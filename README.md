@@ -328,6 +328,49 @@ const result = await applySemanticEdits([edit], config);
 
 每项结果会区分 `written`、`writeUnconfirmed`、`conflict`、`notWritable`、`writeFailed` 和 `unprocessed`，并在可读取时带上写入前后的事实。多匹配和已变化的相关输入不会写入。语义编辑只改实际资源，不运行 QA、判定完成状态或推进处理基线。
 
+## 应用保存的更新计划
+
+更新计划可在一个进程中生成并保存，再由另一个进程读取应用。宿主为每项明确选择保留现有内容或采用计划候选；候选内容须与 `edits.targetContent` 返回的 JSON 形态一致。应用时会重新读取事实、核对计划生成时保存的原文与译文输入，并从计划保留的原始上下文重算 `edits.dependencies`。未声明的元数据变化不会被整体哈希，也不会自动阻止候选。
+
+```ts
+import {
+  applyUpdatePlan,
+  createUpdatePlan,
+  readFacts,
+  type UpdatePlan,
+} from "@l10n/core";
+import {
+  createFileProcessingBaselineStore,
+  createFileUpdatePlanStore,
+} from "@l10n/core/node";
+import config from "./l10n.config.ts";
+
+const baselineStore = createFileProcessingBaselineStore(
+  ".l10n/processing-baseline.json",
+);
+const planStore = createFileUpdatePlanStore(".l10n/update-plan.json");
+
+// 生成进程保存计划。
+const plan = createUpdatePlan(
+  await readFacts(config),
+  await baselineStore.load(),
+  config,
+);
+await planStore.save(plan);
+
+// 后续进程读取计划，由宿主明确选择处理范围。
+const savedPlan = (await planStore.load()) as UpdatePlan | undefined;
+if (savedPlan === undefined) throw new Error("没有可应用的计划。");
+const result = await applyUpdatePlan(
+  savedPlan,
+  [{ sourceKey: "src/messages.ts:18", language: "fr", choice: "candidate" }],
+  config,
+  baselineStore,
+);
+```
+
+`choice: "retain"` 会校验计划仍对应当前事实，再只推进所选原文与语言的处理基线；`choice: "candidate"` 会通过 `prepareSemanticEdit` 和 `applySemanticEdits` 执行定位、写入前校验及写后复读。共享译文不会替其他原文推进基线。`contentResults` 与 `baselineResults` 分别报告实际内容结果和保存进度，因此写入成功而基线保存失败时会保留这两项事实。未选择、输入冲突、写入失败或写入未确认的范围不会推进。
+
 ## 本地制品
 
 在框架仓库根目录打包后，可在宿主目录安装生成的 tarball：
