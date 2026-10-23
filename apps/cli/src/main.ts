@@ -3,7 +3,7 @@ import { pathToFileURL } from "node:url";
 
 import {
   DuplicateTranslationUnitKeyError,
-  readSourceFacts,
+  readFacts,
   type FrameworkConfig,
   type TranslationUnitInput,
 } from "@l10n/core";
@@ -30,17 +30,112 @@ export type CliRuntime = {
   readonly identity: CliCommandIdentity;
 };
 
-const sourceFactsSchema = standardSchema(
+const enumerationSchema = v.picklist(["complete", "partial", "failed"]);
+const readStatusSchema = v.picklist([
+  "complete",
+  "incomplete",
+  "failed",
+  "notRead",
+]);
+
+const factsSchema = standardSchema(
   v.object({
     version: v.string(),
-    units: v.array(
+    source: v.object({
+      version: v.string(),
+      read: v.object({
+        status: readStatusSchema,
+        scopes: v.array(
+          v.object({
+            range: v.unknown(),
+            enumeration: enumerationSchema,
+            recordCount: v.number(),
+            error: v.optional(v.string()),
+          }),
+        ),
+        error: v.optional(v.string()),
+      }),
+      totalUnitCount: v.nullable(v.number()),
+      units: v.array(
+        v.object({
+          key: v.string(),
+          unit: v.unknown(),
+          bodyAvailability: v.picklist(["available", "unavailable"]),
+          scopeIndex: v.number(),
+        }),
+      ),
+    }),
+    translations: v.object({
+      reads: v.array(
+        v.object({
+          language: v.string(),
+          status: readStatusSchema,
+          scopes: v.array(
+            v.object({
+              range: v.unknown(),
+              covers: v.array(v.string()),
+              enumeration: enumerationSchema,
+              translationIndexes: v.array(v.number()),
+              error: v.optional(v.string()),
+            }),
+          ),
+          error: v.optional(v.string()),
+        }),
+      ),
+      records: v.array(
+        v.object({
+          index: v.number(),
+          language: v.string(),
+          scopeIndex: v.number(),
+          range: v.unknown(),
+          translation: v.unknown(),
+          bodyAvailability: v.picklist(["available", "unavailable"]),
+        }),
+      ),
+    }),
+    associations: v.array(
       v.object({
-        key: v.string(),
-        unit: v.unknown(),
+        sourceKey: v.string(),
+        language: v.string(),
+        status: v.picklist([
+          "matched",
+          "missing",
+          "unavailable",
+          "unknown",
+          "conflict",
+        ]),
+        coverageStatus: readStatusSchema,
+        scopeIndexes: v.array(v.number()),
+        translationIndexes: v.array(v.number()),
       }),
     ),
   }),
 );
+
+function readStatusText(status: string): string {
+  return (
+    {
+      complete: "完整",
+      incomplete: "不完整",
+      failed: "失败",
+      notRead: "未读取",
+    }[status] ?? status
+  );
+}
+
+function enumerationText(enumeration: string): string {
+  return (
+    {
+      complete: "完整枚举",
+      partial: "部分枚举",
+      failed: "读取失败",
+    }[enumeration] ?? enumeration
+  );
+}
+
+function rangeText(range: unknown): string {
+  return JSON.stringify(range) ?? "null";
+}
 
 function createCliContract(identity: CliCommandIdentity) {
   const define = defineCli<undefined>();
@@ -70,13 +165,13 @@ function createCliContract(identity: CliCommandIdentity) {
       cli: {
         kind: "rootGroup",
         name: identity.commandName,
-        description: "读取宿主提供的原文事实。",
+        description: "读取宿主提供的源译事实。",
       },
       ...define.command("facts")({
         kind: "command",
         parent: "cli",
         name: "facts",
-        description: "读取原文单元并计算宿主定义的身份。",
+        description: "读取源译事实并计算宿主定义的关联。",
         fields: {
           config: { kind: "positional", description: "宿主配置文件路径" },
         },
@@ -85,17 +180,56 @@ function createCliContract(identity: CliCommandIdentity) {
           kind: "data",
           variants: {
             read: {
-              description: "原文事实",
+              description: "源译事实",
               exitCode: 0,
-              schema: sourceFactsSchema,
-              text: ({ version, units }) =>
+              schema: factsSchema,
+              text: (facts) =>
                 text.lines([
-                  `原文事实（${units.length} 个单元）`,
-                  `事实版本：${version}`,
-                  ...units.flatMap(({ key, unit }) => [
-                    `- ${key}`,
-                    `  ${JSON.stringify(unit) ?? "null"}`,
-                  ]),
+                  `源译事实（已知 ${facts.source.units.length} 个原文）`,
+                  `事实版本：${facts.version}`,
+                  `原文读取：${readStatusText(facts.source.read.status)}；总数：${facts.source.totalUnitCount ?? "未知"}`,
+                  ...facts.source.read.scopes.map(
+                    ({ range, enumeration, recordCount, error }) =>
+                      `原文范围 ${rangeText(range)}：${enumerationText(enumeration)}，发现 ${recordCount} 条${error === undefined ? "" : `；${error}`}`,
+                  ),
+                  ...facts.source.units.flatMap(
+                    ({ key, unit, bodyAvailability }) => [
+                      `- ${key}（正文${bodyAvailability === "available" ? "可用" : "不可用"}）`,
+                      `  ${JSON.stringify(unit) ?? "null"}`,
+                    ],
+                  ),
+                  ...(facts.translations.reads.length === 0
+                    ? ["目标语言：未配置"]
+                    : facts.translations.reads.flatMap(
+                        ({ language, status, scopes, error }) => [
+                          `目标语言 ${language} 读取：${readStatusText(status)}${error === undefined ? "" : `；${error}`}`,
+                          ...scopes.map(
+                            ({
+                              range,
+                              covers,
+                              enumeration,
+                              translationIndexes,
+                              error: scopeError,
+                            }) =>
+                              `  范围 ${rangeText(range)}：${enumerationText(enumeration)}；覆盖 ${covers.join(", ") || "无"}；译文 ${translationIndexes.join(", ") || "无"}${scopeError === undefined ? "" : `；${scopeError}`}`,
+                          ),
+                        ],
+                      )),
+                  ...facts.translations.records.map(
+                    ({ index, language, translation, bodyAvailability }) =>
+                      `译文 #${index}（${language}，正文${bodyAvailability === "available" ? "可用" : "不可用"}）：${JSON.stringify(translation) ?? "null"}`,
+                  ),
+                  ...facts.associations.map(
+                    ({
+                      sourceKey,
+                      language,
+                      status,
+                      coverageStatus,
+                      scopeIndexes,
+                      translationIndexes,
+                    }) =>
+                      `关联 ${sourceKey} → ${language}：${status}（覆盖${readStatusText(coverageStatus)}，范围 ${scopeIndexes.join(", ") || "无"}，译文 ${translationIndexes.join(", ") || "无"}）`,
+                  ),
                 ]),
             },
           },
@@ -137,10 +271,37 @@ function createCliContract(identity: CliCommandIdentity) {
               );
             const config =
               configModule.default as FrameworkConfig<TranslationUnitInput>;
-            const facts = await readSourceFacts(config);
+            const facts = await readFacts(config);
             return outcome.data.read({
-              version: facts.version,
-              units: [...facts.units],
+              ...facts,
+              source: {
+                ...facts.source,
+                read: {
+                  ...facts.source.read,
+                  scopes: facts.source.read.scopes.map((scope) => ({
+                    ...scope,
+                  })),
+                },
+                units: facts.source.units.map((unit) => ({ ...unit })),
+              },
+              translations: {
+                reads: facts.translations.reads.map((read) => ({
+                  ...read,
+                  scopes: read.scopes.map((scope) => ({
+                    ...scope,
+                    covers: [...scope.covers],
+                    translationIndexes: [...scope.translationIndexes],
+                  })),
+                })),
+                records: facts.translations.records.map((record) => ({
+                  ...record,
+                })),
+              },
+              associations: facts.associations.map((association) => ({
+                ...association,
+                scopeIndexes: [...association.scopeIndexes],
+                translationIndexes: [...association.translationIndexes],
+              })),
             });
           } catch (error) {
             if (error instanceof DuplicateTranslationUnitKeyError)

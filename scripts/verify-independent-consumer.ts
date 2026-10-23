@@ -79,42 +79,103 @@ function writeConsumerFiles(
   const workspaceConfig = `overrides:\n  "@l10n/core@0.0.0": "file:${coreTarball}"\n`;
   const configSource = `import { defineConfig } from "@l10n/core";
 
-export default defineConfig({
+export let translationReadCount = 0;
+
+const config = defineConfig({
   source: {
-    readUnits: () => [
-      {
-        source: "Save",
-        context: {
-          location: { file: "src/messages.ts", line: 18 },
-          screenshot: "shots/save-button.png",
-        },
-      },
-    ],
+    read: () => ({
+      scopes: [{
+        range: "src/messages.ts",
+        enumeration: "complete",
+        records: [
+          { value: { source: "Save", context: { file: "src/messages.ts", line: 18, screenshot: "shots/save.png" } }, bodyAvailability: "available" },
+          { value: { source: "Submit", context: { file: "src/messages.ts", line: 19, screenshot: "shots/submit.png" } }, bodyAvailability: "available" },
+          { value: { source: "Cancel", context: { file: "src/messages.ts", line: 20, screenshot: "shots/cancel.png" } }, bodyAvailability: "available" },
+          { value: { source: "Help", context: { file: "src/messages.ts", line: 21, screenshot: "shots/help.png" } }, bodyAvailability: "available" }
+        ]
+      }]
+    }),
   },
   keyOf(unit) {
-    return unit.context.location.file + ":" + unit.context.location.line + ":" + unit.source;
+    return unit.context.file + ":" + unit.context.line;
+  },
+  translations: {
+    languages: ["fr", "ja", "de"],
+    read(language, sourceUnits) {
+      translationReadCount += 1;
+      if (language === "de") throw new Error("German catalogue unavailable");
+      if (language === "fr") {
+        return {
+          scopes: [
+            {
+              range: "locales/fr/partial.json",
+              covers: sourceUnits.slice(0, 3).map(({ key }) => key),
+              enumeration: "partial",
+              records: [
+                { value: { text: "Partagé", context: { sourceLines: [18, 19] } }, bodyAvailability: "available" },
+                { value: { text: "Annuler A", context: { sourceLines: [20] } }, bodyAvailability: "available" },
+                { value: { text: "Annuler B", context: { sourceLines: [20] } }, bodyAvailability: "available" }
+              ]
+            },
+            {
+              range: "locales/fr/complete.json",
+              covers: sourceUnits.slice(3).map(({ key }) => key),
+              enumeration: "complete",
+              records: [
+                { value: { text: "Isolé", context: { sourceLines: [] } }, bodyAvailability: "available" }
+              ]
+            }
+          ]
+        };
+      }
+      return {
+        scopes: [{
+          range: "locales/ja.json",
+          covers: sourceUnits.map(({ key }) => key),
+          enumeration: "complete",
+          records: [
+            { value: { text: "共有", context: { sourceLines: [18, 19] } }, bodyAvailability: "available" },
+            { value: { text: "取消", context: { sourceLines: [20] } }, bodyAvailability: "unavailable" },
+            { value: { text: "孤立", context: { sourceLines: [] } }, bodyAvailability: "available" },
+            { value: { text: "ヘルプ", context: { sourceLines: [21] } }, bodyAvailability: "available" }
+          ]
+        }]
+      };
+    },
+    matches(unit, translation) {
+      return translation.context.sourceLines.includes(unit.context.line);
+    }
   },
 });
+
+export default config;
 `;
   const duplicateConfigSource = `import { defineConfig } from "@l10n/core";
 
 export default defineConfig({
   source: {
-    readUnits: () => [
-      { source: "Save", context: { location: "src/messages.ts" } },
-      { source: "Submit", context: { location: "src/messages.ts" } },
-    ],
+    read: () => ({
+      scopes: [{
+        range: "src/messages.ts",
+        enumeration: "complete",
+        records: [
+          { value: { source: "Save", context: { file: "src/messages.ts" } }, bodyAvailability: "available" },
+          { value: { source: "Submit", context: { file: "src/messages.ts" } }, bodyAvailability: "available" }
+        ]
+      }]
+    }),
   },
   keyOf(unit) {
-    return unit.context.location;
+    return unit.context.file;
   },
 });
 `;
   const typecheckSource = `import "@l10n/checks";
-import { readSourceFacts } from "@l10n/core";
+import { readFacts, readSourceFacts } from "@l10n/core";
 import config from "./l10n.config.ts";
 
 void readSourceFacts(config);
+void readFacts(config);
 `;
   const tsconfig = {
     compilerOptions: {
@@ -134,48 +195,63 @@ import { spawnSync } from "node:child_process";
 import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { defineConfig, DuplicateTranslationUnitKeyError, readSourceFacts } from "@l10n/core";
+import { defineConfig, DuplicateTranslationUnitKeyError, readFacts, readSourceFacts } from "@l10n/core";
 import "@l10n/checks";
-import config from "./l10n.config.ts";
+import config, { translationReadCount } from "./l10n.config.ts";
 
 const repositoryRoot = ${JSON.stringify(repositoryRoot)};
-const facts = await readSourceFacts(config);
-assert.deepEqual(facts.units, [{
-  key: "src/messages.ts:18:Save",
-  unit: {
-    source: "Save",
-    context: {
-      location: { file: "src/messages.ts", line: 18 },
-      screenshot: "shots/save-button.png",
-    },
-  },
-}]);
+const sourceFacts = await readSourceFacts(config);
+assert.equal(translationReadCount, 0);
+assert.equal(sourceFacts.read.status, "complete");
+assert.equal(sourceFacts.totalUnitCount, 4);
+assert.equal(sourceFacts.units[0].key, "src/messages.ts:18");
+assert.equal(sourceFacts.units[0].unit.context.screenshot, "shots/save.png");
+
+const facts = await readFacts(config);
+assert.equal(translationReadCount, 3);
 assert.match(facts.version, /^sha256:[a-f0-9]{64}$/u);
-
-let reads = 0;
-defineConfig({ source: { readUnits: () => { reads += 1; return []; } }, keyOf: () => "unused" });
-assert.equal(reads, 0);
-
-const makeConfig = (screenshot) => defineConfig({
-  source: { readUnits: () => [{ source: "Save", context: { file: "src/messages.ts", screenshot } }] },
-  keyOf: (unit) => unit.context.file,
-});
-const before = await readSourceFacts(makeConfig("shots/before.png"));
-const after = await readSourceFacts(makeConfig("shots/after.png"));
-assert.equal(before.units[0].key, after.units[0].key);
-assert.notEqual(before.version, after.version);
-
-const changedIdentity = await readSourceFacts(defineConfig({
-  source: { readUnits: () => [{ source: "Submit", context: { file: "src/other.ts" } }] },
-  keyOf: (unit) => unit.context.file + ":" + unit.source,
-}));
-assert.notEqual(facts.units[0].key, changedIdentity.units[0].key);
+assert.equal(facts.source.totalUnitCount, 4);
+assert.deepEqual(facts.translations.reads.map(({ language, status }) => [language, status]), [
+  ["fr", "incomplete"],
+  ["ja", "complete"],
+  ["de", "failed"],
+]);
+assert.deepEqual(facts.associations.map(({ sourceKey, language, status, coverageStatus, translationIndexes }) => [
+  sourceKey,
+  language,
+  status,
+  coverageStatus,
+  translationIndexes,
+]), [
+  ["src/messages.ts:18", "fr", "unknown", "incomplete", [0]],
+  ["src/messages.ts:19", "fr", "unknown", "incomplete", [0]],
+  ["src/messages.ts:20", "fr", "conflict", "incomplete", [1, 2]],
+  ["src/messages.ts:21", "fr", "missing", "complete", []],
+  ["src/messages.ts:18", "ja", "matched", "complete", [4]],
+  ["src/messages.ts:19", "ja", "matched", "complete", [4]],
+  ["src/messages.ts:20", "ja", "unavailable", "complete", [5]],
+  ["src/messages.ts:21", "ja", "matched", "complete", [7]],
+  ["src/messages.ts:18", "de", "unknown", "failed", []],
+  ["src/messages.ts:19", "de", "unknown", "failed", []],
+  ["src/messages.ts:20", "de", "unknown", "failed", []],
+  ["src/messages.ts:21", "de", "unknown", "failed", []],
+]);
+assert.equal(facts.translations.records.length, 8);
+assert.deepEqual(facts.translations.records[0].translation.context.sourceLines, [18, 19]);
+assert.deepEqual(facts.translations.records[3].translation.context.sourceLines, []);
+assert.deepEqual(facts.translations.records[6].translation.context.sourceLines, []);
 
 await assert.rejects(readSourceFacts({
-  source: { readUnits: () => [
-    { source: "Save", context: { file: "src/messages.ts" } },
-    { source: "Submit", context: { file: "src/messages.ts" } },
-  ] },
+  source: { read: () => ({
+    scopes: [{
+      range: "src/messages.ts",
+      enumeration: "complete",
+      records: [
+        { value: { source: "Save", context: { file: "src/messages.ts" } }, bodyAvailability: "available" },
+        { value: { source: "Submit", context: { file: "src/messages.ts" } }, bodyAvailability: "available" },
+      ],
+    }],
+  }) },
   keyOf: (unit) => unit.context.file,
 }), DuplicateTranslationUnitKeyError);
 
@@ -192,7 +268,7 @@ assert.equal(structured.status, 0, structured.stderr);
 assert.deepEqual(JSON.parse(structured.stdout).data, facts);
 const readable = spawnSync(executable, ["facts", "l10n.config.ts", "--output-format", "text"], { encoding: "utf8", shell: process.platform === "win32" });
 assert.equal(readable.status, 0, readable.stderr);
-for (const content of [facts.version, facts.units[0].key, "shots/save-button.png"])
+for (const content of [facts.version, facts.source.units[0].key, "shots/save.png", "unknown", "conflict", "missing", "unavailable", "German catalogue unavailable"])
   assert.ok(readable.stdout.includes(content));
 const duplicate = spawnSync(executable, ["facts", "duplicate.config.ts"], { encoding: "utf8", shell: process.platform === "win32" });
 assert.equal(duplicate.status, 1);
