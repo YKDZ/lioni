@@ -613,6 +613,8 @@ async function prepare() {
     aggregateQa.diagnostics.filter(({ ruleId }) => ruleId === "guide-format"),
   );
   assert.equal(aggregateQa.status, "complete");
+  assert.equal(catalogQa.status, "complete");
+  assert.equal(guideQa.status, "complete");
   assert.equal(aggregateQa.subjects.length, 2);
   assert.deepEqual(
     aggregateQa.evidenceScope.map(({ key }) => key),
@@ -625,6 +627,14 @@ async function prepare() {
   assert.equal(
     aggregateQa.diagnostics.find(({ ruleId }) => ruleId === "guide-format")?.handling.status,
     "active",
+  );
+  assert.equal(
+    aggregateQa.checks.find(({ id }) => id === "cross-domain-same-text")?.status,
+    "not-applicable",
+  );
+  assert.equal(
+    aggregateQa.diagnostics.some(({ ruleId }) => ruleId === "cross-domain-same-text"),
+    false,
   );
 
   const selectedRequest = {
