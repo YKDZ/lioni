@@ -21,14 +21,14 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json --pretty false",
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.build.json --pretty false",
     "format:check": "oxfmt --list-different .",
     "format:write": "oxfmt --write .",
     "lint": "oxlint --quiet --format=unix --ignore-pattern node_modules .",
     "lint:fix": "oxlint --format=unix . --fix",
     "test": "node --conditions=source --test --test-reporter=spec --test-reporter=./scripts/node-test-count-reporter.ts --test-reporter-destination=stdout --test-reporter-destination=stderr 'test/**/*.test.ts'",
     "typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
-    "prepack": "pnpm exec turbo run build --filter=."
+    "prepack": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && pnpm exec turbo run build --filter=."
   },
   "devDependencies": {
     "@l10n/typescript-config": "workspace:*",
