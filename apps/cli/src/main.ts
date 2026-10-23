@@ -234,8 +234,15 @@ function qualityText(value: unknown): ReturnType<typeof text.lines> {
     `事实版本：${result.version}`,
     `检查对象：${result.subjects.length}；诊断：${result.diagnostics.length}`,
     ...result.diagnostics.map(
-      ({ ruleId, severity, object, location, message, evidence }) =>
-        `[${severity}] ${ruleId} ${object.key}（${location.language ?? "原文"}，${rangeText(location.range)}）：${message}；证据 ${evidence.length} 项`,
+      ({ ruleId, severity, object, location, message, evidence, handling }) => {
+        const locationKey =
+          location.key === undefined ? "" : `，位置键 ${location.key}`;
+        const exception =
+          handling.status === "excepted"
+            ? `；例外 ${handling.exceptionId}：${handling.reason}`
+            : "";
+        return `[${severity}] ${ruleId} ${object.key}（${location.language ?? "原文"}，${rangeText(location.range)}${locationKey}）：${message}${exception}；证据 ${evidence.length} 项`;
+      },
     ),
     ...result.checks.flatMap(({ id, status, issues }) =>
       issues.map(

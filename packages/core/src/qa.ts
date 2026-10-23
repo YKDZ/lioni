@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+
 import type {
   Awaitable,
   FrameworkFacts,
@@ -20,7 +22,9 @@ export type QualityObject = {
 
 export type QualityLocation = {
   readonly language: string | null;
+  /** 宿主提供的资源范围；具体含义由相应适配器决定。 */
   readonly range: unknown;
+  /** 宿主定义的资源内定位键，与逻辑对象身份分开提供。 */
   readonly key?: string;
   readonly [field: string]: unknown;
 };
@@ -36,6 +40,52 @@ export type QualityEvidenceScope = {
   readonly language?: string;
 };
 
+export type QualityRelationship = {
+  readonly kind: string;
+  readonly key: string;
+  readonly members: readonly QualitySubject[];
+  readonly [field: string]: unknown;
+};
+
+export type QualityExceptionObjectScope = Pick<
+  QualityObject,
+  "kind" | "key"
+> & {
+  readonly language?: string;
+};
+
+export type QualityExceptionLocationScope = Pick<
+  QualityLocation,
+  "language" | "range"
+> & {
+  readonly key?: string;
+};
+
+export type QualityExceptionScope =
+  | {
+      readonly object: QualityExceptionObjectScope;
+      readonly location?: QualityExceptionLocationScope;
+    }
+  | {
+      readonly location: QualityExceptionLocationScope;
+      readonly object?: QualityExceptionObjectScope;
+    };
+
+export type QualityException = {
+  readonly id: string;
+  readonly ruleId: string;
+  readonly scope: QualityExceptionScope;
+  readonly reason: string;
+};
+
+export type QualityDiagnosticHandling =
+  | { readonly status: "active" }
+  | {
+      readonly status: "excepted";
+      readonly exceptionId: string;
+      readonly reason: string;
+    };
+
 export type QualityEvidence<TObject extends QualityObject = QualityObject> = {
   readonly role: string;
   readonly object: TObject;
@@ -50,10 +100,11 @@ export type QualityDiagnostic<TObject extends QualityObject = QualityObject> = {
   readonly location: QualityLocation;
   readonly message: string;
   readonly evidence: readonly QualityEvidence<TObject>[];
+  readonly handling: QualityDiagnosticHandling;
 };
 
 export type QualityFinding<TObject extends QualityObject = QualityObject> =
-  Omit<QualityDiagnostic<TObject>, "ruleId">;
+  Omit<QualityDiagnostic<TObject>, "ruleId" | "handling">;
 
 export type QualityIssue<TObject extends QualityObject = QualityObject> = {
   readonly code: string;
@@ -83,6 +134,8 @@ export type QualityCheckRequest = {
   readonly subjects: readonly QualitySubject[];
   readonly evidenceScope: readonly QualityEvidenceScope[];
   readonly dependencies: unknown;
+  readonly relationships?: readonly QualityRelationship[];
+  readonly exceptions?: readonly QualityException[];
 };
 
 export type QualityCheckInput<
@@ -120,6 +173,8 @@ export type QualityRunResult<TObject extends QualityObject = QualityObject> = {
   readonly subjects: readonly QualitySubject[];
   readonly evidenceScope: readonly QualityEvidenceScope[];
   readonly dependencies: unknown;
+  readonly relationships: readonly QualityRelationship[];
+  readonly exceptions: readonly QualityException[];
   readonly status: QualityCheckStatus;
   readonly diagnostics: readonly QualityDiagnostic<TObject>[];
   readonly checks: readonly QualityCheckResult<TObject>[];
@@ -148,6 +203,11 @@ export async function runQualityChecks<
         diagnostics: outcome.diagnostics.map((diagnostic) => ({
           ...diagnostic,
           ruleId: definition.id,
+          handling: handlingFor(
+            definition.id,
+            diagnostic,
+            request.exceptions ?? [],
+          ),
         })),
         issues: outcome.issues,
         coverage: outcome.coverage,
@@ -180,10 +240,64 @@ export async function runQualityChecks<
     subjects: request.subjects.map((subject) => ({ ...subject })),
     evidenceScope: request.evidenceScope.map((entry) => ({ ...entry })),
     dependencies: request.dependencies,
+    relationships: (request.relationships ?? []).map((relationship) => ({
+      ...relationship,
+      members: relationship.members.map((member) => ({ ...member })),
+    })),
+    exceptions: (request.exceptions ?? []).map((exception) => ({
+      ...exception,
+      scope: {
+        ...exception.scope,
+        ...(exception.scope.object === undefined
+          ? {}
+          : { object: { ...exception.scope.object } }),
+        ...(exception.scope.location === undefined
+          ? {}
+          : { location: { ...exception.scope.location } }),
+      },
+    })),
     status: aggregateStatus(results),
     diagnostics: results.flatMap(({ diagnostics }) => diagnostics),
     checks: results,
   };
+}
+
+function handlingFor(
+  ruleId: string,
+  diagnostic: QualityFinding,
+  exceptions: readonly QualityException[],
+): QualityDiagnosticHandling {
+  const exception = exceptions.find(
+    (candidate) =>
+      candidate.ruleId === ruleId &&
+      exceptionScopeMatches(candidate.scope, diagnostic),
+  );
+  return exception === undefined
+    ? { status: "active" }
+    : {
+        status: "excepted",
+        exceptionId: exception.id,
+        reason: exception.reason,
+      };
+}
+
+function exceptionScopeMatches(
+  scope: QualityExceptionScope,
+  diagnostic: QualityFinding,
+): boolean {
+  const objectMatches =
+    scope.object === undefined ||
+    (scope.object.kind === diagnostic.object.kind &&
+      scope.object.key === diagnostic.object.key &&
+      (scope.object.language === undefined ||
+        scope.object.language === diagnostic.object.language));
+  const locationMatches =
+    scope.location === undefined ||
+    (scope.location.language === diagnostic.location.language &&
+      isDeepStrictEqual(scope.location.range, diagnostic.location.range) &&
+      (scope.location.key === undefined ||
+        scope.location.key === diagnostic.location.key));
+  return objectMatches && locationMatches;
 }
 
 function aggregateStatus(

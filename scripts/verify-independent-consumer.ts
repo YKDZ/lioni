@@ -345,22 +345,99 @@ export default defineConfig<Unit, Translation>({
 `;
   const qaConfigSource = `import { readFile } from "node:fs/promises";
 import { defineConfig } from "@l10n/core";
-import { createMessagePlaceholderChecker } from "@l10n/checks";
+import { createMessagePlaceholderChecker, createRelationshipChecker } from "@l10n/checks";
 
-type Unit = { readonly source: string; readonly key: string };
-type Translation = { readonly text: string; readonly key: string };
+type Unit = {
+  readonly source: string;
+  readonly nativeId: string;
+  readonly context: { readonly file: string; readonly line: number };
+};
+type Translation = {
+  readonly sourceId: string;
+  readonly nativeKey: string;
+  readonly text: string;
+};
 
 async function readMessageResource() {
-  return JSON.parse(await readFile("qa-messages.json", "utf8")) as { text: string };
+  return JSON.parse(await readFile("qa-messages.json", "utf8")) as {
+    readonly messages: readonly Translation[];
+  };
 }
 
 export const qualityChecks = [
   createMessagePlaceholderChecker<Unit, Translation>({
     sourceText: (unit) => unit.source,
     translationText: (translation) => translation.text,
+    sourceLocation: (unit, _subject, range) => ({
+      ...range,
+      key: String(unit.context.line),
+    }),
+    translationLocation: (translation, _subject, range) => ({
+      ...range,
+      key: translation.nativeKey,
+    }),
     configuration: { grammar: "simple-placeholders-v1" },
   }),
+  createRelationshipChecker<Unit, Translation, {
+    readonly constraint: string;
+  }>({
+    id: "same-target-text",
+    relationshipKind: "same-target-text",
+    configuration: { constraint: "target text is equal" },
+    translationLocation: (translation, _subject, range) => ({
+      ...range,
+      key: translation.nativeKey,
+    }),
+    evaluate: ({ members }) =>
+      new Set(members.map(({ translation }) => translation.text))
+        .size > 1
+        ? { severity: "error", message: "关系成员应使用相同译文。" }
+        : undefined,
+  }),
 ];
+
+export function qualityRequest() {
+  return {
+    subjects: [{ key: "sha256:save", language: "fr" }],
+    evidenceScope: [
+      { kind: "translation-unit", key: "sha256:save", language: "fr" },
+      { kind: "translation-unit", key: "sha256:submit", language: "fr" },
+    ],
+    relationships: [
+      {
+        kind: "same-target-text",
+        key: "approved-variation",
+        members: [
+          { key: "sha256:submit", language: "fr" },
+          { key: "sha256:save", language: "fr" },
+        ],
+      },
+      {
+        kind: "same-target-text",
+        key: "strict-variation",
+        members: [
+          { key: "sha256:save", language: "fr" },
+          { key: "sha256:submit", language: "fr" },
+        ],
+      },
+    ],
+    exceptions: [
+      {
+        id: "approved-variation",
+        ruleId: "same-target-text",
+        scope: {
+          location: {
+            language: "fr",
+            range: "locales/fr.json",
+            key: "submit_button",
+          },
+        },
+        reason: "保留宿主现有按钮译法。",
+      },
+    ],
+    dependencies: {},
+  };
+}
 
 export default defineConfig<Unit, Translation>({
   source: {
@@ -368,11 +445,14 @@ export default defineConfig<Unit, Translation>({
       scopes: [{
         range: "src/messages.ts",
         enumeration: "complete",
-        records: [{ value: { source: "Hello {name}", key: "save" }, bodyAvailability: "available" }],
+        records: [
+          { value: { source: "Hello {name}", nativeId: "save", context: { file: "src/messages.ts", line: 18 } }, bodyAvailability: "available" },
+          { value: { source: "Save", nativeId: "submit", context: { file: "src/messages.ts", line: 19 } }, bodyAvailability: "available" },
+        ],
       }],
     }),
   },
-  keyOf: (unit) => unit.key,
+  keyOf: (unit) => "sha256:" + unit.nativeId,
   translations: {
     languages: ["fr"],
     async read(_language, sourceUnits) {
@@ -382,11 +462,11 @@ export default defineConfig<Unit, Translation>({
           range: "locales/fr.json",
           covers: sourceUnits.map(({ key }) => key),
           enumeration: "complete",
-          records: [{ value: { text: resource.text, key: "save" }, bodyAvailability: "available" }],
+          records: resource.messages.map((value) => ({ value, bodyAvailability: "available" })),
         }],
       };
     },
-    matches: (unit, translation) => unit.key === translation.key,
+    matches: (unit, translation) => unit.nativeId === translation.sourceId,
   },
 });
 `;
@@ -543,27 +623,58 @@ assert.equal(noChecks.status, 0, noChecks.stderr);
 assert.equal(JSON.parse(noChecks.stdout).data.status, "not-run");
 
 const qaResource = path.join(process.cwd(), "qa-messages.json");
-const originalResource = Buffer.from(JSON.stringify({ text: "Bonjour" }));
+const originalResource = Buffer.from(JSON.stringify({
+  messages: [
+    { sourceId: "save", nativeKey: "save_label", text: "Bonjour" },
+    { sourceId: "submit", nativeKey: "submit_button", text: "Enregistrer" },
+  ],
+}));
 await writeFile(qaResource, originalResource);
 const initialQa = spawnSync(executable, ["qa", "qa.config.ts"], { encoding: "utf8", shell: process.platform === "win32" });
-assert.equal(initialQa.status, 0, initialQa.stderr);
+assert.equal(initialQa.status, 0, initialQa.stderr + initialQa.stdout);
 const initialResult = JSON.parse(initialQa.stdout).data;
 assert.equal(initialResult.status, "complete");
-assert.equal(initialResult.subjects[0].key, "save");
+assert.equal(initialResult.subjects[0].key, "sha256:save");
 assert.equal(initialResult.subjects[0].language, "fr");
-assert.equal(initialResult.diagnostics.length, 1);
+assert.equal(initialResult.diagnostics.length, 3);
 assert.equal(initialResult.diagnostics[0].ruleId, "message-placeholders");
 assert.equal(initialResult.diagnostics[0].evidence.length, 2);
+assert.equal(initialResult.diagnostics[0].object.key, "sha256:save");
+assert.equal(initialResult.diagnostics[0].location.key, "save_label");
+assert.deepEqual(initialResult.diagnostics.slice(1).map(({ object, location, handling }) => [
+  object.key,
+  location.key,
+  handling,
+]), [
+  ["approved-variation", "submit_button", {
+    status: "excepted",
+    exceptionId: "approved-variation",
+    reason: "保留宿主现有按钮译法。",
+  }],
+  ["strict-variation", "save_label", { status: "active" }],
+]);
 assert.deepEqual(await readFile(qaResource), originalResource);
 
-const editedResource = Buffer.from(JSON.stringify({ text: "Bonjour {name}" }));
+const readableQa = spawnSync(executable, ["qa", "qa.config.ts", "--output-format", "text"], { encoding: "utf8", shell: process.platform === "win32" });
+assert.equal(readableQa.status, 0, readableQa.stderr);
+assert.ok(readableQa.stdout.includes("位置键 submit_button"));
+assert.ok(readableQa.stdout.includes("例外 approved-variation：保留宿主现有按钮译法。"));
+
+const editedResource = Buffer.from(JSON.stringify({
+  messages: [
+    { sourceId: "save", nativeKey: "save_label", text: "Bonjour" },
+    { sourceId: "submit", nativeKey: "submit_button", text: "Bonjour" },
+  ],
+}));
 await writeFile(qaResource, editedResource);
 const editedQa = spawnSync(executable, ["qa", "qa.config.ts"], { encoding: "utf8", shell: process.platform === "win32" });
 assert.equal(editedQa.status, 0, editedQa.stderr);
 const editedResult = JSON.parse(editedQa.stdout).data;
 assert.equal(editedResult.status, "complete");
 assert.notEqual(editedResult.version, initialResult.version);
-assert.deepEqual(editedResult.diagnostics, []);
+assert.equal(editedResult.diagnostics.length, 1);
+assert.equal(editedResult.diagnostics[0].ruleId, "message-placeholders");
+assert.equal(editedResult.diagnostics[0].handling.status, "active");
 assert.deepEqual(await readFile(qaResource), editedResource);
 
 const baselineHost = path.join(process.cwd(), "baseline-host.mjs");
