@@ -1,0 +1,27 @@
+/.scratch
+/docs
+/.agents
+/skills-lock.json
+/AGENTS.md
+GLOSSARY*.md
+
+# 模板工程生成物与本地代理上下文
+node_modules/
+.pnpm-store/
+dist/
+target/
+.turbo/
+coverage/
+.env
+.template/
+.vitest/
+data/
+playwright-report/
+test-results/
+AGENTS.md
+CLAUDE.md
+.agents/
+.codex/
+.scratch/
+docs/
+skills-lock.json
