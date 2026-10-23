@@ -7,6 +7,7 @@ import {
 import type { CompletionFacts, CompletionPolicy } from "./completion.ts";
 
 export * from "./completion.ts";
+export * from "./qa.ts";
 
 export type Awaitable<T> = T | Promise<T>;
 

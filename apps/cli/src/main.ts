@@ -6,7 +6,12 @@ import {
   DuplicateTranslationUnitKeyError,
   readFacts,
   readCompletion,
+  runQualityChecks,
   type FrameworkConfig,
+  type FrameworkFacts,
+  type QualityCheckDefinition,
+  type QualityCheckRequest,
+  type QualityRunResult,
   type TranslationUnitInput,
 } from "@l10n/core";
 import {
@@ -185,16 +190,104 @@ function completionStatusText(status: string): string {
   );
 }
 
-async function loadConfig(
-  configPath: string,
-): Promise<FrameworkConfig<TranslationUnitInput>> {
+type CliConfigModule = {
+  readonly default?: unknown;
+  readonly qualityChecks?: unknown;
+  readonly qualityRequest?: unknown;
+};
+
+async function loadConfigModule(configPath: string): Promise<CliConfigModule> {
   const configUrl = pathToFileURL(resolve(process.cwd(), configPath));
-  const configModule = (await import(configUrl.href)) as {
-    readonly default?: unknown;
-  };
+  return (await import(configUrl.href)) as CliConfigModule;
+}
+
+function frameworkConfig(
+  configModule: CliConfigModule,
+): FrameworkConfig<TranslationUnitInput> {
   if (configModule.default === undefined)
     throw new TypeError("宿主配置必须默认导出 defineConfig(...) 的结果。");
   return configModule.default as FrameworkConfig<TranslationUnitInput>;
+}
+
+async function loadConfig(
+  configPath: string,
+): Promise<FrameworkConfig<TranslationUnitInput>> {
+  return frameworkConfig(await loadConfigModule(configPath));
+}
+
+function qualityStatusText(status: string): string {
+  return (
+    {
+      "not-run": "未执行",
+      "not-applicable": "不适用",
+      incomplete: "不完整",
+      failed: "失败",
+      complete: "完整",
+    }[status] ?? status
+  );
+}
+
+function qualityText(value: unknown): ReturnType<typeof text.lines> {
+  const result = value as QualityRunResult;
+  return text.lines([
+    `质量检查：${qualityStatusText(result.status)}`,
+    `事实版本：${result.version}`,
+    `检查对象：${result.subjects.length}；诊断：${result.diagnostics.length}`,
+    ...result.diagnostics.map(
+      ({ ruleId, severity, object, location, message, evidence }) =>
+        `[${severity}] ${ruleId} ${object.key}（${location.language ?? "原文"}，${rangeText(location.range)}）：${message}；证据 ${evidence.length} 项`,
+    ),
+    ...result.checks.flatMap(({ id, status, issues }) =>
+      issues.map(
+        ({ message }) => `[${qualityStatusText(status)}] ${id}：${message}`,
+      ),
+    ),
+  ]);
+}
+
+function defaultQualityRequest<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+>(facts: FrameworkFacts<TUnit, TTranslation>): QualityCheckRequest {
+  const subjects = facts.associations.map(({ sourceKey, language }) => ({
+    key: sourceKey,
+    language,
+  }));
+  return {
+    subjects,
+    evidenceScope: subjects.map(({ key, language }) => ({
+      kind: "translation-unit",
+      key,
+      language,
+    })),
+    dependencies: {},
+  };
+}
+
+function configuredQualityChecks(
+  value: unknown,
+): readonly QualityCheckDefinition<TranslationUnitInput, unknown>[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value))
+    throw new TypeError("宿主导出的 qualityChecks 必须是检查器数组。");
+  return value as readonly QualityCheckDefinition<
+    TranslationUnitInput,
+    unknown
+  >[];
+}
+
+function configuredQualityRequest(
+  value: unknown,
+  facts: FrameworkFacts<TranslationUnitInput, unknown>,
+): QualityCheckRequest {
+  if (value === undefined) return defaultQualityRequest(facts);
+  if (typeof value !== "function")
+    throw new TypeError("宿主导出的 qualityRequest 必须是接收 facts 的函数。");
+  return (
+    value as (
+      facts: FrameworkFacts<TranslationUnitInput, unknown>,
+    ) => QualityCheckRequest
+  )(facts);
 }
 
 function createCliContract(identity: CliCommandIdentity) {
@@ -472,6 +565,52 @@ function createCliContract(identity: CliCommandIdentity) {
                 message: error.message,
               });
             return outcome.failure.readFailed({
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        },
+      }),
+      ...define.command("qa")({
+        kind: "command",
+        parent: "cli",
+        name: "qa",
+        description: "使用宿主显式选择的检查器检查当前事实。",
+        fields: {
+          config: { kind: "positional", description: "宿主配置文件路径" },
+        },
+        input: standardSchema(v.object({ config: v.string() })),
+        success: {
+          kind: "data",
+          variants: {
+            checked: {
+              description: "质量检查结果",
+              exitCode: 0,
+              schema: standardSchema(v.record(v.string(), v.unknown())),
+              text: qualityText,
+            },
+          },
+        },
+        failures: {
+          checkFailed: {
+            description: "读取事实或执行质量检查失败",
+            exitCode: 1,
+            schema: standardSchema(v.object({ message: v.string() })),
+            text: ({ message }) => text.line(`质量检查失败：${message}`),
+          },
+        },
+        async handler({ input, outcome }) {
+          try {
+            const configModule = await loadConfigModule(input.config);
+            const facts = await readFacts(frameworkConfig(configModule));
+            const checks = configuredQualityChecks(configModule.qualityChecks);
+            const request = configuredQualityRequest(
+              configModule.qualityRequest,
+              facts,
+            );
+            const result = await runQualityChecks(facts, request, checks);
+            return outcome.data.checked(result);
+          } catch (error) {
+            return outcome.failure.checkFailed({
               message: error instanceof Error ? error.message : String(error),
             });
           }

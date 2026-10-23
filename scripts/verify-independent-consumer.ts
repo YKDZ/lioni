@@ -224,13 +224,67 @@ export default defineConfig({
   },
 });
 `;
-  const typecheckSource = `import "@l10n/checks";
+  const qaConfigSource = `import { readFile } from "node:fs/promises";
+import { defineConfig } from "@l10n/core";
+import { createMessagePlaceholderChecker } from "@l10n/checks";
+
+type Unit = { readonly source: string; readonly key: string };
+type Translation = { readonly text: string; readonly key: string };
+
+async function readMessageResource() {
+  return JSON.parse(await readFile("qa-messages.json", "utf8")) as { text: string };
+}
+
+export const qualityChecks = [
+  createMessagePlaceholderChecker<Unit, Translation>({
+    sourceText: (unit) => unit.source,
+    translationText: (translation) => translation.text,
+    configuration: { grammar: "simple-placeholders-v1" },
+  }),
+];
+
+export default defineConfig<Unit, Translation>({
+  source: {
+    read: () => ({
+      scopes: [{
+        range: "src/messages.ts",
+        enumeration: "complete",
+        records: [{ value: { source: "Hello {name}", key: "save" }, bodyAvailability: "available" }],
+      }],
+    }),
+  },
+  keyOf: (unit) => unit.key,
+  translations: {
+    languages: ["fr"],
+    async read(_language, sourceUnits) {
+      const resource = await readMessageResource();
+      return {
+        scopes: [{
+          range: "locales/fr.json",
+          covers: sourceUnits.map(({ key }) => key),
+          enumeration: "complete",
+          records: [{ value: { text: resource.text, key: "save" }, bodyAvailability: "available" }],
+        }],
+      };
+    },
+    matches: (unit, translation) => unit.key === translation.key,
+  },
+});
+`;
+  const typecheckSource = `import { createMessagePlaceholderChecker } from "@l10n/checks";
 import { evaluateCompletion, readCompletion, readFacts, readSourceFacts } from "@l10n/core";
 import config from "./l10n.config.ts";
 import completionConfig from "./completion.config.ts";
+import qaConfig, { qualityChecks } from "./qa.config.ts";
 
 void readSourceFacts(config);
 void readFacts(config);
+void readFacts(qaConfig);
+void qualityChecks;
+void createMessagePlaceholderChecker({
+  sourceText: (unit: { source: string }) => unit.source,
+  translationText: (translation: { text: string }) => translation.text,
+});
 void readCompletion(completionConfig);
 void readFacts(completionConfig).then((facts) =>
   evaluateCompletion(facts, completionConfig.completion!),
@@ -247,11 +301,16 @@ void readFacts(completionConfig).then((facts) =>
       target: "ES2023",
       types: ["node"],
     },
-    files: ["l10n.config.ts", "completion.config.ts", "typecheck.ts"],
+    files: [
+      "l10n.config.ts",
+      "completion.config.ts",
+      "qa.config.ts",
+      "typecheck.ts",
+    ],
   };
   const runtimeCheck = `import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { realpath } from "node:fs/promises";
+import { readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, DuplicateTranslationUnitKeyError, readFacts, readSourceFacts } from "@l10n/core";
@@ -334,7 +393,35 @@ assert.equal(duplicate.status, 1);
 assert.equal(JSON.parse(duplicate.stderr).variant, "duplicateIdentity");
 assert.equal(JSON.parse(duplicate.stderr).data.key, "src/messages.ts");
 
-process.stdout.write("独立打包宿主：类型、API、CLI 和重复身份检查通过。\\n");
+const noChecks = spawnSync(executable, ["qa", "l10n.config.ts"], { encoding: "utf8", shell: process.platform === "win32" });
+assert.equal(noChecks.status, 0, noChecks.stderr);
+assert.equal(JSON.parse(noChecks.stdout).data.status, "not-run");
+
+const qaResource = path.join(process.cwd(), "qa-messages.json");
+const originalResource = Buffer.from(JSON.stringify({ text: "Bonjour" }));
+await writeFile(qaResource, originalResource);
+const initialQa = spawnSync(executable, ["qa", "qa.config.ts"], { encoding: "utf8", shell: process.platform === "win32" });
+assert.equal(initialQa.status, 0, initialQa.stderr);
+const initialResult = JSON.parse(initialQa.stdout).data;
+assert.equal(initialResult.status, "complete");
+assert.equal(initialResult.subjects[0].key, "save");
+assert.equal(initialResult.subjects[0].language, "fr");
+assert.equal(initialResult.diagnostics.length, 1);
+assert.equal(initialResult.diagnostics[0].ruleId, "message-placeholders");
+assert.equal(initialResult.diagnostics[0].evidence.length, 2);
+assert.deepEqual(await readFile(qaResource), originalResource);
+
+const editedResource = Buffer.from(JSON.stringify({ text: "Bonjour {name}" }));
+await writeFile(qaResource, editedResource);
+const editedQa = spawnSync(executable, ["qa", "qa.config.ts"], { encoding: "utf8", shell: process.platform === "win32" });
+assert.equal(editedQa.status, 0, editedQa.stderr);
+const editedResult = JSON.parse(editedQa.stdout).data;
+assert.equal(editedResult.status, "complete");
+assert.notEqual(editedResult.version, initialResult.version);
+assert.deepEqual(editedResult.diagnostics, []);
+assert.deepEqual(await readFile(qaResource), editedResource);
+
+process.stdout.write("独立打包宿主：事实 API、完成 API、显式 QA、外部编辑重算和只读检查通过。\\n");
 `;
   const completionCheckSource = `import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
@@ -395,6 +482,11 @@ process.stdout.write("独立打包宿主：完成 API 重用与直接编辑后�
     writeFile(
       path.join(consumerRoot, "completion.config.ts"),
       completionConfigSource,
+    ),
+    writeFile(path.join(consumerRoot, "qa.config.ts"), qaConfigSource),
+    writeFile(
+      path.join(consumerRoot, "qa-messages.json"),
+      JSON.stringify({ text: "Bonjour" }),
     ),
     writeFile(
       path.join(consumerRoot, "completion-resources", "fr.json"),

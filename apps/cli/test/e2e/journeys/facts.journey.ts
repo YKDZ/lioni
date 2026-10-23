@@ -66,6 +66,38 @@ const journey: CliJourney = {
 };
 `,
     );
+    await writeFile(
+      path.join(workDir, "qa.config.ts"),
+      `import type { QualityCheckDefinition, TranslationUnitInput } from "@l10n/core";
+
+export { default } from "./l10n.config.ts";
+
+const check: QualityCheckDefinition<TranslationUnitInput, unknown> = {
+  id: "host-rule",
+  configuration: { enabled: true },
+  check({ subjects }) {
+    return {
+      status: "complete",
+      diagnostics: [],
+      issues: [],
+      coverage: {
+        selected: subjects.length,
+        evaluated: subjects.length,
+        notApplicable: 0,
+        incomplete: 0,
+        failed: 0
+      }
+    };
+  }
+};
+
+export const qualityChecks = [check];
+`,
+    );
+    await writeFile(
+      path.join(workDir, "no-checks.config.ts"),
+      `export { default } from "./l10n.config.ts";\n`,
+    );
   },
   commands() {
     return [
@@ -81,6 +113,14 @@ const journey: CliJourney = {
         name: "duplicate source identity",
         args: ["facts", "duplicate.config.ts"],
       },
+      {
+        name: "explicit host QA checker",
+        args: ["qa", "qa.config.ts"],
+      },
+      {
+        name: "QA without a configured checker",
+        args: ["qa", "no-checks.config.ts"],
+      },
       { name: "help", args: ["--help"] },
       { name: "version", args: ["--version"] },
     ];
@@ -89,6 +129,8 @@ const journey: CliJourney = {
     const structured = results[0];
     const readable = results[1];
     const duplicate = results[2];
+    const qa = results[3];
+    const noChecks = results[4];
     assert.equal(
       structured?.exitCode,
       0,
@@ -225,10 +267,45 @@ const journey: CliJourney = {
       variant: "duplicateIdentity",
       data: { key: "src/messages.ts:18" },
     });
-    assert.equal(results[3]?.exitCode, 0);
-    assert.match(results[3]?.stdout ?? "", /facts/u);
-    assert.equal(results[4]?.exitCode, 0);
-    assert.equal(results[4]?.stdout, "l10n 0.0.0\n");
+    assert.equal(qa?.exitCode, 0, `${qa?.stdout ?? ""}${qa?.stderr ?? ""}`);
+    assert.equal(qa?.stderr, "");
+    const qaResult = JSON.parse(qa?.stdout ?? "") as {
+      data: {
+        status: string;
+        subjects: readonly { key: string; language: string }[];
+        checks: readonly { id: string; configuration: { enabled: boolean } }[];
+      };
+    };
+    assert.equal(qaResult.data.status, "complete");
+    assert.deepEqual(qaResult.data.subjects, [
+      { key: "src/messages.ts:18", language: "fr" },
+    ]);
+    assert.deepEqual(qaResult.data.checks, [
+      {
+        id: "host-rule",
+        configuration: { enabled: true },
+        status: "complete",
+        diagnostics: [],
+        issues: [],
+        coverage: {
+          selected: 1,
+          evaluated: 1,
+          notApplicable: 0,
+          incomplete: 0,
+          failed: 0,
+        },
+      },
+    ]);
+    assert.equal(noChecks?.exitCode, 0);
+    assert.equal(
+      (JSON.parse(noChecks?.stdout ?? "") as { data: { status: string } }).data
+        .status,
+      "not-run",
+    );
+    assert.equal(results[5]?.exitCode, 0);
+    assert.match(results[5]?.stdout ?? "", /facts/u);
+    assert.equal(results[6]?.exitCode, 0);
+    assert.equal(results[6]?.stdout, "l10n 0.0.0\n");
   },
 };
 

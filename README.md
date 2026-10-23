@@ -137,6 +137,50 @@ l10n completion ./l10n.config.ts --output-format text
 
 默认输出结构化结果；文本模式展示同一事实版本、来源、实际译文、读取状态和关联状态。完成命令展示判据、统计范围、逐项义务和未知原因。
 
+## 当前质量检查
+
+`@l10n/checks` 提供可选的消息占位符检查器。宿主配置显式导出检查器，CLI 才会执行它；CLI 本身不导入 `@l10n/checks`：
+
+```ts
+import { createMessagePlaceholderChecker } from "@l10n/checks";
+
+export const qualityChecks = [
+  createMessagePlaceholderChecker({
+    sourceText: (unit) => unit.source,
+    translationText: (translation) => translation.text,
+    configuration: { grammar: "simple-placeholders-v1" },
+  }),
+];
+```
+
+检查器适配器由宿主提供，用来从原始单元和实际译文中取出消息文本。CLI 默认检查事实中的所有源译组合；也可以导出 `qualityRequest(facts)`，显式返回 `subjects`、`evidenceScope` 和 `dependencies` 来缩小检查范围或声明规则所需输入。未导出 `qualityChecks` 时，`qa` 会返回 `not-run`。
+
+```sh
+l10n qa ./l10n.config.ts
+l10n qa ./l10n.config.ts --output-format text
+```
+
+程序化调用可自行指定对象、证据范围、依赖及检查器：
+
+```ts
+import { readFacts, runQualityChecks } from "@l10n/core";
+
+const facts = await readFacts(config);
+const result = await runQualityChecks(
+  facts,
+  {
+    subjects: [{ key: "src/messages.ts:18", language: "fr" }],
+    evidenceScope: [
+      { kind: "translation-unit", key: "src/messages.ts:18", language: "fr" },
+    ],
+    dependencies: { policyRevision: "2026-10" },
+  },
+  qualityChecks,
+);
+```
+
+执行状态 `complete` 只表示所选检查已完成；即使存在 error 诊断也可能是 `complete`。未支持的 ICU 或链接消息会使检查 `incomplete` 并附带原因，损坏的占位符会使检查 `failed`。内置解析范围覆盖普通文本、`{name}`／`{0}` 占位符及以 `|` 分隔的分支；不同目标语言可以使用不同分支数。
+
 ## 本地制品
 
 在框架仓库根目录打包后，可在宿主目录安装生成的 tarball：
