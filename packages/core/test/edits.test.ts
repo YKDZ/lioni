@@ -128,6 +128,121 @@ void describe("semantic edits", () => {
     });
   });
 
+  void it("keeps write observations stable while the host mutates its raw resource", async () => {
+    for (const failAfterWrite of [false, true]) {
+      const source = { id: "source:A", source: "Save" };
+      const translation = {
+        id: "target:A",
+        text: "Old translation",
+      };
+      const locations = new WeakMap([
+        [translation, { file: "memory.fr", key: "actual-target" }],
+      ]);
+      const config = defineConfig({
+        source: {
+          read: () => ({
+            scopes: [
+              {
+                range: "memory-source",
+                enumeration: "complete",
+                records: [{ value: source, bodyAvailability: "available" }],
+              },
+            ],
+          }),
+        },
+        keyOf(unit) {
+          assert.strictEqual(unit, source);
+          return unit.id;
+        },
+        translations: {
+          languages: ["fr"],
+          read(_language, sourceUnits) {
+            return {
+              scopes: [
+                {
+                  range: "memory-target",
+                  covers: sourceUnits.map(({ key }) => key),
+                  enumeration: "complete",
+                  records: [
+                    { value: translation, bodyAvailability: "available" },
+                  ],
+                },
+              ],
+            };
+          },
+          matches(unit, actualTranslation) {
+            assert.strictEqual(unit, source);
+            assert.strictEqual(actualTranslation, translation);
+            return (
+              unit.id === "source:A" && actualTranslation.id === "target:A"
+            );
+          },
+        },
+        edits: {
+          targetContent: (actualTranslation) => actualTranslation.text,
+          locateExistingTarget({ sourceUnit, translation: actualTranslation }) {
+            assert.strictEqual(sourceUnit.unit, source);
+            assert.strictEqual(actualTranslation.translation, translation);
+            const locator = locations.get(actualTranslation.translation);
+            assert.ok(locator);
+            return { status: "located", locator };
+          },
+          locateNewTarget: () => ({
+            status: "notWritable",
+            reason: "本场景修改已有目标。",
+          }),
+          write({ edit, currentTranslation }) {
+            assert.strictEqual(currentTranslation?.translation, translation);
+            translation.text = textContent(edit.content);
+            if (failAfterWrite)
+              throw new Error("资源已修改，但存储随后报告失败。");
+          },
+        },
+      });
+      const facts = await readFacts(config);
+      const prepared = await prepareSemanticEdit(
+        facts,
+        { sourceKey: "source:A", language: "fr", content: "New translation" },
+        config,
+      );
+      assert.equal(prepared.status, "prepared");
+      if (prepared.status !== "prepared") continue;
+
+      const savedEdit = JSON.parse(
+        JSON.stringify(prepared.edit),
+      ) as typeof prepared.edit;
+      const result = await applySemanticEdits([savedEdit], config);
+      const editResult = result.results[0];
+
+      assert.equal(
+        editResult?.status,
+        failAfterWrite ? "writeFailed" : "written",
+      );
+      assert.equal(translation.text, "New translation");
+      assert.equal(
+        editResult?.before?.translations[0]?.translation.text,
+        "Old translation",
+      );
+      assert.equal(
+        editResult?.after?.translations[0]?.translation.text,
+        "New translation",
+      );
+      assert.equal(editResult?.before?.factsVersion, facts.version);
+      assert.notEqual(
+        editResult?.before?.factsVersion,
+        editResult?.after?.factsVersion,
+      );
+      assert.equal(savedEdit.expected.target.status, "present");
+      if (savedEdit.expected.target.status === "present")
+        assert.equal(savedEdit.expected.target.content, "Old translation");
+      translation.text = "Later external change";
+      assert.equal(
+        editResult?.after?.translations[0]?.translation.text,
+        "New translation",
+      );
+    }
+  });
+
   void it("applies a saved edit after unrelated source and target metadata changes", async () => {
     const state = {
       sourceText: "Save",

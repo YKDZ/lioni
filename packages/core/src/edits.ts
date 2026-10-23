@@ -291,8 +291,17 @@ export async function applySemanticEdits<
       continue;
     }
 
-    const before = observeEditFacts(facts, edit.sourceKey, edit.language);
-    const validation = await validateSemanticEdit(edit, before, config);
+    const beforeObservation = readEditObservation(
+      facts,
+      edit.sourceKey,
+      edit.language,
+    );
+    const before = snapshotEditObservation(beforeObservation);
+    const validation = await validateSemanticEdit(
+      edit,
+      beforeObservation,
+      config,
+    );
     if (validation.status !== "ready") {
       results.push({
         ...base,
@@ -315,10 +324,12 @@ export async function applySemanticEdits<
     } catch (error) {
       let after: SemanticEditObservation<TUnit, TTranslation> | undefined;
       try {
-        after = observeEditFacts(
-          await readFacts(config),
-          edit.sourceKey,
-          edit.language,
+        after = snapshotEditObservation(
+          readEditObservation(
+            await readFacts(config),
+            edit.sourceKey,
+            edit.language,
+          ),
         );
       } catch {
         // 保留写入失败结果；回读错误不会覆盖更直接的写入故障。
@@ -334,12 +345,14 @@ export async function applySemanticEdits<
     }
 
     try {
-      const after = observeEditFacts(
-        await readFacts(config),
+      const afterFacts = await readFacts(config);
+      const afterObservation = readEditObservation(
+        afterFacts,
         edit.sourceKey,
         edit.language,
       );
-      if (confirmsEditContent(edit, after, adapter)) {
+      const after = snapshotEditObservation(afterObservation);
+      if (confirmsEditContent(edit, afterObservation, adapter)) {
         results.push({ ...base, status: "written", before, after });
       } else {
         results.push({
@@ -519,7 +532,7 @@ async function validateSemanticEdit<
   };
 }
 
-function observeEditFacts<TUnit extends TranslationUnitInput, TTranslation>(
+function readEditObservation<TUnit extends TranslationUnitInput, TTranslation>(
   facts: FrameworkFacts<TUnit, TTranslation>,
   sourceKey: string,
   language: string,
@@ -546,6 +559,18 @@ function observeEditFacts<TUnit extends TranslationUnitInput, TTranslation>(
     association,
     translations,
   };
+}
+
+function snapshotEditObservation<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+>(
+  observation: SemanticEditObservation<TUnit, TTranslation>,
+): SemanticEditObservation<TUnit, TTranslation> {
+  return snapshotJson(observation, "编辑事实观察") as SemanticEditObservation<
+    TUnit,
+    TTranslation
+  >;
 }
 
 function confirmsEditContent<TUnit extends TranslationUnitInput, TTranslation>(
