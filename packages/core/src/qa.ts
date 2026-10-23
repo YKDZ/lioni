@@ -188,34 +188,45 @@ export async function runQualityChecks<
   request: QualityCheckRequest,
   checks: readonly QualityCheckDefinition<TUnit, TTranslation>[],
 ): Promise<QualityRunResult> {
+  const boundRequest = snapshotQualityData({
+    subjects: request.subjects,
+    evidenceScope: request.evidenceScope,
+    dependencies: request.dependencies,
+    relationships: request.relationships ?? [],
+    exceptions: request.exceptions ?? [],
+  });
   const results: QualityCheckResult[] = [];
   for (const definition of checks) {
+    let configuration: unknown;
     try {
+      configuration = snapshotQualityData(definition.configuration);
       const outcome = await definition.check({
         facts,
         ...request,
         configuration: definition.configuration,
       });
+      const findings = snapshotQualityData(outcome.diagnostics);
+      const diagnostics = findings.map((diagnostic) => ({
+        ...diagnostic,
+        ruleId: definition.id,
+        handling: handlingFor(
+          definition.id,
+          diagnostic,
+          boundRequest.exceptions,
+        ),
+      }));
       results.push({
         id: definition.id,
-        configuration: definition.configuration,
+        configuration,
         status: outcome.status,
-        diagnostics: outcome.diagnostics.map((diagnostic) => ({
-          ...diagnostic,
-          ruleId: definition.id,
-          handling: handlingFor(
-            definition.id,
-            diagnostic,
-            request.exceptions ?? [],
-          ),
-        })),
-        issues: outcome.issues,
-        coverage: outcome.coverage,
+        diagnostics,
+        issues: snapshotQualityData(outcome.issues),
+        coverage: { ...outcome.coverage },
       });
     } catch (error) {
       results.push({
         id: definition.id,
-        configuration: definition.configuration,
+        configuration,
         status: "failed",
         diagnostics: [],
         issues: [
@@ -237,29 +248,25 @@ export async function runQualityChecks<
 
   return {
     version: facts.version,
-    subjects: request.subjects.map((subject) => ({ ...subject })),
-    evidenceScope: request.evidenceScope.map((entry) => ({ ...entry })),
-    dependencies: request.dependencies,
-    relationships: (request.relationships ?? []).map((relationship) => ({
-      ...relationship,
-      members: relationship.members.map((member) => ({ ...member })),
-    })),
-    exceptions: (request.exceptions ?? []).map((exception) => ({
-      ...exception,
-      scope: {
-        ...exception.scope,
-        ...(exception.scope.object === undefined
-          ? {}
-          : { object: { ...exception.scope.object } }),
-        ...(exception.scope.location === undefined
-          ? {}
-          : { location: { ...exception.scope.location } }),
-      },
-    })),
+    ...boundRequest,
     status: aggregateStatus(results),
     diagnostics: results.flatMap(({ diagnostics }) => diagnostics),
     checks: results,
   };
+}
+
+function snapshotQualityData<TValue>(value: TValue): TValue {
+  // 报告使用与事实版本一致的 JSON 表示；传给检查器的原始输入不经复制。
+  if (value === undefined) return value;
+  let serialized: string | undefined;
+  try {
+    serialized = JSON.stringify(value);
+  } catch (error) {
+    throw new TypeError("QA 输入与结果必须可序列化为 JSON。", { cause: error });
+  }
+  if (serialized === undefined)
+    throw new TypeError("QA 输入与结果必须可序列化为 JSON。");
+  return JSON.parse(serialized) as TValue;
 }
 
 function handlingFor(

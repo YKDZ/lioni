@@ -402,4 +402,240 @@ void describe("relationship quality checks", () => {
     assert.deepEqual(result.exceptions, request.exceptions);
     assert.deepEqual(facts, originalFacts);
   });
+
+  void it("keeps relationship evidence tied to the facts version after host edits", async () => {
+    type LocatedTranslation = Omit<Translation, "text"> & {
+      text: string;
+      readonly sourceId: string;
+      readonly nativeKey: string;
+      readonly position: { line: number };
+    };
+    const targets: LocatedTranslation[] = [
+      {
+        id: "a",
+        sourceId: "A",
+        nativeKey: "save_label",
+        text: "Old A",
+        position: { line: 18 },
+      },
+      {
+        id: "b",
+        sourceId: "B",
+        nativeKey: "save_button",
+        text: "Other B",
+        position: { line: 19 },
+      },
+    ];
+    const hostMetadata = new WeakMap<LocatedTranslation, string>([
+      [targets[0] as LocatedTranslation, "save_label"],
+      [targets[1] as LocatedTranslation, "save_button"],
+    ]);
+    const config = defineConfig<Unit, LocatedTranslation>({
+      source: {
+        read: () => ({
+          scopes: [
+            {
+              range: "src/messages.ts",
+              enumeration: "complete",
+              records: [
+                {
+                  value: { id: "A", source: "Save", text: "Save" },
+                  bodyAvailability: "available",
+                },
+                {
+                  value: {
+                    id: "B",
+                    source: "Save action",
+                    text: "Save action",
+                  },
+                  bodyAvailability: "available",
+                },
+              ],
+            },
+          ],
+        }),
+      },
+      keyOf: (unit) => unit.id,
+      translations: {
+        languages: ["fr"],
+        read: (_language, sourceUnits) => ({
+          scopes: [
+            {
+              range: "locales/fr.json",
+              covers: sourceUnits.map(({ key }) => key),
+              enumeration: "complete",
+              records: targets.map((value) => ({
+                value,
+                bodyAvailability: "available",
+              })),
+            },
+          ],
+        }),
+        matches: (unit, translation) => unit.id === translation.sourceId,
+      },
+    });
+    const checker = createRelationshipChecker<
+      Unit,
+      LocatedTranslation,
+      {
+        readonly constraint: string;
+        readonly observedTarget: LocatedTranslation;
+      }
+    >({
+      id: "same-target-text",
+      relationshipKind: "same-target-text",
+      configuration: {
+        constraint: "target text is equal",
+        observedTarget: targets[0] as LocatedTranslation,
+      },
+      translationLocation: (translation, _subject, defaultLocation) => ({
+        ...defaultLocation,
+        key: hostMetadata.get(translation) ?? "unlocated",
+        position: translation.position,
+      }),
+      evaluate: ({ members, configuration }) => {
+        const first = members[0]?.translation;
+        const second = members[1]?.translation;
+        if (
+          first === undefined ||
+          second === undefined ||
+          hostMetadata.get(first) !== "save_label" ||
+          hostMetadata.get(second) !== "save_button" ||
+          hostMetadata.get(configuration.observedTarget) !== "save_label"
+        )
+          return {
+            severity: "error",
+            message: "宿主关系上下文不可用。",
+          };
+        return first.text === second.text
+          ? undefined
+          : { severity: "error", message: "关系成员译文不同。" };
+      },
+    });
+    const request: QualityCheckRequest = {
+      subjects: [{ key: "A", language: "fr" }],
+      evidenceScope: ["A", "B"].map((key) => ({
+        kind: "translation-unit",
+        key,
+        language: "fr",
+      })),
+      relationships: [
+        {
+          kind: "same-target-text",
+          key: "shared-save",
+          members: [
+            { key: "A", language: "fr" },
+            { key: "B", language: "fr" },
+          ],
+        },
+      ],
+      dependencies: { observedTarget: targets[0] },
+    };
+
+    const oldFacts = await readFacts(config);
+    const oldRun = await runQualityChecks(oldFacts, request, [checker]);
+
+    assert.equal(oldRun.status, "complete");
+    assert.equal(oldRun.diagnostics[0]?.message, "关系成员译文不同。");
+    assert.deepEqual(oldRun.checks[0]?.configuration, {
+      constraint: "target text is equal",
+      observedTarget: {
+        id: "a",
+        sourceId: "A",
+        nativeKey: "save_label",
+        text: "Old A",
+        position: { line: 18 },
+      },
+    });
+    assert.deepEqual(oldRun.diagnostics[0]?.evidence[0]?.value, {
+      id: "a",
+      sourceId: "A",
+      nativeKey: "save_label",
+      text: "Old A",
+      position: { line: 18 },
+    });
+    assert.deepEqual(oldRun.diagnostics[0]?.location, {
+      language: "fr",
+      range: "locales/fr.json",
+      key: "save_label",
+      position: { line: 18 },
+    });
+
+    targets[0]!.text = "New A";
+    targets[0]!.position.line = 42;
+
+    assert.equal(oldRun.version, oldFacts.version);
+    assert.deepEqual(
+      {
+        configuration: oldRun.checks[0]?.configuration,
+        dependencies: oldRun.dependencies,
+        value: oldRun.diagnostics[0]?.evidence[0]?.value,
+        location: oldRun.diagnostics[0]?.location,
+      },
+      {
+        configuration: {
+          constraint: "target text is equal",
+          observedTarget: {
+            id: "a",
+            sourceId: "A",
+            nativeKey: "save_label",
+            text: "Old A",
+            position: { line: 18 },
+          },
+        },
+        dependencies: {
+          observedTarget: {
+            id: "a",
+            sourceId: "A",
+            nativeKey: "save_label",
+            text: "Old A",
+            position: { line: 18 },
+          },
+        },
+        value: {
+          id: "a",
+          sourceId: "A",
+          nativeKey: "save_label",
+          text: "Old A",
+          position: { line: 18 },
+        },
+        location: {
+          language: "fr",
+          range: "locales/fr.json",
+          key: "save_label",
+          position: { line: 18 },
+        },
+      },
+    );
+
+    const newFacts = await readFacts(config);
+    const newRun = await runQualityChecks(newFacts, request, [checker]);
+
+    assert.notEqual(newRun.version, oldRun.version);
+    assert.equal(
+      (
+        newRun.dependencies as {
+          readonly observedTarget: LocatedTranslation;
+        }
+      ).observedTarget.text,
+      "New A",
+    );
+    assert.equal(
+      (
+        newRun.checks[0]?.configuration as {
+          readonly observedTarget: LocatedTranslation;
+        }
+      ).observedTarget.text,
+      "New A",
+    );
+    assert.equal(
+      (newRun.diagnostics[0]?.evidence[0]?.value as LocatedTranslation).text,
+      "New A",
+    );
+    assert.equal(
+      (newRun.diagnostics[0]?.location.position as { line: number } | undefined)
+        ?.line,
+      42,
+    );
+  });
 });
