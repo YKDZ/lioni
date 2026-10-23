@@ -212,6 +212,70 @@ const result = await advanceProcessingBaseline(store, facts, [
 
 已消失的原文仍保留历史单元和相关译文范围。若宿主明确处理这项删除，可在推进时传入原有 `matches` 函数；它会重新检查历史相关范围，保留仍存在的目标事实，并只推进该原文身份和语言。
 
+## 语义编辑
+
+宿主可把候选保存为可 JSON 序列化的语义编辑。已有译文的位置由实际译文定位；新增位置由宿主根据原始原文单元、语言和自身配置确定。身份 key 不作为资源物理位置。宿主还可以声明候选依赖的上下文，例如截图；未声明的元数据变化不会自动阻止局部写入：
+
+```ts
+import { prepareSemanticEdit, readFacts } from "@l10n/core";
+import config from "./l10n.config.ts";
+
+const facts = await readFacts(config);
+const prepared = await prepareSemanticEdit(
+  facts,
+  { sourceKey: "src/messages.ts:18", language: "fr", content: "Enregistrer" },
+  config,
+);
+
+if (prepared.status === "prepared") {
+  // 将 JSON 保存到宿主自己的候选文件，可在后续进程中读取。
+  await saveEdit(JSON.stringify(prepared.edit));
+}
+```
+
+`edits` 配置提供实际目标内容读取、现有目标定位、新目标定位和宿主写入函数。定位函数必须使用宿主的真实资源来源；无法定位或资源只读时返回 `notWritable`。写入函数应只改候选目标并保留同一资源中的无关内容：
+
+```ts
+edits: {
+  targetContent: (translation) => translation.text,
+  locateExistingTarget({ translation }) {
+    return {
+      status: "located",
+      locator: {
+        file: translation.translation.context.file,
+        key: translation.translation.context.resourceKey,
+      },
+    };
+  },
+  locateNewTarget({ sourceUnit, language }) {
+    return {
+      status: "located",
+      locator: {
+        file: `locales/${language}.json`,
+        key: sourceUnit.unit.context.resourceKey,
+      },
+    };
+  },
+  dependencies: ({ sourceUnit }) => ({
+    screenshot: sourceUnit.unit.context.screenshot,
+  }),
+  async write({ edit, target }) {
+    await hostResources.update(target.locator, edit.content);
+  },
+},
+```
+
+新进程读取候选后，`applySemanticEdits` 会重新读取事实，核对原文、目标正文、已声明依赖和宿主解析出的实际位置，再调用写入函数；写入后会再次读取并报告观察到的资源结果：
+
+```ts
+import { applySemanticEdits, type SemanticEdit } from "@l10n/core";
+
+const edit = JSON.parse(await readSavedEdit()) as SemanticEdit;
+const result = await applySemanticEdits([edit], config);
+```
+
+每项结果会区分 `written`、`writeUnconfirmed`、`conflict`、`notWritable`、`writeFailed` 和 `unprocessed`，并在可读取时带上写入前后的事实。多匹配和已变化的相关输入不会写入。语义编辑只改实际资源，不运行 QA、判定完成状态或推进处理基线。
+
 ## 本地制品
 
 在框架仓库根目录打包后，可在宿主目录安装生成的 tarball：

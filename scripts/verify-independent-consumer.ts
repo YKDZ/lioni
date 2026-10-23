@@ -224,6 +224,125 @@ export default defineConfig({
   },
 });
 `;
+  const editsConfigSource = `import { readFileSync, writeFileSync } from "node:fs";
+import { defineConfig } from "@l10n/core";
+
+type Unit = {
+  source: string;
+  context: {
+    identity: string;
+    line: number;
+    targetKey: string;
+    screenshot: string;
+    unrelated?: string;
+  };
+};
+type Translation = {
+  text: string;
+  context: {
+    file: string;
+    resourceKey: string;
+    sourceLines: number[];
+    annotation?: string;
+    readOnly?: boolean;
+    writeFailure?: boolean;
+    writeIgnore?: boolean;
+  };
+};
+
+function readSources(): Unit[] {
+  return JSON.parse(readFileSync("edit-sources.json", "utf8")) as Unit[];
+}
+
+function readCatalogue(): { enumeration: "complete" | "partial"; records: Translation[]; unrelated: unknown } {
+  return JSON.parse(readFileSync("edit-catalogue.json", "utf8")) as {
+    enumeration: "complete" | "partial";
+    records: Translation[];
+    unrelated: unknown;
+  };
+}
+
+export default defineConfig<Unit, Translation>({
+  source: {
+    read() {
+      return {
+        scopes: [{
+          range: "edit-sources.json",
+          enumeration: "complete",
+          records: readSources().map((value) => ({ value, bodyAvailability: "available" as const })),
+        }],
+      };
+    },
+  },
+  keyOf: (unit) => unit.context.identity,
+  translations: {
+    languages: ["fr"],
+    read(_language, sourceUnits) {
+      const catalogue = readCatalogue();
+      return {
+        scopes: [{
+          range: "edit-catalogue.json",
+          covers: sourceUnits.map(({ key }) => key),
+          enumeration: catalogue.enumeration,
+          records: catalogue.records.map((value) => ({ value, bodyAvailability: "available" as const })),
+        }],
+      };
+    },
+    matches: (unit, translation) => translation.context.sourceLines.includes(unit.context.line),
+  },
+  edits: {
+    targetContent: (translation) => translation.text,
+    locateExistingTarget({ translation }) {
+      if (translation.translation.context.readOnly)
+        return { status: "notWritable", reason: "该译文资源只读。" };
+      return {
+        status: "located",
+        locator: {
+          file: translation.translation.context.file,
+          key: translation.translation.context.resourceKey,
+        },
+      };
+    },
+    locateNewTarget({ sourceUnit, language }) {
+      const key = sourceUnit.unit.context.targetKey;
+      if (key === "") return { status: "notWritable", reason: "宿主无法定位新增目标。" };
+      return {
+        status: "located",
+        locator: { file: "locales/" + language + ".json", key },
+      };
+    },
+    dependencies: ({ sourceUnit }) => ({ screenshot: sourceUnit.unit.context.screenshot }),
+    write({ edit, sourceUnit, target, currentTranslation }) {
+      const catalogue = readCatalogue();
+      if (target.kind === "existing") {
+        if (currentTranslation?.translation.context.writeFailure)
+          throw new Error("宿主资源拒绝保存该译文。");
+        if (currentTranslation?.translation.context.writeIgnore) return;
+        const locator = target.locator as { file: string; key: string };
+        const record = catalogue.records.find((item) =>
+          item.context.file === locator.file && item.context.resourceKey === locator.key,
+        );
+        if (record === undefined) throw new Error("实际译文定位已失效。");
+        if (typeof edit.content !== "string") throw new Error("该宿主只接受字符串译文。");
+        record.text = edit.content;
+      } else {
+        if (typeof edit.content !== "string") throw new Error("该宿主只接受字符串译文。");
+        const locator = target.locator as { file: string; key: string };
+        catalogue.records.push({
+          text: edit.content,
+          context: {
+            file: locator.file,
+            resourceKey: locator.key,
+            sourceLines: [sourceUnit.unit.context.line],
+            annotation: "created by host adapter",
+          },
+        });
+      }
+      writeFileSync("edit-catalogue.json", JSON.stringify(catalogue, null, 2));
+    },
+  },
+});
+`;
   const qaConfigSource = `import { readFile } from "node:fs/promises";
 import { defineConfig } from "@l10n/core";
 import { createMessagePlaceholderChecker } from "@l10n/checks";
@@ -273,9 +392,11 @@ export default defineConfig<Unit, Translation>({
 `;
   const typecheckSource = `import { createMessagePlaceholderChecker } from "@l10n/checks";
 import {
+  applySemanticEdits,
   advanceProcessingBaseline,
   compareProcessingBaseline,
   evaluateCompletion,
+  prepareSemanticEdit,
   readCompletion,
   readFacts,
   readSourceFacts,
@@ -283,6 +404,7 @@ import {
 import { createFileProcessingBaselineStore } from "@l10n/core/node";
 import config from "./l10n.config.ts";
 import completionConfig from "./completion.config.ts";
+import editConfig from "./edits.config.ts";
 import qaConfig, { qualityChecks } from "./qa.config.ts";
 
 void readSourceFacts(config);
@@ -300,6 +422,17 @@ void readFacts(completionConfig).then((facts) =>
 void compareProcessingBaseline;
 void advanceProcessingBaseline;
 void createFileProcessingBaselineStore(".l10n/processing-baseline.json");
+void readFacts(editConfig).then(async (facts) => {
+  const sourceUnit = facts.source.units[0];
+  if (sourceUnit === undefined) return;
+  const prepared = await prepareSemanticEdit(facts, {
+    sourceKey: sourceUnit.key,
+    language: "fr",
+    content: "Edited translation",
+  }, editConfig);
+  if (prepared.status === "prepared")
+    return applySemanticEdits([prepared.edit], editConfig);
+});
 `;
   const tsconfig = {
     compilerOptions: {
@@ -315,6 +448,7 @@ void createFileProcessingBaselineStore(".l10n/processing-baseline.json");
     files: [
       "l10n.config.ts",
       "completion.config.ts",
+      "edits.config.ts",
       "qa.config.ts",
       "typecheck.ts",
     ],
@@ -581,7 +715,279 @@ if (scenario === "establish") {
   }
 }
 `;
+  const editApplySource = `import { readFile, writeFile } from "node:fs/promises";
+import { applySemanticEdits } from "@l10n/core";
+import config from "./edits.config.ts";
 
+const editPath = process.argv[2];
+if (editPath === undefined) throw new Error("缺少语义编辑文件路径。");
+const edits = JSON.parse(await readFile(editPath, "utf8"));
+const result = await applySemanticEdits(edits, config);
+await writeFile(editPath + ".result.json", JSON.stringify(result), "utf8");
+`;
+  const editCheckSource = `import assert from "node:assert/strict";
+import { readFile, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import path from "node:path";
+import { applySemanticEdits, prepareSemanticEdit, readFacts } from "@l10n/core";
+import config from "./edits.config.ts";
+
+async function prepare(sourceKey, content) {
+  const facts = await readFacts(config);
+  const result = await prepareSemanticEdit(facts, { sourceKey, language: "fr", content }, config);
+  assert.equal(result.status, "prepared", result.reason);
+  return result.edit;
+}
+
+async function applyInNewProcess(name, edits) {
+  const editPath = path.join(process.cwd(), name + ".json");
+  await writeFile(editPath, JSON.stringify(edits), "utf8");
+  const child = spawnSync(process.execPath, ["edit-apply.mjs", editPath], { encoding: "utf8" });
+  assert.equal(child.status, 0, child.stderr);
+  const saved = JSON.parse(await readFile(editPath + ".result.json", "utf8"));
+  return saved.results;
+}
+
+const sourcesPath = path.join(process.cwd(), "edit-sources.json");
+const cataloguePath = path.join(process.cwd(), "edit-catalogue.json");
+const initialFacts = await readFacts(config);
+assert.equal(initialFacts.associations.find(({ sourceKey }) => sourceKey === "source:18")?.status, "matched");
+assert.equal(initialFacts.associations.find(({ sourceKey }) => sourceKey === "source:19")?.status, "matched");
+assert.equal(initialFacts.associations.find(({ sourceKey }) => sourceKey === "source:22")?.status, "missing");
+
+const firstSharedEdit = await prepare("source:18", "First shared proposal");
+const secondSharedEdit = await prepare("source:19", "Second shared proposal");
+assert.notEqual(firstSharedEdit.sourceKey, firstSharedEdit.target.locator.key);
+const sources = JSON.parse(await readFile(sourcesPath, "utf8"));
+sources[0].context.unrelated = "changed after preparation";
+await writeFile(sourcesPath, JSON.stringify(sources, null, 2), "utf8");
+const catalogue = JSON.parse(await readFile(cataloguePath, "utf8"));
+catalogue.records[0].context.annotation = "external annotation change";
+catalogue.unrelated = { preserve: "unrelated resource entry" };
+await writeFile(cataloguePath, JSON.stringify(catalogue, null, 2), "utf8");
+
+const sharedResults = await applyInNewProcess("shared-edits", [firstSharedEdit, secondSharedEdit]);
+assert.deepEqual(sharedResults.map(({ status }) => status), ["written", "conflict"]);
+assert.equal(sharedResults[1].before.translations[0].translation.text, "First shared proposal");
+let actualCatalogue = JSON.parse(await readFile(cataloguePath, "utf8"));
+assert.equal(actualCatalogue.records[0].text, "First shared proposal");
+assert.deepEqual(actualCatalogue.unrelated, { preserve: "unrelated resource entry" });
+
+const staleTargetEdit = await prepare("source:18", "Must not overwrite external edit");
+actualCatalogue.records[0].text = "External target edit";
+await writeFile(cataloguePath, JSON.stringify(actualCatalogue, null, 2), "utf8");
+const staleTargetResults = await applyInNewProcess("stale-target-edit", [staleTargetEdit]);
+assert.equal(staleTargetResults[0].status, "conflict");
+actualCatalogue = JSON.parse(await readFile(cataloguePath, "utf8"));
+assert.equal(actualCatalogue.records[0].text, "External target edit");
+
+const staleSourceEdit = await prepare("source:18", "Must not overwrite after source change");
+const changedSourceText = JSON.parse(await readFile(sourcesPath, "utf8"));
+changedSourceText[0].source = "Save with changed meaning";
+await writeFile(sourcesPath, JSON.stringify(changedSourceText, null, 2), "utf8");
+const staleSourceResults = await applyInNewProcess("stale-source-edit", [staleSourceEdit]);
+assert.equal(staleSourceResults[0].status, "conflict");
+actualCatalogue = JSON.parse(await readFile(cataloguePath, "utf8"));
+assert.equal(actualCatalogue.records[0].text, "External target edit");
+changedSourceText[0].source = "Save";
+await writeFile(sourcesPath, JSON.stringify(changedSourceText, null, 2), "utf8");
+
+const staleContextEdit = await prepare("source:18", "Must not overwrite after screenshot change");
+const changedSources = JSON.parse(await readFile(sourcesPath, "utf8"));
+changedSources[0].context.screenshot = "shots/save-v2.png";
+await writeFile(sourcesPath, JSON.stringify(changedSources, null, 2), "utf8");
+const staleContextResults = await applyInNewProcess("stale-context-edit", [staleContextEdit]);
+assert.equal(staleContextResults[0].status, "conflict");
+assert.match(staleContextResults[0].reason, /依赖/u);
+actualCatalogue = JSON.parse(await readFile(cataloguePath, "utf8"));
+assert.equal(actualCatalogue.records[0].text, "External target edit");
+
+const multiMatchEdit = await prepare("source:20", "Do not edit an ambiguous target");
+actualCatalogue = JSON.parse(await readFile(cataloguePath, "utf8"));
+actualCatalogue.records.push({
+  text: "Second cancel translation",
+  context: {
+    file: "locales/fr.json",
+    resourceKey: "duplicate-cancel",
+    sourceLines: [20],
+  },
+});
+await writeFile(cataloguePath, JSON.stringify(actualCatalogue, null, 2), "utf8");
+const multiMatchResults = await applyInNewProcess("multi-match-edit", [multiMatchEdit]);
+assert.equal(multiMatchResults[0].status, "conflict");
+actualCatalogue = JSON.parse(await readFile(cataloguePath, "utf8"));
+assert.equal(actualCatalogue.records.find(({ context }) => context.resourceKey === "readonly-cancel").text, "Cancel original");
+actualCatalogue.records = actualCatalogue.records.filter(({ context }) => context.resourceKey !== "duplicate-cancel");
+await writeFile(cataloguePath, JSON.stringify(actualCatalogue, null, 2), "utf8");
+
+const readOnlyEdit = await prepare("source:20", "No write to read-only target");
+actualCatalogue.records.find(({ context }) => context.resourceKey === "readonly-cancel").context.readOnly = true;
+await writeFile(cataloguePath, JSON.stringify(actualCatalogue, null, 2), "utf8");
+const readOnlyResults = await applyInNewProcess("readonly-edit", [readOnlyEdit]);
+assert.equal(readOnlyResults[0].status, "notWritable");
+
+const failedWriteEdit = await prepare("source:21", "Host storage rejects this edit");
+const failedWriteResults = await applyInNewProcess("failed-write-edit", [failedWriteEdit]);
+assert.equal(failedWriteResults[0].status, "writeFailed");
+assert.equal(failedWriteResults[0].after.translations[0].translation.text, "Help original");
+
+const ignoredWriteEdit = await prepare("source:24", "Host reports success without changing the resource");
+const ignoredWriteResults = await applyInNewProcess("ignored-write-edit", [ignoredWriteEdit]);
+assert.equal(ignoredWriteResults[0].status, "writeUnconfirmed");
+assert.equal(ignoredWriteResults[0].after.translations[0].translation.text, "Tooltip original");
+
+const createEdit = await prepare("source:22", "À propos");
+assert.deepEqual(createEdit.target, {
+  kind: "create",
+  locator: { file: "locales/fr.json", key: "toolbar.about" },
+});
+actualCatalogue = JSON.parse(await readFile(cataloguePath, "utf8"));
+actualCatalogue.records.push({
+  text: "Externally created About",
+  context: {
+    file: "locales/fr.json",
+    resourceKey: "toolbar.about",
+    sourceLines: [22],
+  },
+});
+await writeFile(cataloguePath, JSON.stringify(actualCatalogue, null, 2), "utf8");
+const occupiedCreateResults = await applyInNewProcess("occupied-create-edit", [createEdit]);
+assert.equal(occupiedCreateResults[0].status, "conflict");
+actualCatalogue = JSON.parse(await readFile(cataloguePath, "utf8"));
+assert.equal(actualCatalogue.records.find(({ context }) => context.resourceKey === "toolbar.about").text, "Externally created About");
+actualCatalogue.records = actualCatalogue.records.filter(({ context }) => context.resourceKey !== "toolbar.about");
+actualCatalogue.enumeration = "partial";
+await writeFile(cataloguePath, JSON.stringify(actualCatalogue, null, 2), "utf8");
+const unprocessedResults = await applyInNewProcess("unprocessed-edit", [createEdit]);
+assert.equal(unprocessedResults[0].status, "unprocessed");
+actualCatalogue = JSON.parse(await readFile(cataloguePath, "utf8"));
+assert.equal(actualCatalogue.records.some(({ context }) => context.resourceKey === "toolbar.about"), false);
+actualCatalogue.enumeration = "complete";
+await writeFile(cataloguePath, JSON.stringify(actualCatalogue, null, 2), "utf8");
+const createResults = await applyInNewProcess("create-edit", [createEdit]);
+assert.equal(createResults[0].status, "written");
+assert.equal(createResults[0].after.translations[0].translation.text, "À propos");
+
+const factsAfter = await readFacts(config);
+assert.equal(factsAfter.associations.find(({ sourceKey }) => sourceKey === "source:18")?.status, "matched");
+assert.equal(factsAfter.associations.find(({ sourceKey }) => sourceKey === "source:19")?.status, "matched");
+const noLocationFacts = await readFacts(config);
+const noLocation = await prepareSemanticEdit(noLocationFacts, {
+  sourceKey: "source:23",
+  language: "fr",
+  content: "Cannot be located",
+}, config);
+assert.equal(noLocation.status, "notWritable");
+
+process.stdout.write("独立打包宿主：编辑跨进程、冲突、依赖失效、失败和未处理结果通过。\\n");
+`;
+
+  const editSources = [
+    {
+      source: "Save",
+      context: {
+        identity: "source:18",
+        line: 18,
+        targetKey: "toolbar.save",
+        screenshot: "shots/save.png",
+      },
+    },
+    {
+      source: "Submit",
+      context: {
+        identity: "source:19",
+        line: 19,
+        targetKey: "toolbar.submit",
+        screenshot: "shots/submit.png",
+      },
+    },
+    {
+      source: "Cancel",
+      context: {
+        identity: "source:20",
+        line: 20,
+        targetKey: "toolbar.cancel",
+        screenshot: "shots/cancel.png",
+      },
+    },
+    {
+      source: "Help",
+      context: {
+        identity: "source:21",
+        line: 21,
+        targetKey: "toolbar.help",
+        screenshot: "shots/help.png",
+      },
+    },
+    {
+      source: "About",
+      context: {
+        identity: "source:22",
+        line: 22,
+        targetKey: "toolbar.about",
+        screenshot: "shots/about.png",
+      },
+    },
+    {
+      source: "Other",
+      context: {
+        identity: "source:23",
+        line: 23,
+        targetKey: "",
+        screenshot: "shots/other.png",
+      },
+    },
+    {
+      source: "Tooltip",
+      context: {
+        identity: "source:24",
+        line: 24,
+        targetKey: "toolbar.tooltip",
+        screenshot: "shots/tooltip.png",
+      },
+    },
+  ];
+  const editCatalogue = {
+    enumeration: "complete",
+    records: [
+      {
+        text: "Shared original",
+        context: {
+          file: "locales/fr.json",
+          resourceKey: "shared-save-submit",
+          sourceLines: [18, 19],
+          annotation: "keep this metadata",
+        },
+      },
+      {
+        text: "Cancel original",
+        context: {
+          file: "locales/fr.json",
+          resourceKey: "readonly-cancel",
+          sourceLines: [20],
+        },
+      },
+      {
+        text: "Help original",
+        context: {
+          file: "locales/fr.json",
+          resourceKey: "failed-help",
+          sourceLines: [21],
+          writeFailure: true,
+        },
+      },
+      {
+        text: "Tooltip original",
+        context: {
+          file: "locales/fr.json",
+          resourceKey: "ignored-tooltip",
+          sourceLines: [24],
+          writeIgnore: true,
+        },
+      },
+    ],
+    unrelated: { preserve: "original resource entry" },
+  };
   await mkdir(path.join(consumerRoot, "completion-resources"), {
     recursive: true,
   });
@@ -600,6 +1006,7 @@ if (scenario === "establish") {
       path.join(consumerRoot, "completion.config.ts"),
       completionConfigSource,
     ),
+    writeFile(path.join(consumerRoot, "edits.config.ts"), editsConfigSource),
     writeFile(path.join(consumerRoot, "qa.config.ts"), qaConfigSource),
     writeFile(
       path.join(consumerRoot, "qa-messages.json"),
@@ -613,6 +1020,14 @@ if (scenario === "establish") {
       path.join(consumerRoot, "completion-resources", "de.json"),
       "[]\n",
     ),
+    writeFile(
+      path.join(consumerRoot, "edit-sources.json"),
+      JSON.stringify(editSources, null, 2),
+    ),
+    writeFile(
+      path.join(consumerRoot, "edit-catalogue.json"),
+      JSON.stringify(editCatalogue, null, 2),
+    ),
     writeFile(path.join(consumerRoot, "typecheck.ts"), typecheckSource),
     writeFile(
       path.join(consumerRoot, "tsconfig.json"),
@@ -624,6 +1039,8 @@ if (scenario === "establish") {
       completionCheckSource,
     ),
     writeFile(path.join(consumerRoot, "baseline-host.mjs"), baselineHostSource),
+    writeFile(path.join(consumerRoot, "edit-apply.mjs"), editApplySource),
+    writeFile(path.join(consumerRoot, "edit-check.mjs"), editCheckSource),
   ]).then(() => undefined);
 }
 
@@ -671,6 +1088,14 @@ export async function verifyIndependentConsumer(): Promise<void> {
       consumerRoot,
     );
     process.stdout.write(completionRuntime.stdout);
+
+    process.stdout.write("运行语义编辑跨进程、真实资源和输入冲突场景…\n");
+    const editRuntime = runChecked(
+      process.execPath,
+      ["edit-check.mjs"],
+      consumerRoot,
+    );
+    process.stdout.write(editRuntime.stdout);
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
   }

@@ -5,8 +5,10 @@ import {
   evaluateCompletion,
 } from "./completion.ts";
 import type { CompletionFacts, CompletionPolicy } from "./completion.ts";
+import type { SemanticEditAdapter } from "./edits.ts";
 
 export * from "./completion.ts";
+export * from "./edits.ts";
 export * from "./qa.ts";
 export {
   advanceProcessingBaseline,
@@ -85,6 +87,7 @@ export type FrameworkConfig<
   readonly keyOf: (unit: TUnit) => string;
   readonly translations?: TranslationAdapter<TUnit, TTranslation>;
   readonly completion?: CompletionPolicy<TUnit, TTranslation>;
+  readonly edits?: SemanticEditAdapter<TUnit, TTranslation>;
 };
 
 export type SourceUnitFact<TUnit extends TranslationUnitInput> = {
