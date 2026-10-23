@@ -92,14 +92,50 @@ const facts = await readFacts(config);
 
 来源总数仅在全部来源范围完整枚举时提供，否则为 `null`。组合事实保留来源和译文读取范围、原始记录、正文可用性、目标语言及关联索引。关联状态可为 `matched`、`missing`、`unavailable`、`unknown` 或 `conflict`；`coverageStatus` 单独说明覆盖是否完整、失败或尚未读取。事实版本随实际输入和关联结果变化。原始上下文和范围需能序列化为 JSON。
 
+## 完成统计
+
+只有请求完成统计时才需要宿主配置完成判据。`resolveCompletion` 是普通函数，接收当前原文、源译关联和匹配到的实际译文；宿主可以按正文、状态或项目规则判定，也可以对证据不足返回未知：
+
+```ts
+completion: {
+  criterion: "译文正文可读且非空",
+  resolveCompletion({ association, translations }) {
+    if (association.status === "unavailable") {
+      return { status: "unknown", reason: "译文正文不可用。" };
+    }
+    return translations.some(
+      ({ translation }) =>
+        typeof translation.text === "string" && translation.text.trim() !== "",
+    );
+  },
+},
+```
+
+`readCompletion(config)` 在同一份源译事实上计算判据，并返回事实及 `completion` 报告。义务按本次全部原文与显式目标语言组合；缺译和无资源语言仍计入分母，目标独有译文不增加分母。部分或失败的读取、正文不可用及匹配冲突保留为未知依据，不会自动记作未完成或缺译。原文范围不完整时保留已知条目的局部结果，总义务数和完成率为 `null`，并说明总数未知原因。
+
+也可以复用一份事实快照比较不同宿主判据，不需要重新读取或重新匹配：
+
+```ts
+import config from "./l10n.config.ts";
+import { evaluateCompletion, readFacts } from "@l10n/core";
+
+const facts = await readFacts(config);
+const report = await evaluateCompletion(facts, {
+  criterion: "项目自己的判据",
+  resolveCompletion: ({ translations }) => translations.length > 0,
+});
+```
+
 也可以用 CLI 读取同一份配置：
 
 ```sh
 l10n facts ./l10n.config.ts
 l10n facts ./l10n.config.ts --output-format text
+l10n completion ./l10n.config.ts
+l10n completion ./l10n.config.ts --output-format text
 ```
 
-默认输出结构化结果；文本模式展示同一事实版本、来源、实际译文、读取状态和关联状态。
+默认输出结构化结果；文本模式展示同一事实版本、来源、实际译文、读取状态和关联状态。完成命令展示判据、统计范围、逐项义务和未知原因。
 
 ## 本地制品
 
@@ -121,10 +157,10 @@ overrides:
 
 此路径对应上面的 `/tmp/l10n-packages` 示例；按宿主实际 tarball 路径调整。
 
-然后在宿主目录安装 CLI 和 core：
+然后在宿主目录安装所需制品：
 
 ```sh
 pnpm add /tmp/l10n-packages/l10n-core-0.0.0.tgz /tmp/l10n-packages/l10n-cli-0.0.0.tgz
 ```
 
-每次 core 制品变化后，重新打包 core、checks 和 CLI，并在干净宿主目录重新安装同一包集。仓库中的 `pnpm verify:independent-consumer` 会自动完成该流程并检查已安装类型、API 和 CLI。`facts` 入口读取原文；配置 `translations` 后，也会读取显式目标语言的实际译文并生成匹配及覆盖事实。`@l10n/checks` 的具体检查器随对应能力交付，由宿主配置显式选择。
+每次 core 制品变化后，重新打包 core、checks 和 CLI，并在干净宿主目录重新安装同一包集。仓库中的 `pnpm verify:independent-consumer` 会自动完成该流程并检查已安装类型、API 和 CLI。`facts` 入口读取源译事实；`completion` 在其上按宿主判据生成义务与统计。`@l10n/checks` 的具体检查器随对应能力交付，由宿主配置显式选择。

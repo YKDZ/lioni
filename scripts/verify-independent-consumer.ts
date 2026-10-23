@@ -51,7 +51,7 @@ function runChecked(
   return result;
 }
 
-function writeConsumerFiles(
+async function writeConsumerFiles(
   consumerRoot: string,
   artifactRoot: string,
 ): Promise<void> {
@@ -71,6 +71,9 @@ function writeConsumerFiles(
     packageManager: "pnpm@12.9.1",
     type: "module",
     dependencies,
+    devDependencies: {
+      "@types/node": "24.19.2",
+    },
   };
   const coreTarball = path
     .relative(consumerRoot, path.join(artifactRoot, "l10n-core-0.0.0.tgz"))
@@ -170,12 +173,68 @@ export default defineConfig({
   },
 });
 `;
+  const completionConfigSource = `import { readFileSync } from "node:fs";
+import { defineConfig } from "@l10n/core";
+
+type Translation = {
+  text: string;
+  context: { sourceLine: number };
+};
+
+const sourceRecords = [
+  { source: "Save", context: { file: "src/messages.ts", line: 18 } },
+  { source: "Submit", context: { file: "src/messages.ts", line: 19 } },
+];
+
+export default defineConfig({
+  source: {
+    read: () => ({
+      scopes: [{
+        range: "src/messages.ts",
+        enumeration: "complete",
+        records: sourceRecords.map((value) => ({ value, bodyAvailability: "available" })),
+      }],
+    }),
+  },
+  keyOf(unit) {
+    return unit.context.file + ":" + unit.context.line;
+  },
+  translations: {
+    languages: ["fr", "de"],
+    read(language, sourceUnits) {
+      const values = JSON.parse(readFileSync(new URL("./completion-resources/" + language + ".json", import.meta.url), "utf8")) as Translation[];
+      return {
+        scopes: [{
+          range: "completion-resources/" + language + ".json",
+          covers: sourceUnits.map(({ key }) => key),
+          enumeration: "complete",
+          records: values.map((value) => ({ value, bodyAvailability: "available" })),
+        }],
+      };
+    },
+    matches(unit, translation) {
+      return unit.context.line === translation.context.sourceLine;
+    },
+  },
+  completion: {
+    criterion: "存在可用正文的实际译文",
+    resolveCompletion({ translations }) {
+      return translations.some(({ bodyAvailability }) => bodyAvailability === "available");
+    },
+  },
+});
+`;
   const typecheckSource = `import "@l10n/checks";
-import { readFacts, readSourceFacts } from "@l10n/core";
+import { evaluateCompletion, readCompletion, readFacts, readSourceFacts } from "@l10n/core";
 import config from "./l10n.config.ts";
+import completionConfig from "./completion.config.ts";
 
 void readSourceFacts(config);
 void readFacts(config);
+void readCompletion(completionConfig);
+void readFacts(completionConfig).then((facts) =>
+  evaluateCompletion(facts, completionConfig.completion!),
+);
 `;
   const tsconfig = {
     compilerOptions: {
@@ -186,9 +245,9 @@ void readFacts(config);
       noEmit: true,
       strict: true,
       target: "ES2023",
-      types: [],
+      types: ["node"],
     },
-    files: ["l10n.config.ts", "typecheck.ts"],
+    files: ["l10n.config.ts", "completion.config.ts", "typecheck.ts"],
   };
   const runtimeCheck = `import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -277,7 +336,51 @@ assert.equal(JSON.parse(duplicate.stderr).data.key, "src/messages.ts");
 
 process.stdout.write("独立打包宿主：类型、API、CLI 和重复身份检查通过。\\n");
 `;
+  const completionCheckSource = `import assert from "node:assert/strict";
+import { writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { evaluateCompletion, readCompletion, readFacts } from "@l10n/core";
+import completionConfig from "./completion.config.ts";
 
+const initial = await readCompletion(completionConfig);
+assert.equal(initial.completion.status, "incomplete");
+assert.equal(initial.completion.scope.sourceUnitCount, 2);
+assert.equal(initial.completion.scope.targetLanguages.join(","), "fr,de");
+assert.equal(initial.completion.scope.obligationCount, 4);
+assert.equal(initial.completion.confirmedIncompleteCount, 4);
+assert.equal(initial.completion.completionRate, 0);
+
+const fixedFacts = await readFacts(completionConfig);
+const reused = await evaluateCompletion(fixedFacts, completionConfig.completion);
+assert.equal(reused.factsVersion, fixedFacts.version);
+assert.equal(reused.status, "incomplete");
+
+const resourcePath = fileURLToPath(new URL("./completion-resources/fr.json", import.meta.url));
+await writeFile(resourcePath, JSON.stringify([
+  { text: "Save", context: { sourceLine: 18 } }
+]), "utf8");
+const executable = path.join(process.cwd(), "node_modules", ".bin", process.platform === "win32" ? "l10n.cmd" : "l10n");
+const updated = spawnSync(executable, ["completion", "completion.config.ts"], { encoding: "utf8", shell: process.platform === "win32" });
+assert.equal(updated.status, 0, updated.stderr);
+const report = JSON.parse(updated.stdout).data;
+assert.notEqual(report.factsVersion, initial.completion.factsVersion);
+assert.equal(report.confirmedCompleteCount, 1);
+assert.equal(report.confirmedIncompleteCount, 3);
+assert.equal(report.completionRate, 0.25);
+assert.deepEqual(report.obligations[0].translationIndexes, [0]);
+
+const readable = spawnSync(executable, ["completion", "completion.config.ts", "--output-format", "text"], { encoding: "utf8", shell: process.platform === "win32" });
+assert.equal(readable.status, 0, readable.stderr);
+assert.ok(readable.stdout.includes("完成率：25.0%"));
+
+process.stdout.write("独立打包宿主：完成 API 重用与直接编辑后的新进程重算通过。\\n");
+`;
+
+  await mkdir(path.join(consumerRoot, "completion-resources"), {
+    recursive: true,
+  });
   return Promise.all([
     writeFile(
       path.join(consumerRoot, "package.json"),
@@ -289,12 +392,28 @@ process.stdout.write("独立打包宿主：类型、API、CLI 和重复身份检
       path.join(consumerRoot, "duplicate.config.ts"),
       duplicateConfigSource,
     ),
+    writeFile(
+      path.join(consumerRoot, "completion.config.ts"),
+      completionConfigSource,
+    ),
+    writeFile(
+      path.join(consumerRoot, "completion-resources", "fr.json"),
+      "[]\n",
+    ),
+    writeFile(
+      path.join(consumerRoot, "completion-resources", "de.json"),
+      "[]\n",
+    ),
     writeFile(path.join(consumerRoot, "typecheck.ts"), typecheckSource),
     writeFile(
       path.join(consumerRoot, "tsconfig.json"),
       JSON.stringify(tsconfig, null, 2),
     ),
     writeFile(path.join(consumerRoot, "consumer-check.mjs"), runtimeCheck),
+    writeFile(
+      path.join(consumerRoot, "completion-check.mjs"),
+      completionCheckSource,
+    ),
   ]).then(() => undefined);
 }
 
@@ -334,6 +453,14 @@ export async function verifyIndependentConsumer(): Promise<void> {
       consumerRoot,
     );
     process.stdout.write(runtime.stdout);
+
+    process.stdout.write("运行无 QA 依赖的完成度和外部编辑场景…\n");
+    const completionRuntime = runChecked(
+      process.execPath,
+      ["completion-check.mjs"],
+      consumerRoot,
+    );
+    process.stdout.write(completionRuntime.stdout);
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
   }

@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
 
+import {
+  CompletionConfigurationError,
+  evaluateCompletion,
+} from "./completion.ts";
+import type { CompletionFacts, CompletionPolicy } from "./completion.ts";
+
+export * from "./completion.ts";
+
 export type Awaitable<T> = T | Promise<T>;
 
 export type TranslationUnitInput = {
@@ -57,6 +65,7 @@ export type FrameworkConfig<
   readonly source: SourceAdapter<TUnit>;
   readonly keyOf: (unit: TUnit) => string;
   readonly translations?: TranslationAdapter<TUnit, TTranslation>;
+  readonly completion?: CompletionPolicy<TUnit, TTranslation>;
 };
 
 export type SourceUnitFact<TUnit extends TranslationUnitInput> = {
@@ -317,6 +326,23 @@ export async function readFacts<
 
   const version = factsVersion({ source, translations, associations });
   return { version, source, translations, associations };
+}
+
+export async function readCompletion<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+>(
+  config: FrameworkConfig<TUnit, TTranslation>,
+): Promise<CompletionFacts<TUnit, TTranslation>> {
+  const policy = config.completion;
+  if (policy === undefined)
+    throw new CompletionConfigurationError("missingPolicy");
+  if (config.translations === undefined)
+    throw new CompletionConfigurationError("missingTranslations");
+
+  const facts = await readFacts(config);
+  const completion = await evaluateCompletion(facts, policy);
+  return { ...facts, completion };
 }
 
 function readStatus(
