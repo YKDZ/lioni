@@ -7,6 +7,11 @@ import {
   type ProcessingBaseline,
   type ProcessingBaselineStore,
 } from "./baselines.ts";
+import {
+  validateUpdatePlan,
+  type UpdatePlan,
+  type UpdatePlanStore,
+} from "./plans.ts";
 
 /** 为 Node.js 宿主创建文件处理基线存储。 */
 export function createFileProcessingBaselineStore(
@@ -37,6 +42,52 @@ export function createFileProcessingBaselineStore(
     async save(baseline) {
       validateProcessingBaseline(baseline);
       const contents = `${JSON.stringify(baseline, null, 2)}\n`;
+      const directory = path.dirname(filePath);
+      const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+      let moved = false;
+      try {
+        await mkdir(directory, { recursive: true });
+        await writeFile(temporaryPath, contents, "utf8");
+        await rename(temporaryPath, filePath);
+        moved = true;
+      } finally {
+        if (!moved) await unlink(temporaryPath).catch(ignoreMissingFile);
+      }
+    },
+  };
+}
+
+/** 为 Node.js 宿主创建文件更新计划存储。 */
+export function createFileUpdatePlanStore(filePath: string): UpdatePlanStore {
+  return {
+    async load() {
+      let contents: string;
+      try {
+        contents = await readFile(filePath, "utf8");
+      } catch (error) {
+        if (isMissingFile(error)) return undefined;
+        throw error;
+      }
+
+      let value: unknown;
+      try {
+        value = JSON.parse(contents) as unknown;
+      } catch (error) {
+        throw new TypeError(`更新计划文件不是有效 JSON：${filePath}`, {
+          cause: error,
+        });
+      }
+      validateUpdatePlan(value as UpdatePlan);
+      return value as UpdatePlan;
+    },
+
+    async save(plan) {
+      validateUpdatePlan(plan);
+      const serialized = JSON.stringify(plan, null, 2);
+      if (serialized === undefined)
+        throw new TypeError("更新计划必须可序列化为 JSON。");
+      const contents = `${serialized}\n`;
+      validateUpdatePlan(JSON.parse(contents) as UpdatePlan);
       const directory = path.dirname(filePath);
       const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
       let moved = false;
