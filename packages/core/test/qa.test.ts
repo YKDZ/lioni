@@ -135,6 +135,7 @@ void describe("quality checks", () => {
       {
         ruleId: "placeholders",
         severity: "error",
+        handling: { status: "active" },
         object: { kind: "translation-unit", key: "message:save" },
         location: {
           language: "fr",
@@ -242,5 +243,130 @@ void describe("quality checks", () => {
     assert.equal(result.version, facts.version);
     assert.deepEqual(result.dependencies, dependencies);
     assert.equal(result.checks[0]?.issues[0]?.message, "checker crashed");
+  });
+
+  void it("applies an exception only to its rule and object without hiding evidence", async () => {
+    const facts = await readFacts(
+      defineConfig({
+        source: {
+          read: () => ({
+            scopes: [
+              {
+                range: "src/messages.ts",
+                enumeration: "complete",
+                records: [
+                  { value: { source: "A" }, bodyAvailability: "available" },
+                  { value: { source: "B" }, bodyAvailability: "available" },
+                ],
+              },
+            ],
+          }),
+        },
+        keyOf: (unit) => unit.source,
+      }),
+    );
+    const makeFinding = (key: string) => ({
+      severity: "error" as const,
+      object: { kind: "translation-unit", key, language: "fr" },
+      location: { language: "fr", range: "locales/fr.json", key },
+      message: "Translation differs from its evidence.",
+      evidence: [
+        {
+          role: "target",
+          object: { kind: "translation-unit", key, language: "fr" },
+          location: { language: "fr", range: "locales/fr.json", key },
+          value: `value:${key}`,
+        },
+      ],
+    });
+    const request = {
+      subjects: [
+        { key: "A", language: "fr" },
+        { key: "B", language: "fr" },
+      ],
+      evidenceScope: [],
+      dependencies: {},
+      exceptions: [
+        {
+          id: "allow-a",
+          ruleId: "message-placeholders",
+          scope: {
+            object: { kind: "translation-unit", key: "A", language: "fr" },
+          },
+          reason: "宿主允许此消息使用不同表达。",
+        },
+      ],
+    } as QualityCheckRequest & {
+      readonly exceptions: readonly {
+        readonly id: string;
+        readonly ruleId: string;
+        readonly scope: {
+          readonly object: {
+            readonly kind: string;
+            readonly key: string;
+            readonly language: string;
+          };
+        };
+        readonly reason: string;
+      }[];
+    };
+    const outcome = {
+      status: "complete" as const,
+      diagnostics: [makeFinding("A"), makeFinding("B")],
+      issues: [],
+      coverage: {
+        selected: 2,
+        evaluated: 2,
+        notApplicable: 0,
+        incomplete: 0,
+        failed: 0,
+      },
+    };
+
+    const result = await runQualityChecks(facts, request, [
+      {
+        id: "message-placeholders",
+        configuration: {},
+        check: () => outcome,
+      },
+      {
+        id: "other-rule",
+        configuration: {},
+        check: () => ({ ...outcome, diagnostics: [makeFinding("A")] }),
+      },
+    ]);
+
+    assert.equal(result.status, "complete");
+    assert.deepEqual(
+      result.diagnostics.map(({ ruleId, object, handling }) => ({
+        ruleId,
+        object,
+        handling,
+      })),
+      [
+        {
+          ruleId: "message-placeholders",
+          object: { kind: "translation-unit", key: "A", language: "fr" },
+          handling: {
+            status: "excepted",
+            exceptionId: "allow-a",
+            reason: "宿主允许此消息使用不同表达。",
+          },
+        },
+        {
+          ruleId: "message-placeholders",
+          object: { kind: "translation-unit", key: "B", language: "fr" },
+          handling: { status: "active" },
+        },
+        {
+          ruleId: "other-rule",
+          object: { kind: "translation-unit", key: "A", language: "fr" },
+          handling: { status: "active" },
+        },
+      ],
+    );
+    assert.equal(result.diagnostics[0]?.evidence[0]?.value, "value:A");
+    assert.equal(result.checks[0]?.coverage.evaluated, 2);
+    assert.equal(result.version, facts.version);
   });
 });

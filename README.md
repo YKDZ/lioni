@@ -155,6 +155,8 @@ export const qualityChecks = [
 
 检查器适配器由宿主提供，用来从原始单元和实际译文中取出消息文本。CLI 默认检查事实中的所有源译组合；也可以导出 `qualityRequest(facts)`，显式返回 `subjects`、`evidenceScope` 和 `dependencies` 来缩小检查范围或声明规则所需输入。未导出 `qualityChecks` 时，`qa` 会返回 `not-run`。
 
+诊断对象中的 `key` 使用 `keyOf` 生成的逻辑身份。位置默认只使用宿主读取时提供的资源范围，不会把逻辑身份当成资源内键。需要精确定位时，`createMessagePlaceholderChecker` 可配置 `sourceLocation(unit, subject, defaultLocation)` 和 `translationLocation(translation, subject, defaultLocation)`；两个回调都能读取原始对象，并返回宿主可解释的位置。关系检查器也可用 `translationLocation` 为成员译文提供资源内定位。
+
 ```sh
 l10n qa ./l10n.config.ts
 l10n qa ./l10n.config.ts --output-format text
@@ -174,10 +176,60 @@ const result = await runQualityChecks(
       { kind: "translation-unit", key: "src/messages.ts:18", language: "fr" },
     ],
     dependencies: { policyRevision: "2026-10" },
+    relationships: [
+      {
+        kind: "same-target-text",
+        key: "shared-save",
+        members: [
+          { key: "src/messages.ts:18", language: "fr" },
+          { key: "src/messages.ts:19", language: "fr" },
+        ],
+      },
+    ],
+    exceptions: [
+      {
+        id: "allow-existing-wording",
+        ruleId: "same-target-text",
+        scope: { object: { kind: "relationship", key: "shared-save" } },
+        reason: "保留宿主现有译法。",
+      },
+    ],
   },
   qualityChecks,
 );
 ```
+
+宿主通过 `createRelationshipChecker` 以普通函数定义关系约束：`relationshipKind` 选择宿主声明的关系，`evaluate` 接收全部允许范围内且内容可用的成员，并返回可选诊断。核心只传递关系，不枚举同译等约束。选中一个成员时，检查器仍可读取证据范围内的其他成员；诊断对象保留完整关系，展示位置默认取关系首个成员，即使该成员未被选中也会保留诊断。
+
+关系约束只需提供宿主函数；例如将成员译文投影成文本后比较：
+
+```ts
+import { createRelationshipChecker } from "@l10n/checks";
+
+const sameTargetText = createRelationshipChecker<
+  Unit,
+  Translation,
+  { readonly relation: string }
+>({
+  id: "same-target-text",
+  relationshipKind: "same-target-text",
+  configuration: { relation: "same-target-text" },
+  translationLocation: (translation, _subject, location) => ({
+    ...location,
+    key: translation.nativeKey,
+  }),
+  evaluate({ members }) {
+    const texts = members.map(({ translation }) => translation.text);
+    return new Set(texts).size === 1
+      ? undefined
+      : { severity: "error", message: "关系成员应使用相同译文。" };
+  },
+});
+```
+
+将 `sameTargetText` 与其他检查器一起放入 `qualityChecks`。`qualityRequest(facts)` 中的关系成员使用逻辑身份，`evidenceScope` 独立列出允许作为证据的成员。
+
+例外按规则和对象或位置范围命中；同时提供对象与位置时，两者都要匹配。`location` 范围按语言、资源范围及可选的资源内定位键匹配。命中后只在诊断上增加 `handling: { status: "excepted", exceptionId, reason }`，保留原诊断和证据，不改变检查执行状态或基础事实。
 
 执行状态 `complete` 只表示所选检查已完成；即使存在 error 诊断也可能是 `complete`。未支持的 ICU 或链接消息会使检查 `incomplete` 并附带原因，损坏的占位符会使检查 `failed`。内置解析范围覆盖普通文本、`{name}`／`{0}` 占位符及以 `|` 分隔的分支；不同目标语言可以使用不同分支数。
 

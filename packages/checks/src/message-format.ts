@@ -5,6 +5,7 @@ import type {
   QualityEvidence,
   QualityFinding,
   QualityIssue,
+  QualityLocation,
   QualityObject,
   QualitySubject,
 } from "@l10n/core";
@@ -15,6 +16,16 @@ export type MessagePlaceholderCheckerOptions<
 > = {
   readonly sourceText: (unit: TUnit) => unknown;
   readonly translationText: (translation: TTranslation) => unknown;
+  readonly sourceLocation?: (
+    unit: TUnit,
+    subject: QualitySubject,
+    defaultLocation: QualityLocation,
+  ) => QualityLocation;
+  readonly translationLocation?: (
+    translation: TTranslation,
+    subject: QualitySubject,
+    defaultLocation: QualityLocation,
+  ) => QualityLocation;
   readonly configuration?: unknown;
 };
 
@@ -173,16 +184,23 @@ function checkSubject<TUnit extends TranslationUnitInput, TTranslation>(
       subject,
     );
 
-  const sourceLocation = {
+  const defaultSourceLocation: QualityLocation = {
     language: null,
     range: input.facts.source.read.scopes[sourceUnit.scopeIndex]?.range,
-    key: subject.key,
   };
-  const targetLocation = {
+  const defaultTargetLocation: QualityLocation = {
     language: subject.language,
     range: record.range,
-    key: subject.key,
   };
+  const sourceLocation =
+    options.sourceLocation?.(sourceUnit.unit, subject, defaultSourceLocation) ??
+    defaultSourceLocation;
+  const targetLocation =
+    options.translationLocation?.(
+      record.translation,
+      subject,
+      defaultTargetLocation,
+    ) ?? defaultTargetLocation;
   const sourceEvidence: QualityEvidence = {
     role: "source",
     object: sourceObject,
