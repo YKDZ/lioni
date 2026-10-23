@@ -1,5 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -615,6 +622,220 @@ void readFacts(editConfig).then(async (facts) => {
     return applySemanticEdits([prepared.edit], editConfig);
 });
 `;
+  const resumeConfigSource = `import { readFile, writeFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { defineConfig } from "@l10n/core";
+
+type Unit = { id: string; source: string };
+type Translation = { sourceId: string; text: string; path: string };
+
+const sourcePath = fileURLToPath(new URL("./resume-resources/source.json", import.meta.url));
+const targetPath = (id: string) => fileURLToPath(new URL("./resume-resources/fr/" + id + ".json", import.meta.url));
+
+export default defineConfig<Unit, Translation>({
+  source: {
+    async read() {
+      const records = JSON.parse(await readFile(sourcePath, "utf8")) as Unit[];
+      return {
+        scopes: [{
+          range: "resume-resources/source.json",
+          enumeration: "complete",
+          records: records.map((value) => ({ value, bodyAvailability: "available" })),
+        }],
+      };
+    },
+  },
+  keyOf: (unit) => unit.id,
+  translations: {
+    languages: ["fr"],
+    async read(_language, sourceUnits) {
+      const records = await Promise.all(sourceUnits.map(async ({ unit }) => {
+        const path = targetPath(unit.id);
+        const value = JSON.parse(await readFile(path, "utf8")) as Omit<Translation, "path">;
+        return { value: { ...value, path }, bodyAvailability: "available" as const };
+      }));
+      return {
+        scopes: [{
+          range: "resume-resources/fr",
+          covers: sourceUnits.map(({ key }) => key),
+          enumeration: "complete",
+          records,
+        }],
+      };
+    },
+    matches: (unit, translation) => unit.id === translation.sourceId,
+  },
+  updatePolicy: ({ sourceKey, change }) => change === "changed"
+    ? { action: "candidate", candidate: "更新译文 " + sourceKey }
+    : { action: "retain" },
+  edits: {
+    targetContent: (translation) => translation.text,
+    locateExistingTarget: ({ translation }) => ({
+      status: "located",
+      locator: { path: translation.translation.path },
+    }),
+    locateNewTarget: () => ({ status: "notWritable", reason: "此场景只修改已有译文。" }),
+    async write({ edit, currentTranslation }) {
+      if (currentTranslation === undefined || typeof edit.content !== "string")
+        throw new TypeError("恢复场景需要字符串候选和现有译文。");
+      const value = JSON.parse(await readFile(currentTranslation.translation.path, "utf8")) as Record<string, unknown>;
+      value.text = edit.content;
+      await writeFile(currentTranslation.translation.path, JSON.stringify(value) + "\\n", "utf8");
+    },
+  },
+});
+`;
+  const resumeHostSource = `import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import {
+  advanceProcessingBaseline,
+  applyUpdatePlan,
+  compareProcessingBaseline,
+  createUpdatePlan,
+  readFacts,
+} from "@l10n/core";
+import {
+  createFileProcessingBaselineStore,
+  createFileUpdatePlanStore,
+} from "@l10n/core/node";
+import config from "./resume.config.ts";
+
+const ids = ["A", "B", "C"];
+const selections = ids.map((sourceKey) => ({ sourceKey, language: "fr" }));
+const baselinePath = ".l10n/resume-baseline.json";
+const baselineStore = createFileProcessingBaselineStore(baselinePath);
+const planStore = createFileUpdatePlanStore(".l10n/resume-plan.json");
+const readTarget = async (id) => JSON.parse(await readFile("resume-resources/fr/" + id + ".json", "utf8"));
+const entry = (baseline, id) => baseline?.entries.find(({ sourceKey }) => sourceKey === id);
+const findResult = (results, id) => results.find(({ sourceKey }) => sourceKey === id);
+const scenario = process.argv[2];
+
+if (scenario === "initialize") {
+  const facts = await readFacts(config);
+  const result = await advanceProcessingBaseline(baselineStore, facts, selections, {
+    matches: config.translations.matches,
+  });
+  assert.equal(result.outcome, "saved");
+  assert.ok(result.baseline);
+  assert.ok(result.baseline.entries.every(({ processed }) => processed));
+} else if (scenario === "save-plan") {
+  const facts = await readFacts(config);
+  const baseline = await baselineStore.load();
+  const plan = createUpdatePlan(facts, baseline, config);
+  for (const id of ids) {
+    const item = plan.items.find(({ sourceKey }) => sourceKey === id);
+    assert.equal(item?.change, "changed");
+    assert.equal(item?.executable, true);
+    assert.equal(item?.recommendation.action, "candidate");
+  }
+  await planStore.save(plan);
+} else if (scenario === "partial") {
+  const plan = await planStore.load();
+  assert.ok(plan);
+  const result = await applyUpdatePlan(
+    plan,
+    [
+      { sourceKey: "A", language: "fr", choice: "candidate" },
+      { sourceKey: "B", language: "fr", choice: "candidate" },
+    ],
+    config,
+    baselineStore,
+  );
+  assert.equal(findResult(result.contentResults, "A")?.status, "written");
+  const failedWrite = findResult(result.contentResults, "B");
+  assert.equal(failedWrite?.status, "writeFailed");
+  assert.match(failedWrite?.reason ?? "", /EACCES|permission denied/iu);
+  assert.equal(findResult(result.contentResults, "C")?.status, "notSelected");
+  assert.equal(findResult(result.baselineResults, "A")?.status, "advanced");
+  assert.equal(findResult(result.baselineResults, "B")?.status, "notAttempted");
+  assert.equal(findResult(result.baselineResults, "C")?.status, "notSelected");
+  const baseline = await baselineStore.load();
+  assert.equal(entry(baseline, "A")?.source.unit.source, "原文 A 新版");
+  assert.equal(entry(baseline, "B")?.source.unit.source, "原文 B 旧版");
+  assert.equal(entry(baseline, "C")?.source.unit.source, "原文 C 旧版");
+  assert.equal(entry(baseline, "A")?.association.translations[0]?.translation.text, "更新译文 A");
+  assert.equal(entry(baseline, "B")?.association.translations[0]?.translation.text, "译文 B");
+  assert.equal(entry(baseline, "C")?.association.translations[0]?.translation.text, "译文 C");
+  assert.equal((await readTarget("A")).text, "更新译文 A");
+  assert.equal((await readTarget("B")).text, "译文 B");
+  assert.equal((await readTarget("C")).text, "译文 C");
+} else if (scenario === "resume-write") {
+  const plan = await planStore.load();
+  assert.ok(plan);
+  const result = await applyUpdatePlan(
+    plan,
+    [{ sourceKey: "B", language: "fr", choice: "candidate" }],
+    config,
+    baselineStore,
+  );
+  assert.equal(findResult(result.contentResults, "B")?.status, "written");
+  assert.equal(findResult(result.baselineResults, "B")?.status, "advanced");
+  assert.equal((await readTarget("B")).text, "更新译文 B");
+  assert.equal(entry(await baselineStore.load(), "B")?.association.translations[0]?.translation.text, "更新译文 B");
+} else if (scenario === "baseline-failure") {
+  const plan = await planStore.load();
+  assert.ok(plan);
+  const baselineBefore = await readFile(baselinePath, "utf8");
+  const result = await applyUpdatePlan(
+    plan,
+    [{ sourceKey: "C", language: "fr", choice: "candidate" }],
+    config,
+    baselineStore,
+  );
+  assert.equal(findResult(result.contentResults, "C")?.status, "written");
+  const failedSave = findResult(result.baselineResults, "C");
+  assert.equal(failedSave?.status, "failed");
+  assert.match(failedSave?.reason ?? "", /EACCES|permission denied/iu);
+  assert.equal((await readTarget("C")).text, "更新译文 C");
+  assert.equal(await readFile(baselinePath, "utf8"), baselineBefore);
+  assert.equal(entry(await baselineStore.load(), "C")?.source.unit.source, "原文 C 旧版");
+  assert.equal(entry(await baselineStore.load(), "C")?.association.translations[0]?.translation.text, "译文 C");
+} else if (scenario === "stale-old-plan") {
+  const plan = await planStore.load();
+  assert.ok(plan);
+  const baselineBefore = await readFile(baselinePath, "utf8");
+  const result = await applyUpdatePlan(
+    plan,
+    [{ sourceKey: "C", language: "fr", choice: "candidate" }],
+    config,
+    baselineStore,
+  );
+  assert.equal(findResult(result.contentResults, "C")?.status, "conflict");
+  assert.equal(findResult(result.baselineResults, "C")?.status, "notAttempted");
+  assert.equal(await readFile(baselinePath, "utf8"), baselineBefore);
+  assert.equal((await readTarget("C")).text, "更新译文 C");
+} else if (scenario === "replan-retain") {
+  const facts = await readFacts(config);
+  const baseline = await baselineStore.load();
+  const refreshedPlan = createUpdatePlan(facts, baseline, config);
+  const refreshedC = refreshedPlan.items.find(({ sourceKey }) => sourceKey === "C");
+  assert.equal(refreshedC?.change, "changed");
+  assert.equal(refreshedC?.expectedInput?.association.translations[0]?.translation.text, "更新译文 C");
+  assert.equal(refreshedC?.recommendation.action, "candidate");
+  await planStore.save(refreshedPlan);
+  const result = await applyUpdatePlan(
+    refreshedPlan,
+    [{ sourceKey: "C", language: "fr", choice: "retain" }],
+    config,
+    baselineStore,
+  );
+  assert.equal(findResult(result.contentResults, "C")?.status, "retained");
+  assert.equal(findResult(result.baselineResults, "C")?.status, "advanced");
+  assert.equal((await readTarget("C")).text, "更新译文 C");
+} else if (scenario === "verify") {
+  const facts = await readFacts(config);
+  const baseline = await baselineStore.load();
+  assert.ok(baseline);
+  for (const id of ids) {
+    assert.equal(entry(baseline, id)?.processed, true);
+    assert.equal(entry(baseline, id)?.source.unit.source, "原文 " + id + " 新版");
+    assert.equal(entry(baseline, id)?.association.translations[0]?.translation.text, "更新译文 " + id);
+  }
+  assert.ok(compareProcessingBaseline(facts, baseline, {
+    matches: config.translations.matches,
+  }).changes.every(({ status }) => status === "unchanged"));
+}
+`;
   const tsconfig = {
     compilerOptions: {
       allowImportingTsExtensions: true,
@@ -633,6 +854,7 @@ void readFacts(editConfig).then(async (facts) => {
       "plan.config.ts",
       "qa.config.ts",
       "composition.config.ts",
+      "resume.config.ts",
       "typecheck.ts",
     ],
   };
@@ -1397,6 +1619,8 @@ process.stdout.write("独立打包宿主：编辑跨进程、冲突、依赖失�
       JSON.stringify(tsconfig, null, 2),
     ),
     writeFile(path.join(consumerRoot, "consumer-check.mjs"), runtimeCheck),
+    writeFile(path.join(consumerRoot, "resume.config.ts"), resumeConfigSource),
+    writeFile(path.join(consumerRoot, "resume-host.mjs"), resumeHostSource),
     writeFile(
       path.join(consumerRoot, "completion-check.mjs"),
       completionCheckSource,
@@ -1529,6 +1753,111 @@ export async function verifyIndependentConsumer(): Promise<void> {
     process.stdout.write(planApplyVerify.stdout);
     process.stdout.write(
       "独立打包宿主：保存计划的新进程应用、资源写入和分项基线推进通过。\n",
+    );
+
+    process.stdout.write("验证真实文件故障后的新进程恢复…\n");
+    const resumeResources = path.join(consumerRoot, "resume-resources");
+    const resumeSourcePath = path.join(resumeResources, "source.json");
+    const resumeTranslations = path.join(resumeResources, "fr");
+    const resumeBaselineDirectory = path.join(consumerRoot, ".l10n");
+    await Promise.all([
+      mkdir(resumeTranslations, { recursive: true }),
+      mkdir(resumeBaselineDirectory, { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(
+        resumeSourcePath,
+        JSON.stringify([
+          { id: "A", source: "原文 A 旧版" },
+          { id: "B", source: "原文 B 旧版" },
+          { id: "C", source: "原文 C 旧版" },
+        ]),
+      ),
+      writeFile(
+        path.join(resumeTranslations, "A.json"),
+        JSON.stringify({ sourceId: "A", text: "译文 A" }),
+      ),
+      writeFile(
+        path.join(resumeTranslations, "B.json"),
+        JSON.stringify({ sourceId: "B", text: "译文 B" }),
+      ),
+      writeFile(
+        path.join(resumeTranslations, "C.json"),
+        JSON.stringify({ sourceId: "C", text: "译文 C" }),
+      ),
+    ]);
+    runChecked(
+      process.execPath,
+      ["resume-host.mjs", "initialize"],
+      consumerRoot,
+    );
+
+    await writeFile(
+      resumeSourcePath,
+      JSON.stringify([
+        { id: "A", source: "原文 A 新版" },
+        { id: "B", source: "原文 B 新版" },
+        { id: "C", source: "原文 C 新版" },
+      ]),
+    );
+    runChecked(
+      process.execPath,
+      ["resume-host.mjs", "save-plan"],
+      consumerRoot,
+    );
+
+    const failedTargetPath = path.join(resumeTranslations, "B.json");
+    await chmod(failedTargetPath, 0o444);
+    try {
+      runChecked(
+        process.execPath,
+        ["resume-host.mjs", "partial"],
+        consumerRoot,
+      );
+    } finally {
+      await chmod(failedTargetPath, 0o644);
+    }
+    process.stdout.write(
+      "新进程A成功推进；B收到真实EACCES并保留旧内容；C未选择且保留旧依据。\n",
+    );
+
+    runChecked(
+      process.execPath,
+      ["resume-host.mjs", "resume-write"],
+      consumerRoot,
+    );
+    await chmod(resumeBaselineDirectory, 0o555);
+    try {
+      runChecked(
+        process.execPath,
+        ["resume-host.mjs", "baseline-failure"],
+        consumerRoot,
+      );
+    } finally {
+      await chmod(resumeBaselineDirectory, 0o755);
+    }
+    process.stdout.write(
+      "新进程B继续成功；C内容写入成功而处理基线保存收到真实EACCES，旧基线字节保持不变。\n",
+    );
+
+    runChecked(
+      process.execPath,
+      ["resume-host.mjs", "stale-old-plan"],
+      consumerRoot,
+    );
+    runChecked(
+      process.execPath,
+      ["resume-host.mjs", "replan-retain"],
+      consumerRoot,
+    );
+    const resumeVerify = runChecked(
+      process.execPath,
+      ["resume-host.mjs", "verify"],
+      consumerRoot,
+    );
+    process.stdout.write(resumeVerify.stdout);
+    process.stdout.write(
+      "独立打包宿主：旧计划拒绝过期目标；正式重规划并保留实际C内容后，A/B/C均按新进程读取结果更新处理基线。\n",
     );
 
     process.stdout.write("运行语义编辑跨进程、真实资源和输入冲突场景…\n");
