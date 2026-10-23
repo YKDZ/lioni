@@ -229,7 +229,7 @@ export default defineConfig({
   },
 });
 `;
-  const planConfigSource = `import { readFile } from "node:fs/promises";
+  const planConfigSource = `import { readFile, writeFile } from "node:fs/promises";
 import { defineConfig } from "@l10n/core";
 
 type Unit = {
@@ -237,7 +237,7 @@ type Unit = {
   readonly source: string;
   readonly context: { readonly file: string; readonly line: number; readonly screenshot: string };
 };
-type Translation = { readonly id: string; readonly text: string };
+type Translation = { readonly id: string; text: string };
 
 export default defineConfig<Unit, Translation>({
   source: {
@@ -268,18 +268,41 @@ export default defineConfig<Unit, Translation>({
     },
     matches: (unit, translation) => unit.id === translation.id,
   },
-  updatePolicy: ({ change, sourceUnit, translations }) =>
+  updatePolicy: ({ change, sourceUnit }) =>
     change === "changed"
       ? {
           action: "candidate",
-          candidate: {
-            text: sourceUnit?.source,
-            screenshot: sourceUnit?.context.screenshot,
-            priorText: translations[0]?.text,
-          },
+          candidate: sourceUnit?.source,
           reason: "读取计划时生成的候选。",
         }
       : { action: "retain", reason: "保留当前内容。" },
+  edits: {
+    targetContent: (translation) => translation.text,
+    locateExistingTarget: ({ translation }) => ({
+      status: "located",
+      locator: { id: translation.translation.id },
+    }),
+    locateNewTarget: () => ({
+      status: "notWritable",
+      reason: "此消费场景只更新现有译文。",
+    }),
+    dependencies: ({ sourceUnit }) => ({
+      screenshot: sourceUnit.unit.context.screenshot,
+    }),
+    async write({ edit, target }) {
+      if (typeof edit.content !== "string") throw new TypeError("候选译文必须是字符串。");
+      const locator = target.locator;
+      if (typeof locator !== "object" || locator === null || !("id" in locator) || typeof locator.id !== "string") {
+        throw new TypeError("译文定位缺少实际记录身份。");
+      }
+      const path = new URL("./update-plan-resources/fr.json", import.meta.url);
+      const translations = JSON.parse(await readFile(path, "utf8")) as Translation[];
+      const translation = translations.find(({ id }) => id === locator.id);
+      if (translation === undefined) throw new Error("实际译文记录已不存在。");
+      translation.text = edit.content;
+      await writeFile(path, JSON.stringify(translations), "utf8");
+    },
+  },
 });
 `;
   const editsConfigSource = `import { readFileSync, writeFileSync } from "node:fs";
@@ -534,6 +557,7 @@ export default defineConfig<Unit, Translation>({
 import {
   applySemanticEdits,
   advanceProcessingBaseline,
+  applyUpdatePlan,
   compareProcessingBaseline,
   createUpdatePlan,
   evaluateCompletion,
@@ -568,7 +592,16 @@ void readFacts(completionConfig).then((facts) =>
 void compareProcessingBaseline;
 void advanceProcessingBaseline;
 void createFileProcessingBaselineStore(".l10n/processing-baseline.json");
-void readFacts(planConfig).then((facts) => createUpdatePlan(facts, undefined, planConfig));
+void readFacts(planConfig).then(async (facts) => {
+  const baselineStore = createFileProcessingBaselineStore(".l10n/plan-baseline.json");
+  const plan = createUpdatePlan(facts, await baselineStore.load(), planConfig);
+  return applyUpdatePlan(
+    plan,
+    [{ sourceKey: "save-button", language: "fr", choice: "retain" }],
+    planConfig,
+    baselineStore,
+  );
+});
 void createFileUpdatePlanStore(".l10n/update-plan.json");
 void readFacts(editConfig).then(async (facts) => {
   const sourceUnit = facts.source.units[0];
@@ -899,7 +932,7 @@ if (scenario === "establish") {
   const updatePlanHostSource = `import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { advanceProcessingBaseline, createUpdatePlan, readFacts } from "@l10n/core";
+import { advanceProcessingBaseline, applyUpdatePlan, compareProcessingBaseline, createUpdatePlan, readFacts } from "@l10n/core";
 import {
   createFileProcessingBaselineStore,
   createFileUpdatePlanStore,
@@ -939,11 +972,7 @@ if (scenario === "establish") {
   assert.equal(item?.current?.source.unit.context.screenshot, "shots/save-updated.png");
   assert.equal(item?.expectedInput?.source.value, "Save");
   assert.equal(item?.expectedInput?.association.translations[0]?.translation.text, "Enregistrer");
-  assert.deepEqual(item?.recommendation.action === "candidate" ? item.recommendation.candidate : undefined, {
-    text: "Save",
-    screenshot: "shots/save-updated.png",
-    priorText: "Enregistrer",
-  });
+  assert.equal(item?.recommendation.action === "candidate" ? item.recommendation.candidate : undefined, "Save");
   await planStore.save(plan);
   assert.deepEqual(await readFile(sourcePath), sourceBefore);
   assert.deepEqual(await readFile(targetPath), targetBefore);
@@ -957,15 +986,62 @@ if (scenario === "establish") {
   assert.equal(item?.current?.source.unit.context.screenshot, "shots/save-updated.png");
   assert.equal(item?.expectedInput?.source.value, "Save");
   assert.equal(item?.expectedInput?.association.translations[0]?.translation.text, "Enregistrer");
-  assert.deepEqual(item?.recommendation.action === "candidate" ? item.recommendation.candidate : undefined, {
-    text: "Save",
-    screenshot: "shots/save-updated.png",
-    priorText: "Enregistrer",
-  });
+  assert.equal(item?.recommendation.action === "candidate" ? item.recommendation.candidate : undefined, "Save");
   const liveSource = JSON.parse(await readFile(sourcePath, "utf8"));
   const liveTarget = JSON.parse(await readFile(targetPath, "utf8"));
   assert.equal(liveSource[0].context.screenshot, "shots/after-plan.png");
   assert.equal(liveTarget[0].text, "Sauvegarder");
+} else if (scenario === "stale-apply") {
+  const baselineBefore = await readFile(baselinePath, "utf8");
+  const targetBefore = await readFile(targetPath, "utf8");
+  const plan = await planStore.load();
+  assert.ok(plan);
+  const result = await applyUpdatePlan(
+    plan,
+    [{ sourceKey: "save-button", language: "fr", choice: "candidate" }],
+    config,
+    baselineStore,
+  );
+  assert.equal(result.contentResults.find(({ sourceKey }) => sourceKey === "save-button")?.status, "conflict");
+  assert.equal(result.baselineResults.find(({ sourceKey }) => sourceKey === "save-button")?.status, "notAttempted");
+  assert.deepEqual(await readFile(targetPath, "utf8"), targetBefore);
+  assert.deepEqual(await readFile(baselinePath, "utf8"), baselineBefore);
+} else if (scenario === "refresh") {
+  const facts = await readFacts(config);
+  const baseline = await baselineStore.load();
+  const plan = createUpdatePlan(facts, baseline, config);
+  const item = plan.items.find(({ sourceKey }) => sourceKey === "save-button");
+  assert.equal(item?.expectedInput?.source.value, "Save");
+  assert.equal(item?.recommendation.action === "candidate" ? item.recommendation.candidate : undefined, "Save");
+  await planStore.save(plan);
+} else if (scenario === "apply") {
+  const plan = await planStore.load();
+  assert.ok(plan);
+  const result = await applyUpdatePlan(
+    plan,
+    [{ sourceKey: "save-button", language: "fr", choice: "candidate" }],
+    config,
+    baselineStore,
+  );
+  assert.equal(result.contentResults.find(({ sourceKey }) => sourceKey === "save-button")?.status, "written");
+  assert.equal(result.baselineResults.find(({ sourceKey }) => sourceKey === "save-button")?.status, "advanced");
+} else if (scenario === "verify") {
+  const facts = await readFacts(config);
+  const baseline = await baselineStore.load();
+  assert.ok(baseline);
+  const a = baseline.entries.find(({ sourceKey }) => sourceKey === "save-button");
+  const b = baseline.entries.find(({ sourceKey }) => sourceKey === "cancel-button");
+  assert.equal(a?.source.unit.source, "Save");
+  assert.equal(a?.association.translations[0]?.translation.text, "Save");
+  assert.equal(a?.processed, true);
+  assert.equal(b?.source.unit.source, "Cancel");
+  assert.equal(b?.association.translations[0]?.translation.text, "Annuler");
+  assert.equal(b?.processed, false);
+  const changes = compareProcessingBaseline(facts, baseline, {
+    matches: (unit, translation) => unit.id === translation.id,
+  }).changes;
+  assert.equal(changes.find(({ sourceKey }) => sourceKey === "save-button")?.status, "unchanged");
+  assert.equal(changes.find(({ sourceKey }) => sourceKey === "cancel-button")?.status, "unchanged");
 }
 `;
   const editApplySource = `import { readFile, writeFile } from "node:fs/promises";
@@ -1430,8 +1506,29 @@ export async function verifyIndependentConsumer(): Promise<void> {
       consumerRoot,
     );
     process.stdout.write(planRead.stdout);
+    runChecked(
+      process.execPath,
+      ["update-plan-host.mjs", "stale-apply"],
+      consumerRoot,
+    );
+    runChecked(
+      process.execPath,
+      ["update-plan-host.mjs", "refresh"],
+      consumerRoot,
+    );
+    runChecked(
+      process.execPath,
+      ["update-plan-host.mjs", "apply"],
+      consumerRoot,
+    );
+    const planApplyVerify = runChecked(
+      process.execPath,
+      ["update-plan-host.mjs", "verify"],
+      consumerRoot,
+    );
+    process.stdout.write(planApplyVerify.stdout);
     process.stdout.write(
-      "独立打包宿主：更新计划保存、历史依据跨进程读取且未写资源或基线通过。\n",
+      "独立打包宿主：保存计划的新进程应用、资源写入和分项基线推进通过。\n",
     );
 
     process.stdout.write("运行语义编辑跨进程、真实资源和输入冲突场景…\n");

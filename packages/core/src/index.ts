@@ -11,6 +11,7 @@ import type { QualityCheckDefinition, QualityCheckRequest } from "./qa.ts";
 
 export * from "./completion.ts";
 export * from "./edits.ts";
+export * from "./apply-plans.ts";
 export * from "./plans.ts";
 export * from "./qa.ts";
 export {
