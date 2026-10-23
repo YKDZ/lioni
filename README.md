@@ -181,6 +181,37 @@ const result = await runQualityChecks(
 
 执行状态 `complete` 只表示所选检查已完成；即使存在 error 诊断也可能是 `complete`。未支持的 ICU 或链接消息会使检查 `incomplete` 并附带原因，损坏的占位符会使检查 `failed`。内置解析范围覆盖普通文本、`{name}`／`{0}` 占位符及以 `|` 分隔的分支；不同目标语言可以使用不同分支数。
 
+## 处理基线
+
+处理基线按原文身份和目标语言分别保存变化已处理的依据。读取事实和比较不会写入基线；首次缺少历史时，比较结果会报告 `history-insufficient`。显式推进某些范围后，其他观察到的范围仍标记为未处理，后续比较可以区分旧工作和新增内容。关联冲突或未知范围不会推进。
+
+Node 宿主可直接使用默认文件存储，也可实现相同的 `ProcessingBaselineStore` 接口替换存储：
+
+```ts
+import {
+  advanceProcessingBaseline,
+  compareProcessingBaseline,
+  readFacts,
+} from "@l10n/core";
+import { createFileProcessingBaselineStore } from "@l10n/core/node";
+import config from "./l10n.config.ts";
+
+const store = createFileProcessingBaselineStore(
+  ".l10n/processing-baseline.json",
+);
+const facts = await readFacts(config);
+const comparison = compareProcessingBaseline(facts, await store.load());
+
+// 只将本次明确处理的原文身份和语言推进为已处理。
+const result = await advanceProcessingBaseline(store, facts, [
+  { sourceKey: "src/messages.ts:18", language: "fr" },
+]);
+```
+
+文件存储在同目录写入新文件后原子替换基线；读取损坏或不支持的文件会报告错误，保存失败会返回原有基线。为确认原文或译文范围的删除，宿主应在不同进程中持续使用相同的 JSON 范围值；比较只接受历史与当前对应范围都完整枚举的证据，其他范围的成功读取不能替代。
+
+已消失的原文仍保留历史单元和相关译文范围。若宿主明确处理这项删除，可在推进时传入原有 `matches` 函数；它会重新检查历史相关范围，保留仍存在的目标事实，并只推进该原文身份和语言。
+
 ## 本地制品
 
 在框架仓库根目录打包后，可在宿主目录安装生成的 tarball：

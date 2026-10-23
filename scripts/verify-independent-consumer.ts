@@ -272,7 +272,15 @@ export default defineConfig<Unit, Translation>({
 });
 `;
   const typecheckSource = `import { createMessagePlaceholderChecker } from "@l10n/checks";
-import { evaluateCompletion, readCompletion, readFacts, readSourceFacts } from "@l10n/core";
+import {
+  advanceProcessingBaseline,
+  compareProcessingBaseline,
+  evaluateCompletion,
+  readCompletion,
+  readFacts,
+  readSourceFacts,
+} from "@l10n/core";
+import { createFileProcessingBaselineStore } from "@l10n/core/node";
 import config from "./l10n.config.ts";
 import completionConfig from "./completion.config.ts";
 import qaConfig, { qualityChecks } from "./qa.config.ts";
@@ -289,6 +297,9 @@ void readCompletion(completionConfig);
 void readFacts(completionConfig).then((facts) =>
   evaluateCompletion(facts, completionConfig.completion!),
 );
+void compareProcessingBaseline;
+void advanceProcessingBaseline;
+void createFileProcessingBaselineStore(".l10n/processing-baseline.json");
 `;
   const tsconfig = {
     compilerOptions: {
@@ -421,7 +432,13 @@ assert.notEqual(editedResult.version, initialResult.version);
 assert.deepEqual(editedResult.diagnostics, []);
 assert.deepEqual(await readFile(qaResource), editedResource);
 
-process.stdout.write("独立打包宿主：事实 API、完成 API、显式 QA、外部编辑重算和只读检查通过。\\n");
+const baselineHost = path.join(process.cwd(), "baseline-host.mjs");
+for (const scenario of ["establish", "modified", "source-change", "other-range", "identity-change", "removed", "all-gone"]) {
+  const result = spawnSync(process.execPath, [baselineHost, scenario], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+}
+
+process.stdout.write("独立打包宿主：事实API、完成API、显式QA、基线Node子入口、外部编辑重算和只读检查通过。\\n");
 `;
   const completionCheckSource = `import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
@@ -462,7 +479,107 @@ const readable = spawnSync(executable, ["completion", "completion.config.ts", "-
 assert.equal(readable.status, 0, readable.stderr);
 assert.ok(readable.stdout.includes("完成率：25.0%"));
 
-process.stdout.write("独立打包宿主：完成 API 重用与直接编辑后的新进程重算通过。\\n");
+`;
+  const baselineHostSource = `import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { advanceProcessingBaseline, compareProcessingBaseline, defineConfig, readFacts } from "@l10n/core";
+import { createFileProcessingBaselineStore } from "@l10n/core/node";
+
+const scenario = process.argv[2];
+const baselinePath = path.join(process.cwd(), "processing-baseline.json");
+const store = createFileProcessingBaselineStore(baselinePath);
+const sourceByScenario = {
+  establish: [{ range: "source-r1", units: [{ id: "A", source: "Save" }, { id: "B", source: "Cancel" }] }],
+  modified: [{ range: "source-r1", units: [{ id: "A", source: "Save" }, { id: "B", source: "Cancel" }, { id: "C", source: "Help" }] }],
+  "source-change": [{ range: "source-r1", units: [{ id: "A", source: "Save now" }, { id: "B", source: "Cancel" }] }],
+  "other-range": [{ range: "source-r2", units: [{ id: "B", source: "Cancel" }] }],
+  "identity-change": [{ range: "source-r1", units: [{ id: "A-new", source: "Save" }, { id: "B", source: "Cancel" }] }],
+  removed: [{ range: "source-r1", units: [] }],
+  "all-gone": [{ range: "source-r1", units: [] }],
+};
+const targetsByScenario = {
+  establish: [{ range: "target-r1", translations: [{ id: "A", text: "Enregistrer" }, { id: "B", text: "Annuler" }] }],
+  modified: [{ range: "target-r1", translations: [{ id: "A", text: "Sauvegarder" }, { id: "B", text: "Annuler" }, { id: "C", text: "Aide" }] }],
+  "source-change": [{ range: "target-r1", translations: [{ id: "A", text: "Enregistrer" }, { id: "B", text: "Annuler" }] }],
+  "other-range": [{ range: "target-r2", translations: [{ id: "B", text: "Annuler" }] }],
+  "identity-change": [{ range: "target-r1", translations: [{ id: "A-new", text: "Enregistrer" }, { id: "B", text: "Annuler" }] }],
+  removed: [{ range: "target-r1", translations: [{ id: "orphan", text: "Orphan" }] }],
+  "all-gone": [{ range: "target-r1", translations: [] }],
+};
+const sourceScopes = sourceByScenario[scenario];
+const targetScopes = targetsByScenario[scenario];
+assert.ok(sourceScopes);
+assert.ok(targetScopes);
+const config = defineConfig({
+  source: {
+    read: () => ({
+      scopes: sourceScopes.map(({ range, units }) => ({
+        range,
+        enumeration: "complete",
+        records: units.map((value) => ({ value, bodyAvailability: "available" })),
+      })),
+    }),
+  },
+  keyOf: (unit) => unit.id,
+  translations: {
+    languages: ["fr"],
+    read: (_language, units) => ({
+      scopes: targetScopes.map(({ range, translations }) => ({
+        range,
+        covers: units.map(({ key }) => key),
+        enumeration: "complete",
+        records: translations.map((value) => ({ value, bodyAvailability: "available" })),
+      })),
+    }),
+    matches: (unit, translation) => unit.id === translation.id,
+  },
+});
+const facts = await readFacts(config);
+
+if (scenario === "establish") {
+  const result = await advanceProcessingBaseline(store, facts, [{ sourceKey: "A", language: "fr" }]);
+  assert.equal(result.outcome, "saved");
+  assert.deepEqual(result.baseline.entries.map(({ sourceKey, processed }) => [sourceKey, processed]), [["A", true], ["B", false]]);
+} else {
+  const before = await readFile(baselinePath, "utf8");
+  const baseline = await store.load();
+  const changes = compareProcessingBaseline(facts, baseline).changes;
+  const forA = changes.find(({ sourceKey }) => sourceKey === "A");
+  assert.equal(await readFile(baselinePath, "utf8"), before);
+  if (scenario === "modified") {
+    assert.equal(forA.status, "changed");
+    assert.equal(changes.find(({ sourceKey }) => sourceKey === "B").processed, false);
+    assert.equal(changes.find(({ sourceKey }) => sourceKey === "C").status, "added");
+    const advanced = await advanceProcessingBaseline(store, facts, [{ sourceKey: "A", language: "fr" }]);
+    assert.equal(advanced.outcome, "saved");
+    const afterAdvance = compareProcessingBaseline(facts, advanced.baseline).changes;
+    assert.equal(afterAdvance.find(({ sourceKey }) => sourceKey === "C").status, "added");
+    assert.equal(afterAdvance.find(({ sourceKey }) => sourceKey === "B").processed, false);
+  } else if (scenario === "other-range") {
+    assert.equal(forA.status, "unknown");
+  } else if (scenario === "source-change") {
+    assert.equal(forA.status, "changed");
+  } else if (scenario === "identity-change") {
+    assert.equal(forA.status, "source-removed");
+    assert.equal(changes.find(({ sourceKey }) => sourceKey === "A-new").status, "added");
+  } else if (scenario === "removed") {
+    assert.equal(forA.status, "source-removed");
+    assert.ok(facts.translations.records.some(({ translation }) => translation.id === "orphan"));
+    const advanced = await advanceProcessingBaseline(
+      store,
+      facts,
+      [{ sourceKey: "A", language: "fr" }],
+      { matches: (unit, translation) => unit.id === translation.id },
+    );
+    assert.equal(advanced.outcome, "saved");
+    assert.equal(advanced.baseline.entries.find(({ sourceKey }) => sourceKey === "A").source.presence, "removed");
+    assert.deepEqual(advanced.baseline.entries.find(({ sourceKey }) => sourceKey === "A").source.unit, { id: "A", source: "Save" });
+  } else if (scenario === "all-gone") {
+    assert.equal(forA.status, "source-removed");
+    assert.equal(facts.translations.records.length, 0);
+  }
+}
 `;
 
   await mkdir(path.join(consumerRoot, "completion-resources"), {
@@ -506,6 +623,7 @@ process.stdout.write("独立打包宿主：完成 API 重用与直接编辑后�
       path.join(consumerRoot, "completion-check.mjs"),
       completionCheckSource,
     ),
+    writeFile(path.join(consumerRoot, "baseline-host.mjs"), baselineHostSource),
   ]).then(() => undefined);
 }
 

@@ -8,6 +8,24 @@ import type { CompletionFacts, CompletionPolicy } from "./completion.ts";
 
 export * from "./completion.ts";
 export * from "./qa.ts";
+export {
+  advanceProcessingBaseline,
+  compareProcessingBaseline,
+  type ProcessingBaseline,
+  type ProcessingBaselineAdvanceOptions,
+  type ProcessingBaselineAdvanceResult,
+  type ProcessingBaselineChange,
+  type ProcessingBaselineCompareOptions,
+  type ProcessingBaselineEntry,
+  type ProcessingBaselineMatch,
+  type ProcessingBaselineSelection,
+  type ProcessingBaselineSourceScope,
+  type ProcessingBaselineStore,
+  type ProcessingBaselineTranslation,
+  type ProcessingBaselineTranslationScope,
+  type ProcessingBaselineComparison,
+  type ProcessingChangeStatus,
+} from "./baselines.ts";
 
 export type Awaitable<T> = T | Promise<T>;
 
