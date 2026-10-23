@@ -620,18 +620,21 @@ void describe("relationship quality checks", () => {
       ).observedTarget.text,
       "New A",
     );
+    const updatedCheck = newRun.checks[0];
+    assert.ok(updatedCheck);
     assert.equal(
       (
-        newRun.checks[0]?.configuration as {
+        updatedCheck.configuration as {
           readonly observedTarget: LocatedTranslation;
         }
       ).observedTarget.text,
       "New A",
     );
-    assert.equal(
-      (newRun.diagnostics[0]?.evidence[0]?.value as LocatedTranslation).text,
-      "New A",
-    );
+    const updatedDiagnostic = newRun.diagnostics[0];
+    assert.ok(updatedDiagnostic);
+    const updatedEvidence = updatedDiagnostic.evidence[0];
+    assert.ok(updatedEvidence);
+    assert.equal((updatedEvidence.value as LocatedTranslation).text, "New A");
     assert.equal(
       (newRun.diagnostics[0]?.location.position as { line: number } | undefined)
         ?.line,
