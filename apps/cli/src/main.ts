@@ -192,8 +192,6 @@ function completionStatusText(status: string): string {
 
 type CliConfigModule = {
   readonly default?: unknown;
-  readonly qualityChecks?: unknown;
-  readonly qualityRequest?: unknown;
 };
 
 async function loadConfigModule(configPath: string): Promise<CliConfigModule> {
@@ -272,29 +270,24 @@ function defaultQualityRequest<
 }
 
 function configuredQualityChecks(
-  value: unknown,
+  config: FrameworkConfig<TranslationUnitInput>,
 ): readonly QualityCheckDefinition<TranslationUnitInput, unknown>[] {
-  if (value === undefined) return [];
-  if (!Array.isArray(value))
-    throw new TypeError("宿主导出的 qualityChecks 必须是检查器数组。");
-  return value as readonly QualityCheckDefinition<
-    TranslationUnitInput,
-    unknown
-  >[];
+  const checks = config.qualityChecks;
+  if (checks === undefined) return [];
+  if (!Array.isArray(checks))
+    throw new TypeError("defineConfig 的 qualityChecks 必须是检查器数组。");
+  return checks;
 }
 
-function configuredQualityRequest(
-  value: unknown,
+async function configuredQualityRequest(
+  config: FrameworkConfig<TranslationUnitInput>,
   facts: FrameworkFacts<TranslationUnitInput, unknown>,
-): QualityCheckRequest {
-  if (value === undefined) return defaultQualityRequest(facts);
-  if (typeof value !== "function")
-    throw new TypeError("宿主导出的 qualityRequest 必须是接收 facts 的函数。");
-  return (
-    value as (
-      facts: FrameworkFacts<TranslationUnitInput, unknown>,
-    ) => QualityCheckRequest
-  )(facts);
+): Promise<QualityCheckRequest> {
+  const request = config.qualityRequest;
+  if (request === undefined) return defaultQualityRequest(facts);
+  if (typeof request !== "function")
+    throw new TypeError("defineConfig 的 qualityRequest 必须是函数。");
+  return await request(facts);
 }
 
 function createCliContract(identity: CliCommandIdentity) {
@@ -608,12 +601,10 @@ function createCliContract(identity: CliCommandIdentity) {
         async handler({ input, outcome }) {
           try {
             const configModule = await loadConfigModule(input.config);
-            const facts = await readFacts(frameworkConfig(configModule));
-            const checks = configuredQualityChecks(configModule.qualityChecks);
-            const request = configuredQualityRequest(
-              configModule.qualityRequest,
-              facts,
-            );
+            const config = frameworkConfig(configModule);
+            const facts = await readFacts(config);
+            const checks = configuredQualityChecks(config);
+            const request = await configuredQualityRequest(config, facts);
             const result = await runQualityChecks(facts, request, checks);
             return outcome.data.checked(result);
           } catch (error) {

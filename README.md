@@ -139,21 +139,43 @@ l10n completion ./l10n.config.ts --output-format text
 
 ## 当前质量检查
 
-`@l10n/checks` 提供可选的消息占位符检查器。宿主配置显式导出检查器，CLI 才会执行它；CLI 本身不导入 `@l10n/checks`：
+`@l10n/checks` 提供可选的消息占位符检查器。把检查器和对象选择函数放入默认 `defineConfig(...)` 配置，CLI 会从同一配置中执行它们；CLI 本身不导入 `@l10n/checks`：
 
 ```ts
+import { defineConfig } from "@l10n/core";
 import { createMessagePlaceholderChecker } from "@l10n/checks";
+import adapters from "./l10n-adapters.ts";
 
-export const qualityChecks = [
+const qualityChecks = [
   createMessagePlaceholderChecker({
     sourceText: (unit) => unit.source,
     translationText: (translation) => translation.text,
     configuration: { grammar: "simple-placeholders-v1" },
   }),
 ];
+
+export default defineConfig({
+  ...adapters,
+  qualityChecks,
+  qualityRequest(facts) {
+    const subjects = facts.associations.map(({ sourceKey, language }) => ({
+      key: sourceKey,
+      language,
+    }));
+    return {
+      subjects,
+      evidenceScope: subjects.map(({ key, language }) => ({
+        kind: "translation-unit",
+        key,
+        language,
+      })),
+      dependencies: {},
+    };
+  },
+});
 ```
 
-检查器适配器由宿主提供，用来从原始单元和实际译文中取出消息文本。CLI 默认检查事实中的所有源译组合；也可以导出 `qualityRequest(facts)`，显式返回 `subjects`、`evidenceScope` 和 `dependencies` 来缩小检查范围或声明规则所需输入。未导出 `qualityChecks` 时，`qa` 会返回 `not-run`。
+检查器适配器由宿主提供，用来从原始单元和实际译文中取出消息文本。`qualityRequest(facts)` 可异步返回 `subjects`、`evidenceScope`、关系、例外和明确依赖；未配置 `qualityChecks` 时，`qa` 返回 `not-run`。
 
 诊断对象中的 `key` 使用 `keyOf` 生成的逻辑身份。位置默认只使用宿主读取时提供的资源范围，不会把逻辑身份当成资源内键。需要精确定位时，`createMessagePlaceholderChecker` 可配置 `sourceLocation(unit, subject, defaultLocation)` 和 `translationLocation(translation, subject, defaultLocation)`；两个回调都能读取原始对象，并返回宿主可解释的位置。关系检查器也可用 `translationLocation` 为成员译文提供资源内定位。
 
@@ -162,20 +184,23 @@ l10n qa ./l10n.config.ts
 l10n qa ./l10n.config.ts --output-format text
 ```
 
-程序化调用可自行指定对象、证据范围、依赖及检查器：
+程序化调用复用配置中的检查器和选择函数；也可以为一次调用显式覆盖请求：
 
 ```ts
 import { readFacts, runQualityChecks } from "@l10n/core";
 
 const facts = await readFacts(config);
+const request = (await config.qualityRequest?.(facts)) ?? {
+  subjects: [{ key: "src/messages.ts:18", language: "fr" }],
+  evidenceScope: [
+    { kind: "translation-unit", key: "src/messages.ts:18", language: "fr" },
+  ],
+  dependencies: { policyRevision: "2026-10" },
+};
 const result = await runQualityChecks(
   facts,
   {
-    subjects: [{ key: "src/messages.ts:18", language: "fr" }],
-    evidenceScope: [
-      { kind: "translation-unit", key: "src/messages.ts:18", language: "fr" },
-    ],
-    dependencies: { policyRevision: "2026-10" },
+    ...request,
     relationships: [
       {
         kind: "same-target-text",
@@ -195,7 +220,7 @@ const result = await runQualityChecks(
       },
     ],
   },
-  qualityChecks,
+  config.qualityChecks ?? [],
 );
 ```
 
@@ -227,11 +252,39 @@ const sameTargetText = createRelationshipChecker<
 });
 ```
 
-将 `sameTargetText` 与其他检查器一起放入 `qualityChecks`。`qualityRequest(facts)` 中的关系成员使用逻辑身份，`evidenceScope` 独立列出允许作为证据的成员。
+将 `sameTargetText` 与其他检查器一起放入 `defineConfig` 的 `qualityChecks`。`qualityRequest(facts)` 中的关系成员使用逻辑身份，`evidenceScope` 独立列出允许作为证据的成员。
 
 例外按规则和对象或位置范围命中；同时提供对象与位置时，两者都要匹配。`location` 范围按语言、资源范围及可选的资源内定位键匹配。命中后只在诊断上增加 `handling: { status: "excepted", exceptionId, reason }`，保留原诊断和证据，不改变检查执行状态或基础事实。
 
 执行状态 `complete` 只表示所选检查已完成；即使存在 error 诊断也可能是 `complete`。未支持的 ICU 或链接消息会使检查 `incomplete` 并附带原因，损坏的占位符会使检查 `failed`。内置解析范围覆盖普通文本、`{name}`／`{0}` 占位符及以 `|` 分隔的分支；不同目标语言可以使用不同分支数。
+
+### 用普通代码组合多个输入
+
+宿主可把异构资源保留为各自的原始形状，再用普通模块、函数和数组组合读取、质量检查与策略。身份函数可加入来源域，避免不同资源中相同的原生键碰撞。局部完成判据、检查配置、例外及更新策略由宿主模块分别提供；汇总配置显式合并它们，只有 `qualityRequest` 明确声明关系和证据时才会进行跨输入检查。
+
+```ts
+const inputs = [catalogInput, guideInput];
+
+export default defineConfig({
+  source: combineSourceAdapters(inputs),
+  keyOf: (unit) => `${unit.context.domain}:${unit.context.nativeKey}`,
+  translations: combineTranslationAdapters(inputs),
+  completion: {
+    criterion: "domain-specific-v1",
+    resolveCompletion(input) {
+      return completionByDomain[input.sourceUnit.unit.context.domain](input);
+    },
+  },
+  qualityChecks: inputs.flatMap((input) => input.qualityChecks),
+  qualityRequest: async (facts) =>
+    mergeQualityRequests(
+      await Promise.all(inputs.map((input) => input.qualityRequest(facts))),
+    ),
+  updatePolicy: (item) => updatePolicyByDomain[domainFor(item.sourceKey)](item),
+});
+```
+
+`combineSourceAdapters`、`combineTranslationAdapters` 和 `mergeQualityRequests` 属于宿主普通代码，可按项目资源形状实现。单输入入口使用同一模块与函数；汇总只组合明确提供的输入，不自动扩大 QA 证据或已处理范围。
 
 ## 处理基线
 

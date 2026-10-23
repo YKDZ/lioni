@@ -7,6 +7,7 @@ import {
 import type { CompletionFacts, CompletionPolicy } from "./completion.ts";
 import type { SemanticEditAdapter } from "./edits.ts";
 import type { UpdatePolicy } from "./plans.ts";
+import type { QualityCheckDefinition, QualityCheckRequest } from "./qa.ts";
 
 export * from "./completion.ts";
 export * from "./edits.ts";
@@ -91,6 +92,13 @@ export type FrameworkConfig<
   readonly completion?: CompletionPolicy<TUnit, TTranslation>;
   readonly edits?: SemanticEditAdapter<TUnit, TTranslation>;
   readonly updatePolicy?: UpdatePolicy<TUnit, TTranslation>;
+  readonly qualityChecks?: readonly QualityCheckDefinition<
+    TUnit,
+    TTranslation
+  >[];
+  readonly qualityRequest?: (
+    facts: FrameworkFacts<TUnit, TTranslation>,
+  ) => Awaitable<QualityCheckRequest>;
 };
 
 export type SourceUnitFact<TUnit extends TranslationUnitInput> = {

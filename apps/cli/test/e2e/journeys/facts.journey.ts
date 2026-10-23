@@ -69,8 +69,7 @@ const journey: CliJourney = {
     await writeFile(
       path.join(workDir, "qa.config.ts"),
       `import type { QualityCheckDefinition, TranslationUnitInput } from "@l10n/core";
-
-export { default } from "./l10n.config.ts";
+import baseConfig from "./l10n.config.ts";
 
 const check: QualityCheckDefinition<TranslationUnitInput, unknown> = {
   id: "host-rule",
@@ -91,7 +90,25 @@ const check: QualityCheckDefinition<TranslationUnitInput, unknown> = {
   }
 };
 
-export const qualityChecks = [check];
+export default {
+  ...baseConfig,
+  qualityChecks: [check],
+  qualityRequest(facts) {
+    const subjects = facts.associations.map(({ sourceKey, language }) => ({
+      key: sourceKey,
+      language,
+    }));
+    return {
+      subjects,
+      evidenceScope: subjects.map(({ key, language }) => ({
+        kind: "translation-unit",
+        key,
+        language,
+      })),
+      dependencies: { selectedBy: "defineConfig" },
+    };
+  },
+};
 `,
     );
     await writeFile(
@@ -273,6 +290,7 @@ export const qualityChecks = [check];
       data: {
         status: string;
         subjects: readonly { key: string; language: string }[];
+        dependencies: { selectedBy: string };
         checks: readonly { id: string; configuration: { enabled: boolean } }[];
       };
     };
@@ -280,6 +298,9 @@ export const qualityChecks = [check];
     assert.deepEqual(qaResult.data.subjects, [
       { key: "src/messages.ts:18", language: "fr" },
     ]);
+    assert.deepEqual(qaResult.data.dependencies, {
+      selectedBy: "defineConfig",
+    });
     assert.deepEqual(qaResult.data.checks, [
       {
         id: "host-rule",

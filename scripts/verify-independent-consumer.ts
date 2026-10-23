@@ -4,6 +4,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import {
+  verifyCompositionConsumer,
+  writeCompositionConsumerFiles,
+} from "./verify-independent-composition.ts";
+
 const repositoryRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -417,7 +422,7 @@ async function readMessageResource() {
   };
 }
 
-export const qualityChecks = [
+const qualityChecks = [
   createMessagePlaceholderChecker<Unit, Translation>({
     sourceText: (unit) => unit.source,
     translationText: (translation) => translation.text,
@@ -449,7 +454,7 @@ export const qualityChecks = [
   }),
 ];
 
-export function qualityRequest() {
+function qualityRequest() {
   return {
     subjects: [{ key: "sha256:save", language: "fr" }],
     evidenceScope: [
@@ -521,6 +526,8 @@ export default defineConfig<Unit, Translation>({
     },
     matches: (unit, translation) => unit.nativeId === translation.sourceId,
   },
+  qualityChecks,
+  qualityRequest,
 });
 `;
   const typecheckSource = `import { createMessagePlaceholderChecker } from "@l10n/checks";
@@ -543,12 +550,13 @@ import config from "./l10n.config.ts";
 import completionConfig from "./completion.config.ts";
 import editConfig from "./edits.config.ts";
 import planConfig from "./plan.config.ts";
-import qaConfig, { qualityChecks } from "./qa.config.ts";
+import qaConfig from "./qa.config.ts";
 
 void readSourceFacts(config);
 void readFacts(config);
 void readFacts(qaConfig);
-void qualityChecks;
+void qaConfig.qualityChecks;
+void qaConfig.qualityRequest;
 void createMessagePlaceholderChecker({
   sourceText: (unit: { source: string }) => unit.source,
   translationText: (translation: { text: string }) => translation.text,
@@ -591,6 +599,7 @@ void readFacts(editConfig).then(async (facts) => {
       "edits.config.ts",
       "plan.config.ts",
       "qa.config.ts",
+      "composition.config.ts",
       "typecheck.ts",
     ],
   };
@@ -1348,12 +1357,16 @@ export async function verifyIndependentConsumer(): Promise<void> {
     }
 
     await writeConsumerFiles(consumerRoot, artifactRoot);
+    await writeCompositionConsumerFiles(consumerRoot);
     process.stdout.write("从独立目录安装三个本地 npm 制品…\n");
     runChecked("pnpm", ["install"], consumerRoot);
 
     const typecheck = path.join(repositoryRoot, "node_modules", ".bin", "tsc");
     process.stdout.write("检查宿主通过已安装声明文件的类型…\n");
     runChecked(typecheck, ["--project", "tsconfig.json"], consumerRoot);
+
+    process.stdout.write("运行异构输入组合与默认配置 QA 场景…\n");
+    await verifyCompositionConsumer(consumerRoot);
 
     process.stdout.write("运行独立宿主公开 API 与 CLI 场景…\n");
     const runtime = runChecked(
