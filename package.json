@@ -8,6 +8,7 @@
     "check:full": "node --conditions=source scripts/task-gates.ts check:full",
     "check:heavy": "node --conditions=source scripts/task-gates.ts check:heavy",
     "fix": "node --conditions=source scripts/task-gates.ts fix",
+    "verify:independent-consumer": "node --conditions=source scripts/verify-independent-consumer.ts",
     "format:check": "oxfmt --list-different --no-error-on-unmatched-pattern package.json pnpm-workspace.yaml pnpm-lock.yaml turbo.json tsconfig.json tsconfig.config.json *.config.ts .pnpmfile.mjs .gitignore .dockerignore Dockerfile TODO.md rust-toolchain.toml .vscode .devcontainer scripts",
     "format:write": "oxfmt --write --no-error-on-unmatched-pattern package.json pnpm-workspace.yaml pnpm-lock.yaml turbo.json tsconfig.json tsconfig.config.json *.config.ts .pnpmfile.mjs .gitignore .dockerignore Dockerfile TODO.md rust-toolchain.toml .vscode .devcontainer scripts",
     "lint": "oxlint --quiet --format=unix --no-error-on-unmatched-pattern *.config.ts .pnpmfile.mjs scripts",

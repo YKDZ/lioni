@@ -39,6 +39,11 @@
       "dependsOn": ["//#lint:fix"],
       "tags": ["work:repair"]
     },
+    "//#verify:independent-consumer": {
+      "cache": false,
+      "outputs": [],
+      "tags": ["quality:heavy"]
+    },
     "//#lint": {
       "outputs": [],
       "tags": ["quality:light"]

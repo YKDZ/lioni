@@ -30,9 +30,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
     "prepack": "pnpm exec turbo run build --filter=."
   },
-  "dependencies": {
-    "valibot": "catalog:"
-  },
   "devDependencies": {
     "@l10n/typescript-config": "workspace:*",
     "@types/node": "catalog:",

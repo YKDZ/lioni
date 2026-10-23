@@ -18,15 +18,9 @@ function assertNever(value: never): never {
   throw new Error(`unsupported journey mode: ${String(value)}`);
 }
 
-type JourneyRunTarget = {
-  readonly mode: CliJourneyMode;
-  readonly packedBin?: string;
-};
-
 const journeyRunnerUsage = [
   "Usage:",
   "  run-journeys.ts <source|distribution> [source|distribution ...]",
-  "  run-journeys.ts packed <bin-path>",
 ].join("\n");
 
 function invalidArguments(message: string): never {
@@ -35,36 +29,14 @@ function invalidArguments(message: string): never {
 
 function parseJourneyRunTargets(
   args: readonly string[],
-): readonly JourneyRunTarget[] {
+): readonly CliJourneyMode[] {
   const first = args[0];
   if (first === undefined) {
     invalidArguments("missing journey mode");
   }
 
-  if (first === "packed") {
-    if (args.length === 1) {
-      invalidArguments("packed journey mode requires exactly one bin path");
-    }
-    if (args.length !== 2) {
-      invalidArguments(
-        "packed journey mode accepts exactly one bin path and cannot be combined with other modes",
-      );
-    }
-    const packedBin = args[1]!;
-    if (
-      packedBin === "source" ||
-      packedBin === "distribution" ||
-      packedBin === "packed"
-    ) {
-      invalidArguments(
-        `packed bin path cannot be journey mode ${JSON.stringify(packedBin)}`,
-      );
-    }
-    return [{ mode: "packed", packedBin }];
-  }
-
   const seen = new Set<CliJourneyMode>();
-  const targets: JourneyRunTarget[] = [];
+  const targets: CliJourneyMode[] = [];
   for (const argument of args) {
     switch (argument) {
       case "source":
@@ -75,15 +47,11 @@ function parseJourneyRunTargets(
           );
         }
         seen.add(argument);
-        targets.push({ mode: argument });
+        targets.push(argument);
         break;
-      case "packed":
-        invalidArguments(
-          "packed journey mode cannot be combined with source or distribution",
-        );
       default:
         invalidArguments(
-          `unknown journey mode ${JSON.stringify(argument)}; expected source, distribution, or packed`,
+          `unknown journey mode ${JSON.stringify(argument)}; expected source or distribution`,
         );
     }
   }
@@ -112,10 +80,10 @@ async function discoverJourneys(): Promise<readonly CliJourney[]> {
   );
 }
 
-function invocation(
-  mode: CliJourneyMode,
-  packedBin: string | undefined,
-): { readonly executable: string; readonly prefix: readonly string[] } {
+function invocation(mode: CliJourneyMode): {
+  readonly executable: string;
+  readonly prefix: readonly string[];
+} {
   switch (mode) {
     case "source":
       return {
@@ -130,13 +98,6 @@ function invocation(
         executable: process.execPath,
         prefix: [path.join(packageRoot, "dist", "cli.js")],
       };
-    case "packed":
-      if (packedBin === undefined) {
-        throw new Error(
-          "packed journey mode requires a package-manager bin path",
-        );
-      }
-      return { executable: packedBin, prefix: [] };
     default:
       return assertNever(mode);
   }
@@ -144,11 +105,10 @@ function invocation(
 
 async function runCommand(options: {
   readonly mode: CliJourneyMode;
-  readonly packedBin: string | undefined;
   readonly command: CliJourneyCommand;
   readonly cwd: string;
 }): Promise<CliJourneyResult> {
-  const target = invocation(options.mode, options.packedBin);
+  const target = invocation(options.mode);
   return await new Promise((resolve, reject) => {
     const child = spawn(
       target.executable,
@@ -183,7 +143,6 @@ async function runCommand(options: {
 
 export async function runJourneys(options: {
   readonly mode: CliJourneyMode;
-  readonly packedBin?: string;
 }): Promise<readonly string[]> {
   const passed: string[] = [];
   for (const journey of await discoverJourneys()) {
@@ -199,7 +158,6 @@ export async function runJourneys(options: {
         results.push(
           await runCommand({
             mode: options.mode,
-            packedBin: options.packedBin,
             command,
             cwd: workDir,
           }),
@@ -215,29 +173,10 @@ export async function runJourneys(options: {
 }
 
 async function runJourneyTargets(
-  targets: readonly JourneyRunTarget[],
+  targets: readonly CliJourneyMode[],
 ): Promise<readonly string[]> {
   const passed: string[] = [];
-  for (const target of targets) {
-    switch (target.mode) {
-      case "source":
-      case "distribution":
-        passed.push(...(await runJourneys({ mode: target.mode })));
-        break;
-      case "packed":
-        passed.push(
-          ...(await runJourneys({
-            mode: target.mode,
-            ...(target.packedBin === undefined
-              ? {}
-              : { packedBin: target.packedBin }),
-          })),
-        );
-        break;
-      default:
-        assertNever(target.mode);
-    }
-  }
+  for (const mode of targets) passed.push(...(await runJourneys({ mode })));
   return passed;
 }
 

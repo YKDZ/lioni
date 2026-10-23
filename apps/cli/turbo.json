@@ -42,12 +42,6 @@
       "tags": ["work:lifecycle"]
     },
     "test": {
-      "dependsOn": [],
-      "inputs": [],
-      "outputs": [],
-      "tags": ["quality:light"]
-    },
-    "test:e2e": {
       "dependsOn": ["build"],
       "inputs": [],
       "outputs": [],

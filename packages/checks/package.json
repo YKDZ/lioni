@@ -26,13 +26,11 @@
     "format:write": "oxfmt --write .",
     "lint": "oxlint --quiet --format=unix --ignore-pattern node_modules .",
     "lint:fix": "oxlint --format=unix . --fix",
-    "test": "node --conditions=source --test --test-reporter=spec --test-reporter=./scripts/node-test-count-reporter.ts --test-reporter-destination=stdout --test-reporter-destination=stderr 'test/**/*.test.ts'",
     "typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
     "prepack": "pnpm exec turbo run build --filter=."
   },
   "dependencies": {
-    "@l10n/core": "workspace:*",
-    "valibot": "catalog:"
+    "@l10n/core": "workspace:*"
   },
   "devDependencies": {
     "@l10n/typescript-config": "workspace:*",

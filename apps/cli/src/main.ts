@@ -1,3 +1,12 @@
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+
+import {
+  DuplicateTranslationUnitKeyError,
+  readSourceFacts,
+  type FrameworkConfig,
+  type TranslationUnitInput,
+} from "@l10n/core";
 import {
   CliWriteError,
   defineCli,
@@ -21,13 +30,20 @@ export type CliRuntime = {
   readonly identity: CliCommandIdentity;
 };
 
-const records = [
-  { name: "ada", title: "Ada Lovelace" },
-  { name: "grace", title: "Grace Hopper" },
-];
+const sourceFactsSchema = standardSchema(
+  v.object({
+    version: v.string(),
+    units: v.array(
+      v.object({
+        key: v.string(),
+        unit: v.unknown(),
+      }),
+    ),
+  }),
+);
 
 function createCliContract(identity: CliCommandIdentity) {
-  const define = defineCli<{ getManifest(): Record<string, unknown> }>();
+  const define = defineCli<undefined>();
   return define({
     root: "cli",
     help: helpCapability({
@@ -54,80 +70,90 @@ function createCliContract(identity: CliCommandIdentity) {
       cli: {
         kind: "rootGroup",
         name: identity.commandName,
-        description: "查询示例记录。",
+        description: "读取宿主提供的原文事实。",
       },
-      ...define.command("lookup")({
+      ...define.command("facts")({
         kind: "command",
         parent: "cli",
-        name: "lookup",
-        description: "按名称查询内存记录。",
+        name: "facts",
+        description: "读取原文单元并计算宿主定义的身份。",
         fields: {
-          name: { kind: "positional", description: "小写字母组成的记录名称" },
+          config: { kind: "positional", description: "宿主配置文件路径" },
         },
-        input: standardSchema(
-          v.object({
-            name: v.pipe(
-              v.string(),
-              v.regex(/^[a-z]+$/, "名称只能包含小写字母。"),
-            ),
-          }),
-        ),
+        input: standardSchema(v.object({ config: v.string() })),
         success: {
           kind: "data",
           variants: {
-            found: {
-              description: "找到记录",
+            read: {
+              description: "原文事实",
               exitCode: 0,
-              schema: standardSchema(
-                v.object({ name: v.string(), title: v.string() }),
-              ),
-              text: ({ name, title }) =>
-                text.line(`找到记录：${title}（${name}）`),
-            },
-          },
-        },
-        failures: {
-          notFound: {
-            description: "记录不存在",
-            exitCode: 1,
-            schema: standardSchema(v.object({ name: v.string() })),
-            text: ({ name }) => text.line(`未找到记录：${name}。`),
-          },
-        },
-        handler({ input, outcome }) {
-          const record = records.find(({ name }) => name === input.name);
-          return record === undefined
-            ? outcome.failure.notFound({ name: input.name })
-            : outcome.data.found(record);
-        },
-      }),
-      ...define.command("schema")({
-        kind: "command",
-        parent: "cli",
-        name: "schema",
-        description: "导出完整 CLI 契约及输入/输出 Schema。",
-        input: standardSchema(v.object({})),
-        fields: {},
-        success: {
-          kind: "data",
-          variants: {
-            exported: {
-              description: "完整 CLI 契约",
-              exitCode: 0,
-              schema: standardSchema(
-                v.object({ manifest: v.record(v.string(), v.unknown()) }),
-              ),
-              text: ({ manifest }) =>
+              schema: sourceFactsSchema,
+              text: ({ version, units }) =>
                 text.lines([
-                  "CLI 契约",
-                  ...JSON.stringify(manifest, null, 2).split("\n"),
+                  `原文事实（${units.length} 个单元）`,
+                  `事实版本：${version}`,
+                  ...units.flatMap(({ key, unit }) => [
+                    `- ${key}`,
+                    `  ${JSON.stringify(unit) ?? "null"}`,
+                  ]),
                 ]),
             },
           },
         },
-        failures: {},
-        handler: ({ dependencies, outcome }) =>
-          outcome.data.exported({ manifest: dependencies.getManifest() }),
+        failures: {
+          duplicateIdentity: {
+            description: "原文身份重复",
+            exitCode: 1,
+            schema: standardSchema(
+              v.object({
+                key: v.string(),
+                firstIndex: v.number(),
+                duplicateIndex: v.number(),
+              }),
+            ),
+            text: ({ key, firstIndex, duplicateIndex }) =>
+              text.line(
+                `原文身份重复：${key}（第 ${firstIndex + 1} 与第 ${duplicateIndex + 1} 个单元）。`,
+              ),
+          },
+          readFailed: {
+            description: "读取原文事实失败",
+            exitCode: 1,
+            schema: standardSchema(v.object({ message: v.string() })),
+            text: ({ message }) => text.line(`读取原文事实失败：${message}`),
+          },
+        },
+        async handler({ input, outcome }) {
+          try {
+            const configUrl = pathToFileURL(
+              resolve(process.cwd(), input.config),
+            );
+            const configModule = (await import(configUrl.href)) as {
+              readonly default?: unknown;
+            };
+            if (configModule.default === undefined)
+              throw new TypeError(
+                "宿主配置必须默认导出 defineConfig(...) 的结果。",
+              );
+            const config =
+              configModule.default as FrameworkConfig<TranslationUnitInput>;
+            const facts = await readSourceFacts(config);
+            return outcome.data.read({
+              version: facts.version,
+              units: [...facts.units],
+            });
+          } catch (error) {
+            if (error instanceof DuplicateTranslationUnitKeyError)
+              return outcome.failure.duplicateIdentity({
+                key: error.key,
+                firstIndex: error.firstIndex,
+                duplicateIndex: error.duplicateIndex,
+              });
+            return outcome.failure.readFailed({
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        },
       }),
     },
   });
@@ -138,7 +164,7 @@ export async function runCli(runtime: CliRuntime): Promise<number> {
     const contract = createCliContract(runtime.identity);
     const result = await executeCli(contract, {
       invocation: parseCliInvocation(contract, runtime.argv.slice(2)),
-      dependencies: { getManifest: () => ({ ...contract.manifest }) },
+      dependencies: undefined,
       write: runtime.write,
     });
     return result.exitCode;

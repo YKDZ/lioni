@@ -265,9 +265,6 @@ importers:
       '@l10n/core':
         specifier: workspace:*
         version: link:../core
-      valibot:
-        specifier: 'catalog:'
-        version: 1.5.0(typescript@7.0.2)
     devDependencies:
       '@l10n/typescript-config':
         specifier: workspace:*
@@ -289,10 +286,6 @@ importers:
         version: typescript@7.0.2
 
   packages/core:
-    dependencies:
-      valibot:
-        specifier: 'catalog:'
-        version: 1.5.0(typescript@7.0.2)
     devDependencies:
       '@l10n/typescript-config':
         specifier: workspace:*
