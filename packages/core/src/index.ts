@@ -12,7 +12,11 @@ import {
   type QualityCheckRequest,
   type QualityRunResult,
 } from "./qa.ts";
-import type { TranslationWritebackAdapter } from "./semantic-edits.ts";
+import type {
+  JsonValue,
+  SemanticEditCandidate,
+  TranslationWritebackAdapter,
+} from "./semantic-edits.ts";
 
 export * from "./completion.ts";
 export * from "./semantic-edits.ts";
@@ -81,6 +85,7 @@ export type TranslationAdapter<
   TTranslation,
 > = {
   readonly languages: readonly string[];
+  readonly contentOf: (translation: TTranslation) => JsonValue;
   read(
     language: string,
     sourceUnits: readonly SourceUnitFact<TUnit>[],
@@ -165,6 +170,7 @@ export type ActualTranslationFact<TTranslation> = {
   readonly scopeIndex: number;
   readonly range: unknown;
   readonly translation: TTranslation;
+  readonly content: JsonValue;
   readonly bodyAvailability: BodyAvailability;
 };
 
@@ -224,10 +230,11 @@ export function validateFrameworkConfig(value: unknown): void {
     !Array.isArray(translations.languages) ||
     translations.languages.some((language) => typeof language !== "string") ||
     typeof translations.read !== "function" ||
-    typeof translations.matches !== "function"
+    typeof translations.matches !== "function" ||
+    typeof translations.contentOf !== "function"
   )
     throw new TypeError(
-      "defineConfig 的 translations 必须提供语言列表、read 与 matches 函数。",
+      "defineConfig 的 translations 必须提供语言列表、read、matches 与 contentOf 函数。",
     );
 }
 
@@ -322,6 +329,13 @@ export async function readFacts<
             scopeIndex,
             range: scope.range,
             translation: record.value,
+            content:
+              record.bodyAvailability === "available"
+                ? snapshotJson(
+                    translationAdapter.contentOf(record.value),
+                    "译文业务内容",
+                  )
+                : null,
             bodyAvailability: record.bodyAvailability,
           });
         }
@@ -423,10 +437,17 @@ export async function readCompletion<
 export async function analyzeQuality<
   TUnit extends TranslationUnitInput,
   TTranslation,
->(config: FrameworkConfig<TUnit, TTranslation>): Promise<QualityRunResult> {
+>(
+  config: FrameworkConfig<TUnit, TTranslation>,
+  options: { readonly candidates?: readonly SemanticEditCandidate[] } = {},
+): Promise<QualityRunResult> {
   const facts = await readFacts(config);
   const checks = configuredQualityChecks(config);
-  const request = await createConfiguredQualityRequest(config, facts);
+  const configuredRequest = await createConfiguredQualityRequest(config, facts);
+  const request =
+    options.candidates === undefined
+      ? configuredRequest
+      : { ...configuredRequest, candidates: options.candidates };
   return runQualityChecks(facts, request, checks);
 }
 
@@ -434,17 +455,21 @@ function defaultQualityRequest<
   TUnit extends TranslationUnitInput,
   TTranslation,
 >(facts: FrameworkFacts<TUnit, TTranslation>): QualityCheckRequest {
-  const subjects = facts.associations.map(({ sourceKey, language }) => ({
-    key: sourceKey,
-    language,
-  }));
   return {
-    subjects,
-    evidenceScope: subjects.map(({ key, language }) => ({
-      kind: "translation-unit",
-      key,
-      language,
-    })),
+    candidates: facts.associations.flatMap((association) => {
+      if (association.status !== "matched") return [];
+      const record =
+        facts.translations.records[association.translationIndexes[0] as number];
+      return record === undefined
+        ? []
+        : [
+            {
+              sourceKey: association.sourceKey,
+              language: association.language,
+              content: record.content,
+            },
+          ];
+    }),
     dependencies: {},
   };
 }
@@ -478,6 +503,20 @@ async function createConfiguredQualityRequest<
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function snapshotJson(value: unknown, description: string): JsonValue {
+  let serialized: string | undefined;
+  try {
+    serialized = JSON.stringify(value);
+  } catch (error) {
+    throw new TypeError(`${description}必须可序列化为 JSON。`, {
+      cause: error,
+    });
+  }
+  if (serialized === undefined)
+    throw new TypeError(`${description}必须可序列化为 JSON。`);
+  return JSON.parse(serialized) as JsonValue;
 }
 
 function readStatus(

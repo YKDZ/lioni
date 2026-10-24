@@ -41,96 +41,95 @@ void describe("quality checks", () => {
             ],
           }),
           matches: () => true,
+          contentOf: ({ text }) => ({ text }),
         },
       }),
     );
     const dependencies = { policy: { strict: true } };
     const configuration = { missingPlaceholders: "error" };
-    const subjects = [{ key: "message:save", language: "fr" }];
-    const evidenceScope = [
-      { kind: "translation-unit" as const, key: "message:save" },
+    const candidates = [
+      {
+        sourceKey: "message:save",
+        language: "fr",
+        content: { text: "Bonjour" },
+      },
     ];
     let observedVersion: string | undefined;
     let observedDependencies: unknown;
     let observedConfiguration: unknown;
 
-    const result = await runQualityChecks(
-      facts,
-      { subjects, evidenceScope, dependencies },
-      [
-        {
-          id: "placeholders",
-          configuration,
-          check(input) {
-            observedVersion = input.facts.version;
-            observedDependencies = input.dependencies;
-            observedConfiguration = input.configuration;
-            return {
-              status: "complete" as const,
-              diagnostics: [
-                {
-                  severity: "error" as const,
-                  object: {
-                    kind: "translation-unit" as const,
-                    key: "message:save",
-                  },
-                  location: {
-                    language: "fr",
-                    range: "locales/fr.json",
-                    key: "message:save",
-                  },
-                  message: "Target is missing {name}.",
-                  evidence: [
-                    {
-                      role: "source" as const,
-                      object: {
-                        kind: "translation-unit" as const,
-                        key: "message:save",
-                      },
-                      location: {
-                        language: null,
-                        range: "src/messages.ts",
-                        key: "message:save",
-                      },
-                      value: unit.source,
-                    },
-                    {
-                      role: "target" as const,
-                      object: {
-                        kind: "translation-unit" as const,
-                        key: "message:save",
-                      },
-                      location: {
-                        language: "fr",
-                        range: "locales/fr.json",
-                        key: "message:save",
-                      },
-                      value: translation.text,
-                    },
-                  ],
+    const result = await runQualityChecks(facts, { candidates, dependencies }, [
+      {
+        id: "placeholders",
+        configuration,
+        check(input) {
+          observedVersion = input.facts.version;
+          observedDependencies = input.dependencies;
+          observedConfiguration = input.configuration;
+          return {
+            status: "complete" as const,
+            diagnostics: [
+              {
+                severity: "error" as const,
+                object: {
+                  kind: "translation-unit" as const,
+                  key: "message:save",
                 },
-              ],
-              issues: [],
-              coverage: {
-                selected: 1,
-                evaluated: 1,
-                notApplicable: 0,
-                incomplete: 0,
-                failed: 0,
+                location: {
+                  language: "fr",
+                  range: "locales/fr.json",
+                  key: "message:save",
+                },
+                message: "Target is missing {name}.",
+                evidence: [
+                  {
+                    role: "source" as const,
+                    object: {
+                      kind: "translation-unit" as const,
+                      key: "message:save",
+                    },
+                    location: {
+                      language: null,
+                      range: "src/messages.ts",
+                      key: "message:save",
+                    },
+                    value: unit.source,
+                  },
+                  {
+                    role: "target" as const,
+                    object: {
+                      kind: "translation-unit" as const,
+                      key: "message:save",
+                    },
+                    location: {
+                      language: "fr",
+                      range: "locales/fr.json",
+                      key: "message:save",
+                    },
+                    value: translation.text,
+                  },
+                ],
               },
-            };
-          },
+            ],
+            issues: [],
+            coverage: {
+              selected: 1,
+              evaluated: 1,
+              notApplicable: 0,
+              incomplete: 0,
+              failed: 0,
+            },
+          };
         },
-      ],
-    );
+      },
+    ]);
 
     assert.equal(observedVersion, facts.version);
     assert.deepEqual(observedDependencies, dependencies);
     assert.deepEqual(observedConfiguration, configuration);
     assert.equal(result.version, facts.version);
     assert.equal(result.status, "complete");
-    assert.deepEqual(result.subjects, subjects);
-    assert.deepEqual(result.evidenceScope, evidenceScope);
+    assert.deepEqual(result.candidates, candidates);
     assert.deepEqual(result.diagnostics, [
       {
         ruleId: "placeholders",
@@ -186,35 +185,117 @@ void describe("quality checks", () => {
       }),
     );
     const request: QualityCheckRequest = {
-      subjects: [],
-      evidenceScope: [],
+      candidates: [],
       dependencies: { policyVersion: 1 },
     };
 
     const notRun = await runQualityChecks(facts, request, []);
-    const notApplicable = await runQualityChecks(facts, request, [
+    let called = false;
+    const noCandidateRun = await runQualityChecks(facts, request, [
       {
         id: "placeholders",
         configuration: {},
-        check: () => ({
-          status: "not-applicable",
-          diagnostics: [],
-          issues: [],
-          coverage: {
-            selected: 0,
-            evaluated: 0,
-            notApplicable: 0,
-            incomplete: 0,
-            failed: 0,
-          },
-        }),
+        check: () => {
+          called = true;
+          return {
+            status: "not-applicable",
+            diagnostics: [],
+            issues: [],
+            coverage: {
+              selected: 1,
+              evaluated: 0,
+              notApplicable: 1,
+              incomplete: 0,
+              failed: 0,
+            },
+          };
+        },
       },
     ]);
+    const notApplicable = await runQualityChecks(
+      facts,
+      {
+        ...request,
+        candidates: [
+          { sourceKey: "unused", language: "fr", content: "Bonjour" },
+        ],
+      },
+      [
+        {
+          id: "placeholders",
+          configuration: {},
+          check: () => ({
+            status: "not-applicable",
+            diagnostics: [],
+            issues: [],
+            coverage: {
+              selected: 1,
+              evaluated: 0,
+              notApplicable: 1,
+              incomplete: 0,
+              failed: 0,
+            },
+          }),
+        },
+      ],
+    );
 
     assert.equal(notRun.status, "not-run");
+    assert.equal(noCandidateRun.status, "not-run");
+    assert.equal(called, false);
     assert.equal(notApplicable.status, "not-applicable");
     assert.deepEqual(notRun.dependencies, request.dependencies);
-    assert.deepEqual(notApplicable.subjects, request.subjects);
+    assert.deepEqual(noCandidateRun.candidates, request.candidates);
+  });
+
+  void it("calls each configured checker once for each candidate", async () => {
+    const facts = await readFacts(
+      defineConfig({
+        source: { read: () => ({ scopes: [] }) },
+        keyOf: () => "unused",
+      }),
+    );
+    const observed: string[] = [];
+    const result = await runQualityChecks(
+      facts,
+      {
+        candidates: [
+          { sourceKey: "A", language: "fr", content: "Premier" },
+          { sourceKey: "B", language: "fr", content: "Second" },
+        ],
+        dependencies: {},
+      },
+      [
+        {
+          id: "candidate-order",
+          configuration: {},
+          check({ candidate }) {
+            observed.push(candidate.sourceKey);
+            return {
+              status: "complete",
+              diagnostics: [],
+              issues: [],
+              coverage: {
+                selected: 1,
+                evaluated: 1,
+                notApplicable: 0,
+                incomplete: 0,
+                failed: 0,
+              },
+            };
+          },
+        },
+      ],
+    );
+
+    assert.deepEqual(observed, ["A", "B"]);
+    assert.deepEqual(result.checks[0]?.coverage, {
+      selected: 2,
+      evaluated: 2,
+      notApplicable: 0,
+      incomplete: 0,
+      failed: 0,
+    });
   });
 
   void it("marks a thrown checker failed without losing the run binding", async () => {
@@ -227,7 +308,12 @@ void describe("quality checks", () => {
     const dependencies = { sourceRevision: "revision-2" };
     const result = await runQualityChecks(
       facts,
-      { subjects: [], evidenceScope: [], dependencies },
+      {
+        candidates: [
+          { sourceKey: "external", language: "fr", content: "Bonjour" },
+        ],
+        dependencies,
+      },
       [
         {
           id: "broken",
@@ -280,11 +366,7 @@ void describe("quality checks", () => {
       ],
     });
     const request = {
-      subjects: [
-        { key: "A", language: "fr" },
-        { key: "B", language: "fr" },
-      ],
-      evidenceScope: [],
+      candidates: [{ sourceKey: "A", language: "fr", content: "value:A" }],
       dependencies: {},
       exceptions: [
         {
@@ -315,8 +397,8 @@ void describe("quality checks", () => {
       diagnostics: [makeFinding("A"), makeFinding("B")],
       issues: [],
       coverage: {
-        selected: 2,
-        evaluated: 2,
+        selected: 1,
+        evaluated: 1,
         notApplicable: 0,
         incomplete: 0,
         failed: 0,
@@ -366,7 +448,7 @@ void describe("quality checks", () => {
       ],
     );
     assert.equal(result.diagnostics[0]?.evidence[0]?.value, "value:A");
-    assert.equal(result.checks[0]?.coverage.evaluated, 2);
+    assert.equal(result.checks[0]?.coverage.evaluated, 1);
     assert.equal(result.version, facts.version);
   });
 });

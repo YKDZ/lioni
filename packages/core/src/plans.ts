@@ -20,7 +20,9 @@ import type {
   TranslationUnitInput,
 } from "./index.ts";
 import {
+  prepareSemanticDeletion,
   prepareSemanticEdit,
+  resolveSemanticDeleteInput,
   resolveSemanticEditInput,
   type JsonValue,
   type SemanticEdit,
@@ -60,6 +62,7 @@ export type UpdateDecision =
 
 export type UpdatePlanStatus =
   | "candidate"
+  | "delete"
   | "retain"
   | "review"
   | "notProcessed"
@@ -83,7 +86,7 @@ export type UpdatePlanBlockCode =
   | "previousInputIncomplete"
   | "addedSourceEvidenceIncomplete"
   | "deleteTargetUnavailable"
-  | "deleteNotImplemented"
+  | "deleteRequiresSourceRemoval"
   | "sourceRemoved"
   | "candidateIdentityMismatch"
   | "semanticEditInputUnavailable";
@@ -129,7 +132,7 @@ export type UpdatePlan<
   TUnit extends TranslationUnitInput = TranslationUnitInput,
   TTranslation = unknown,
 > = {
-  readonly formatVersion: 2;
+  readonly formatVersion: 3;
   readonly sourceScopeEvidence: readonly ProcessingBaselineSourceScope[];
   readonly items: readonly UpdatePlanItem<TUnit["source"], TTranslation>[];
 };
@@ -287,13 +290,58 @@ export async function createUpdatePlan<
     }
 
     if (decision.action === "delete") {
+      const historicalSource = change.previous?.source.unit as
+        | TUnit
+        | undefined;
+      if (
+        historicalSource === undefined ||
+        expectedBasis?.source.presence !== "removed"
+      ) {
+        items.push({
+          ...baseItem,
+          status: "blocked",
+          blocker: {
+            code: "deleteTargetUnavailable",
+            message: "缺少用于定位删除目标的历史原文。",
+          },
+        });
+        continue;
+      }
+      const resolved = await resolveSemanticDeleteInput(
+        facts,
+        { sourceKey: change.sourceKey, language: change.language },
+        historicalSource,
+        expectedBasis.source.range,
+        expectedBasis.association.scopes.map(({ range }) => range),
+        config as FrameworkConfig<TUnit, TTranslation>,
+      );
+      if (resolved.status !== "resolved") {
+        items.push({
+          ...baseItem,
+          status: "blocked",
+          blocker: {
+            code: "semanticEditInputUnavailable",
+            message: resolved.reason,
+          },
+        });
+        continue;
+      }
+      const prepared = prepareSemanticDeletion(resolved.input);
+      if (prepared.status !== "prepared") {
+        items.push({
+          ...baseItem,
+          status: "blocked",
+          blocker: {
+            code: "semanticEditInputUnavailable",
+            message: prepared.reason,
+          },
+        });
+        continue;
+      }
       items.push({
         ...baseItem,
-        status: "blocked",
-        blocker: {
-          code: "deleteNotImplemented",
-          message: "删除译文由后续语义编辑能力提供。",
-        },
+        status: "delete",
+        edit: prepared.edit,
       });
       continue;
     }
@@ -348,7 +396,7 @@ export async function createUpdatePlan<
     items.push({ ...baseItem, status: "candidate", edit: prepared.edit });
   }
 
-  return { formatVersion: 2, sourceScopeEvidence, items };
+  return { formatVersion: 3, sourceScopeEvidence, items };
 }
 
 export function validateUpdatePlan(
@@ -357,7 +405,7 @@ export function validateUpdatePlan(
   if (
     typeof value !== "object" ||
     value === null ||
-    value.formatVersion !== 2 ||
+    value.formatVersion !== 3 ||
     !Array.isArray(value.sourceScopeEvidence) ||
     !Array.isArray(value.items)
   ) {
@@ -410,9 +458,17 @@ function matchesDecisionState(item: UpdatePlanItem): boolean {
     return (
       item.decision.action === "candidate" &&
       item.edit !== undefined &&
+      item.edit.operation === "write" &&
       item.edit.sourceKey === item.sourceKey &&
       item.edit.language === item.language &&
       isDeepStrictEqual(item.edit.content, item.decision.candidate.content)
+    );
+  if (item.status === "delete")
+    return (
+      item.decision.action === "delete" &&
+      item.edit?.operation === "delete" &&
+      item.edit.sourceKey === item.sourceKey &&
+      item.edit.language === item.language
     );
   if (item.edit !== undefined) return false;
   if (item.status === "retain") return item.decision.action === "retain";
@@ -450,12 +506,7 @@ function currentSourceUnit<TUnit extends TranslationUnitInput, TTranslation>(
   facts: FrameworkFacts<TUnit, TTranslation>,
   change: ProcessingBaselineChange,
 ): TUnit | undefined {
-  const current = facts.source.units.find(
-    ({ key }) => key === change.sourceKey,
-  );
-  if (current !== undefined) return current.unit;
-  const oldUnit = change.current?.source.unit ?? change.previous?.source.unit;
-  return oldUnit as TUnit | undefined;
+  return facts.source.units.find(({ key }) => key === change.sourceKey)?.unit;
 }
 
 function processingBlocker<TSource, TTranslation>(
@@ -487,12 +538,22 @@ function processingBlocker<TSource, TTranslation>(
       };
   }
   if (decision.action === "delete") {
-    return expectedInput.association.translations.length === 0
-      ? {
-          code: "deleteTargetUnavailable",
-          message: "没有可关联到该原文的目标条目。",
-        }
-      : undefined;
+    if (
+      change.status !== "source-removed" ||
+      expectedInput.source.presence !== "removed"
+    )
+      return {
+        code: "deleteRequiresSourceRemoval",
+        message: "只能在原文已确认移除后处理删除译文。",
+      };
+    if (
+      expectedInput.association.status !== "matched" ||
+      expectedInput.association.translations.length !== 1
+    )
+      return {
+        code: "deleteTargetUnavailable",
+        message: "没有唯一且可读取的历史关联目标。",
+      };
   }
   if (
     decision.action === "candidate" &&
@@ -601,6 +662,7 @@ function isUpdateDecision(value: unknown): value is UpdateDecision {
 function isUpdatePlanStatus(value: unknown): value is UpdatePlanStatus {
   return (
     value === "candidate" ||
+    value === "delete" ||
     value === "retain" ||
     value === "review" ||
     value === "notProcessed" ||
@@ -637,7 +699,7 @@ function isUpdatePlanBlockCode(value: unknown): value is UpdatePlanBlockCode {
     value === "previousInputIncomplete" ||
     value === "addedSourceEvidenceIncomplete" ||
     value === "deleteTargetUnavailable" ||
-    value === "deleteNotImplemented" ||
+    value === "deleteRequiresSourceRemoval" ||
     value === "sourceRemoved" ||
     value === "candidateIdentityMismatch" ||
     value === "semanticEditInputUnavailable"
@@ -648,21 +710,44 @@ function isSemanticEdit(value: unknown): value is SemanticEdit {
   if (typeof value !== "object" || value === null) return false;
   const edit = value as Record<string, unknown>;
   if (
-    edit.formatVersion !== "l10n.semantic-edit/v1" ||
+    edit.formatVersion !== "l10n.semantic-edit/v2" ||
     typeof edit.createdFromFactsVersion !== "string" ||
     typeof edit.sourceKey !== "string" ||
     typeof edit.language !== "string" ||
-    !isJsonValue(edit.content) ||
     !isSemanticEditTarget(edit.target) ||
     typeof edit.expected !== "object" ||
     edit.expected === null
   )
     return false;
   const expected = edit.expected as Record<string, unknown>;
+  if (
+    !isSemanticEditSourceExpectation(expected.source) ||
+    !isJsonValue(expected.dependencies) ||
+    !isSemanticEditTargetExpected(expected.target)
+  )
+    return false;
+  if (edit.operation === "write")
+    return isJsonValue(edit.content) && expected.source.presence === "present";
   return (
-    isJsonValue(expected.source) &&
-    isJsonValue(expected.dependencies) &&
-    isSemanticEditTargetExpected(expected.target)
+    edit.operation === "delete" &&
+    !Object.hasOwn(edit, "content") &&
+    (edit.target as Record<string, unknown>).kind === "existing" &&
+    expected.source.presence === "removed" &&
+    (expected.target as Record<string, unknown>).status === "present"
+  );
+}
+
+function isSemanticEditSourceExpectation(
+  value: unknown,
+): value is SemanticEdit["expected"]["source"] {
+  if (typeof value !== "object" || value === null) return false;
+  const source = value as Record<string, unknown>;
+  if (source.presence === "present")
+    return isJsonValue(source.range) && isJsonValue(source.content);
+  return (
+    source.presence === "removed" &&
+    isJsonValue(source.range) &&
+    isJsonValue(source.historicalContent)
   );
 }
 
@@ -681,7 +766,11 @@ function isSemanticEditTargetExpected(value: unknown): boolean {
   const target = value as Record<string, unknown>;
   return target.status === "missing"
     ? true
-    : target.status === "present" && isJsonValue(target.content);
+    : target.status === "present" &&
+        isJsonValue(target.content) &&
+        isJsonValue(target.range) &&
+        Array.isArray(target.scopes) &&
+        target.scopes.every((range) => isJsonValue(range));
 }
 
 function isJsonValue(

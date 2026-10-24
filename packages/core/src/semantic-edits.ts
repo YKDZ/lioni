@@ -32,23 +32,100 @@ export type SemanticEditCandidate = {
   readonly content: JsonValue;
 };
 
-export type SemanticEdit = {
-  readonly formatVersion: "l10n.semantic-edit/v1";
+export type SemanticEditSourceExpectation =
+  | {
+      readonly presence: "present";
+      readonly range: JsonValue;
+      readonly content: JsonValue;
+    }
+  | {
+      readonly presence: "removed";
+      readonly range: JsonValue;
+      readonly historicalContent: JsonValue;
+    };
+
+export type SemanticEditTargetExpectation =
+  | { readonly status: "missing" }
+  | {
+      readonly status: "present";
+      readonly content: JsonValue;
+      readonly range: JsonValue;
+      readonly scopes: readonly JsonValue[];
+    };
+
+type SemanticEditExpected = {
+  readonly source: SemanticEditSourceExpectation;
+  readonly target: SemanticEditTargetExpectation;
+  readonly dependencies: JsonValue;
+};
+
+type SemanticEditBase = {
   readonly createdFromFactsVersion: string;
   readonly sourceKey: string;
   readonly language: string;
   readonly target: SemanticEditTarget;
-  readonly content: JsonValue;
-  readonly expected: {
-    readonly source: JsonValue;
-    readonly target:
-      | { readonly status: "missing" }
-      | { readonly status: "present"; readonly content: JsonValue };
-    readonly dependencies: JsonValue;
+  readonly expected: SemanticEditExpected;
+};
+
+export type SemanticEdit =
+  | (SemanticEditBase & {
+      readonly formatVersion: "l10n.semantic-edit/v2";
+      readonly operation: "write";
+      readonly content: JsonValue;
+      readonly target: SemanticEditTarget;
+      readonly expected: SemanticEditExpected & {
+        readonly source: Extract<
+          SemanticEditSourceExpectation,
+          { presence: "present" }
+        >;
+      };
+    })
+  | (SemanticEditBase & {
+      readonly formatVersion: "l10n.semantic-edit/v2";
+      readonly operation: "delete";
+      readonly content?: never;
+      readonly target: SemanticEditTarget & { readonly kind: "existing" };
+      readonly expected: SemanticEditExpected & {
+        readonly source: Extract<
+          SemanticEditSourceExpectation,
+          { presence: "removed" }
+        >;
+        readonly target: Extract<
+          SemanticEditTargetExpectation,
+          { status: "present" }
+        >;
+      };
+    });
+
+export type SemanticEditInput = {
+  readonly createdFromFactsVersion: string;
+  readonly sourceKey: string;
+  readonly language: string;
+  readonly target: SemanticEditTarget;
+  readonly expected: SemanticEditExpected & {
+    readonly source: Extract<
+      SemanticEditSourceExpectation,
+      { presence: "present" }
+    >;
   };
 };
 
-export type SemanticEditInput = Omit<SemanticEdit, "formatVersion" | "content">;
+export type SemanticDeleteInput = {
+  readonly createdFromFactsVersion: string;
+  readonly sourceKey: string;
+  readonly language: string;
+  readonly target: SemanticEditTarget & { readonly kind: "existing" };
+  readonly expected: SemanticEditExpected & {
+    readonly source: Extract<
+      SemanticEditSourceExpectation,
+      { presence: "removed" }
+    >;
+    readonly target: Extract<
+      SemanticEditTargetExpectation,
+      { status: "present" }
+    >;
+  };
+};
 
 export type SemanticEditSubject = Pick<
   SemanticEditCandidate,
@@ -63,7 +140,6 @@ export type TranslationWritebackAdapter<
   TUnit extends TranslationUnitInput,
   TTranslation,
 > = {
-  readonly targetContent: (translation: TTranslation) => JsonValue;
   readonly locateExistingTarget: (input: {
     readonly sourceUnit: SourceUnitFact<TUnit>;
     readonly translation: ActualTranslationFact<TTranslation>;
@@ -92,6 +168,10 @@ export type SemanticEditPreparation =
 
 export type SemanticEditInputResolution =
   | { readonly status: "resolved"; readonly input: SemanticEditInput }
+  | { readonly status: "notWritable"; readonly reason: string };
+
+export type SemanticDeleteInputResolution =
+  | { readonly status: "resolved"; readonly input: SemanticDeleteInput }
   | { readonly status: "notWritable"; readonly reason: string };
 
 export type SemanticEditObservation<
@@ -156,6 +236,12 @@ export async function resolveSemanticEditInput<
       status: "notWritable",
       reason: "原文正文不可用，无法核对编辑输入。",
     };
+  const sourceScope = facts.source.read.scopes[sourceUnit.scopeIndex];
+  if (sourceScope === undefined)
+    return {
+      status: "notWritable",
+      reason: "找不到原文单元对应的读取范围。",
+    };
 
   const association = facts.associations.find(
     ({ sourceKey, language }) =>
@@ -191,6 +277,7 @@ export async function resolveSemanticEditInput<
     };
 
   let currentTranslation: ActualTranslationFact<TTranslation> | undefined;
+  let targetScopes: JsonValue[] = [];
   if (association.status === "matched") {
     if (association.translationIndexes.length !== 1)
       return {
@@ -207,6 +294,15 @@ export async function resolveSemanticEditInput<
         status: "notWritable",
         reason: "现有译文正文不可用，无法核对目标输入。",
       };
+    const translationRead = facts.translations.reads.find(
+      ({ language }) => language === subject.language,
+    );
+    targetScopes = association.scopeIndexes.flatMap((scopeIndex) => {
+      const scope = translationRead?.scopes[scopeIndex];
+      return scope === undefined
+        ? []
+        : [snapshotJson(scope.range, "目标译文范围")];
+    });
   }
 
   const translations =
@@ -235,10 +331,9 @@ export async function resolveSemanticEditInput<
         ? { status: "missing" }
         : {
             status: "present",
-            content: snapshotJson(
-              adapter.targetContent(currentTranslation.translation),
-              "现有译文正文",
-            ),
+            content: snapshotJson(currentTranslation.content, "现有译文正文"),
+            range: snapshotJson(currentTranslation.range, "目标译文范围"),
+            scopes: targetScopes,
           };
     const dependencies = await adapter.dependencies?.({
       sourceUnit,
@@ -254,8 +349,211 @@ export async function resolveSemanticEditInput<
         language: subject.language,
         target,
         expected: {
-          source: snapshotJson(sourceUnit.unit.source, "原文正文"),
+          source: {
+            presence: "present",
+            range: snapshotJson(sourceScope.range, "原文范围"),
+            content: snapshotJson(sourceUnit.unit.source, "原文正文"),
+          },
           target: expectedTarget,
+          dependencies: snapshotJson(dependencies ?? null, "编辑依赖"),
+        },
+      },
+    };
+  } catch (error) {
+    return {
+      status: "notWritable",
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/** 根据明确的历史原文及当前目标事实，纯解析可执行删除所需输入。 */
+export async function resolveSemanticDeleteInput<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+>(
+  facts: FrameworkFacts<TUnit, TTranslation>,
+  subject: SemanticEditSubject,
+  historicalSource: TUnit,
+  sourceRange: unknown,
+  targetScopeRanges: readonly unknown[],
+  config: FrameworkConfig<TUnit, TTranslation>,
+): Promise<SemanticDeleteInputResolution> {
+  const adapter = config.translationWriteback;
+  const matches = config.translations?.matches;
+  if (adapter === undefined || matches === undefined)
+    return {
+      status: "notWritable",
+      reason: "宿主没有提供删除目标解析能力。",
+    };
+  if (facts.source.units.some(({ key }) => key === subject.sourceKey))
+    return {
+      status: "notWritable",
+      reason: "原文仍然存在，不能准备删除译文。",
+    };
+
+  let sourceRangeSnapshot: JsonValue;
+  let historicalSourceSnapshot: JsonValue;
+  try {
+    sourceRangeSnapshot = snapshotJson(sourceRange, "历史原文范围");
+    historicalSourceSnapshot = snapshotJson(historicalSource, "历史原文单元");
+  } catch (error) {
+    return {
+      status: "notWritable",
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  const sourceScopeIndexes = facts.source.read.scopes.flatMap((scope, index) =>
+    isDeepStrictEqual(scope.range, sourceRangeSnapshot) ? [index] : [],
+  );
+  if (
+    sourceScopeIndexes.length === 0 ||
+    sourceScopeIndexes.some(
+      (index) => facts.source.read.scopes[index]?.enumeration !== "complete",
+    )
+  )
+    return {
+      status: "notWritable",
+      reason: "当前原文范围读取不完整，无法确认原文已移除。",
+    };
+
+  const translationRead = facts.translations.reads.find(
+    ({ language }) => language === subject.language,
+  );
+  const scopeRanges: JsonValue[] = [];
+  for (const value of targetScopeRanges) {
+    let range: JsonValue;
+    try {
+      range = snapshotJson(value, "目标译文范围");
+    } catch (error) {
+      return {
+        status: "notWritable",
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+    if (scopeRanges.some((existing) => isDeepStrictEqual(existing, range)))
+      continue;
+    scopeRanges.push(range);
+  }
+  const targetScopeIndexes = (translationRead?.scopes ?? []).flatMap(
+    (scope, index) =>
+      scopeRanges.some((range) => isDeepStrictEqual(scope.range, range))
+        ? [index]
+        : [],
+  );
+  if (
+    translationRead === undefined ||
+    scopeRanges.length === 0 ||
+    scopeRanges.some(
+      (range) =>
+        !translationRead.scopes.some((scope) =>
+          isDeepStrictEqual(scope.range, range),
+        ),
+    ) ||
+    targetScopeIndexes.some(
+      (index) => translationRead.scopes[index]?.enumeration !== "complete",
+    )
+  )
+    return {
+      status: "notWritable",
+      reason: "目标译文范围读取不完整，无法确认删除目标。",
+    };
+
+  const sourceScopeIndex = sourceScopeIndexes[0];
+  if (sourceScopeIndex === undefined)
+    return {
+      status: "notWritable",
+      reason: "找不到历史原文对应的读取范围。",
+    };
+  // 仅为宿主重定位和依赖计算保留的历史输入，不加入当前原文事实。
+  const historicalSourceUnit: SourceUnitFact<TUnit> = {
+    key: subject.sourceKey,
+    unit: historicalSource,
+    bodyAvailability: "available",
+    scopeIndex: sourceScopeIndex,
+  };
+  let targetTranslations: ActualTranslationFact<TTranslation>[];
+  try {
+    targetTranslations = facts.translations.records.filter(
+      (translation) =>
+        translation.language === subject.language &&
+        scopeRanges.some((range) =>
+          isDeepStrictEqual(range, translation.range),
+        ) &&
+        matches(historicalSource, translation.translation),
+    );
+  } catch (error) {
+    return {
+      status: "notWritable",
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+  if (targetTranslations.length !== 1)
+    return {
+      status: "notWritable",
+      reason:
+        targetTranslations.length === 0
+          ? "没有可关联到历史原文的现存删除目标。"
+          : "历史原文匹配到多条现存译文，无法确定删除目标。",
+    };
+  const currentTranslation = targetTranslations[0];
+  if (
+    currentTranslation === undefined ||
+    currentTranslation.bodyAvailability !== "available"
+  )
+    return {
+      status: "notWritable",
+      reason: "删除目标正文不可用，无法核对预期输入。",
+    };
+
+  const association: TranslationAssociationFact = {
+    sourceKey: subject.sourceKey,
+    language: subject.language,
+    status: "matched",
+    coverageStatus: "complete",
+    scopeIndexes: targetScopeIndexes,
+    translationIndexes: [currentTranslation.index],
+  };
+  try {
+    const resolution = await adapter.locateExistingTarget({
+      sourceUnit: historicalSourceUnit,
+      translation: currentTranslation,
+    });
+    if (resolution.status === "notWritable")
+      return { status: "notWritable", reason: resolution.reason };
+    const dependencies = await adapter.dependencies?.({
+      sourceUnit: historicalSourceUnit,
+      language: subject.language,
+      association,
+      translations: [currentTranslation],
+    });
+    const targetContent = snapshotJson(
+      currentTranslation.content,
+      "待删除译文正文",
+    );
+    return {
+      status: "resolved",
+      input: {
+        createdFromFactsVersion: facts.version,
+        sourceKey: subject.sourceKey,
+        language: subject.language,
+        target: {
+          kind: "existing",
+          locator: snapshotJson(resolution.locator, "删除目标位置"),
+        },
+        expected: {
+          source: {
+            presence: "removed",
+            range: sourceRangeSnapshot,
+            historicalContent: historicalSourceSnapshot,
+          },
+          target: {
+            status: "present",
+            content: targetContent,
+            range: snapshotJson(currentTranslation.range, "目标译文范围"),
+            scopes: scopeRanges,
+          },
           dependencies: snapshotJson(dependencies ?? null, "编辑依赖"),
         },
       },
@@ -288,8 +586,34 @@ export function prepareSemanticEdit(
       status: "prepared",
       edit: {
         ...snapshot,
-        formatVersion: "l10n.semantic-edit/v1",
+        formatVersion: "l10n.semantic-edit/v2",
+        operation: "write",
         content: snapshotJson(candidate.content, "候选内容"),
+      },
+    };
+  } catch (error) {
+    return {
+      status: "notWritable",
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/** 将已经解析的删除输入固化为不含伪造内容值的语义编辑。 */
+export function prepareSemanticDeletion(
+  input: SemanticDeleteInput,
+): SemanticEditPreparation {
+  try {
+    const snapshot = snapshotJson(
+      input,
+      "已解析删除输入",
+    ) as SemanticDeleteInput;
+    return {
+      status: "prepared",
+      edit: {
+        ...snapshot,
+        formatVersion: "l10n.semantic-edit/v2",
+        operation: "delete",
       },
     };
   } catch (error) {
@@ -332,15 +656,15 @@ export async function applySemanticEdits<
       continue;
     }
 
-    const beforeObservation = readEditObservation(
-      facts,
-      edit.sourceKey,
-      edit.language,
-    );
+    const beforeObservation =
+      edit.operation === "delete"
+        ? readDeleteEditObservation(facts, edit, config)
+        : readEditObservation(facts, edit.sourceKey, edit.language);
     const before = snapshotEditObservation(beforeObservation);
     const validation = await validateSemanticEdit(
       edit,
       beforeObservation,
+      facts,
       config,
     );
     if (validation.status !== "ready") {
@@ -365,12 +689,11 @@ export async function applySemanticEdits<
     } catch (error) {
       let after: SemanticEditObservation<TUnit, TTranslation> | undefined;
       try {
+        const afterFacts = await readFacts(config);
         after = snapshotEditObservation(
-          readEditObservation(
-            await readFacts(config),
-            edit.sourceKey,
-            edit.language,
-          ),
+          edit.operation === "delete"
+            ? readDeleteEditObservation(afterFacts, edit, config)
+            : readEditObservation(afterFacts, edit.sourceKey, edit.language),
         );
       } catch {
         // 保留写入失败结果；回读错误不会覆盖更直接的写入故障。
@@ -387,13 +710,14 @@ export async function applySemanticEdits<
 
     try {
       const afterFacts = await readFacts(config);
-      const afterObservation = readEditObservation(
-        afterFacts,
-        edit.sourceKey,
-        edit.language,
-      );
+      const afterObservation =
+        edit.operation === "delete"
+          ? readDeleteEditObservation(afterFacts, edit, config)
+          : readEditObservation(afterFacts, edit.sourceKey, edit.language);
       const after = snapshotEditObservation(afterObservation);
-      if (confirmsEditContent(edit, afterObservation, adapter)) {
+      if (
+        await confirmsSemanticEdit(edit, afterObservation, afterFacts, config)
+      ) {
         results.push({ ...base, status: "written", before, after });
       } else {
         results.push({
@@ -422,6 +746,7 @@ async function validateSemanticEdit<
 >(
   edit: SemanticEdit,
   observation: SemanticEditObservation<TUnit, TTranslation>,
+  facts: FrameworkFacts<TUnit, TTranslation>,
   config: FrameworkConfig<TUnit, TTranslation>,
 ): Promise<
   | {
@@ -434,8 +759,11 @@ async function validateSemanticEdit<
       readonly reason: string;
     }
 > {
-  if (edit.formatVersion !== "l10n.semantic-edit/v1")
+  if (edit.formatVersion !== "l10n.semantic-edit/v2")
     return { status: "unprocessed", reason: "不支持的语义编辑版本。" };
+
+  if (edit.operation === "delete")
+    return validateSemanticDeletion(edit, facts, config);
 
   const adapter = config.translationWriteback;
   if (adapter === undefined)
@@ -450,6 +778,13 @@ async function validateSemanticEdit<
   if (sourceUnit.bodyAvailability !== "available")
     return { status: "unprocessed", reason: "当前原文正文不可用。" };
 
+  const currentSourceScope = facts.source.read.scopes[sourceUnit.scopeIndex];
+  if (
+    currentSourceScope === undefined ||
+    !isDeepStrictEqual(currentSourceScope.range, edit.expected.source.range)
+  )
+    return { status: "conflict", reason: "原文所在范围已变化。" };
+
   let currentSource: JsonValue;
   try {
     currentSource = snapshotJson(sourceUnit.unit.source, "当前原文正文");
@@ -459,7 +794,7 @@ async function validateSemanticEdit<
       reason: error instanceof Error ? error.message : String(error),
     };
   }
-  if (!isDeepStrictEqual(currentSource, edit.expected.source))
+  if (!isDeepStrictEqual(currentSource, edit.expected.source.content))
     return { status: "conflict", reason: "原文正文已变化。" };
 
   const association = observation.association;
@@ -518,10 +853,14 @@ async function validateSemanticEdit<
       currentTranslation.bodyAvailability !== "available"
     )
       return { status: "unprocessed", reason: "当前译文正文不可用。" };
+    if (
+      !isDeepStrictEqual(currentTranslation.range, edit.expected.target.range)
+    )
+      return { status: "conflict", reason: "目标译文所在范围已变化。" };
     let currentTargetContent: JsonValue;
     try {
       currentTargetContent = snapshotJson(
-        adapter.targetContent(currentTranslation.translation),
+        currentTranslation.content,
         "当前译文正文",
       );
     } catch (error) {
@@ -573,6 +912,245 @@ async function validateSemanticEdit<
   };
 }
 
+async function validateSemanticDeletion<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+>(
+  edit: Extract<SemanticEdit, { operation: "delete" }>,
+  facts: FrameworkFacts<TUnit, TTranslation>,
+  config: FrameworkConfig<TUnit, TTranslation>,
+): Promise<
+  | {
+      readonly status: "ready";
+      readonly sourceUnit: SourceUnitFact<TUnit>;
+      readonly currentTranslation: ActualTranslationFact<TTranslation>;
+    }
+  | {
+      readonly status: "conflict" | "notWritable" | "unprocessed";
+      readonly reason: string;
+    }
+> {
+  const adapter = config.translationWriteback;
+  const matches = config.translations?.matches;
+  if (adapter === undefined || matches === undefined)
+    return { status: "notWritable", reason: "宿主没有提供删除写回适配器。" };
+
+  if (facts.source.units.some(({ key }) => key === edit.sourceKey))
+    return { status: "conflict", reason: "已移除的原文单元重新出现。" };
+  const sourceScopeIndexes = facts.source.read.scopes.flatMap((scope, index) =>
+    isDeepStrictEqual(scope.range, edit.expected.source.range) ? [index] : [],
+  );
+  if (
+    sourceScopeIndexes.length === 0 ||
+    sourceScopeIndexes.some(
+      (index) => facts.source.read.scopes[index]?.enumeration !== "complete",
+    )
+  )
+    return {
+      status: "unprocessed",
+      reason: "当前原文范围读取不足，无法确认原文仍已移除。",
+    };
+
+  const relation = removedSourceRelation(edit, facts, matches);
+  if (relation.association.status === "unknown")
+    return {
+      status: "unprocessed",
+      reason: "当前目标范围读取不足，无法核对删除目标。",
+    };
+  if (relation.association.status === "conflict")
+    return {
+      status: "conflict",
+      reason: "历史原文当前匹配到多条译文，拒绝删除。",
+    };
+  if (relation.association.status === "unavailable")
+    return {
+      status: "unprocessed",
+      reason: "当前删除目标正文不可用。",
+    };
+  if (relation.association.status !== "matched")
+    return {
+      status: "conflict",
+      reason: "预期存在的删除目标已不存在。",
+    };
+  const currentTranslation = relation.translations[0];
+  if (currentTranslation === undefined)
+    return {
+      status: "unprocessed",
+      reason: "当前删除目标无法唯一定位。",
+    };
+
+  let currentContent: JsonValue;
+  let dependencies: JsonValue;
+  let resolution: EditTargetResolution;
+  try {
+    currentContent = snapshotJson(
+      currentTranslation.content,
+      "当前删除目标正文",
+    );
+    dependencies = snapshotJson(
+      (await adapter.dependencies?.({
+        sourceUnit: relation.historicalSourceUnit,
+        language: edit.language,
+        association: relation.association,
+        translations: relation.translations,
+      })) ?? null,
+      "当前编辑依赖",
+    );
+    resolution = await adapter.locateExistingTarget({
+      sourceUnit: relation.historicalSourceUnit,
+      translation: currentTranslation,
+    });
+  } catch (error) {
+    return {
+      status: "notWritable",
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+  if (resolution.status === "notWritable")
+    return { status: "notWritable", reason: resolution.reason };
+  if (!isDeepStrictEqual(currentContent, edit.expected.target.content))
+    return { status: "conflict", reason: "目标译文内容已变化。" };
+  if (!isDeepStrictEqual(currentTranslation.range, edit.expected.target.range))
+    return { status: "conflict", reason: "目标译文所在范围已变化。" };
+  if (!isDeepStrictEqual(dependencies, edit.expected.dependencies))
+    return { status: "conflict", reason: "候选声明的上下文依赖已变化。" };
+  if (!isDeepStrictEqual(resolution.locator, edit.target.locator))
+    return { status: "conflict", reason: "宿主解析出的实际目标位置已变化。" };
+
+  return {
+    status: "ready",
+    sourceUnit: relation.historicalSourceUnit,
+    currentTranslation,
+  };
+}
+
+function readDeleteEditObservation<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+>(
+  facts: FrameworkFacts<TUnit, TTranslation>,
+  edit: Extract<SemanticEdit, { operation: "delete" }>,
+  config: FrameworkConfig<TUnit, TTranslation>,
+): SemanticEditObservation<TUnit, TTranslation> {
+  const relation = removedSourceRelation(
+    edit,
+    facts,
+    config.translations?.matches,
+  );
+  return {
+    factsVersion: facts.version,
+    sourceReadStatus: facts.source.read.status,
+    translationReadStatus:
+      facts.translations.reads.find(
+        ({ language }) => language === edit.language,
+      )?.status ?? null,
+    sourceUnit:
+      facts.source.units.find(({ key }) => key === edit.sourceKey) ?? null,
+    association: relation.association,
+    translations: relation.translations,
+  };
+}
+
+function removedSourceRelation<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+>(
+  edit: Extract<SemanticEdit, { operation: "delete" }>,
+  facts: FrameworkFacts<TUnit, TTranslation>,
+  matches: ((unit: TUnit, translation: TTranslation) => boolean) | undefined,
+): {
+  readonly historicalSourceUnit: SourceUnitFact<TUnit>;
+  readonly association: TranslationAssociationFact;
+  readonly translations: readonly ActualTranslationFact<TTranslation>[];
+} {
+  const expectedSource = edit.expected.source;
+  const sourceScopeIndex = facts.source.read.scopes.findIndex(({ range }) =>
+    isDeepStrictEqual(range, expectedSource.range),
+  );
+  // 仅供显式历史匹配、定位和依赖回调使用，不伪装为当前 source 记录。
+  const historicalSourceUnit: SourceUnitFact<TUnit> = {
+    key: edit.sourceKey,
+    unit: expectedSource.historicalContent as TUnit,
+    bodyAvailability: "available",
+    scopeIndex: sourceScopeIndex,
+  };
+  const translationRead = facts.translations.reads.find(
+    ({ language }) => language === edit.language,
+  );
+  const expectedScopeIndexes = (translationRead?.scopes ?? []).flatMap(
+    (scope, index) =>
+      edit.expected.target.scopes.some((range) =>
+        isDeepStrictEqual(range, scope.range),
+      )
+        ? [index]
+        : [],
+  );
+  const scopesComplete =
+    translationRead !== undefined &&
+    edit.expected.target.scopes.length > 0 &&
+    edit.expected.target.scopes.every((range) =>
+      translationRead.scopes.some(
+        (scope) =>
+          isDeepStrictEqual(scope.range, range) &&
+          scope.enumeration === "complete",
+      ),
+    );
+  const coverageStatus: CoverageStatus =
+    translationRead === undefined
+      ? "notRead"
+      : translationRead.error !== undefined
+        ? "failed"
+        : scopesComplete
+          ? "complete"
+          : translationRead.scopes.some((scope) =>
+                edit.expected.target.scopes.some(
+                  (range) =>
+                    isDeepStrictEqual(range, scope.range) &&
+                    scope.enumeration === "failed",
+                ),
+              )
+            ? "failed"
+            : "incomplete";
+  let translations: ActualTranslationFact<TTranslation>[] = [];
+  let relationshipReadFailed = matches === undefined;
+  if (matches !== undefined) {
+    try {
+      translations = facts.translations.records.filter(
+        (translation) =>
+          translation.language === edit.language &&
+          matches(
+            expectedSource.historicalContent as TUnit,
+            translation.translation,
+          ),
+      );
+    } catch {
+      relationshipReadFailed = true;
+    }
+  }
+  const status =
+    translations.length > 1
+      ? "conflict"
+      : relationshipReadFailed || coverageStatus !== "complete"
+        ? "unknown"
+        : translations.length === 0
+          ? "missing"
+          : translations[0]?.bodyAvailability === "available"
+            ? "matched"
+            : "unavailable";
+  return {
+    historicalSourceUnit,
+    association: {
+      sourceKey: edit.sourceKey,
+      language: edit.language,
+      status,
+      coverageStatus,
+      scopeIndexes: expectedScopeIndexes,
+      translationIndexes: translations.map(({ index }) => index),
+    },
+    translations,
+  };
+}
+
 function readEditObservation<TUnit extends TranslationUnitInput, TTranslation>(
   facts: FrameworkFacts<TUnit, TTranslation>,
   sourceKey: string,
@@ -614,10 +1192,38 @@ function snapshotEditObservation<
   >;
 }
 
-function confirmsEditContent<TUnit extends TranslationUnitInput, TTranslation>(
+async function confirmsSemanticEdit<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+>(
   edit: SemanticEdit,
   observation: SemanticEditObservation<TUnit, TTranslation>,
-  adapter: TranslationWritebackAdapter<TUnit, TTranslation>,
+  facts: FrameworkFacts<TUnit, TTranslation>,
+  config: FrameworkConfig<TUnit, TTranslation>,
+): Promise<boolean> {
+  if (edit.operation === "write") return confirmsEditContent(edit, observation);
+
+  if (observation.sourceUnit !== null) return false;
+  const sourceScopeIsComplete = facts.source.read.scopes.some(
+    (scope) =>
+      isDeepStrictEqual(scope.range, edit.expected.source.range) &&
+      scope.enumeration === "complete",
+  );
+  const relation = removedSourceRelation(
+    edit,
+    facts,
+    config.translations?.matches,
+  );
+  return (
+    sourceScopeIsComplete &&
+    relation.association.coverageStatus === "complete" &&
+    relation.association.status === "missing"
+  );
+}
+
+function confirmsEditContent<TUnit extends TranslationUnitInput, TTranslation>(
+  edit: Extract<SemanticEdit, { operation: "write" }>,
+  observation: SemanticEditObservation<TUnit, TTranslation>,
 ): boolean {
   if (
     observation.association?.status !== "matched" ||
@@ -628,10 +1234,7 @@ function confirmsEditContent<TUnit extends TranslationUnitInput, TTranslation>(
   if (translation === undefined || translation.bodyAvailability !== "available")
     return false;
   return isDeepStrictEqual(
-    snapshotJson(
-      adapter.targetContent(translation.translation),
-      "回读译文正文",
-    ),
+    snapshotJson(translation.content, "回读译文正文"),
     edit.content,
   );
 }

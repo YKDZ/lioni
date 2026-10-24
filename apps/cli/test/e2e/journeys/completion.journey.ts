@@ -35,7 +35,8 @@ const journey: CliJourney = {
         ] : []
       }] };
     },
-    matches: (unit, translation) => unit.context.line === translation.context.sourceLine
+    matches: (unit, translation) => unit.context.line === translation.context.sourceLine,
+    contentOf: (translation) => translation.text
   },
   completion: {
     criterion: "存在实际译文记录（允许同文）",
@@ -63,7 +64,8 @@ const journey: CliJourney = {
       enumeration: "complete",
       records: [{ value: { text: "Save", context: { sourceLine: 18 } }, bodyAvailability: "available" }]
     }] }),
-    matches: (unit, translation) => unit.context.line === translation.context.sourceLine
+    matches: (unit, translation) => unit.context.line === translation.context.sourceLine,
+    contentOf: (translation) => translation.text
   },
   completion: {
     criterion: "实际译文存在",

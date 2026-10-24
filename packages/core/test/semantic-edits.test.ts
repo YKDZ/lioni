@@ -72,12 +72,12 @@ void describe("semantic edits", () => {
         matches: (unit, actualTranslation) =>
           unit.context.key === "toolbar.save" &&
           actualTranslation.text === "Enregistrer",
-      },
-      translationWriteback: {
-        targetContent: (actualTranslation) => ({
+        contentOf: (actualTranslation) => ({
           text: actualTranslation.text,
           state: actualTranslation.state,
         }),
+      },
+      translationWriteback: {
         locateExistingTarget: ({ sourceUnit }) => ({
           status: "located",
           locator: {
@@ -174,9 +174,9 @@ void describe("semantic edits", () => {
         },
         matches: (unit, translation) =>
           unit.context.line === translation.context.sourceLine,
+        contentOf: (translation) => translation.text,
       },
       translationWriteback: {
-        targetContent: (translation) => translation.text,
         locateExistingTarget({ translation }) {
           return {
             status: "located",
@@ -216,7 +216,8 @@ void describe("semantic edits", () => {
     assert.equal(prepared.status, "prepared");
     if (prepared.status !== "prepared") return;
     assert.deepStrictEqual(JSON.parse(JSON.stringify(prepared.edit)), {
-      formatVersion: "l10n.semantic-edit/v1",
+      formatVersion: "l10n.semantic-edit/v2",
+      operation: "write",
       createdFromFactsVersion: facts.version,
       sourceKey: "src/messages.ts:18",
       language: "fr",
@@ -226,8 +227,17 @@ void describe("semantic edits", () => {
       },
       content: "Enregistrer le formulaire",
       expected: {
-        source: "Save",
-        target: { status: "present", content: "Enregistrer" },
+        source: {
+          presence: "present",
+          range: "src/messages.ts",
+          content: "Save",
+        },
+        target: {
+          status: "present",
+          content: "Enregistrer",
+          range: "locales/fr.json",
+          scopes: ["locales/fr.json"],
+        },
         dependencies: { screenshot: "shots/save.png" },
       },
     });
@@ -282,9 +292,9 @@ void describe("semantic edits", () => {
               unit.id === "source:A" && actualTranslation.id === "target:A"
             );
           },
+          contentOf: (actualTranslation) => actualTranslation.text,
         },
         translationWriteback: {
-          targetContent: (actualTranslation) => actualTranslation.text,
           locateExistingTarget({ sourceUnit, translation: actualTranslation }) {
             assert.strictEqual(sourceUnit.unit, source);
             assert.strictEqual(actualTranslation.translation, translation);
@@ -409,9 +419,9 @@ void describe("semantic edits", () => {
         },
         matches: (unit, translation) =>
           unit.context.line === translation.context.sourceLine,
+        contentOf: (translation) => translation.text,
       },
       translationWriteback: {
-        targetContent: (translation) => translation.text,
         locateExistingTarget: ({ translation }) => ({
           status: "located",
           locator: {
@@ -526,9 +536,9 @@ void describe("semantic edits", () => {
         },
         matches: (unit, translation) =>
           unit.context.line === translation.context.sourceLine,
+        contentOf: (translation) => translation.text,
       },
       translationWriteback: {
-        targetContent: (translation) => translation.text,
         locateExistingTarget: ({ translation }) => ({
           status: "located",
           locator: {
@@ -628,9 +638,9 @@ void describe("semantic edits", () => {
           };
         },
         matches: () => true,
+        contentOf: (translation) => translation.text,
       },
       translationWriteback: {
-        targetContent: (translation) => translation.text,
         locateExistingTarget: ({ translation }) => ({
           status: "located",
           locator: {

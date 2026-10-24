@@ -3,8 +3,13 @@ import { isDeepStrictEqual } from "node:util";
 import type {
   Awaitable,
   FrameworkFacts,
+  SourceReadFact,
+  SourceUnitFact,
+  TranslationAssociationFact,
+  TranslationReadFact,
   TranslationUnitInput,
 } from "./index.ts";
+import type { SemanticEditCandidate } from "./semantic-edits.ts";
 
 export type QualityCheckStatus =
   | "not-run"
@@ -32,12 +37,6 @@ export type QualityLocation = {
 export type QualitySubject = {
   readonly key: string;
   readonly language: string;
-};
-
-export type QualityEvidenceScope = {
-  readonly kind: string;
-  readonly key: string;
-  readonly language?: string;
 };
 
 export type QualityRelationship = {
@@ -122,6 +121,10 @@ export type QualityCoverage = {
   readonly failed: number;
 };
 
+type MutableQualityCoverage = {
+  -readonly [TKey in keyof QualityCoverage]: QualityCoverage[TKey];
+};
+
 export type QualityCheckOutcome<TObject extends QualityObject = QualityObject> =
   {
     readonly status: Exclude<QualityCheckStatus, "not-run">;
@@ -131,8 +134,7 @@ export type QualityCheckOutcome<TObject extends QualityObject = QualityObject> =
   };
 
 export type QualityCheckRequest = {
-  readonly subjects: readonly QualitySubject[];
-  readonly evidenceScope: readonly QualityEvidenceScope[];
+  readonly candidates: readonly SemanticEditCandidate[];
   readonly dependencies: unknown;
   readonly relationships?: readonly QualityRelationship[];
   readonly exceptions?: readonly QualityException[];
@@ -141,8 +143,10 @@ export type QualityCheckRequest = {
 export type QualityCheckInput<
   TUnit extends TranslationUnitInput,
   TTranslation,
-> = QualityCheckRequest & {
+> = Omit<QualityCheckRequest, "candidates"> & {
   readonly facts: FrameworkFacts<TUnit, TTranslation>;
+  readonly candidate: SemanticEditCandidate;
+  readonly sourceUnit: SourceUnitFact<TUnit> | null;
   readonly configuration: unknown;
 };
 
@@ -162,16 +166,24 @@ export type QualityCheckResult<TObject extends QualityObject = QualityObject> =
   {
     readonly id: string;
     readonly configuration: unknown;
-    readonly status: Exclude<QualityCheckStatus, "not-run">;
+    readonly status: QualityCheckStatus;
     readonly diagnostics: readonly QualityDiagnostic<TObject>[];
     readonly issues: readonly QualityIssue<TObject>[];
     readonly coverage: QualityCoverage;
   };
 
+export type QualityFactCoverage = {
+  readonly source: SourceReadFact;
+  readonly translations: readonly TranslationReadFact[];
+  readonly associations: readonly (TranslationAssociationFact & {
+    readonly candidateSelected: boolean;
+  })[];
+};
+
 export type QualityRunResult<TObject extends QualityObject = QualityObject> = {
   readonly version: string;
-  readonly subjects: readonly QualitySubject[];
-  readonly evidenceScope: readonly QualityEvidenceScope[];
+  readonly candidates: readonly SemanticEditCandidate[];
+  readonly factCoverage: QualityFactCoverage;
   readonly dependencies: unknown;
   readonly relationships: readonly QualityRelationship[];
   readonly exceptions: readonly QualityException[];
@@ -189,74 +201,133 @@ export async function runQualityChecks<
   checks: readonly QualityCheckDefinition<TUnit, TTranslation>[],
 ): Promise<QualityRunResult> {
   const boundRequest = snapshotQualityData({
-    subjects: request.subjects,
-    evidenceScope: request.evidenceScope,
+    candidates: request.candidates,
     dependencies: request.dependencies,
     relationships: request.relationships ?? [],
     exceptions: request.exceptions ?? [],
   });
   const results: QualityCheckResult[] = [];
   for (const definition of checks) {
-    let configuration: unknown;
-    try {
-      configuration = snapshotQualityData(definition.configuration);
-      const outcome = await definition.check({
-        facts,
-        ...request,
-        configuration: definition.configuration,
-      });
-      const findings = snapshotQualityData(outcome.diagnostics);
-      const diagnostics = findings.map((diagnostic) => ({
-        ...diagnostic,
-        ruleId: definition.id,
-        handling: handlingFor(
-          definition.id,
-          diagnostic,
-          boundRequest.exceptions,
-        ),
-      }));
-      results.push({
-        id: definition.id,
-        configuration,
-        status: outcome.status,
-        diagnostics,
-        issues: snapshotQualityData(outcome.issues),
-        coverage: { ...outcome.coverage },
-      });
-    } catch (error) {
-      results.push({
-        id: definition.id,
-        configuration,
-        status: "failed",
-        diagnostics: [],
-        issues: [
-          {
-            code: "checkFailed",
-            message: error instanceof Error ? error.message : String(error),
-          },
-        ],
-        coverage: {
-          selected: request.subjects.length,
-          evaluated: 0,
-          notApplicable: 0,
-          incomplete: 0,
-          failed: 1,
-        },
-      });
+    let configuration: unknown = null;
+    let configurationFailure: unknown;
+    let configurationFailed = false;
+    if (boundRequest.candidates.length > 0) {
+      try {
+        configuration = snapshotQualityData(definition.configuration);
+      } catch (error) {
+        configurationFailure = error;
+        configurationFailed = true;
+      }
     }
+    const diagnostics: QualityDiagnostic[] = [];
+    const issues: QualityIssue[] = [];
+    const coverage: MutableQualityCoverage = {
+      selected: 0,
+      evaluated: 0,
+      notApplicable: 0,
+      incomplete: 0,
+      failed: 0,
+    };
+    const statuses: QualityCheckStatus[] = [];
+
+    for (const candidate of boundRequest.candidates) {
+      if (configurationFailed) {
+        statuses.push("failed");
+        coverage.selected += 1;
+        coverage.failed += 1;
+        issues.push({
+          code: "checkFailed",
+          message:
+            configurationFailure instanceof Error
+              ? configurationFailure.message
+              : String(configurationFailure),
+          object: candidateObject(candidate),
+        });
+        continue;
+      }
+      try {
+        const outcome = await definition.check({
+          facts,
+          candidate,
+          sourceUnit:
+            facts.source.units.find(({ key }) => key === candidate.sourceKey) ??
+            null,
+          dependencies: boundRequest.dependencies,
+          relationships: boundRequest.relationships,
+          exceptions: boundRequest.exceptions,
+          configuration: definition.configuration,
+        });
+        const findings = snapshotQualityData(outcome.diagnostics);
+        const checkIssues = snapshotQualityData(outcome.issues);
+        diagnostics.push(
+          ...findings.map((diagnostic) => ({
+            ...diagnostic,
+            ruleId: definition.id,
+            handling: handlingFor(
+              definition.id,
+              diagnostic,
+              boundRequest.exceptions,
+            ),
+          })),
+        );
+        issues.push(...checkIssues);
+        statuses.push(outcome.status);
+        addCoverage(coverage, outcome.coverage);
+      } catch (error) {
+        statuses.push("failed");
+        coverage.selected += 1;
+        coverage.failed += 1;
+        issues.push({
+          code: "checkFailed",
+          message: error instanceof Error ? error.message : String(error),
+          object: candidateObject(candidate),
+        });
+      }
+    }
+
+    results.push({
+      id: definition.id,
+      configuration,
+      status: aggregateStatus(statuses),
+      diagnostics,
+      issues,
+      coverage,
+    });
   }
 
   return {
     version: facts.version,
     ...boundRequest,
-    status: aggregateStatus(results),
+    factCoverage: snapshotQualityData({
+      source: facts.source.read,
+      translations: facts.translations.reads,
+      associations: facts.associations.map((association) => ({
+        ...association,
+        candidateSelected: boundRequest.candidates.some(
+          ({ sourceKey, language }) =>
+            sourceKey === association.sourceKey &&
+            language === association.language,
+        ),
+      })),
+    }),
+    status: aggregateStatus(results.map(({ status }) => status)),
     diagnostics: results.flatMap(({ diagnostics }) => diagnostics),
     checks: results,
   };
 }
 
+function addCoverage(
+  target: MutableQualityCoverage,
+  addition: QualityCoverage,
+): void {
+  target.selected += addition.selected;
+  target.evaluated += addition.evaluated;
+  target.notApplicable += addition.notApplicable;
+  target.incomplete += addition.incomplete;
+  target.failed += addition.failed;
+}
+
 function snapshotQualityData<TValue>(value: TValue): TValue {
-  // 报告使用与事实版本一致的 JSON 表示；传给检查器的原始输入不经复制。
   if (value === undefined) return value;
   let serialized: string | undefined;
   try {
@@ -308,12 +379,24 @@ function exceptionScopeMatches(
 }
 
 function aggregateStatus(
-  checks: readonly QualityCheckResult[],
+  statuses: readonly QualityCheckStatus[],
 ): QualityCheckStatus {
-  if (checks.length === 0) return "not-run";
-  if (checks.every(({ status }) => status === "not-applicable"))
+  if (
+    statuses[0] === undefined ||
+    statuses.every((status) => status === "not-run")
+  )
+    return "not-run";
+  if (statuses.every((status) => status === "not-applicable"))
     return "not-applicable";
-  if (checks.some(({ status }) => status === "failed")) return "failed";
-  if (checks.some(({ status }) => status === "incomplete")) return "incomplete";
+  if (statuses.some((status) => status === "failed")) return "failed";
+  if (statuses.some((status) => status === "incomplete")) return "incomplete";
   return "complete";
+}
+
+function candidateObject(candidate: SemanticEditCandidate): QualityObject {
+  return {
+    kind: "translation-unit",
+    key: candidate.sourceKey,
+    language: candidate.language,
+  };
 }

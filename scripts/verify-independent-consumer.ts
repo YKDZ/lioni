@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmod,
   mkdir,
@@ -94,9 +95,18 @@ async function writeConsumerFiles(
   const workspaceConfig = `overrides:\n  "@l10n/core@0.0.0": "file:${coreTarball}"\n`;
   const configSource = `import { defineConfig } from "@l10n/core";
 
+type Unit = {
+  readonly source: string;
+  readonly context: { readonly file: string; readonly line: number; readonly screenshot: string };
+};
+type Translation = {
+  readonly text: string;
+  readonly context: { readonly sourceLines: readonly number[] };
+};
+
 export let translationReadCount = 0;
 
-const config = defineConfig({
+const config = defineConfig<Unit, Translation>({
   source: {
     read: () => ({
       scopes: [{
@@ -116,6 +126,9 @@ const config = defineConfig({
   },
   translations: {
     languages: ["fr", "ja", "de"],
+    contentOf(translation) {
+      return translation.text;
+    },
     read(language, sourceUnits) {
       translationReadCount += 1;
       if (language === "de") throw new Error("German catalogue unavailable");
@@ -192,13 +205,17 @@ type Translation = {
   text: string;
   context: { sourceLine: number };
 };
+type Unit = {
+  source: string;
+  context: { file: string; line: number };
+};
 
 const sourceRecords = [
   { source: "Save", context: { file: "src/messages.ts", line: 18 } },
   { source: "Submit", context: { file: "src/messages.ts", line: 19 } },
 ];
 
-export default defineConfig({
+export default defineConfig<Unit, Translation>({
   source: {
     read: () => ({
       scopes: [{
@@ -213,6 +230,7 @@ export default defineConfig({
   },
   translations: {
     languages: ["fr", "de"],
+    contentOf: (translation) => translation.text,
     read(language, sourceUnits) {
       const values = JSON.parse(readFileSync(new URL("./completion-resources/" + language + ".json", import.meta.url), "utf8")) as Translation[];
       return {
@@ -262,6 +280,7 @@ export default defineConfig<Unit, Translation>({
   keyOf: (unit) => unit.id,
   translations: {
     languages: ["fr"],
+    contentOf: (translation) => translation.text,
     async read(_language, sourceUnits) {
       const translations = JSON.parse(await readFile(new URL("./update-plan-resources/fr.json", import.meta.url), "utf8")) as Translation[];
       return {
@@ -288,7 +307,6 @@ export default defineConfig<Unit, Translation>({
         }
       : { action: "none", reason: "该项未由此计划处理。" },
   translationWriteback: {
-    targetContent: (translation) => translation.text,
     locateExistingTarget: ({ translation }) => ({
       status: "located",
       locator: { id: translation.translation.id },
@@ -315,6 +333,149 @@ export default defineConfig<Unit, Translation>({
     },
   },
 });
+`;
+  const deletionConfigSource = `import { readFile, writeFile } from "node:fs/promises";
+import { defineConfig } from "@l10n/core";
+
+type Unit = { id: string; source: string; context: { file: string } };
+type Translation = { id: string; text: string; context: { file: string; key: string } };
+type Resource = { enumeration: "complete" | "partial" | "failed"; records: Translation[] };
+const sourcePath = new URL("./deletion-resources/source.json", import.meta.url);
+const targetPath = new URL("./deletion-resources/fr.json", import.meta.url);
+const dependencyPath = new URL("./deletion-resources/dependencies.json", import.meta.url);
+
+export default defineConfig<Unit, Translation>({
+  source: {
+    async read() {
+      const units = JSON.parse(await readFile(sourcePath, "utf8")) as Unit[];
+      return {
+        scopes: [{
+          range: "deletion-resources/source.json",
+          enumeration: "complete",
+          records: units.map((value) => ({ value, bodyAvailability: "available" as const })),
+        }],
+      };
+    },
+  },
+  keyOf: (unit) => unit.id,
+  translations: {
+    languages: ["fr"],
+    contentOf: (translation) => translation.text,
+    async read(_language, sourceUnits) {
+      const resource = JSON.parse(await readFile(targetPath, "utf8")) as Resource;
+      return {
+        scopes: [{
+          range: "deletion-resources/fr.json",
+          covers: sourceUnits.map(({ key }) => key),
+          enumeration: resource.enumeration,
+          records: resource.records.map((value) => ({ value, bodyAvailability: "available" as const })),
+        }],
+      };
+    },
+    matches: (unit, translation) => unit.id === translation.id,
+  },
+  updatePolicy: ({ change }) => change === "source-removed"
+    ? { action: "delete", reason: "清理已移除原文的目标译文。" }
+    : { action: "none" },
+  translationWriteback: {
+    locateExistingTarget: ({ translation }) => ({
+      status: "located",
+      locator: { file: "deletion-resources/fr.json", key: translation.translation.context.key },
+    }),
+    locateNewTarget: () => ({ status: "notWritable", reason: "删除场景不创建目标。" }),
+    async dependencies() {
+      return JSON.parse(await readFile(dependencyPath, "utf8")) as { revision: number };
+    },
+    async write({ edit, target }) {
+      if (edit.operation !== "delete" || target.kind !== "existing")
+        throw new TypeError("该宿主场景只执行删除语义编辑。");
+      const locator = target.locator;
+      if (typeof locator !== "object" || locator === null || !("key" in locator) || typeof locator.key !== "string")
+        throw new TypeError("删除目标缺少宿主资源键。");
+      const resource = JSON.parse(await readFile(targetPath, "utf8")) as Resource;
+      const index = resource.records.findIndex(({ context }) => context.key === locator.key);
+      if (index < 0) throw new Error("宿主明确的删除目标已不存在。");
+      resource.records.splice(index, 1);
+      await writeFile(targetPath, JSON.stringify(resource) + "\\n", "utf8");
+    },
+  },
+});
+`;
+  const deletionHostSource = `import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { advanceProcessingBaseline, applyUpdatePlan, createUpdatePlan, readFacts } from "@l10n/core";
+import { createFileProcessingBaselineStore, createFileUpdatePlanStore } from "@l10n/core/node";
+import config from "./deletion.config.ts";
+
+const scenario = process.argv[2];
+const sourcePath = fileURLToPath(new URL("./deletion-resources/source.json", import.meta.url));
+const targetPath = fileURLToPath(new URL("./deletion-resources/fr.json", import.meta.url));
+const dependencyPath = fileURLToPath(new URL("./deletion-resources/dependencies.json", import.meta.url));
+const baselinePath = ".l10n/deletion-baseline.json";
+const planPath = ".l10n/deletion-plan.json";
+const baselineStore = createFileProcessingBaselineStore(baselinePath);
+const planStore = createFileUpdatePlanStore(planPath);
+
+if (scenario === "initialize") {
+  const result = await advanceProcessingBaseline(baselineStore, await readFacts(config), [
+    { sourceKey: "retired-message", language: "fr" },
+  ], { matches: config.translations.matches });
+  assert.equal(result.outcome, "saved");
+  assert.equal(result.selections[0]?.outcome, "advanced");
+} else if (scenario === "save-plan") {
+  const before = await Promise.all([readFile(sourcePath), readFile(targetPath), readFile(baselinePath)]);
+  const facts = await readFacts(config);
+  const plan = await createUpdatePlan(facts, await baselineStore.load(), config);
+  const item = plan.items.find(({ sourceKey }) => sourceKey === "retired-message");
+  assert.equal(item?.change, "source-removed");
+  assert.equal(item?.expectedInput?.source.presence, "removed");
+  assert.equal(item?.decision.action, "delete");
+  assert.equal(item?.status, "delete");
+  assert.equal(item?.edit?.operation, "delete");
+  assert.equal(Object.hasOwn(item?.edit ?? {}, "content"), false);
+  assert.equal("value" in (item?.expectedInput?.source ?? {}), false);
+  assert.equal(item?.edit?.expected.source.presence, "removed");
+  await planStore.save(plan);
+  assert.deepEqual(await Promise.all([readFile(sourcePath), readFile(targetPath), readFile(baselinePath)]), before);
+} else if (scenario === "read-plan") {
+  const plan = await planStore.load();
+  assert.ok(plan);
+  const item = plan.items.find(({ sourceKey }) => sourceKey === "retired-message");
+  assert.equal(item?.status, "delete");
+  assert.equal(item?.edit?.operation, "delete");
+  assert.equal(Object.hasOwn(item?.edit ?? {}, "content"), false);
+} else if (scenario === "apply") {
+  const plan = await planStore.load();
+  assert.ok(plan);
+  const baselineBefore = await readFile(baselinePath, "utf8");
+  const result = await applyUpdatePlan(plan, config, baselineStore);
+  const item = result.contentResults.find(({ sourceKey }) => sourceKey === "retired-message");
+  const baselineResult = result.baselineResults.find(({ sourceKey }) => sourceKey === "retired-message");
+  if (process.argv[3] === "stale-dependency") {
+    assert.equal(item?.status, "conflict");
+    assert.equal(baselineResult?.status, "notAttempted");
+    assert.equal(await readFile(baselinePath, "utf8"), baselineBefore);
+    const target = JSON.parse(await readFile(targetPath, "utf8"));
+    assert.equal(target.records[0]?.text, "Enregistrer");
+  } else {
+    assert.equal(item?.status, "written");
+    assert.equal(baselineResult?.status, "advanced");
+    assert.deepEqual(JSON.parse(await readFile(targetPath, "utf8")).records, []);
+  }
+} else if (scenario === "verify") {
+  const baseline = await baselineStore.load();
+  const entry = baseline?.entries.find(({ sourceKey }) => sourceKey === "retired-message");
+  assert.equal(entry?.source.presence, "removed");
+  assert.equal(entry?.association.status, "missing");
+  assert.equal(entry?.processed, true);
+  assert.deepEqual(JSON.parse(await readFile(targetPath, "utf8")).records, []);
+  const facts = await readFacts(config);
+  assert.equal(facts.source.units.some(({ key }) => key === "retired-message"), false);
+  assert.equal(facts.translations.records.length, 0);
+}
+
+console.log(JSON.stringify({ scenario, pid: process.pid }));
 `;
   const editsConfigSource = `import { readFileSync, writeFileSync } from "node:fs";
 import { defineConfig } from "@l10n/core";
@@ -369,6 +530,7 @@ export default defineConfig<Unit, Translation>({
   keyOf: (unit) => unit.context.identity,
   translations: {
     languages: ["fr"],
+    contentOf: (translation) => translation.text,
     read(_language, sourceUnits) {
       const catalogue = readCatalogue();
       return {
@@ -383,7 +545,6 @@ export default defineConfig<Unit, Translation>({
     matches: (unit, translation) => translation.context.sourceLines.includes(unit.context.line),
   },
   translationWriteback: {
-    targetContent: (translation) => translation.text,
     locateExistingTarget({ translation }) {
       if (translation.translation.context.readOnly)
         return { status: "notWritable", reason: "该译文资源只读。" };
@@ -436,7 +597,7 @@ export default defineConfig<Unit, Translation>({
 });
 `;
   const qaConfigSource = `import { readFile } from "node:fs/promises";
-import { defineConfig } from "@l10n/core";
+import { defineConfig, type FrameworkFacts } from "@l10n/core";
 import { createMessagePlaceholderChecker, createRelationshipChecker } from "@l10n/checks";
 
 type Unit = {
@@ -459,14 +620,14 @@ async function readMessageResource() {
 const qualityChecks = [
   createMessagePlaceholderChecker<Unit, Translation>({
     sourceText: (unit) => unit.source,
-    translationText: (translation) => translation.text,
+    translationText: (content) => content,
     sourceLocation: (unit, _subject, range) => ({
       ...range,
       key: String(unit.context.line),
     }),
-    translationLocation: (translation, _subject, range) => ({
+    translationLocation: (translation, subject, range) => ({
       ...range,
-      key: translation.nativeKey,
+      key: translation?.nativeKey ?? subject.key,
     }),
     configuration: { grammar: "simple-placeholders-v1" },
   }),
@@ -476,25 +637,30 @@ const qualityChecks = [
     id: "same-target-text",
     relationshipKind: "same-target-text",
     configuration: { constraint: "target text is equal" },
-    translationLocation: (translation, _subject, range) => ({
+    translationLocation: (translation, subject, range) => ({
       ...range,
-      key: translation.nativeKey,
+      key: translation?.nativeKey ?? subject.key,
     }),
     evaluate: ({ members }) =>
-      new Set(members.map(({ translation }) => translation.text))
+      new Set(members.map(({ content }) => content))
         .size > 1
         ? { severity: "error", message: "关系成员应使用相同译文。" }
         : undefined,
   }),
 ];
 
-function createQualityRequest() {
+function createQualityRequest(facts: FrameworkFacts<Unit, Translation>) {
+  const association = facts.associations.find(
+    ({ sourceKey, language, status }) =>
+      sourceKey === "sha256:save" && language === "fr" && status === "matched",
+  );
+  const record = association === undefined
+    ? undefined
+    : facts.translations.records[association.translationIndexes[0] as number];
   return {
-    subjects: [{ key: "sha256:save", language: "fr" }],
-    evidenceScope: [
-      { kind: "translation-unit", key: "sha256:save", language: "fr" },
-      { kind: "translation-unit", key: "sha256:submit", language: "fr" },
-    ],
+    candidates: record === undefined
+      ? []
+      : [{ sourceKey: "sha256:save", language: "fr", content: record.content }],
     relationships: [
       {
         kind: "same-target-text",
@@ -547,6 +713,7 @@ export default defineConfig<Unit, Translation>({
   keyOf: (unit) => "sha256:" + unit.nativeId,
   translations: {
     languages: ["fr"],
+    contentOf: (translation) => translation.text,
     async read(_language, sourceUnits) {
       const resource = await readMessageResource();
       return {
@@ -586,6 +753,7 @@ import config from "./l10n.config.ts";
 import completionConfig from "./completion.config.ts";
 import editConfig from "./edits.config.ts";
 import planConfig from "./plan.config.ts";
+import deletionConfig from "./deletion.config.ts";
 import qaConfig from "./qa.config.ts";
 
 void readSourceFacts(config);
@@ -595,7 +763,7 @@ void qaConfig.qualityChecks;
 void qaConfig.createQualityRequest;
 void createMessagePlaceholderChecker({
   sourceText: (unit: { source: string }) => unit.source,
-  translationText: (translation: { text: string }) => translation.text,
+  translationText: (content) => content,
 });
 void readCompletion(completionConfig);
 void readFacts(completionConfig).then((facts) =>
@@ -603,6 +771,7 @@ void readFacts(completionConfig).then((facts) =>
 );
 void compareProcessingBaseline;
 void advanceProcessingBaseline;
+void readFacts(deletionConfig);
 void createFileProcessingBaselineStore(".l10n/processing-baseline.json");
 void readFacts(planConfig).then(async (facts) => {
   const baselineStore = createFileProcessingBaselineStore(".l10n/plan-baseline.json");
@@ -655,6 +824,7 @@ export default defineConfig<Unit, Translation>({
   keyOf: (unit) => unit.id,
   translations: {
     languages: ["fr"],
+    contentOf: (translation) => translation.text,
     async read(_language, sourceUnits) {
       const records = await Promise.all(sourceUnits.map(async ({ unit }) => {
         const path = targetPath(unit.id);
@@ -678,7 +848,6 @@ export default defineConfig<Unit, Translation>({
       : { action: "candidate", candidate: { sourceKey, language, content: "更新译文 " + sourceKey } }
     : { action: "none" },
   translationWriteback: {
-    targetContent: (translation) => translation.text,
     locateExistingTarget: ({ translation }) => ({
       status: "located",
       locator: { path: translation.translation.path },
@@ -845,6 +1014,7 @@ if (scenario === "initialize") {
       "completion.config.ts",
       "edits.config.ts",
       "plan.config.ts",
+      "deletion.config.ts",
       "qa.config.ts",
       "composition.config.ts",
       "resume.config.ts",
@@ -947,13 +1117,39 @@ const originalResource = Buffer.from(JSON.stringify({
     { sourceId: "submit", nativeKey: "submit_button", text: "Enregistrer" },
   ],
 }));
+await writeFile(qaResource, JSON.stringify({ messages: [] }));
+const skippedQa = spawnSync(executable, ["qa", "qa.config.ts"], { encoding: "utf8", shell: process.platform === "win32" });
+assert.equal(skippedQa.status, 0, skippedQa.stderr + skippedQa.stdout);
+const skippedResult = JSON.parse(skippedQa.stdout).data;
+assert.equal(skippedResult.status, "not-run");
+assert.deepEqual(skippedResult.candidates, []);
+assert.deepEqual(
+  skippedResult.factCoverage.associations.map(({ status, candidateSelected }) => [status, candidateSelected]),
+  [["missing", false], ["missing", false]],
+);
+const readableSkippedQa = spawnSync(executable, ["qa", "qa.config.ts", "--output-format", "text"], { encoding: "utf8", shell: process.platform === "win32" });
+assert.equal(readableSkippedQa.status, 0, readableSkippedQa.stderr);
+assert.ok(readableSkippedQa.stdout.includes("质量检查：未执行"));
+assert.ok(readableSkippedQa.stdout.includes("关联 sha256:save → fr：missing"));
 await writeFile(qaResource, originalResource);
 const initialQa = spawnSync(executable, ["qa", "qa.config.ts"], { encoding: "utf8", shell: process.platform === "win32" });
 assert.equal(initialQa.status, 0, initialQa.stderr + initialQa.stdout);
 const initialResult = JSON.parse(initialQa.stdout).data;
 assert.equal(initialResult.status, "complete");
-assert.equal(initialResult.subjects[0].key, "sha256:save");
-assert.equal(initialResult.subjects[0].language, "fr");
+assert.deepEqual(initialResult.candidates, [
+  { sourceKey: "sha256:save", language: "fr", content: "Bonjour" },
+]);
+assert.deepEqual(
+  initialResult.factCoverage.associations.map(({ sourceKey, status, candidateSelected }) => [
+    sourceKey,
+    status,
+    candidateSelected,
+  ]),
+  [
+    ["sha256:save", "matched", true],
+    ["sha256:submit", "matched", false],
+  ],
+);
 assert.equal(initialResult.diagnostics.length, 3);
 assert.equal(initialResult.diagnostics[0].ruleId, "message-placeholders");
 assert.equal(initialResult.diagnostics[0].evidence.length, 2);
@@ -1087,6 +1283,7 @@ const config = defineConfig({
   keyOf: (unit) => unit.id,
   translations: {
     languages: ["fr"],
+    contentOf: (translation) => translation.text,
     read: (_language, units) => ({
       scopes: targetScopes.map(({ range, translations }) => ({
         range,
@@ -1544,6 +1741,9 @@ process.stdout.write("独立打包宿主：编辑跨进程、冲突、依赖失�
   await mkdir(path.join(consumerRoot, "update-plan-resources"), {
     recursive: true,
   });
+  await mkdir(path.join(consumerRoot, "deletion-resources"), {
+    recursive: true,
+  });
   return Promise.all([
     writeFile(
       path.join(consumerRoot, "package.json"),
@@ -1560,6 +1760,11 @@ process.stdout.write("独立打包宿主：编辑跨进程、冲突、依赖失�
       completionConfigSource,
     ),
     writeFile(path.join(consumerRoot, "plan.config.ts"), planConfigSource),
+    writeFile(
+      path.join(consumerRoot, "deletion.config.ts"),
+      deletionConfigSource,
+    ),
+    writeFile(path.join(consumerRoot, "deletion-host.mjs"), deletionHostSource),
     writeFile(path.join(consumerRoot, "edits.config.ts"), editsConfigSource),
     writeFile(path.join(consumerRoot, "qa.config.ts"), qaConfigSource),
     writeFile(
@@ -1603,6 +1808,36 @@ process.stdout.write("独立打包宿主：编辑跨进程、冲突、依赖失�
         { id: "save-button", text: "Enregistrer" },
         { id: "cancel-button", text: "Annuler" },
       ]),
+    ),
+    writeFile(
+      path.join(consumerRoot, "deletion-resources", "source.json"),
+      JSON.stringify([
+        {
+          id: "retired-message",
+          source: "Archived message",
+          context: { file: "src/archived.ts" },
+        },
+      ]),
+    ),
+    writeFile(
+      path.join(consumerRoot, "deletion-resources", "fr.json"),
+      JSON.stringify({
+        enumeration: "complete",
+        records: [
+          {
+            id: "retired-message",
+            text: "Enregistrer",
+            context: {
+              file: "deletion-resources/fr.json",
+              key: "archive.save",
+            },
+          },
+        ],
+      }),
+    ),
+    writeFile(
+      path.join(consumerRoot, "deletion-resources", "dependencies.json"),
+      JSON.stringify({ revision: 1 }),
     ),
     writeFile(
       path.join(consumerRoot, "edit-sources.json"),
@@ -1652,6 +1887,17 @@ export async function verifyIndependentConsumer(): Promise<void> {
         "pnpm",
         ["--filter", packageName, "pack", "--pack-destination", artifactRoot],
         repositoryRoot,
+      );
+    }
+
+    for (const packageName of packageNames) {
+      const shortName = packageName.slice("@l10n/".length);
+      const tarball = path.join(artifactRoot, `l10n-${shortName}-0.0.0.tgz`);
+      const digest = createHash("sha256")
+        .update(await readFile(tarball))
+        .digest("hex");
+      process.stdout.write(
+        `制品 SHA-256 ${path.basename(tarball)} ${digest}\n`,
       );
     }
 
@@ -1858,6 +2104,72 @@ export async function verifyIndependentConsumer(): Promise<void> {
     process.stdout.write(resumeVerify.stdout);
     process.stdout.write(
       "独立打包宿主：旧计划拒绝过期目标；正式重规划并保留实际C内容后，A/B/C均按新进程读取结果更新处理基线。\n",
+    );
+
+    process.stdout.write("验证已打包制品删除译文的跨进程资源链…\n");
+    await mkdir(path.join(consumerRoot, ".l10n"), { recursive: true });
+    const deletionSourcePath = path.join(
+      consumerRoot,
+      "deletion-resources",
+      "source.json",
+    );
+    const deletionDependencyPath = path.join(
+      consumerRoot,
+      "deletion-resources",
+      "dependencies.json",
+    );
+    process.stdout.write(
+      runChecked(
+        process.execPath,
+        ["deletion-host.mjs", "initialize"],
+        consumerRoot,
+      ).stdout,
+    );
+    await writeFile(deletionSourcePath, "[]\n", "utf8");
+    process.stdout.write(
+      runChecked(
+        process.execPath,
+        ["deletion-host.mjs", "save-plan"],
+        consumerRoot,
+      ).stdout,
+    );
+    process.stdout.write(
+      runChecked(
+        process.execPath,
+        ["deletion-host.mjs", "read-plan"],
+        consumerRoot,
+      ).stdout,
+    );
+    await writeFile(
+      deletionDependencyPath,
+      JSON.stringify({ revision: 2 }),
+      "utf8",
+    );
+    process.stdout.write(
+      runChecked(
+        process.execPath,
+        ["deletion-host.mjs", "apply", "stale-dependency"],
+        consumerRoot,
+      ).stdout,
+    );
+    await writeFile(
+      deletionDependencyPath,
+      JSON.stringify({ revision: 1 }),
+      "utf8",
+    );
+    process.stdout.write(
+      runChecked(process.execPath, ["deletion-host.mjs", "apply"], consumerRoot)
+        .stdout,
+    );
+    process.stdout.write(
+      runChecked(
+        process.execPath,
+        ["deletion-host.mjs", "verify"],
+        consumerRoot,
+      ).stdout,
+    );
+    process.stdout.write(
+      "独立打包宿主：原文删除后新进程读取并保存计划；依赖变化时拒绝应用，恢复后 writer 删除实际文件目标，新进程回读确认不存在并推进该范围基线。\n",
     );
 
     process.stdout.write("运行语义编辑跨进程、真实资源和输入冲突场景…\n");

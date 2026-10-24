@@ -66,6 +66,7 @@ void describe("completion", () => {
           matches(unit, translation) {
             return translation.context.sourceLine === unit.context.line;
           },
+          contentOf: () => null,
         },
         completion: {
           criterion: "存在实际译文记录",
@@ -175,6 +176,7 @@ void describe("completion", () => {
           matches(sourceUnit, translation) {
             return sourceUnit.context.line === translation.context.sourceLine;
           },
+          contentOf: () => null,
         },
         completion: {
           criterion: "记录被标记为完成",
@@ -263,6 +265,7 @@ void describe("completion", () => {
           matches(unit, translation) {
             return unit.context.line === translation.context.sourceLine;
           },
+          contentOf: () => null,
         },
       }),
     );
@@ -332,6 +335,7 @@ void describe("completion", () => {
           },
           matches: (unit, translation) =>
             unit.context.line === translation.context.line,
+          contentOf: () => null,
         },
         completion: {
           criterion: "要求译文正文可用",

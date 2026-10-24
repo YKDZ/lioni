@@ -69,6 +69,7 @@ function makeConfig(
         ],
       }),
       matches: (unit, translation) => unit.id === translation.id,
+      contentOf: (translation) => translation.text,
     },
     ...(options.updatePolicy === undefined
       ? {}
@@ -76,7 +77,6 @@ function makeConfig(
     ...(options.withWriteback
       ? {
           translationWriteback: {
-            targetContent: (translation) => translation.text,
             locateExistingTarget: ({ translation }) => ({
               status: "located" as const,
               locator: { id: translation.translation.id },
@@ -243,16 +243,19 @@ void describe("update plans", () => {
     assert.equal(plan.items[0]?.blocker?.code, "historyInsufficient");
   });
 
-  void it("keeps deletion explicitly blocked until semantic deletion is supported", async () => {
+  void it("prepares an explicit deletion edit for a removed source", async () => {
     const initial = makeConfig(
       [{ id: "save-button", source: "Save", context: { line: 18 } }],
       [{ id: "save-button", text: "Enregistrer" }],
     );
     const baseline = await establishBaseline(initial, ["save-button"]);
     const config = makeConfig(
-      [{ id: "save-button", source: "Save", context: { line: 18 } }],
+      [],
       [{ id: "save-button", text: "Enregistrer" }],
-      { updatePolicy: () => ({ action: "delete" }) },
+      {
+        withWriteback: true,
+        updatePolicy: () => ({ action: "delete" }),
+      },
     );
 
     const plan = await createUpdatePlan(
@@ -262,8 +265,32 @@ void describe("update plans", () => {
     );
 
     assert.equal(plan.items[0]?.decision.action, "delete");
-    assert.equal(plan.items[0]?.status, "blocked");
-    assert.equal(plan.items[0]?.blocker?.code, "deleteNotImplemented");
+    assert.equal(plan.items[0]?.change, "source-removed");
+    assert.equal(plan.items[0]?.expectedInput?.source.presence, "removed");
+    assert.equal(plan.items[0]?.status, "delete");
+    assert.equal(plan.items[0]?.blocker, undefined);
+    assert.equal(plan.items[0]?.edit?.operation, "delete");
+    assert.equal("content" in (plan.items[0]?.edit ?? {}), false);
+  });
+
+  void it("retains a removed source translation under the default policy", async () => {
+    const initial = makeConfig(
+      [{ id: "save-button", source: "Save", context: { line: 18 } }],
+      [{ id: "save-button", text: "Enregistrer" }],
+    );
+    const baseline = await establishBaseline(initial, ["save-button"]);
+    const config = makeConfig([], [{ id: "save-button", text: "Enregistrer" }]);
+
+    const plan = await createUpdatePlan(
+      await readFacts(config),
+      baseline.baseline,
+      config,
+    );
+
+    assert.equal(plan.items[0]?.change, "source-removed");
+    assert.equal(plan.items[0]?.decision.action, "retain");
+    assert.equal(plan.items[0]?.status, "retain");
+    assert.equal(plan.items[0]?.edit, undefined);
   });
 
   void it("keeps plan observations stable when resources mutate after preparation", async () => {

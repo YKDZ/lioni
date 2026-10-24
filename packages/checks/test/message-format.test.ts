@@ -17,11 +17,7 @@ type Translation = { readonly text: string; readonly key: string };
 async function checkMessages(
   source: string,
   translation: string | undefined,
-  evidenceScope: readonly {
-    readonly kind: string;
-    readonly key: string;
-    readonly language?: string;
-  }[] = [{ kind: "translation-unit", key: "save", language: "fr" }],
+  candidate: string | undefined = translation,
 ) {
   const facts = await readFacts(
     defineConfig<Unit, Translation>({
@@ -63,19 +59,22 @@ async function checkMessages(
           ],
         }),
         matches: (unit, actual) => unit.key === actual.key,
+        contentOf: ({ text }) => text,
       },
     }),
   );
   const checker = createMessagePlaceholderChecker<Unit, Translation>({
     sourceText: (unit) => unit.source,
-    translationText: (actual) => actual.text,
+    translationText: (content) => content,
     configuration: { grammar: "simple-placeholders-v1" },
   });
   const result = await runQualityChecks(
     facts,
     {
-      subjects: [{ key: "save", language: "fr" }],
-      evidenceScope,
+      candidates:
+        candidate === undefined
+          ? []
+          : [{ sourceKey: "save", language: "fr", content: candidate }],
       dependencies: { resourceVersion: facts.version },
     },
     [checker],
@@ -128,12 +127,13 @@ void describe("message placeholder checker", () => {
     assert.deepEqual(named.result.diagnostics[0]?.location, {
       language: "fr",
       range: "locales/fr.json",
+      key: "save",
     });
     assert.deepEqual(
       named.result.diagnostics[0]?.evidence.map(({ location }) => location),
       [
         { language: null, range: "src/messages.ts" },
-        { language: "fr", range: "locales/fr.json" },
+        { language: "fr", range: "locales/fr.json", key: "save" },
       ],
     );
     assert.equal(
@@ -168,20 +168,39 @@ void describe("message placeholder checker", () => {
     assert.equal(result.checks[0]?.issues[0]?.code, "malformedMessage");
   });
 
-  void it("reports missing translations as not applicable", async () => {
+  void it("does not call candidate checks for missing translations and reports the fact", async () => {
     const { result } = await checkMessages("Hello {name}", undefined);
 
-    assert.equal(result.status, "not-applicable");
-    assert.equal(result.checks[0]?.issues[0]?.code, "translationMissing");
+    assert.equal(result.status, "not-run");
+    assert.equal(result.checks[0]?.status, "not-run");
+    assert.equal(result.factCoverage.associations[0]?.status, "missing");
   });
 
-  void it("honors the allowed evidence scope separately from selected subjects", async () => {
-    const { result } = await checkMessages("Hello {name}", "Bonjour", []);
+  void it("checks an unsaved candidate without a matching record", async () => {
+    const { result } = await checkMessages(
+      "Hello {name}",
+      undefined,
+      "Bonjour {name}",
+    );
 
-    assert.deepEqual(result.subjects, [{ key: "save", language: "fr" }]);
-    assert.equal(result.status, "incomplete");
-    assert.equal(result.checks[0]?.issues[0]?.code, "evidenceOutOfScope");
+    assert.equal(result.status, "complete");
     assert.deepEqual(result.diagnostics, []);
+    assert.equal(result.factCoverage.associations[0]?.status, "missing");
+    assert.equal(result.factCoverage.associations[0]?.candidateSelected, true);
+
+    const resourceCandidate = await checkMessages(
+      "Hello {name}",
+      "Bonjour {name}",
+    );
+    assert.deepEqual(result.diagnostics, resourceCandidate.result.diagnostics);
+  });
+
+  void it("checks an explicitly supplied empty string candidate", async () => {
+    const { result } = await checkMessages("Hello {name}", undefined, "");
+
+    assert.equal(result.status, "complete");
+    assert.equal(result.candidates.length, 1);
+    assert.equal(result.diagnostics[0]?.message, "译文可能缺少占位符 {name}。");
   });
 
   void it("keeps hashed identity separate from host source and translation locations", async () => {
@@ -243,16 +262,16 @@ void describe("message placeholder checker", () => {
           }),
           matches: (unit, translation) =>
             unit.identity === translation.sourceIdentity,
+          contentOf: ({ text }) => text,
         },
       }),
     );
     const request: QualityCheckRequest = {
-      subjects: [{ key: "sha256:4c24e086c2c84554", language: "fr" }],
-      evidenceScope: [
+      candidates: [
         {
-          kind: "translation-unit",
-          key: "sha256:4c24e086c2c84554",
+          sourceKey: "sha256:4c24e086c2c84554",
           language: "fr",
+          content: "Bonjour",
         },
       ],
       dependencies: {},
@@ -262,17 +281,20 @@ void describe("message placeholder checker", () => {
       NativeTranslation
     >({
       sourceText: (unit) => unit.source,
-      translationText: (translation) => translation.text,
+      translationText: (content) => content,
       sourceLocation: (unit, _subject, range) => ({
         ...range,
         range: unit.location.file,
         key: String(unit.location.line),
       }),
-      translationLocation: (translation, _subject, range) => ({
-        ...range,
-        range: translation.location.file,
-        key: translation.key,
-      }),
+      translationLocation: (translation, _subject, range) =>
+        translation === undefined
+          ? range
+          : {
+              ...range,
+              range: translation.location.file,
+              key: translation.key,
+            },
     });
 
     const result = await runQualityChecks(facts, request, [checker]);

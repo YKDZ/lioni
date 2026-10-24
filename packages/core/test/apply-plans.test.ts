@@ -11,6 +11,7 @@ import {
   defineConfig,
   readFacts,
   type FrameworkConfig,
+  type JsonValue,
   type ProcessingBaseline,
   type ProcessingBaselineStore,
   type UpdatePolicy,
@@ -19,6 +20,14 @@ import { createFileUpdatePlanStore } from "../src/node.ts";
 
 type Unit = { readonly id: string; readonly source: string };
 type Translation = { readonly id: string; text: string };
+type MutableReadState = {
+  sourceEnumeration?: "complete" | "partial" | "failed";
+  translationEnumeration?: "complete" | "partial" | "failed";
+  sourceRange?: string;
+  translationRange?: string;
+  location?: string;
+  dependencies?: JsonValue;
+};
 
 class MemoryBaselineStore implements ProcessingBaselineStore {
   baseline: ProcessingBaseline | undefined;
@@ -42,6 +51,7 @@ function makeConfig(
     readonly failWriteFor?: string;
     readonly ignoreWriteFor?: string;
     readonly withWriteback?: boolean;
+    readonly readState?: MutableReadState;
   } = {},
 ): FrameworkConfig<Unit, Translation> {
   return defineConfig({
@@ -49,8 +59,8 @@ function makeConfig(
       read: () => ({
         scopes: [
           {
-            range: "source/messages.json",
-            enumeration: "complete",
+            range: options.readState?.sourceRange ?? "source/messages.json",
+            enumeration: options.readState?.sourceEnumeration ?? "complete",
             records: units.map((value) => ({
               value,
               bodyAvailability: "available" as const,
@@ -65,9 +75,10 @@ function makeConfig(
       read: (_language, sourceUnits) => ({
         scopes: [
           {
-            range: "locales/fr.json",
+            range: options.readState?.translationRange ?? "locales/fr.json",
             covers: sourceUnits.map(({ key }) => key),
-            enumeration: "complete",
+            enumeration:
+              options.readState?.translationEnumeration ?? "complete",
             records: translations.map((value) => ({
               value,
               bodyAvailability: "available" as const,
@@ -76,6 +87,7 @@ function makeConfig(
         ],
       }),
       matches: (unit, translation) => unit.id === translation.id,
+      contentOf: (translation) => translation.text,
     },
     ...(options.updatePolicy === undefined
       ? {}
@@ -83,16 +95,32 @@ function makeConfig(
     ...(options.withWriteback
       ? {
           translationWriteback: {
-            targetContent: (translation) => translation.text,
             locateExistingTarget: ({ translation }) => ({
               status: "located" as const,
-              locator: { id: translation.translation.id },
+              locator: {
+                id: translation.translation.id,
+                location: options.readState?.location ?? "locales/fr.json",
+              },
             }),
             locateNewTarget: ({ sourceUnit }) => ({
               status: "located" as const,
               locator: { id: sourceUnit.key },
             }),
+            dependencies: () => options.readState?.dependencies,
             write({ edit, currentTranslation }) {
+              if (edit.operation === "delete") {
+                if (currentTranslation === undefined)
+                  throw new TypeError("需要现有译文删除目标。");
+                if (edit.sourceKey === options.ignoreWriteFor) return;
+                if (edit.sourceKey === options.failWriteFor)
+                  throw new Error("目标资源不可写。");
+                const index = translations.indexOf(
+                  currentTranslation.translation,
+                );
+                if (index < 0) throw new Error("删除目标已不存在。");
+                (translations as Translation[]).splice(index, 1);
+                return;
+              }
               if (
                 currentTranslation === undefined ||
                 typeof edit.content !== "string"
@@ -141,6 +169,223 @@ async function establishBaseline(
 }
 
 void describe("apply update plans", () => {
+  void it("deletes a removed source target and advances its confirmed result", async () => {
+    const units: Unit[] = [{ id: "A", source: "Save" }];
+    const translations: Translation[] = [{ id: "A", text: "Enregistrer" }];
+    const initial = makeConfig(units, translations);
+    const baselineStore = await establishBaseline(initial, ["A"]);
+    units.splice(0, units.length);
+    const config = makeConfig(units, translations, {
+      withWriteback: true,
+      updatePolicy: () => ({ action: "delete" }),
+    });
+    const plan = await createUpdatePlan(
+      await readFacts(config),
+      baselineStore.baseline,
+      config,
+    );
+    assert.equal(plan.items[0]?.status, "delete");
+
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "l10n-delete-plan-"),
+    );
+    const planStore = createFileUpdatePlanStore(
+      path.join(directory, "update-plan.json"),
+    );
+    try {
+      await planStore.save(plan);
+      const savedPlan = await planStore.load();
+      assert.deepStrictEqual(savedPlan, plan);
+      const result = await applyUpdatePlan(
+        savedPlan as NonNullable<typeof savedPlan>,
+        config,
+        baselineStore,
+      );
+
+      assert.equal(result.contentResults[0]?.status, "written");
+      assert.equal(result.baselineResults[0]?.status, "advanced");
+      assert.deepStrictEqual(translations, []);
+      assert.equal(
+        baselineStore.baseline?.entries[0]?.source.presence,
+        "removed",
+      );
+      assert.equal(
+        baselineStore.baseline?.entries[0]?.association.status,
+        "missing",
+      );
+      assert.equal(baselineStore.baseline?.entries[0]?.processed, true);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  void it("rejects stale deletion source, target, location, dependency, and read inputs", async () => {
+    const scenarios: readonly [
+      string,
+      (input: {
+        units: Unit[];
+        translations: Translation[];
+        readState: MutableReadState;
+      }) => void,
+    ][] = [
+      [
+        "source reappears",
+        ({ units }) => units.push({ id: "A", source: "Save" }),
+      ],
+      [
+        "target content changes",
+        ({ translations }) => {
+          const target = translations[0];
+          if (target !== undefined) target.text = "External translation";
+        },
+      ],
+      ["target disappears", ({ translations }) => translations.splice(0, 1)],
+      [
+        "target scope changes",
+        ({ readState }) => {
+          readState.translationRange = "locales/fr/renamed.json";
+        },
+      ],
+      [
+        "declared dependency changes",
+        ({ readState }) => {
+          readState.dependencies = { revision: 2 };
+        },
+      ],
+      [
+        "host target location changes",
+        ({ readState }) => {
+          readState.location = "locales/fr/renamed.json";
+        },
+      ],
+      [
+        "target coverage becomes partial",
+        ({ readState }) => {
+          readState.translationEnumeration = "partial";
+        },
+      ],
+    ];
+
+    for (const [scenario, mutate] of scenarios) {
+      const units: Unit[] = [{ id: "A", source: "Save" }];
+      const translations: Translation[] = [{ id: "A", text: "Enregistrer" }];
+      const baselineStore = await establishBaseline(
+        makeConfig(units, translations),
+        ["A"],
+      );
+      units.splice(0, units.length);
+      const readState: MutableReadState = {
+        dependencies: { revision: 1 },
+      };
+      const config = makeConfig(units, translations, {
+        readState,
+        withWriteback: true,
+        updatePolicy: () => ({ action: "delete" }),
+      });
+      const plan = await createUpdatePlan(
+        await readFacts(config),
+        baselineStore.baseline,
+        config,
+      );
+      const baselineBefore = structuredClone(baselineStore.baseline);
+      mutate({ units, translations, readState });
+
+      const result = await applyUpdatePlan(plan, config, baselineStore);
+
+      assert.equal(
+        result.contentResults[0]?.status,
+        "conflict",
+        `${scenario} must reject the saved deletion`,
+      );
+      assert.equal(result.baselineResults[0]?.status, "notAttempted");
+      assert.deepStrictEqual(baselineStore.baseline, baselineBefore);
+    }
+  });
+
+  void it("does not treat a successful writer return as a confirmed deletion", async () => {
+    const units: Unit[] = [{ id: "A", source: "Save" }];
+    const translations: Translation[] = [{ id: "A", text: "Enregistrer" }];
+    const baselineStore = await establishBaseline(
+      makeConfig(units, translations),
+      ["A"],
+    );
+    units.splice(0, units.length);
+    const baselineBefore = structuredClone(baselineStore.baseline);
+    const config = makeConfig(units, translations, {
+      ignoreWriteFor: "A",
+      withWriteback: true,
+      updatePolicy: () => ({ action: "delete" }),
+    });
+    const plan = await createUpdatePlan(
+      await readFacts(config),
+      baselineStore.baseline,
+      config,
+    );
+
+    const result = await applyUpdatePlan(plan, config, baselineStore);
+
+    assert.equal(result.contentResults[0]?.status, "writeUnconfirmed");
+    assert.equal(result.baselineResults[0]?.status, "notAttempted");
+    assert.deepStrictEqual(translations, [{ id: "A", text: "Enregistrer" }]);
+    assert.deepStrictEqual(baselineStore.baseline, baselineBefore);
+  });
+
+  void it("continues after one deletion write fails and advances only the confirmed target", async () => {
+    const units: Unit[] = [
+      { id: "A", source: "Save" },
+      { id: "B", source: "Cancel" },
+    ];
+    const translations: Translation[] = [
+      { id: "A", text: "Enregistrer" },
+      { id: "B", text: "Annuler" },
+    ];
+    const baselineStore = await establishBaseline(
+      makeConfig(units, translations),
+      ["A", "B"],
+    );
+    units.splice(0, units.length);
+    const config = makeConfig(units, translations, {
+      failWriteFor: "A",
+      withWriteback: true,
+      updatePolicy: () => ({ action: "delete" }),
+    });
+    const plan = await createUpdatePlan(
+      await readFacts(config),
+      baselineStore.baseline,
+      config,
+    );
+
+    const result = await applyUpdatePlan(plan, config, baselineStore);
+
+    assert.equal(
+      result.contentResults.find(({ sourceKey }) => sourceKey === "A")?.status,
+      "writeFailed",
+    );
+    assert.equal(
+      result.contentResults.find(({ sourceKey }) => sourceKey === "B")?.status,
+      "written",
+    );
+    assert.equal(
+      result.baselineResults.find(({ sourceKey }) => sourceKey === "A")?.status,
+      "notAttempted",
+    );
+    assert.equal(
+      result.baselineResults.find(({ sourceKey }) => sourceKey === "B")?.status,
+      "advanced",
+    );
+    assert.deepStrictEqual(translations, [{ id: "A", text: "Enregistrer" }]);
+    assert.equal(
+      baselineStore.baseline?.entries.find(({ sourceKey }) => sourceKey === "A")
+        ?.processed,
+      true,
+    );
+    assert.equal(
+      baselineStore.baseline?.entries.find(({ sourceKey }) => sourceKey === "B")
+        ?.association.status,
+      "missing",
+    );
+  });
+
   void it("applies a saved candidate without new choices or another policy call", async () => {
     const original = makeConfig(
       [{ id: "A", source: "Save" }],

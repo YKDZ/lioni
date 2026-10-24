@@ -89,6 +89,7 @@ const factsSchema = standardSchema(
           scopeIndex: v.number(),
           range: v.unknown(),
           translation: v.unknown(),
+          content: v.unknown(),
           bodyAvailability: v.picklist(["available", "unavailable"]),
         }),
       ),
@@ -200,7 +201,17 @@ function qualityText(value: unknown): ReturnType<typeof text.lines> {
   return text.lines([
     `质量检查：${qualityStatusText(result.status)}`,
     `事实版本：${result.version}`,
-    `检查对象：${result.subjects.length}；诊断：${result.diagnostics.length}`,
+    `检查候选：${result.candidates.length}；诊断：${result.diagnostics.length}`,
+    `原文读取：${readStatusText(result.factCoverage.source.status)}；译文读取：${result.factCoverage.translations.map(({ language, status }) => `${language} ${readStatusText(status)}`).join("、") || "无"}`,
+    ...result.factCoverage.associations
+      .filter(
+        ({ status, candidateSelected }) =>
+          status !== "matched" || !candidateSelected,
+      )
+      .map(
+        ({ sourceKey, language, status, coverageStatus, candidateSelected }) =>
+          `关联 ${sourceKey} → ${language}：${status}（覆盖${readStatusText(coverageStatus)}；${candidateSelected ? "已选候选" : "未选候选"}）`,
+      ),
     ...result.diagnostics.map(
       ({ ruleId, severity, object, location, message, evidence, handling }) => {
         const locationKey =
