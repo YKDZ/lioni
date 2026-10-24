@@ -12,6 +12,14 @@ const journey: CliJourney = {
       path.join(workDir, "lioni.config.ts"),
       `export default {
   source: {
+    schema: { "~standard": { version: 1, vendor: "completion-journey", validate(value) {
+      const context = value?.context;
+      return typeof value === "object" && value !== null && !Array.isArray(value) &&
+        typeof value.source === "string" && typeof context === "object" && context !== null &&
+        typeof context.file === "string" && typeof context.line === "number"
+        ? { value }
+        : { issues: [{ message: "原文单元结构不匹配。" }] };
+    } } },
     read: () => ({ scopes: [{
       range: "src/messages.ts",
       enumeration: "complete",
@@ -49,6 +57,14 @@ const journey: CliJourney = {
       path.join(workDir, "partial.config.ts"),
       `export default {
   source: {
+    schema: { "~standard": { version: 1, vendor: "completion-journey", validate(value) {
+      const context = value?.context;
+      return typeof value === "object" && value !== null && !Array.isArray(value) &&
+        typeof value.source === "string" && typeof context === "object" && context !== null &&
+        typeof context.line === "number"
+        ? { value }
+        : { issues: [{ message: "原文单元结构不匹配。" }] };
+    } } },
     read: () => ({ scopes: [{
       range: "src/messages.ts",
       enumeration: "partial",
@@ -77,7 +93,7 @@ const journey: CliJourney = {
     await writeFile(
       path.join(workDir, "facts-only.config.ts"),
       `export default {
-  source: { read: () => ({ scopes: [] }) },
+  source: { schema: { "~standard": { version: 1, vendor: "completion-journey", validate(value) { return typeof value === "object" && value !== null && !Array.isArray(value) && typeof value.source === "string" ? { value } : { issues: [{ message: "原文单元结构不匹配。" }] }; } } }, read: () => ({ scopes: [] }) },
   keyOf: (unit) => String(unit.source)
 };
 `,
@@ -85,7 +101,7 @@ const journey: CliJourney = {
     await writeFile(
       path.join(workDir, "completion-no-language.config.ts"),
       `export default {
-  source: { read: () => ({ scopes: [] }) },
+  source: { schema: { "~standard": { version: 1, vendor: "completion-journey", validate(value) { return typeof value === "object" && value !== null && !Array.isArray(value) && typeof value.source === "string" ? { value } : { issues: [{ message: "原文单元结构不匹配。" }] }; } } }, read: () => ({ scopes: [] }) },
   keyOf: (unit) => String(unit.source),
   completion: {
     criterion: "自定义完成判据",

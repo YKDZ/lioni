@@ -47,16 +47,16 @@ const thresholdSchema: StandardSchemaV1<
       output: {} as ThresholdConfiguration,
     },
     validate(value) {
-      if (
-        typeof value !== "object" ||
-        value === null ||
-        Array.isArray(value) ||
-        ("threshold" in value && typeof value.threshold !== "number")
-      )
+      if (typeof value !== "object" || value === null || Array.isArray(value))
+        return { issues: [{ message: "threshold must be a number" }] };
+      const thresholdValue = Object.hasOwn(value, "threshold")
+        ? Reflect.get(value, "threshold")
+        : undefined;
+      if (thresholdValue !== undefined && typeof thresholdValue !== "number")
         return { issues: [{ message: "threshold must be a number" }] };
       return {
         value: {
-          threshold: "threshold" in value ? value.threshold : 3,
+          threshold: typeof thresholdValue === "number" ? thresholdValue : 3,
         },
       };
     },

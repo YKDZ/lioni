@@ -10,6 +10,7 @@ import {
   type ProcessingBaseline,
   type ProcessingBaselineStore,
 } from "../src/index.ts";
+import { sourceSchemaFromExamples } from "./source-schema.ts";
 
 type Unit = {
   readonly source: string;
@@ -55,6 +56,10 @@ function makeScopedFacts(
   return readFacts(
     defineConfig({
       source: {
+        schema: sourceSchemaFromExamples<Unit>(
+          { id: "example", source: "example" },
+          ...sourceScopes.flatMap(({ units }) => units),
+        ),
         read: () => ({
           scopes: sourceScopes.map(({ range, units, enumeration }) => ({
             range,
