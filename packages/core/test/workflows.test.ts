@@ -535,6 +535,26 @@ void describe("configured analysis workflow", () => {
         read: () => ({ scopes: [] }),
       },
       keyOf: ({ id }) => id,
+      translations: {
+        languages: ["fr"],
+        schema: schemaFromExamples<Translation>({
+          id: "external",
+          text: "外部",
+        }),
+        contentSchema: jsonValueSchema,
+        contentOf: ({ text }) => text,
+        read: (_language, sourceUnits) => ({
+          scopes: [
+            {
+              range: "fr.json",
+              covers: sourceUnits.map(({ key }) => key),
+              enumeration: "complete" as const,
+              records: [],
+            },
+          ],
+        }),
+        matches: (unit, translation) => unit.id === translation.id,
+      },
       qualityChecks: [],
       createQualityRequest: () => {
         observedCandidates = [

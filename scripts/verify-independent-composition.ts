@@ -181,8 +181,8 @@ type EntryModule = {
     input: CompletionResolverInput<Unit, Translation>,
   ) => CompletionResolution;
   readonly updatePolicy: (
-    input: UpdatePolicyInput<Unit, Translation>,
-  ) => UpdateDecision;
+    input: UpdatePolicyInput<Unit, Translation, TranslationContent>,
+  ) => UpdateDecision<TranslationContent>;
 };
 
 function readJson(file: string): unknown {
@@ -335,8 +335,18 @@ function unitText(unit: Unit): string {
   return unit.source.body;
 }
 
-function translationText(content: unknown): string | undefined {
-  return typeof content === "string" ? content : undefined;
+function translationText(
+  content: TranslationContent,
+  domain: Domain,
+): string | undefined {
+  if (typeof content === "string") return content;
+  if (domain === "catalog") return undefined;
+  return typeof content === "object" &&
+    content !== null &&
+    "message" in content &&
+    typeof content.message === "string"
+    ? content.message
+    : undefined;
 }
 
 function createDomainChecker(
@@ -352,7 +362,7 @@ function createDomainChecker(
     readonly sourceUnit: SourceUnitFact<Unit>;
     readonly sourceKey: string;
     readonly language: string;
-    readonly content: string;
+    readonly content: TranslationContent;
   };
   return bindQualityCheck<
     Unit,
@@ -401,14 +411,6 @@ function createDomainChecker(
             message: "原文正文不可用，无法核对数字。",
           },
         };
-      if (typeof input.candidate.content !== "string")
-        return {
-          status: "incomplete",
-          issue: {
-            code: "textUnavailable",
-            message: "候选正文不是可核对的字符串。",
-          },
-        };
       return {
         status: "selected",
         subject: {
@@ -430,7 +432,7 @@ function createDomainChecker(
       >,
     ): QualityCheckProjection<NumberTextInput> => {
       const source = unitText(input.subject.sourceUnit.unit);
-      const target = translationText(input.subject.content);
+      const target = translationText(input.subject.content, module.domain);
       if (target === undefined)
         return {
           status: "incomplete",
@@ -491,7 +493,7 @@ function createDomainChecker(
 function requestForDomain(
   facts: FrameworkFacts<Unit, Translation, TranslationContent, never>,
   domain: Domain,
-): QualityCheckRequest {
+): QualityCheckRequest<TranslationContent> {
   const candidates = facts.associations.flatMap((association) => {
     if (
       !association.sourceKey.startsWith(domain + ":") ||
@@ -519,8 +521,8 @@ function requestForDomain(
 }
 
 function mergeQualityRequests(
-  requests: readonly QualityCheckRequest[],
-): QualityCheckRequest {
+  requests: readonly QualityCheckRequest<TranslationContent>[],
+): QualityCheckRequest<TranslationContent> {
   return {
     candidates: requests.flatMap(({ candidates }) => candidates),
     relationships: requests.flatMap(({ relationships }) =>
@@ -779,10 +781,21 @@ async function prepare() {
     ({ id }) => id === "catalog-numbers",
   );
   assert.ok(localCatalogCheck);
-  assert.deepEqual(
-    localCatalogCheck,
-    catalogCheck,
-  );
+  assert.deepEqual(localCatalogCheck.diagnostics, catalogCheck.diagnostics);
+  assert.deepEqual(localCatalogCheck.coverage, {
+    selected: 1,
+    evaluated: 1,
+    notApplicable: 0,
+    incomplete: 0,
+    failed: 0,
+  });
+  assert.deepEqual(catalogCheck.coverage, {
+    selected: 2,
+    evaluated: 1,
+    notApplicable: 1,
+    incomplete: 0,
+    failed: 0,
+  });
   assert.deepEqual(
     catalogQa.diagnostics,
     aggregateQa.diagnostics.filter(({ ruleId }) => ruleId === "catalog-numbers"),
@@ -791,7 +804,21 @@ async function prepare() {
   const localGuideCheck = guideQa.checks.find(({ id }) => id === "guide-numbers");
   assert.ok(guideCheck);
   assert.ok(localGuideCheck);
-  assert.deepEqual(localGuideCheck, guideCheck);
+  assert.deepEqual(localGuideCheck.diagnostics, guideCheck.diagnostics);
+  assert.deepEqual(localGuideCheck.coverage, {
+    selected: 1,
+    evaluated: 1,
+    notApplicable: 0,
+    incomplete: 0,
+    failed: 0,
+  });
+  assert.deepEqual(guideCheck.coverage, {
+    selected: 2,
+    evaluated: 1,
+    notApplicable: 1,
+    incomplete: 0,
+    failed: 0,
+  });
   assert.deepEqual(
     guideQa.diagnostics,
     aggregateQa.diagnostics.filter(({ ruleId }) => ruleId === "guide-numbers"),

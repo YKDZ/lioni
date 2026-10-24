@@ -9,7 +9,7 @@ import type {
   TranslationReadFact,
   TranslationUnitInput,
 } from "./index.ts";
-import type { SemanticEditCandidate } from "./semantic-edits.ts";
+import type { JsonValue, SemanticEditCandidate } from "./semantic-edits.ts";
 import {
   assertJsonValue,
   StandardSchemaContractError,
@@ -139,8 +139,8 @@ export type QualityCheckOutcome<TObject extends QualityObject = QualityObject> =
     readonly coverage: QualityCoverage;
   };
 
-export type QualityCheckRequest = {
-  readonly candidates: readonly SemanticEditCandidate[];
+export type QualityCheckRequest<TBody = JsonValue> = {
+  readonly candidates: readonly SemanticEditCandidate<TBody>[];
   readonly dependencies: unknown;
   readonly relationships?: readonly QualityRelationship[];
   readonly exceptions?: readonly QualityException[];
@@ -152,9 +152,9 @@ export type QualityCheckInput<
   TConfiguration = unknown,
   TBody = unknown,
   TUnavailable = never,
-> = Omit<QualityCheckRequest, "candidates"> & {
+> = Omit<QualityCheckRequest<TBody>, "candidates"> & {
   readonly facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>;
-  readonly candidate: SemanticEditCandidate;
+  readonly candidate: SemanticEditCandidate<TBody>;
   readonly sourceUnit: SourceUnitFact<TUnit> | null;
   readonly configuration: TConfiguration;
 };
@@ -559,9 +559,12 @@ export type QualityFactCoverage = {
   })[];
 };
 
-export type QualityRunResult<TObject extends QualityObject = QualityObject> = {
+export type QualityRunResult<
+  TObject extends QualityObject = QualityObject,
+  TBody = JsonValue,
+> = {
   readonly version: string;
-  readonly candidates: readonly SemanticEditCandidate[];
+  readonly candidates: readonly SemanticEditCandidate<TBody>[];
   readonly factCoverage: QualityFactCoverage;
   readonly dependencies: unknown;
   readonly relationships: readonly QualityRelationship[];
@@ -578,7 +581,7 @@ export async function runQualityChecks<
   TUnavailable,
 >(
   facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
-  request: QualityCheckRequest,
+  request: QualityCheckRequest<TBody>,
   checks: readonly QualityCheckDefinition<
     TUnit,
     TTranslation,
@@ -586,7 +589,7 @@ export async function runQualityChecks<
     TBody,
     TUnavailable
   >[],
-): Promise<QualityRunResult> {
+): Promise<QualityRunResult<QualityObject, TBody>> {
   const boundRequest = snapshotQualityData({
     candidates: request.candidates,
     dependencies: request.dependencies,
@@ -764,7 +767,9 @@ function aggregateStatus(
   return "complete";
 }
 
-function candidateObject(candidate: SemanticEditCandidate): QualityObject {
+function candidateObject<TBody>(
+  candidate: SemanticEditCandidate<TBody>,
+): QualityObject {
   return {
     kind: "translation-unit",
     key: candidate.sourceKey,
