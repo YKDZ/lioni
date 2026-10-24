@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
 import {
   CompletionConfigurationError,
@@ -12,6 +13,11 @@ import {
   type QualityCheckRequest,
   type QualityRunResult,
 } from "./qa.ts";
+import {
+  prepareSemanticEdit,
+  resolveSemanticEditInput,
+  type SemanticEditPreparation,
+} from "./semantic-edits.ts";
 import type {
   JsonValue,
   SemanticEditCandidate,
@@ -449,6 +455,167 @@ export async function analyzeQuality<
       ? configuredRequest
       : { ...configuredRequest, candidates: options.candidates };
   return runQualityChecks(facts, request, checks);
+}
+
+export type QualityWriteCondition = (
+  quality: QualityRunResult,
+) => Awaitable<boolean>;
+
+export type PrepareQualityConditionedSemanticEditOptions = {
+  readonly candidate: SemanticEditCandidate;
+  readonly condition?: QualityWriteCondition;
+  readonly quality?: QualityRunResult;
+};
+
+export type QualityConditionedSemanticEditResult =
+  | {
+      readonly status: "not-required";
+      readonly preparation: SemanticEditPreparation;
+    }
+  | {
+      readonly status: "passed";
+      readonly quality: QualityRunResult;
+      readonly preparation: SemanticEditPreparation;
+    }
+  | {
+      readonly status: "rejected";
+      readonly quality: QualityRunResult;
+    }
+  | {
+      readonly status: "input-mismatch";
+      readonly reason: string;
+    };
+
+/**
+ * Uses a host-selected QA condition to gate preparation of one semantic edit.
+ * Without a condition, quality checks are not required and the candidate follows
+ * the ordinary semantic-edit preparation path.
+ */
+export async function prepareQualityConditionedSemanticEdit<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+>(
+  config: FrameworkConfig<TUnit, TTranslation>,
+  options: PrepareQualityConditionedSemanticEditOptions,
+): Promise<QualityConditionedSemanticEditResult> {
+  const facts = await readFacts(config);
+  const { candidate, condition } = options;
+  if (condition === undefined)
+    return {
+      status: "not-required",
+      preparation: await prepareCandidateEdit(facts, candidate, config),
+    };
+
+  const checks = configuredQualityChecks(config);
+  const configuredRequest = await createConfiguredQualityRequest(config, facts);
+  const request = { ...configuredRequest, candidates: [candidate] };
+  const quality =
+    options.quality ?? (await runQualityChecks(facts, request, checks));
+  if (
+    options.quality !== undefined &&
+    !qualityRunMatchesInputs(
+      facts,
+      candidate,
+      configuredRequest,
+      checks,
+      quality,
+    )
+  )
+    return {
+      status: "input-mismatch",
+      reason: "质量检查结果不匹配当前候选、事实或明确检查输入。",
+    };
+
+  if (!(await condition(quality))) return { status: "rejected", quality };
+  return {
+    status: "passed",
+    quality,
+    preparation: await prepareCandidateEdit(facts, candidate, config),
+  };
+}
+
+async function prepareCandidateEdit<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+>(
+  facts: FrameworkFacts<TUnit, TTranslation>,
+  candidate: SemanticEditCandidate,
+  config: FrameworkConfig<TUnit, TTranslation>,
+): Promise<SemanticEditPreparation> {
+  const resolved = await resolveSemanticEditInput(
+    facts,
+    { sourceKey: candidate.sourceKey, language: candidate.language },
+    config,
+  );
+  return resolved.status === "resolved"
+    ? prepareSemanticEdit(resolved.input, candidate)
+    : resolved;
+}
+
+function qualityRunMatchesInputs<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+>(
+  facts: FrameworkFacts<TUnit, TTranslation>,
+  candidate: SemanticEditCandidate,
+  request: QualityCheckRequest,
+  checks: readonly QualityCheckDefinition<TUnit, TTranslation>[],
+  quality: QualityRunResult,
+): boolean {
+  if (quality.version !== facts.version) return false;
+  const expectedRequest = snapshotJson(
+    {
+      ...request,
+      candidates: [candidate],
+      relationships: request.relationships ?? [],
+      exceptions: request.exceptions ?? [],
+    },
+    "QA 输入",
+  ) as Pick<
+    QualityRunResult,
+    "candidates" | "dependencies" | "relationships" | "exceptions"
+  >;
+  if (
+    !isDeepStrictEqual(quality.candidates, expectedRequest.candidates) ||
+    !isDeepStrictEqual(quality.dependencies, expectedRequest.dependencies) ||
+    !isDeepStrictEqual(quality.relationships, expectedRequest.relationships) ||
+    !isDeepStrictEqual(quality.exceptions, expectedRequest.exceptions)
+  )
+    return false;
+
+  const expectedFactCoverage = snapshotJson(
+    {
+      source: facts.source.read,
+      translations: facts.translations.reads,
+      associations: facts.associations.map((association) => ({
+        ...association,
+        candidateSelected:
+          association.sourceKey === candidate.sourceKey &&
+          association.language === candidate.language,
+      })),
+    },
+    "QA 事实覆盖",
+  );
+  if (!isDeepStrictEqual(quality.factCoverage, expectedFactCoverage))
+    return false;
+
+  const expectedChecks = checks.map(({ id, configuration }) => ({
+    id,
+    configuration: snapshotConfigurationOrNull(configuration),
+  }));
+  const actualChecks = quality.checks.map(({ id, configuration }) => ({
+    id,
+    configuration,
+  }));
+  return isDeepStrictEqual(actualChecks, expectedChecks);
+}
+
+function snapshotConfigurationOrNull(value: unknown): unknown {
+  try {
+    return snapshotJson(value, "QA 检查配置");
+  } catch {
+    return null;
+  }
 }
 
 function defaultQualityRequest<

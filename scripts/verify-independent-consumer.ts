@@ -567,6 +567,36 @@ export default defineConfig<Unit, Translation>({
     },
     matches: (unit, translation) => translation.context.sourceLines.includes(unit.context.line),
   },
+  qualityChecks: [{
+    id: "host-review",
+    configuration: { review: "manual" },
+    check: ({ candidate }) => ({
+      status: "complete",
+      diagnostics: [{
+        severity: "warning",
+        object: {
+          kind: "translation-unit",
+          key: candidate.sourceKey,
+          language: candidate.language,
+        },
+        location: {
+          language: candidate.language,
+          range: "edit-catalogue.json",
+          key: candidate.sourceKey,
+        },
+        message: "待复核",
+        evidence: [],
+      }],
+      issues: [],
+      coverage: {
+        selected: 1,
+        evaluated: 1,
+        notApplicable: 0,
+        incomplete: 0,
+        failed: 0,
+      },
+    }),
+  }],
   translationWriteback: {
     locateExistingTarget({ translation }) {
       if (translation.translation.context.readOnly)
@@ -758,11 +788,13 @@ export default defineConfig<Unit, Translation>({
 import {
   applySemanticEdits,
   advanceProcessingBaseline,
+  analyzeQuality,
   applyUpdatePlan,
   compareProcessingBaseline,
   createUpdatePlan,
   evaluateCompletion,
   prepareSemanticEdit,
+  prepareQualityConditionedSemanticEdit,
   readCompletion,
   readFacts,
   readSourceFacts,
@@ -820,6 +852,15 @@ void readFacts(editConfig).then(async (facts) => {
   if (prepared.status === "prepared")
     return applySemanticEdits([prepared.edit], editConfig);
 });
+void analyzeQuality(editConfig, {
+  candidates: [{ sourceKey: "source:18", language: "fr", content: "Candidate" }],
+}).then((quality) =>
+  prepareQualityConditionedSemanticEdit(editConfig, {
+    candidate: quality.candidates[0]!,
+    quality,
+    condition: (result) => result.diagnostics.length === 0,
+  }),
+);
 `;
   const resumeConfigSource = `import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -1482,11 +1523,13 @@ const result = await applySemanticEdits(edits, config);
 await writeFile(editPath + ".result.json", JSON.stringify(result), "utf8");
 `;
   const editCheckSource = `import assert from "node:assert/strict";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, readdir, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import {
+  analyzeQuality,
   applySemanticEdits,
+  prepareQualityConditionedSemanticEdit,
   prepareSemanticEdit,
   readFacts,
   resolveSemanticEditInput,
@@ -1517,6 +1560,17 @@ async function applyInNewProcess(name, edits) {
   assert.equal(child.status, 0, child.stderr);
   const saved = JSON.parse(await readFile(editPath + ".result.json", "utf8"));
   return saved.results;
+}
+
+async function baselineState() {
+  const directory = path.join(process.cwd(), ".l10n");
+  const files = await readdir(directory, { withFileTypes: true });
+  return Object.fromEntries(await Promise.all(
+    files.filter((entry) => entry.isFile()).map(async ({ name }) => [
+      name,
+      await readFile(path.join(directory, name), "utf8"),
+    ]),
+  ));
 }
 
 const sourcesPath = path.join(process.cwd(), "edit-sources.json");
@@ -1649,7 +1703,53 @@ const noLocation = await resolveSemanticEditInput(noLocationFacts, {
 }, config);
 assert.equal(noLocation.status, "notWritable");
 
+const candidate = {
+  sourceKey: "source:18",
+  language: "fr",
+  content: "Default write with QA findings",
+};
+const quality = await analyzeQuality(config, { candidates: [candidate] });
+assert.equal(quality.diagnostics.length, 1);
+const beforeReject = await readFile(cataloguePath, "utf8");
+const baselineBeforeReject = await baselineState();
+const rejected = await prepareQualityConditionedSemanticEdit(config, {
+  candidate,
+  condition: (currentQuality) => currentQuality.diagnostics.length === 0,
+});
+assert.equal(rejected.status, "rejected");
+assert.equal("preparation" in rejected, false);
+assert.equal(await readFile(cataloguePath, "utf8"), beforeReject);
+assert.deepEqual(await baselineState(), baselineBeforeReject);
+
+let conditionCalled = false;
+const mismatch = await prepareQualityConditionedSemanticEdit(config, {
+  candidate: { ...candidate, content: "Changed after checking" },
+  quality,
+  condition: () => {
+    conditionCalled = true;
+    return true;
+  },
+});
+assert.equal(mismatch.status, "input-mismatch");
+assert.equal(conditionCalled, false);
+assert.equal(await readFile(cataloguePath, "utf8"), beforeReject);
+assert.deepEqual(await baselineState(), baselineBeforeReject);
+
+const allowed = await prepareQualityConditionedSemanticEdit(config, { candidate });
+assert.equal(allowed.status, "not-required");
+assert.equal(allowed.preparation.status, "prepared");
+if (allowed.preparation.status !== "prepared") throw new Error("候选未准备。");
+const writeResult = await applySemanticEdits([allowed.preparation.edit], config);
+assert.equal(writeResult.results[0]?.status, "written");
+assert.deepEqual(await baselineState(), baselineBeforeReject);
+const afterDefaultWrite = JSON.parse(await readFile(cataloguePath, "utf8"));
+assert.equal(
+  afterDefaultWrite.records.find(({ context }) => context.resourceKey === "shared-save-submit").text,
+  candidate.content,
+);
+
 process.stdout.write("独立打包宿主：编辑跨进程、冲突、依赖失效、失败和未处理结果通过。\\n");
+process.stdout.write("独立打包宿主：诊断候选默认写入，显式拒绝和过期检查结果均未修改资源。\\n");
 `;
 
   const editSources = [

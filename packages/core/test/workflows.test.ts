@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  applySemanticEdits,
   analyzeQuality,
   defineConfig,
+  prepareQualityConditionedSemanticEdit,
   type QualityCheckInput,
 } from "../src/index.ts";
 
@@ -16,6 +18,109 @@ type Translation = {
   readonly id: string;
   readonly text: string;
 };
+
+function diagnosedEditScenario() {
+  const translation = { id: "save", text: "Enregistrer" };
+  let requestVersion = "v1";
+  const config = defineConfig<Unit, Translation>({
+    source: {
+      read: () => ({
+        scopes: [
+          {
+            range: "messages.json",
+            enumeration: "complete",
+            records: [
+              {
+                value: { id: "save", source: "Save" },
+                bodyAvailability: "available",
+              },
+            ],
+          },
+        ],
+      }),
+    },
+    keyOf: ({ id }) => id,
+    translations: {
+      languages: ["fr"],
+      read: (_language, sourceUnits) => ({
+        scopes: [
+          {
+            range: "fr.json",
+            covers: sourceUnits.map(({ key }) => key),
+            enumeration: "complete",
+            records: [{ value: translation, bodyAvailability: "available" }],
+          },
+        ],
+      }),
+      matches: (unit, translated) => unit.id === translated.id,
+      contentOf: ({ text }) => text,
+    },
+    translationWriteback: {
+      locateExistingTarget: () => ({
+        status: "located",
+        locator: { file: "fr.json", key: "save" },
+      }),
+      locateNewTarget: () => ({
+        status: "notWritable",
+        reason: "本场景修改已有译文。",
+      }),
+      write: ({ edit }) => {
+        if (typeof edit.content === "string") translation.text = edit.content;
+      },
+    },
+    qualityChecks: [
+      {
+        id: "needs-review",
+        configuration: {},
+        check: ({ candidate }) => ({
+          status: "complete",
+          diagnostics: [
+            {
+              severity: "error",
+              object: {
+                kind: "translation-unit",
+                key: candidate.sourceKey,
+                language: candidate.language,
+              },
+              location: {
+                language: candidate.language,
+                range: "fr.json",
+                key: candidate.sourceKey,
+              },
+              message: "需要人工复核。",
+              evidence: [],
+            },
+          ],
+          issues: [],
+          coverage: {
+            selected: 1,
+            evaluated: 1,
+            notApplicable: 0,
+            incomplete: 0,
+            failed: 0,
+          },
+        }),
+      },
+    ],
+    createQualityRequest: () => ({
+      candidates: [],
+      dependencies: { requestVersion },
+    }),
+  });
+  const candidate = {
+    sourceKey: "save",
+    language: "fr",
+    content: "Sauver",
+  } as const;
+  return {
+    candidate,
+    config,
+    setRequestVersion: (value: string) => {
+      requestVersion = value;
+    },
+    translation,
+  };
+}
 
 void describe("configured analysis workflow", () => {
   void it("checks an explicit candidate against the complete adapter context", async () => {
@@ -435,5 +540,89 @@ void describe("configured analysis workflow", () => {
       name: "TypeError",
       message: "defineConfig 的 createQualityRequest 必须是函数。",
     });
+  });
+
+  void it("prepares and writes a diagnosed candidate by default", async () => {
+    const { candidate, config, translation } = diagnosedEditScenario();
+
+    const quality = await analyzeQuality(config, { candidates: [candidate] });
+    assert.equal(quality.diagnostics.length, 1);
+    const result = await prepareQualityConditionedSemanticEdit(config, {
+      candidate,
+    });
+
+    assert.equal(result.status, "not-required");
+    assert.equal(result.preparation?.status, "prepared");
+    if (result.preparation?.status !== "prepared") return;
+    const applied = await applySemanticEdits([result.preparation.edit], config);
+    assert.equal(applied.results[0]?.status, "written");
+    assert.equal(translation.text, "Sauver");
+  });
+
+  void it("lets the host condition decide whether a diagnosed candidate is prepared", async () => {
+    const { candidate, config } = diagnosedEditScenario();
+    let acceptedQuality: unknown;
+    const passed = await prepareQualityConditionedSemanticEdit(config, {
+      candidate,
+      condition: (quality) => {
+        acceptedQuality = quality;
+        return (
+          quality.status === "complete" && quality.diagnostics.length === 1
+        );
+      },
+    });
+
+    assert.equal(passed.status, "passed");
+    assert.equal(passed.preparation?.status, "prepared");
+    assert.equal(
+      (acceptedQuality as { readonly candidates: readonly unknown[] })
+        .candidates.length,
+      1,
+    );
+
+    const rejected = await prepareQualityConditionedSemanticEdit(config, {
+      candidate: { ...candidate, content: "À refuser" },
+      condition: (quality) => quality.diagnostics.length === 0,
+    });
+    assert.equal(rejected.status, "rejected");
+    assert.equal("preparation" in rejected, false);
+    if (rejected.status === "rejected")
+      assert.equal(rejected.quality.diagnostics.length, 1);
+  });
+
+  void it("rejects an old quality result when its candidate or inputs differ", async () => {
+    const { candidate, config, setRequestVersion } = diagnosedEditScenario();
+    const quality = await analyzeQuality(config, { candidates: [candidate] });
+    let conditionCalled = false;
+    const candidateMismatch = await prepareQualityConditionedSemanticEdit(
+      config,
+      {
+        candidate: { ...candidate, content: "Changed after checking" },
+        quality,
+        condition: () => {
+          conditionCalled = true;
+          return true;
+        },
+      },
+    );
+
+    assert.equal(candidateMismatch.status, "input-mismatch");
+    assert.equal(conditionCalled, false);
+    assert.equal("preparation" in candidateMismatch, false);
+
+    setRequestVersion("v2");
+    const explicitInputMismatch = await prepareQualityConditionedSemanticEdit(
+      config,
+      {
+        candidate,
+        quality,
+        condition: () => {
+          conditionCalled = true;
+          return true;
+        },
+      },
+    );
+    assert.equal(explicitInputMismatch.status, "input-mismatch");
+    assert.equal(conditionCalled, false);
   });
 });
