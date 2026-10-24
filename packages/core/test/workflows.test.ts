@@ -71,7 +71,7 @@ function diagnosedEditScenario() {
     qualityChecks: [
       {
         id: "needs-review",
-        configuration: {},
+        configuration: undefined,
         check: ({ candidate }) => ({
           status: "complete",
           diagnostics: [
@@ -629,6 +629,23 @@ void describe("configured analysis workflow", () => {
     const { candidate, config, setRequestVersion } = diagnosedEditScenario();
     const quality = await analyzeQuality(config, { candidates: [candidate] });
     let conditionCalled = false;
+    const cachedMatch = await prepareQualityConditionedSemanticEdit(config, {
+      candidate,
+      quality,
+      condition: () => {
+        conditionCalled = true;
+        return true;
+      },
+    });
+    assert.equal(cachedMatch.status, "passed");
+    assert.equal(conditionCalled, true);
+    if (cachedMatch.status === "passed") {
+      assert.equal(cachedMatch.preparation.status, "prepared");
+      if (cachedMatch.preparation.status === "prepared")
+        assert.equal(cachedMatch.preparation.edit.content, candidate.content);
+    }
+
+    conditionCalled = false;
     const candidateMismatch = await prepareQualityConditionedSemanticEdit(
       config,
       {

@@ -594,36 +594,54 @@ export default defineConfig<Unit, Translation>({
     },
     matches: (unit, translation) => translation.context.sourceLines.includes(unit.context.line),
   },
-  qualityChecks: [{
-    id: "host-review",
-    configuration: { review: "manual" },
-    check: ({ candidate }) => ({
-      status: "complete",
-      diagnostics: [{
-        severity: "warning",
-        object: {
-          kind: "translation-unit",
-          key: candidate.sourceKey,
-          language: candidate.language,
+  qualityChecks: [
+    {
+      id: "host-review",
+      configuration: { review: "manual" },
+      check: ({ candidate }) => ({
+        status: "complete",
+        diagnostics: [{
+          severity: "warning",
+          object: {
+            kind: "translation-unit",
+            key: candidate.sourceKey,
+            language: candidate.language,
+          },
+          location: {
+            language: candidate.language,
+            range: "edit-catalogue.json",
+            key: candidate.sourceKey,
+          },
+          message: "待复核",
+          evidence: [],
+        }],
+        issues: [],
+        coverage: {
+          selected: 1,
+          evaluated: 1,
+          notApplicable: 0,
+          incomplete: 0,
+          failed: 0,
         },
-        location: {
-          language: candidate.language,
-          range: "edit-catalogue.json",
-          key: candidate.sourceKey,
+      }),
+    },
+    {
+      id: "unconfigured-check",
+      configuration: undefined,
+      check: () => ({
+        status: "complete",
+        diagnostics: [],
+        issues: [],
+        coverage: {
+          selected: 1,
+          evaluated: 1,
+          notApplicable: 0,
+          incomplete: 0,
+          failed: 0,
         },
-        message: "待复核",
-        evidence: [],
-      }],
-      issues: [],
-      coverage: {
-        selected: 1,
-        evaluated: 1,
-        notApplicable: 0,
-        incomplete: 0,
-        failed: 0,
-      },
-    }),
-  }],
+      }),
+    },
+  ],
   translationWriteback: {
     locateExistingTarget({ translation }) {
       if (translation.translation.context.readOnly)
@@ -1748,6 +1766,18 @@ assert.equal("preparation" in rejected, false);
 assert.equal(await readFile(cataloguePath, "utf8"), beforeReject);
 assert.deepEqual(await baselineState(), baselineBeforeReject);
 
+const cachedAllowed = await prepareQualityConditionedSemanticEdit(config, {
+  candidate,
+  quality,
+  condition: () => true,
+});
+assert.equal(cachedAllowed.status, "passed");
+assert.equal(cachedAllowed.preparation.status, "prepared");
+if (cachedAllowed.preparation.status !== "prepared") throw new Error("缓存候选未准备。");
+assert.equal(cachedAllowed.preparation.edit.content, candidate.content);
+assert.equal(await readFile(cataloguePath, "utf8"), beforeReject);
+assert.deepEqual(await baselineState(), baselineBeforeReject);
+
 let conditionCalled = false;
 const mismatch = await prepareQualityConditionedSemanticEdit(config, {
   candidate: { ...candidate, content: "Changed after checking" },
@@ -1807,7 +1837,7 @@ assert.equal(
 );
 
 process.stdout.write("独立打包宿主：编辑跨进程、冲突、依赖失效、失败和未处理结果通过。\\n");
-process.stdout.write("独立打包宿主：诊断候选默认写入，显式拒绝、过期结果及异步候选变化均受核对。\\n");
+process.stdout.write("独立打包宿主：诊断候选默认写入，显式拒绝、缓存复用/错配及异步候选变化均受核对。\\n");
 `;
 
   const editSources = [

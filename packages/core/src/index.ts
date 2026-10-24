@@ -618,6 +618,7 @@ function qualityRunMatchesInputs<
 }
 
 function snapshotConfigurationOrNull(value: unknown): unknown {
+  if (value === undefined) return undefined;
   try {
     return snapshotJson(value, "QA 检查配置");
   } catch {
