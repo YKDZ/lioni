@@ -9,6 +9,7 @@ import {
   createUpdatePlan,
   defineConfig,
   readFacts,
+  StandardSchemaContractError,
   type FrameworkConfig,
   type ProcessingBaseline,
   type ProcessingBaselineStore,
@@ -41,6 +42,8 @@ function makeConfig(
     readonly translationEnumeration?: "complete" | "partial" | "failed";
     readonly updatePolicy?: UpdatePolicy<Unit, Translation>;
     readonly withWriteback?: boolean;
+    readonly onMatch?: () => void;
+    readonly onLocateExisting?: () => void;
   } = {},
 ) {
   return defineConfig<
@@ -89,7 +92,10 @@ function makeConfig(
           },
         ],
       }),
-      matches: (unit, translation) => unit.id === translation.id,
+      matches: (unit, translation) => {
+        options.onMatch?.();
+        return unit.id === translation.id;
+      },
       contentOf: (translation) => translation.text,
     },
     ...(options.updatePolicy === undefined
@@ -98,10 +104,13 @@ function makeConfig(
     ...(options.withWriteback
       ? {
           translationWriteback: {
-            locateExistingTarget: ({ translation }) => ({
-              status: "located" as const,
-              locator: { id: translation.translation.id },
-            }),
+            locateExistingTarget: ({ translation }) => {
+              options.onLocateExisting?.();
+              return {
+                status: "located" as const,
+                locator: { id: translation.translation.id },
+              };
+            },
             locateNewTarget: ({ sourceUnit }) => ({
               status: "located" as const,
               locator: { id: sourceUnit.key },
@@ -134,6 +143,7 @@ async function establishBaseline(
     store,
     facts,
     sourceKeys.map((sourceKey) => ({ sourceKey, language: "fr" })),
+    config,
   );
   assert.equal(result.outcome, "saved");
   return store;
@@ -151,6 +161,93 @@ function candidatePolicy(
 }
 
 void describe("update plans", () => {
+  void it("validates removed history before policy and deletion-location callbacks", async () => {
+    const initial = makeConfig(
+      [
+        {
+          id: "save-button",
+          source: "Save",
+          context: { line: 18 },
+        },
+      ],
+      [{ id: "save-button", text: "Enregistrer" }],
+    );
+    const baselineStore = await establishBaseline(initial, ["save-button"]);
+    const saved = baselineStore.baseline;
+    assert.ok(saved);
+    let matchCalls = 0;
+    let policyCalls = 0;
+    let locateCalls = 0;
+    const config = makeConfig(
+      [],
+      [{ id: "save-button", text: "Enregistrer" }],
+      {
+        withWriteback: true,
+        onMatch: () => {
+          matchCalls += 1;
+        },
+        onLocateExisting: () => {
+          locateCalls += 1;
+        },
+        updatePolicy: () => {
+          policyCalls += 1;
+          return { action: "delete" };
+        },
+      },
+    );
+    const facts = await readFacts(config);
+    const invalidSource: ProcessingBaseline = {
+      ...saved,
+      entries: saved.entries.map((entry) =>
+        entry.sourceKey === "save-button"
+          ? {
+              ...entry,
+              source: {
+                ...entry.source,
+                unit: {
+                  id: "save-button",
+                  source: 7,
+                  context: { line: 18 },
+                },
+              },
+            }
+          : entry,
+      ),
+    };
+    const invalidTranslation: ProcessingBaseline = {
+      ...saved,
+      entries: saved.entries.map((entry) =>
+        entry.sourceKey === "save-button"
+          ? {
+              ...entry,
+              association: {
+                ...entry.association,
+                translations: entry.association.translations.map(
+                  (translation) =>
+                    translation.bodyAvailability === "available"
+                      ? {
+                          ...translation,
+                          translation: { id: "save-button", text: 7 },
+                        }
+                      : translation,
+                ),
+              },
+            }
+          : entry,
+      ),
+    };
+
+    for (const invalidBaseline of [invalidSource, invalidTranslation]) {
+      await assert.rejects(
+        () => createUpdatePlan(facts, invalidBaseline, config),
+        StandardSchemaContractError,
+      );
+    }
+    assert.equal(matchCalls, 0);
+    assert.equal(policyCalls, 0);
+    assert.equal(locateCalls, 0);
+  });
+
   void it("keeps insufficient history as a review decision with structured status", async () => {
     const config = makeConfig(
       [{ id: "save-button", source: "Save", context: { line: 18 } }],

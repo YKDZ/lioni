@@ -387,6 +387,7 @@ const translationSchema = standardSchema<Translation>(
 const contentSchema = standardSchema<string>(
   (value): value is string => typeof value === "string",
 );
+export const callbackCounts = { matches: 0, policy: 0, locate: 0, write: 0 };
 
 export default defineConfig({
   source: {
@@ -419,10 +420,14 @@ export default defineConfig({
         }],
       };
     },
-    matches: (unit, translation) => unit.id === translation.id,
+    matches: (unit, translation) => {
+      callbackCounts.matches += 1;
+      return unit.id === translation.id;
+    },
   },
-  updatePolicy: ({ sourceKey, language, change, sourceUnit }) =>
-    change === "changed"
+  updatePolicy: ({ sourceKey, language, change, sourceUnit }) => {
+    callbackCounts.policy += 1;
+    return change === "changed"
       ? {
           action: "candidate",
           candidate: {
@@ -432,12 +437,16 @@ export default defineConfig({
           },
           reason: "读取计划时生成的候选。",
         }
-      : { action: "none", reason: "该项未由此计划处理。" },
+      : { action: "none", reason: "该项未由此计划处理。" };
+  },
   translationWriteback: {
-    locateExistingTarget: ({ translation }) => ({
-      status: "located",
-      locator: { id: translation.translation.id },
-    }),
+    locateExistingTarget: ({ translation }) => {
+      callbackCounts.locate += 1;
+      return {
+        status: "located",
+        locator: { id: translation.translation.id },
+      };
+    },
     locateNewTarget: () => ({
       status: "notWritable",
       reason: "此消费场景只更新现有译文。",
@@ -446,6 +455,7 @@ export default defineConfig({
       screenshot: sourceUnit.unit.context.screenshot,
     }),
     async write({ edit, target }) {
+      callbackCounts.write += 1;
       if (typeof edit.content !== "string") throw new TypeError("候选译文必须是字符串。");
       const locator = target.locator;
       if (typeof locator !== "object" || locator === null || !("id" in locator) || typeof locator.id !== "string") {
@@ -598,7 +608,7 @@ const planStore = createFileUpdatePlanStore(planPath);
 if (scenario === "initialize") {
   const result = await advanceProcessingBaseline(baselineStore, await readFacts(config), [
     { sourceKey: "retired-message", language: "fr" },
-  ], { matches: config.translations.matches });
+  ], config);
   assert.equal(result.outcome, "saved");
   assert.equal(result.selections[0]?.outcome, "advanced");
 } else if (scenario === "save-plan") {
@@ -1138,11 +1148,14 @@ void readFacts(editConfig).then(async (facts) => {
   if (prepared.status === "prepared")
     return applySemanticEdits([prepared.edit], editConfig);
 });
-void analyzeQuality(editConfig, {
-  candidates: [{ sourceKey: "source:18", language: "fr", content: "Candidate" }],
-}).then((quality) =>
+const editCandidate = {
+  sourceKey: "source:18",
+  language: "fr",
+  content: "Candidate",
+};
+void analyzeQuality(editConfig, { candidates: [editCandidate] }).then((quality) =>
   prepareQualityConditionedSemanticEdit(editConfig, {
-    candidate: quality.candidates[0]!,
+    candidate: editCandidate,
     quality,
     condition: (result) => result.diagnostics.length === 0,
   }),
@@ -1259,9 +1272,12 @@ const scenario = process.argv[2];
 
 if (scenario === "initialize") {
   const facts = await readFacts(config);
-  const result = await advanceProcessingBaseline(baselineStore, facts, baselineSelections, {
-    matches: config.translations.matches,
-  });
+  const result = await advanceProcessingBaseline(
+    baselineStore,
+    facts,
+    baselineSelections,
+    config,
+  );
   assert.equal(result.outcome, "saved");
   assert.ok(result.baseline);
   assert.ok(result.baseline.entries.every(({ processed }) => processed));
@@ -1362,9 +1378,11 @@ if (scenario === "initialize") {
     );
     assert.equal(entry(baseline, id)?.association.translations[0]?.translation.text, "更新译文 " + id);
   }
-  assert.ok(compareProcessingBaseline(facts, baseline, {
-    matches: config.translations.matches,
-  }).changes.every(({ status }) => status === "unchanged"));
+  assert.ok(
+    (await compareProcessingBaseline(facts, baseline, config)).changes.every(
+      ({ status }) => status === "unchanged",
+    ),
+  );
 }
 `;
   const tsconfig = {
@@ -1592,6 +1610,10 @@ for (const scenario of ["establish", "modified", "source-change", "other-range",
   const result = spawnSync(process.execPath, [baselineHost, scenario], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
 }
+for (const scenario of ["corrupt-history", "reject-history"]) {
+  const result = spawnSync(process.execPath, [baselineHost, scenario], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+}
 
 process.stdout.write("独立打包宿主：事实API、完成API、显式QA、基线Node子入口、外部编辑重算和只读检查通过。\\n");
 `;
@@ -1636,7 +1658,7 @@ assert.ok(readable.stdout.includes("完成率：25.0%"));
 
 `;
   const baselineHostSource = `import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { advanceProcessingBaseline, compareProcessingBaseline, defineConfig, readFacts } from "@lioni/core";
 import { createFileProcessingBaselineStore } from "@lioni/core/node";
@@ -1653,6 +1675,8 @@ const sourceByScenario = {
   "identity-change": [{ range: "source-r1", units: [{ id: "A-new", source: "Save" }, { id: "B", source: "Cancel" }] }],
   removed: [{ range: "source-r1", units: [] }],
   "all-gone": [{ range: "source-r1", units: [] }],
+  "corrupt-history": [{ range: "source-r1", units: [] }],
+  "reject-history": [{ range: "source-r1", units: [] }],
 };
 const targetsByScenario = {
   establish: [{ range: "target-r1", translations: [{ id: "A", text: "Enregistrer" }, { id: "B", text: "Annuler" }] }],
@@ -1662,6 +1686,8 @@ const targetsByScenario = {
   "identity-change": [{ range: "target-r1", translations: [{ id: "A-new", text: "Enregistrer" }, { id: "B", text: "Annuler" }] }],
   removed: [{ range: "target-r1", translations: [{ id: "orphan", text: "Orphan" }] }],
   "all-gone": [{ range: "target-r1", translations: [] }],
+  "corrupt-history": [{ range: "target-r1", translations: [] }],
+  "reject-history": [{ range: "target-r1", translations: [] }],
 };
 const sourceScopes = sourceByScenario[scenario];
 const targetScopes = targetsByScenario[scenario];
@@ -1678,6 +1704,7 @@ const translationSchema = standardSchema((value) =>
   typeof value.text === "string",
 );
 const contentSchema = standardSchema((value) => typeof value === "string");
+let matchCalls = 0;
 const config = defineConfig({
   source: {
     schema: sourceSchema,
@@ -1703,28 +1730,46 @@ const config = defineConfig({
         records: translations.map((value) => ({ value, bodyAvailability: "available" })),
       })),
     }),
-    matches: (unit, translation) => unit.id === translation.id,
+    matches: (unit, translation) => {
+      matchCalls += 1;
+      return unit.id === translation.id;
+    },
   },
 });
 const facts = await readFacts(config);
 
-if (scenario === "establish") {
-  const result = await advanceProcessingBaseline(store, facts, [{ sourceKey: "A", language: "fr" }]);
+if (scenario === "corrupt-history") {
+  const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
+  const entry = baseline.entries.find(({ sourceKey }) => sourceKey === "A");
+  assert.ok(entry);
+  entry.source.unit.source = 7;
+  await writeFile(baselinePath, JSON.stringify(baseline, null, 2), "utf8");
+} else if (scenario === "reject-history") {
+  const before = await readFile(baselinePath, "utf8");
+  const baseline = await store.load();
+  await assert.rejects(
+    () => compareProcessingBaseline(facts, baseline, config),
+    { name: "StandardSchemaContractError" },
+  );
+  assert.equal(matchCalls, 0);
+  assert.equal(await readFile(baselinePath, "utf8"), before);
+} else if (scenario === "establish") {
+  const result = await advanceProcessingBaseline(store, facts, [{ sourceKey: "A", language: "fr" }], config);
   assert.equal(result.outcome, "saved");
   assert.deepEqual(result.baseline.entries.map(({ sourceKey, processed }) => [sourceKey, processed]), [["A", true], ["B", false]]);
 } else {
   const before = await readFile(baselinePath, "utf8");
   const baseline = await store.load();
-  const changes = compareProcessingBaseline(facts, baseline).changes;
+  const changes = (await compareProcessingBaseline(facts, baseline, config)).changes;
   const forA = changes.find(({ sourceKey }) => sourceKey === "A");
   assert.equal(await readFile(baselinePath, "utf8"), before);
   if (scenario === "modified") {
     assert.equal(forA.status, "changed");
     assert.equal(changes.find(({ sourceKey }) => sourceKey === "B").processed, false);
     assert.equal(changes.find(({ sourceKey }) => sourceKey === "C").status, "added");
-    const advanced = await advanceProcessingBaseline(store, facts, [{ sourceKey: "A", language: "fr" }]);
+    const advanced = await advanceProcessingBaseline(store, facts, [{ sourceKey: "A", language: "fr" }], config);
     assert.equal(advanced.outcome, "saved");
-    const afterAdvance = compareProcessingBaseline(facts, advanced.baseline).changes;
+    const afterAdvance = (await compareProcessingBaseline(facts, advanced.baseline, config)).changes;
     assert.equal(afterAdvance.find(({ sourceKey }) => sourceKey === "C").status, "added");
     assert.equal(afterAdvance.find(({ sourceKey }) => sourceKey === "B").processed, false);
   } else if (scenario === "other-range") {
@@ -1741,26 +1786,28 @@ if (scenario === "establish") {
       store,
       facts,
       [{ sourceKey: "A", language: "fr" }],
-      { matches: (unit, translation) => unit.id === translation.id },
+      config,
     );
     assert.equal(advanced.outcome, "saved");
     assert.equal(advanced.baseline.entries.find(({ sourceKey }) => sourceKey === "A").source.presence, "removed");
     assert.deepEqual(advanced.baseline.entries.find(({ sourceKey }) => sourceKey === "A").source.unit, { id: "A", source: "Save" });
   } else if (scenario === "all-gone") {
-    assert.equal(forA.status, "source-removed");
+    assert.equal(forA.status, "unchanged");
+    assert.equal(forA.previous.source.presence, "removed");
+    assert.equal(forA.processed, true);
     assert.equal(facts.translations.records.length, 0);
   }
 }
 `;
   const updatePlanHostSource = `import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { advanceProcessingBaseline, applyUpdatePlan, compareProcessingBaseline, createUpdatePlan, readFacts } from "@lioni/core";
 import {
   createFileProcessingBaselineStore,
   createFileUpdatePlanStore,
 } from "@lioni/core/node";
-import config from "./plan.config.ts";
+import config, { callbackCounts } from "./plan.config.ts";
 
 const scenario = process.argv[2];
 const baselinePath = "update-plan-baseline.json";
@@ -1774,7 +1821,7 @@ if (scenario === "establish") {
   const facts = await readFacts(config);
   const result = await advanceProcessingBaseline(baselineStore, facts, [
     { sourceKey: "save-button", language: "fr" },
-  ]);
+  ], config);
   assert.equal(result.outcome, "saved");
   assert.deepEqual(result.baseline?.entries.map(({ sourceKey, processed }) => [sourceKey, processed]), [
     ["save-button", true],
@@ -1852,11 +1899,36 @@ if (scenario === "establish") {
   assert.equal(b?.source.unit.source, "Cancel");
   assert.equal(b?.association.translations[0]?.translation.text, "Annuler");
   assert.equal(b?.processed, false);
-  const changes = compareProcessingBaseline(facts, baseline, {
-    matches: (unit, translation) => unit.id === translation.id,
-  }).changes;
+  const changes = (await compareProcessingBaseline(facts, baseline, config)).changes;
   assert.equal(changes.find(({ sourceKey }) => sourceKey === "save-button")?.status, "unchanged");
   assert.equal(changes.find(({ sourceKey }) => sourceKey === "cancel-button")?.status, "unchanged");
+} else if (scenario === "corrupt-plan") {
+  const saved = JSON.parse(await readFile(planPath, "utf8"));
+  const item = saved.items.find(({ sourceKey }) => sourceKey === "save-button");
+  assert.ok(item);
+  item.current.source.unit.source = 7;
+  await writeFile(planPath, JSON.stringify(saved, null, 2), "utf8");
+} else if (scenario === "reject-plan") {
+  const [planBefore, baselineBefore, targetBefore] = await Promise.all([
+    readFile(planPath, "utf8"),
+    readFile(baselinePath, "utf8"),
+    readFile(targetPath, "utf8"),
+  ]);
+  const plan = await planStore.load();
+  assert.ok(plan);
+  await assert.rejects(
+    () => applyUpdatePlan(plan, config, baselineStore),
+    { name: "StandardSchemaContractError" },
+  );
+  assert.deepEqual(callbackCounts, {
+    matches: 0,
+    policy: 0,
+    locate: 0,
+    write: 0,
+  });
+  assert.equal(await readFile(planPath, "utf8"), planBefore);
+  assert.equal(await readFile(baselinePath, "utf8"), baselineBefore);
+  assert.equal(await readFile(targetPath, "utf8"), targetBefore);
 }
 `;
   const editApplySource = `import { readFile, writeFile } from "node:fs/promises";
@@ -2538,6 +2610,19 @@ export async function verifyIndependentConsumer(): Promise<void> {
     process.stdout.write(planApplyVerify.stdout);
     process.stdout.write(
       "独立打包宿主：保存计划的新进程应用、资源写入和分项基线推进通过。\n",
+    );
+    runChecked(
+      process.execPath,
+      ["update-plan-host.mjs", "corrupt-plan"],
+      consumerRoot,
+    );
+    runChecked(
+      process.execPath,
+      ["update-plan-host.mjs", "reject-plan"],
+      consumerRoot,
+    );
+    process.stdout.write(
+      "新进程拒绝了不符合当前原文契约的持久计划，且未触发策略、匹配、定位或写入回调。\n",
     );
 
     process.stdout.write("验证真实文件故障后的新进程恢复…\n");

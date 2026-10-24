@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import {
   compareProcessingBaseline,
   validateProcessingBaseline,
+  validateProcessingBaselineHistory,
   type ProcessingBaseline,
   type ProcessingBaselineChange,
   type ProcessingBaselineEntry,
@@ -24,10 +25,16 @@ import {
   prepareSemanticEdit,
   resolveSemanticDeleteInput,
   resolveSemanticEditInput,
+  validateSemanticEditCandidate,
+  validateSemanticEditHistory,
   type JsonValue,
   type SemanticEdit,
   type SemanticEditCandidate,
 } from "./semantic-edits.ts";
+import {
+  assertJsonValue,
+  StandardSchemaContractError,
+} from "./standard-schema.ts";
 
 export type UpdatePlanObservation<
   TSource = unknown,
@@ -45,11 +52,18 @@ export type UpdatePlanObservation<
     readonly status: TranslationAssociationStatus;
     readonly coverageStatus: CoverageStatus;
     readonly scopes: readonly ProcessingBaselineTranslationScope[];
-    readonly translations: readonly {
-      readonly range: unknown;
-      readonly translation: TTranslation | TUnavailable;
-      readonly bodyAvailability: BodyAvailability;
-    }[];
+    readonly translations: readonly (
+      | {
+          readonly range: unknown;
+          readonly translation: TTranslation;
+          readonly bodyAvailability: "available";
+        }
+      | {
+          readonly range: unknown;
+          readonly translation: TUnavailable;
+          readonly bodyAvailability: "unavailable";
+        }
+    )[];
   };
 };
 
@@ -137,13 +151,18 @@ export type UpdatePlanItem<
   TTranslation = unknown,
   TBody = JsonValue,
   TUnavailable = never,
+  TUnit extends TranslationUnitInput = TranslationUnitInput,
 > = {
   readonly sourceKey: string;
   readonly language: string;
   readonly change: ProcessingChangeStatus;
   readonly processed: boolean;
-  readonly previous?: ProcessingBaselineEntry;
-  readonly current?: ProcessingBaselineEntry;
+  readonly previous?: ProcessingBaselineEntry<
+    TUnit,
+    TTranslation,
+    TUnavailable
+  >;
+  readonly current?: ProcessingBaselineEntry<TUnit, TTranslation, TUnavailable>;
   readonly expectedInput?: UpdatePlanObservation<
     TSource,
     TTranslation,
@@ -167,13 +186,35 @@ export type UpdatePlan<
     TUnit["source"],
     TTranslation,
     TBody,
-    TUnavailable
+    TUnavailable,
+    TUnit
   >[];
 };
 
+/** 通过 JSON 结构检查后的计划数据；其中业务值仍保持未知类型。 */
+export type UpdatePlanData = {
+  readonly formatVersion: 3;
+  readonly sourceScopeEvidence: readonly ProcessingBaselineSourceScope[];
+  readonly items: readonly UpdatePlanDataItem[];
+};
+
+export type UpdatePlanDataItem = {
+  readonly sourceKey: string;
+  readonly language: string;
+  readonly change: ProcessingChangeStatus;
+  readonly processed: boolean;
+  readonly previous?: ProcessingBaselineEntry;
+  readonly current?: ProcessingBaselineEntry;
+  readonly expectedInput?: UpdatePlanObservation<unknown, unknown, unknown>;
+  readonly decision: UpdateDecision<unknown>;
+  readonly status: UpdatePlanStatus;
+  readonly blocker?: UpdatePlanBlock;
+  readonly edit?: SemanticEdit<unknown>;
+};
+
 export type UpdatePlanStore = {
-  load(): Promise<UpdatePlan | undefined>;
-  save(plan: UpdatePlan): Promise<void>;
+  load(): Promise<UpdatePlanData | undefined>;
+  save(plan: UpdatePlanData): Promise<void>;
 };
 
 export function defaultUpdatePolicy<
@@ -230,17 +271,9 @@ export async function createUpdatePlan<
 >(
   facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
   baseline: ProcessingBaseline | undefined,
-  config: Pick<
-    FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
-    "translations" | "translationWriteback" | "updatePolicy"
-  > = {},
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
 ): Promise<UpdatePlan<TUnit, TTranslation, TBody, TUnavailable>> {
-  const matches = config.translations?.matches;
-  const changes = compareProcessingBaseline(
-    facts,
-    baseline,
-    matches === undefined ? {} : { matches },
-  );
+  const changes = await compareProcessingBaseline(facts, baseline, config);
   const addedRanges = changes.changes.flatMap((change) =>
     change.status === "added" && change.current !== undefined
       ? [change.current.source.range]
@@ -256,7 +289,8 @@ export async function createUpdatePlan<
     TUnit["source"],
     TTranslation,
     TBody,
-    TUnavailable
+    TUnavailable,
+    TUnit
   >[] = [];
 
   for (const change of changes.changes) {
@@ -287,7 +321,7 @@ export async function createUpdatePlan<
       expectedInput?.association.translations.map(
         ({ translation }) => translation,
       ) ?? [];
-    const decision = structuredClone(
+    let decision = structuredClone(
       policy({
         sourceKey: change.sourceKey,
         language: change.language,
@@ -301,6 +335,15 @@ export async function createUpdatePlan<
         translations,
       }),
     );
+    if (decision.action === "candidate") {
+      decision = {
+        ...decision,
+        candidate: await validateSemanticEditCandidate(
+          decision.candidate,
+          config,
+        ),
+      };
+    }
 
     const baseItem = {
       sourceKey: change.sourceKey,
@@ -335,9 +378,7 @@ export async function createUpdatePlan<
     }
 
     if (decision.action === "delete") {
-      const historicalSource = change.previous?.source.unit as
-        | TUnit
-        | undefined;
+      const historicalSource = change.previous?.source.unit;
       if (
         historicalSource === undefined ||
         expectedBasis?.source.presence !== "removed"
@@ -358,7 +399,7 @@ export async function createUpdatePlan<
         historicalSource,
         expectedBasis.source.range,
         expectedBasis.association.scopes.map(({ range }) => range),
-        config as FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+        config,
       );
       if (resolved.status !== "resolved") {
         items.push({
@@ -413,7 +454,7 @@ export async function createUpdatePlan<
     const resolved = await resolveSemanticEditInput(
       facts,
       { sourceKey: change.sourceKey, language: change.language },
-      config as FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+      config,
     );
     if (resolved.status !== "resolved") {
       items.push({
@@ -429,7 +470,7 @@ export async function createUpdatePlan<
     const prepared = await prepareSemanticEdit(
       resolved.input,
       candidate,
-      config as FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+      config,
     );
     if (prepared.status !== "prepared") {
       items.push({
@@ -448,39 +489,33 @@ export async function createUpdatePlan<
   return { formatVersion: 3, sourceScopeEvidence, items };
 }
 
-export function validateUpdatePlan<
-  TUnit extends TranslationUnitInput = TranslationUnitInput,
-  TTranslation = unknown,
-  TBody = JsonValue,
-  TUnavailable = never,
->(
-  value: UpdatePlan<TUnit, TTranslation, TBody, TUnavailable>,
-): asserts value is UpdatePlan<TUnit, TTranslation, TBody, TUnavailable> {
+export function validateUpdatePlan(
+  value: unknown,
+): asserts value is UpdatePlanData {
+  assertJsonValue(value, "更新计划");
   if (
-    typeof value !== "object" ||
-    value === null ||
+    !isRecord(value) ||
     value.formatVersion !== 3 ||
-    !Array.isArray(value.sourceScopeEvidence) ||
-    !Array.isArray(value.items)
+    !isUnknownArray(value.sourceScopeEvidence) ||
+    !isUnknownArray(value.items)
   ) {
-    throw new TypeError("更新计划格式无效或版本不受支持。");
+    invalidUpdatePlan("格式无效或版本不受支持。");
   }
   for (const scope of value.sourceScopeEvidence) {
     if (
-      typeof scope !== "object" ||
-      scope === null ||
+      !isRecord(scope) ||
+      !Object.hasOwn(scope, "range") ||
       !isEnumerationCompleteness(scope.enumeration) ||
-      !Array.isArray(scope.sourceKeys) ||
-      scope.sourceKeys.some((key: unknown) => typeof key !== "string")
+      !isUnknownArray(scope.sourceKeys) ||
+      scope.sourceKeys.some((key) => typeof key !== "string")
     ) {
-      throw new TypeError("更新计划包含无效的原文范围依据。");
+      invalidUpdatePlan("包含无效的原文范围依据。");
     }
   }
   const seen = new Set<string>();
   for (const item of value.items) {
     if (
-      typeof item !== "object" ||
-      item === null ||
+      !isRecord(item) ||
       typeof item.sourceKey !== "string" ||
       typeof item.language !== "string" ||
       typeof item.processed !== "boolean" ||
@@ -495,41 +530,190 @@ export function validateUpdatePlan<
       (item.edit !== undefined && !isSemanticEdit(item.edit)) ||
       !matchesDecisionState(item)
     ) {
-      throw new TypeError("更新计划包含无效条目。");
+      invalidUpdatePlan("包含无效条目。");
     }
     const key = JSON.stringify([item.sourceKey, item.language]);
-    if (seen.has(key))
-      throw new TypeError("更新计划包含重复的原文身份与语言。");
+    if (seen.has(key)) invalidUpdatePlan("包含重复的原文身份与语言。");
     seen.add(key);
   }
 }
 
-function matchesDecisionState<TSource, TTranslation, TBody, TUnavailable>(
-  item: UpdatePlanItem<TSource, TTranslation, TBody, TUnavailable>,
-): boolean {
-  if (item.status === "blocked")
-    return item.blocker !== undefined && item.edit === undefined;
-  if (item.blocker !== undefined) return false;
-  if (item.status === "candidate")
+/** 验证保存计划内的业务历史，并由完整历史快照重建策略观察。 */
+export async function validateUpdatePlanHistory<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  value: unknown,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+): Promise<UpdatePlan<TUnit, TTranslation, TBody, TUnavailable>> {
+  validateUpdatePlan(value);
+  const items: UpdatePlanItem<
+    TUnit["source"],
+    TTranslation,
+    TBody,
+    TUnavailable,
+    TUnit
+  >[] = [];
+  for (const item of value.items) {
+    const previous =
+      item.previous === undefined
+        ? undefined
+        : await validateEntryHistory(item.previous, config);
+    const current =
+      item.current === undefined
+        ? undefined
+        : await validateEntryHistory(item.current, config);
+    let expectedInput:
+      | UpdatePlanObservation<TUnit["source"], TTranslation, TUnavailable>
+      | undefined;
+    if (item.expectedInput !== undefined) {
+      if (current === undefined)
+        invalidUpdatePlan("包含没有完整原文依据的策略观察。");
+      const derived = observe<TUnit, TTranslation, TUnavailable>(current);
+      if (!isDeepStrictEqual(item.expectedInput, derived))
+        invalidUpdatePlan("策略观察与其完整历史快照不一致。");
+      expectedInput = derived;
+    }
+
+    let edit: SemanticEdit<TBody> | undefined;
+    if (item.edit !== undefined) {
+      const validated = await validateSemanticEditHistory(item.edit, config);
+      edit = validated.edit;
+      if (current === undefined)
+        invalidUpdatePlan("包含没有完整原文依据的语义编辑。");
+      if (edit.operation === "write") {
+        if (
+          current.source.presence !== "present" ||
+          !isDeepStrictEqual(edit.expected.source.unit, current.source.unit) ||
+          !isDeepStrictEqual(
+            edit.expected.source.content,
+            current.source.unit.source,
+          )
+        )
+          invalidUpdatePlan("语义编辑原文与完整历史快照不一致。");
+      } else if (
+        current.source.presence !== "removed" ||
+        !isDeepStrictEqual(
+          edit.expected.source.historicalContent,
+          current.source.unit,
+        )
+      ) {
+        invalidUpdatePlan("删除编辑原文与完整历史快照不一致。");
+      }
+
+      if (edit.expected.target.status === "present") {
+        const translation = current.association.translations.find(
+          ({ bodyAvailability }) => bodyAvailability === "available",
+        );
+        const adapter = config.translations;
+        if (
+          translation === undefined ||
+          translation.bodyAvailability !== "available" ||
+          adapter === undefined ||
+          !isDeepStrictEqual(
+            adapter.contentOf(translation.translation),
+            edit.expected.target.content,
+          )
+        )
+          invalidUpdatePlan("语义编辑目标与完整历史快照不一致。");
+      }
+    }
+    let decision: UpdateDecision<TBody>;
+    if (item.decision.action === "candidate") {
+      if (
+        item.decision.candidate.sourceKey !== item.sourceKey ||
+        item.decision.candidate.language !== item.language
+      )
+        invalidUpdatePlan("策略候选与计划项的原文身份或语言不匹配。");
+      const content =
+        edit?.operation === "write"
+          ? edit.content
+          : (
+              await validateSemanticEditCandidate(
+                item.decision.candidate,
+                config,
+              )
+            ).content;
+      decision = {
+        ...item.decision,
+        candidate: {
+          ...item.decision.candidate,
+          content,
+        },
+      };
+    } else {
+      decision = item.decision;
+    }
+    items.push({
+      sourceKey: item.sourceKey,
+      language: item.language,
+      change: item.change,
+      processed: item.processed,
+      ...(previous === undefined ? {} : { previous }),
+      ...(current === undefined ? {} : { current }),
+      ...(expectedInput === undefined ? {} : { expectedInput }),
+      decision,
+      status: item.status,
+      ...(item.blocker === undefined ? {} : { blocker: item.blocker }),
+      ...(edit === undefined ? {} : { edit }),
+    });
+  }
+  return {
+    formatVersion: 3,
+    sourceScopeEvidence: value.sourceScopeEvidence,
+    items,
+  };
+}
+
+async function validateEntryHistory<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  entry: unknown,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+): Promise<ProcessingBaselineEntry<TUnit, TTranslation, TUnavailable>> {
+  const baseline = await validateProcessingBaselineHistory(
+    { formatVersion: 1, entries: [entry], sourceScopes: [] },
+    config,
+  );
+  const validated = baseline.entries[0];
+  if (validated === undefined) invalidUpdatePlan("缺少可验证的历史条目。");
+  return validated;
+}
+
+function matchesDecisionState(value: Record<string, unknown>): boolean {
+  const decision = value.decision;
+  if (!isUpdateDecision(decision)) return false;
+  const edit = value.edit;
+  if (value.status === "blocked")
+    return value.blocker !== undefined && edit === undefined;
+  if (value.blocker !== undefined) return false;
+  if (value.status === "candidate")
     return (
-      item.decision.action === "candidate" &&
-      item.edit !== undefined &&
-      item.edit.operation === "write" &&
-      item.edit.sourceKey === item.sourceKey &&
-      item.edit.language === item.language &&
-      isDeepStrictEqual(item.edit.content, item.decision.candidate.content)
+      decision.action === "candidate" &&
+      isRecord(edit) &&
+      edit.operation === "write" &&
+      edit.sourceKey === value.sourceKey &&
+      edit.language === value.language &&
+      isRecord(decision.candidate) &&
+      isDeepStrictEqual(edit.content, decision.candidate.content)
     );
-  if (item.status === "delete")
+  if (value.status === "delete")
     return (
-      item.decision.action === "delete" &&
-      item.edit?.operation === "delete" &&
-      item.edit.sourceKey === item.sourceKey &&
-      item.edit.language === item.language
+      decision.action === "delete" &&
+      isRecord(edit) &&
+      edit.operation === "delete" &&
+      edit.sourceKey === value.sourceKey &&
+      edit.language === value.language
     );
-  if (item.edit !== undefined) return false;
-  if (item.status === "retain") return item.decision.action === "retain";
-  if (item.status === "review") return item.decision.action === "review";
-  return item.decision.action === "none";
+  if (edit !== undefined) return false;
+  if (value.status === "retain") return decision.action === "retain";
+  if (value.status === "review") return decision.action === "review";
+  return decision.action === "none";
 }
 
 function observe<
@@ -537,15 +721,13 @@ function observe<
   TTranslation,
   TUnavailable = never,
 >(
-  entry: ProcessingBaselineEntry,
+  entry: ProcessingBaselineEntry<TUnit, TTranslation, TUnavailable>,
 ): UpdatePlanObservation<TUnit["source"], TTranslation, TUnavailable> {
-  const unit = entry.source.unit as TUnit;
+  const unit = entry.source.unit;
   return {
     source: {
       presence: entry.source.presence,
-      ...(entry.source.presence === "present"
-        ? { value: unit.source as TUnit["source"] }
-        : {}),
+      ...(entry.source.presence === "present" ? { value: unit.source } : {}),
       bodyAvailability: entry.source.bodyAvailability,
       range: entry.source.range,
       enumeration: entry.source.enumeration,
@@ -556,7 +738,6 @@ function observe<
       scopes: entry.association.scopes.map((scope) => ({ ...scope })),
       translations: entry.association.translations.map((translation) => ({
         ...translation,
-        translation: translation.translation as TTranslation | TUnavailable,
       })),
     },
   };
@@ -705,9 +886,8 @@ function observationBlocker<TSource, TTranslation, TUnavailable>(
 }
 
 function isUpdateDecision(value: unknown): value is UpdateDecision {
-  if (typeof value !== "object" || value === null || !("action" in value))
-    return false;
-  const decision = value as Record<string, unknown>;
+  if (!isRecord(value)) return false;
+  const decision = value;
   if (
     decision.action !== "retain" &&
     decision.action !== "delete" &&
@@ -718,10 +898,9 @@ function isUpdateDecision(value: unknown): value is UpdateDecision {
     return false;
   if ("reason" in decision && typeof decision.reason !== "string") return false;
   if (decision.action !== "candidate") return true;
-  const candidate = decision.candidate as Record<string, unknown> | undefined;
+  const candidate = decision.candidate;
   return (
-    typeof candidate === "object" &&
-    candidate !== null &&
+    isRecord(candidate) &&
     typeof candidate.sourceKey === "string" &&
     typeof candidate.language === "string" &&
     isJsonValue(candidate.content)
@@ -740,9 +919,8 @@ function isUpdatePlanStatus(value: unknown): value is UpdatePlanStatus {
 }
 
 function isUpdatePlanBlock(value: unknown): value is UpdatePlanBlock {
-  if (typeof value !== "object" || value === null || !("code" in value))
-    return false;
-  const blocker = value as Record<string, unknown>;
+  if (!isRecord(value)) return false;
+  const blocker = value;
   return (
     isUpdatePlanBlockCode(blocker.code) &&
     (!("message" in blocker) || typeof blocker.message === "string")
@@ -776,19 +954,18 @@ function isUpdatePlanBlockCode(value: unknown): value is UpdatePlanBlockCode {
 }
 
 function isSemanticEdit(value: unknown): value is SemanticEdit {
-  if (typeof value !== "object" || value === null) return false;
-  const edit = value as Record<string, unknown>;
+  if (!isRecord(value)) return false;
+  const edit = value;
   if (
     edit.formatVersion !== "lioni.semantic-edit/v2" ||
     typeof edit.createdFromFactsVersion !== "string" ||
     typeof edit.sourceKey !== "string" ||
     typeof edit.language !== "string" ||
     !isSemanticEditTarget(edit.target) ||
-    typeof edit.expected !== "object" ||
-    edit.expected === null
+    !isRecord(edit.expected)
   )
     return false;
-  const expected = edit.expected as Record<string, unknown>;
+  const expected = edit.expected;
   if (
     !isSemanticEditSourceExpectation(expected.source) ||
     !isJsonValue(expected.dependencies) ||
@@ -800,19 +977,25 @@ function isSemanticEdit(value: unknown): value is SemanticEdit {
   return (
     edit.operation === "delete" &&
     !Object.hasOwn(edit, "content") &&
-    (edit.target as Record<string, unknown>).kind === "existing" &&
+    isRecord(edit.target) &&
+    edit.target.kind === "existing" &&
     expected.source.presence === "removed" &&
-    (expected.target as Record<string, unknown>).status === "present"
+    isRecord(expected.target) &&
+    expected.target.status === "present"
   );
 }
 
 function isSemanticEditSourceExpectation(
   value: unknown,
 ): value is SemanticEdit["expected"]["source"] {
-  if (typeof value !== "object" || value === null) return false;
-  const source = value as Record<string, unknown>;
+  if (!isRecord(value)) return false;
+  const source = value;
   if (source.presence === "present")
-    return isJsonValue(source.range) && isJsonValue(source.content);
+    return (
+      isJsonValue(source.range) &&
+      isJsonValue(source.unit) &&
+      isJsonValue(source.content)
+    );
   return (
     source.presence === "removed" &&
     isJsonValue(source.range) &&
@@ -821,8 +1004,8 @@ function isSemanticEditSourceExpectation(
 }
 
 function isSemanticEditTarget(value: unknown): boolean {
-  if (typeof value !== "object" || value === null) return false;
-  const target = value as Record<string, unknown>;
+  if (!isRecord(value)) return false;
+  const target = value;
   return (
     (target.kind === "existing" || target.kind === "create") &&
     isJsonValue(target.locator)
@@ -830,9 +1013,8 @@ function isSemanticEditTarget(value: unknown): boolean {
 }
 
 function isSemanticEditTargetExpected(value: unknown): boolean {
-  if (typeof value !== "object" || value === null || !("status" in value))
-    return false;
-  const target = value as Record<string, unknown>;
+  if (!isRecord(value)) return false;
+  const target = value;
   return target.status === "missing"
     ? true
     : target.status === "present" &&
@@ -842,31 +1024,23 @@ function isSemanticEditTargetExpected(value: unknown): boolean {
         target.scopes.every((range) => isJsonValue(range));
 }
 
-function isJsonValue(
-  value: unknown,
-  seen = new Set<object>(),
-): value is JsonValue {
-  if (value === null || typeof value === "string" || typeof value === "boolean")
+function isJsonValue(value: unknown): value is JsonValue {
+  try {
+    assertJsonValue(value, "更新计划字段");
     return true;
-  if (typeof value === "number") return Number.isFinite(value);
-  if (typeof value !== "object") return false;
-  if (seen.has(value)) return false;
-  seen.add(value);
-  const valid = Array.isArray(value)
-    ? value.every((entry) => isJsonValue(entry, seen))
-    : Object.getPrototypeOf(value) === Object.prototype &&
-      Object.values(value).every((entry) => isJsonValue(entry, seen));
-  seen.delete(value);
-  return valid;
+  } catch {
+    return false;
+  }
 }
 
-function isBaselineEntry(value: ProcessingBaselineEntry): boolean {
+function isBaselineEntry(value: unknown): boolean {
   try {
-    validateProcessingBaseline({
+    const baseline: unknown = {
       formatVersion: 1,
       entries: [value],
       sourceScopes: [],
-    });
+    };
+    validateProcessingBaseline(baseline);
     return true;
   } catch {
     return false;
@@ -874,50 +1048,40 @@ function isBaselineEntry(value: ProcessingBaselineEntry): boolean {
 }
 
 function isUpdatePlanObservation(value: unknown): boolean {
-  if (typeof value !== "object" || value === null) return false;
-  if (!("source" in value) || !("association" in value)) return false;
-  const observation = value as Record<string, unknown>;
-  const source = observation.source as Record<string, unknown>;
-  const association = observation.association as Record<string, unknown>;
+  if (!isRecord(value)) return false;
+  const source = value.source;
+  const association = value.association;
   if (
-    typeof source !== "object" ||
-    source === null ||
+    !isRecord(source) ||
     (source.presence !== "present" && source.presence !== "removed") ||
     !isBodyAvailability(source.bodyAvailability) ||
     !isEnumerationCompleteness(source.enumeration) ||
-    typeof association !== "object" ||
-    association === null ||
+    !isRecord(association) ||
     !isAssociationStatus(association.status) ||
     !isCoverageStatus(association.coverageStatus) ||
-    !Array.isArray(association.scopes) ||
-    !Array.isArray(association.translations)
+    !isUnknownArray(association.scopes) ||
+    !isUnknownArray(association.translations)
   ) {
     return false;
   }
   return (
-    association.scopes.every((scope: unknown) => {
-      if (typeof scope !== "object" || scope === null || !("range" in scope))
-        return false;
-      const translationScope = scope as Record<string, unknown>;
+    association.scopes.every((scope) => {
+      if (!isRecord(scope) || !Object.hasOwn(scope, "range")) return false;
+      const translationScope = scope;
       return (
-        Array.isArray(translationScope.covers) &&
-        translationScope.covers.every(
-          (key: unknown) => typeof key === "string",
-        ) &&
+        isUnknownArray(translationScope.covers) &&
+        translationScope.covers.every((key) => typeof key === "string") &&
         isEnumerationCompleteness(translationScope.enumeration)
       );
     }) &&
-    association.translations.every((translation: unknown) => {
+    association.translations.every((translation) => {
       if (
-        typeof translation !== "object" ||
-        translation === null ||
-        !("range" in translation) ||
-        !("translation" in translation)
+        !isRecord(translation) ||
+        !Object.hasOwn(translation, "range") ||
+        !Object.hasOwn(translation, "translation")
       )
         return false;
-      return isBodyAvailability(
-        (translation as Record<string, unknown>).bodyAvailability,
-      );
+      return isBodyAvailability(translation.bodyAvailability);
     })
   );
 }
@@ -962,6 +1126,22 @@ function isAssociationStatus(
     value === "unavailable" ||
     value === "unknown" ||
     value === "conflict"
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isUnknownArray(value: unknown): value is readonly unknown[] {
+  return Array.isArray(value);
+}
+
+function invalidUpdatePlan(message: string): never {
+  throw new StandardSchemaContractError(
+    "更新计划",
+    "schema-mismatch",
+    `更新计划${message}`,
   );
 }
 

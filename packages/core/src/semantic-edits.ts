@@ -14,17 +14,13 @@ import type {
 } from "./index.ts";
 import {
   assertJsonValue,
+  snapshotJsonValue,
   StandardSchemaContractError,
   validateWithStandardSchema,
 } from "./standard-schema.ts";
+import type { JsonValue } from "./standard-schema.ts";
 
-export type JsonValue =
-  | string
-  | number
-  | boolean
-  | null
-  | readonly JsonValue[]
-  | { readonly [key: string]: JsonValue };
+export type { JsonValue } from "./standard-schema.ts";
 
 export type SemanticEditTarget = {
   readonly kind: "existing" | "create";
@@ -41,6 +37,7 @@ export type SemanticEditSourceExpectation =
   | {
       readonly presence: "present";
       readonly range: JsonValue;
+      readonly unit: JsonValue;
       readonly content: JsonValue;
     }
   | {
@@ -406,6 +403,7 @@ export async function resolveSemanticEditInput<
           source: {
             presence: "present",
             range: snapshotJson(sourceScope.range, "原文范围"),
+            unit: snapshotJson(sourceUnit.unit, "完整原文单元"),
             content: snapshotJson(sourceUnit.unit.source, "原文正文"),
           },
           target: expectedTarget,
@@ -730,34 +728,237 @@ export function prepareSemanticDeletion<TBody = JsonValue>(
   }
 }
 
-async function validateSavedSemanticEdit<
+export type ValidatedSemanticEdit<TUnit extends TranslationUnitInput, TBody> =
+  | {
+      readonly operation: "write";
+      readonly edit: Extract<SemanticEdit<TBody>, { operation: "write" }>;
+    }
+  | {
+      readonly operation: "delete";
+      readonly edit: Extract<SemanticEdit<TBody>, { operation: "delete" }>;
+      readonly historicalSource: TUnit;
+    };
+
+/** 从未知持久数据建立可安全进入当前语义编辑回调的视图。 */
+export async function validateSemanticEditHistory<
   TUnit extends TranslationUnitInput,
   TTranslation,
   TBody,
   TUnavailable,
 >(
-  value: SemanticEdit<TBody>,
+  value: unknown,
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
-): Promise<SemanticEdit<TBody>> {
+): Promise<ValidatedSemanticEdit<TUnit, TBody>> {
   const snapshot = snapshotValue(value, "保存的语义编辑");
   if (
     !isRecord(snapshot) ||
+    snapshot.formatVersion !== "lioni.semantic-edit/v2" ||
+    typeof snapshot.createdFromFactsVersion !== "string" ||
     typeof snapshot.sourceKey !== "string" ||
     typeof snapshot.language !== "string" ||
-    (snapshot.operation !== "write" && snapshot.operation !== "delete")
+    (snapshot.operation !== "write" && snapshot.operation !== "delete") ||
+    !isRecord(snapshot.target) ||
+    (snapshot.target.kind !== "existing" &&
+      snapshot.target.kind !== "create") ||
+    !isRecord(snapshot.expected) ||
+    !isRecord(snapshot.expected.source) ||
+    !isRecord(snapshot.expected.target) ||
+    !Object.hasOwn(snapshot.expected, "dependencies")
   )
-    throw new TypeError("保存的语义编辑结构无效。");
+    invalidSavedSemanticEdit("结构无效。");
 
-  if (snapshot.operation === "delete") return snapshot;
-  const candidate = await validateSemanticEditCandidate(
-    {
+  const expectedSource = snapshot.expected.source;
+  const expectedTarget = snapshot.expected.target;
+  const targetLocator = snapshot.target.locator;
+  const dependencies = snapshot.expected.dependencies;
+  const sourceRange = expectedSource.range;
+  const targetKind = snapshot.target.kind;
+  assertJsonValue(targetLocator, "保存的语义编辑位置");
+  assertJsonValue(dependencies, "保存的语义编辑依赖");
+  assertJsonValue(sourceRange, "保存的语义编辑原文范围");
+  let validatedSourceUnit: TUnit | undefined;
+  let validatedSourceContent: JsonValue | undefined;
+  let validatedSourceSnapshot: JsonValue | undefined;
+  if (expectedSource.presence === "present") {
+    if (!Object.hasOwn(expectedSource, "unit"))
+      invalidSavedSemanticEdit("正文编辑缺少完整历史原文。");
+    validatedSourceUnit = await validateWithStandardSchema(
+      config.source.schema,
+      expectedSource.unit,
+      "保存的语义编辑完整原文",
+      { preserveValue: true, requireJson: true },
+    );
+    validatedSourceSnapshot = snapshotJsonValue(
+      validatedSourceUnit,
+      "保存的语义编辑完整原文",
+    );
+    const sourceContent: unknown = validatedSourceUnit.source;
+    assertJsonValue(sourceContent, "保存的语义编辑原文正文");
+    if (!isDeepStrictEqual(sourceContent, expectedSource.content))
+      invalidSavedSemanticEdit("原文正文与完整历史原文不一致。");
+    validatedSourceContent = sourceContent;
+  }
+  const target: SemanticEditTarget = {
+    kind: targetKind,
+    locator: targetLocator,
+  };
+
+  if (expectedTarget.status === "missing") {
+    if (snapshot.operation !== "write" || target.kind !== "create")
+      invalidSavedSemanticEdit("缺少目标只能用于新建正文编辑。");
+    if (Object.hasOwn(expectedTarget, "content"))
+      invalidSavedSemanticEdit("缺失目标不能包含预期正文。");
+    if (expectedSource.presence !== "present")
+      invalidSavedSemanticEdit("正文编辑必须保留当前原文依据。");
+    if (
+      validatedSourceUnit === undefined ||
+      validatedSourceContent === undefined ||
+      validatedSourceSnapshot === undefined
+    )
+      invalidSavedSemanticEdit("正文编辑缺少可验证的完整历史原文。");
+    const candidate = await validateSemanticEditCandidate(
+      {
+        sourceKey: snapshot.sourceKey,
+        language: snapshot.language,
+        content: snapshot.content,
+      },
+      config,
+    );
+    return {
+      operation: "write",
+      edit: {
+        formatVersion: "lioni.semantic-edit/v2",
+        operation: "write",
+        createdFromFactsVersion: snapshot.createdFromFactsVersion,
+        sourceKey: snapshot.sourceKey,
+        language: snapshot.language,
+        content: candidate.content,
+        target,
+        expected: {
+          source: {
+            presence: "present",
+            range: sourceRange,
+            unit: validatedSourceSnapshot,
+            content: validatedSourceContent,
+          },
+          target: { status: "missing" },
+          dependencies,
+        },
+      },
+    };
+  }
+
+  if (
+    expectedTarget.status !== "present" ||
+    !Object.hasOwn(expectedTarget, "content") ||
+    !Object.hasOwn(expectedTarget, "range") ||
+    !Array.isArray(expectedTarget.scopes)
+  )
+    invalidSavedSemanticEdit("预期目标结构无效。");
+  assertJsonValue(expectedTarget.content, "保存的语义编辑目标正文");
+  assertJsonValue(expectedTarget.range, "保存的语义编辑目标范围");
+  for (const range of expectedTarget.scopes) {
+    assertJsonValue(range, "保存的语义编辑目标范围");
+  }
+  const contentSchema = config.translations?.contentSchema;
+  if (contentSchema === undefined)
+    throw new TypeError("验证保存的语义编辑需要 translations.contentSchema。");
+  const expectedContent = await validateWithStandardSchema(
+    contentSchema,
+    expectedTarget.content,
+    "保存的语义编辑目标正文",
+    { preserveValue: true, requireJson: true },
+  );
+  const scopes = expectedTarget.scopes;
+
+  if (snapshot.operation === "write") {
+    if (target.kind !== "existing" || expectedSource.presence !== "present")
+      invalidSavedSemanticEdit("正文编辑的历史目标结构无效。");
+    if (
+      validatedSourceUnit === undefined ||
+      validatedSourceContent === undefined ||
+      validatedSourceSnapshot === undefined
+    )
+      invalidSavedSemanticEdit("正文编辑缺少可验证的完整历史原文。");
+    const candidate = await validateSemanticEditCandidate(
+      {
+        sourceKey: snapshot.sourceKey,
+        language: snapshot.language,
+        content: snapshot.content,
+      },
+      config,
+    );
+    return {
+      operation: "write",
+      edit: {
+        formatVersion: "lioni.semantic-edit/v2",
+        operation: "write",
+        createdFromFactsVersion: snapshot.createdFromFactsVersion,
+        sourceKey: snapshot.sourceKey,
+        language: snapshot.language,
+        content: candidate.content,
+        target,
+        expected: {
+          source: {
+            presence: "present",
+            range: sourceRange,
+            unit: validatedSourceSnapshot,
+            content: validatedSourceContent,
+          },
+          target: {
+            status: "present",
+            content: expectedContent,
+            range: expectedTarget.range,
+            scopes,
+          },
+          dependencies,
+        },
+      },
+    };
+  }
+
+  if (
+    snapshot.operation !== "delete" ||
+    target.kind !== "existing" ||
+    expectedSource.presence !== "removed" ||
+    Object.hasOwn(snapshot, "content")
+  )
+    invalidSavedSemanticEdit("删除编辑的历史目标结构无效。");
+  if (!Object.hasOwn(expectedSource, "historicalContent"))
+    invalidSavedSemanticEdit("删除编辑缺少历史原文。");
+  const historicalSource = await validateWithStandardSchema(
+    config.source.schema,
+    expectedSource.historicalContent,
+    "保存的删除历史原文",
+    { preserveValue: true, requireJson: true },
+  );
+  assertJsonValue(historicalSource, "保存的删除历史原文");
+  return {
+    operation: "delete",
+    edit: {
+      formatVersion: "lioni.semantic-edit/v2",
+      operation: "delete",
+      createdFromFactsVersion: snapshot.createdFromFactsVersion,
       sourceKey: snapshot.sourceKey,
       language: snapshot.language,
-      content: snapshot.content,
+      target: { kind: "existing", locator: target.locator },
+      expected: {
+        source: {
+          presence: "removed",
+          range: sourceRange,
+          historicalContent: historicalSource,
+        },
+        target: {
+          status: "present",
+          content: expectedContent,
+          range: expectedTarget.range,
+          scopes,
+        },
+        dependencies,
+      },
     },
-    config,
-  );
-  return { ...snapshot, content: candidate.content } as SemanticEdit<TBody>;
+    historicalSource,
+  };
 }
 
 export async function applySemanticEdits<
@@ -776,7 +977,15 @@ export async function applySemanticEdits<
     TUnavailable
   >[] = [];
   for (const unvalidatedEdit of edits) {
-    const edit = await validateSavedSemanticEdit(unvalidatedEdit, config);
+    const validatedEdit = await validateSemanticEditHistory(
+      unvalidatedEdit,
+      config,
+    );
+    const edit = validatedEdit.edit;
+    const historicalSource =
+      validatedEdit.operation === "delete"
+        ? validatedEdit.historicalSource
+        : undefined;
     const base = { sourceKey: edit.sourceKey, language: edit.language };
     const adapter = config.translationWriteback;
     if (adapter === undefined || adapter.write === undefined) {
@@ -803,7 +1012,12 @@ export async function applySemanticEdits<
 
     const beforeObservation =
       edit.operation === "delete"
-        ? readDeleteEditObservation(facts, edit, config)
+        ? readDeleteEditObservation(
+            facts,
+            edit,
+            config,
+            requiredHistoricalSource(historicalSource),
+          )
         : readEditObservation(facts, edit.sourceKey, edit.language);
     const before = snapshotEditObservation(beforeObservation);
     const validation = await validateSemanticEdit(
@@ -811,6 +1025,7 @@ export async function applySemanticEdits<
       beforeObservation,
       facts,
       config,
+      historicalSource,
     );
     if (validation.status !== "ready") {
       results.push({
@@ -832,6 +1047,7 @@ export async function applySemanticEdits<
           : { currentTranslation: validation.currentTranslation }),
       });
     } catch (error) {
+      rethrowContractError(error);
       let after:
         | SemanticEditObservation<TUnit, TTranslation, TBody, TUnavailable>
         | undefined;
@@ -839,10 +1055,16 @@ export async function applySemanticEdits<
         const afterFacts = await readFacts(config);
         after = snapshotEditObservation(
           edit.operation === "delete"
-            ? readDeleteEditObservation(afterFacts, edit, config)
+            ? readDeleteEditObservation(
+                afterFacts,
+                edit,
+                config,
+                requiredHistoricalSource(historicalSource),
+              )
             : readEditObservation(afterFacts, edit.sourceKey, edit.language),
         );
-      } catch {
+      } catch (error) {
+        rethrowContractError(error);
         // 保留写入失败结果；回读错误不会覆盖更直接的写入故障。
       }
       results.push({
@@ -859,11 +1081,22 @@ export async function applySemanticEdits<
       const afterFacts = await readFacts(config);
       const afterObservation =
         edit.operation === "delete"
-          ? readDeleteEditObservation(afterFacts, edit, config)
+          ? readDeleteEditObservation(
+              afterFacts,
+              edit,
+              config,
+              requiredHistoricalSource(historicalSource),
+            )
           : readEditObservation(afterFacts, edit.sourceKey, edit.language);
       const after = snapshotEditObservation(afterObservation);
       if (
-        await confirmsSemanticEdit(edit, afterObservation, afterFacts, config)
+        await confirmsSemanticEdit(
+          edit,
+          afterObservation,
+          afterFacts,
+          config,
+          historicalSource,
+        )
       ) {
         results.push({ ...base, status: "written", before, after });
       } else {
@@ -906,6 +1139,7 @@ async function validateSemanticEdit<
   >,
   facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+  historicalSource: TUnit | undefined,
 ): Promise<
   | {
       readonly status: "ready";
@@ -925,7 +1159,12 @@ async function validateSemanticEdit<
     return { status: "unprocessed", reason: "不支持的语义编辑版本。" };
 
   if (edit.operation === "delete")
-    return validateSemanticDeletion(edit, facts, config);
+    return validateSemanticDeletion(
+      edit,
+      facts,
+      config,
+      requiredHistoricalSource(historicalSource),
+    );
 
   const adapter = config.translationWriteback;
   if (adapter === undefined)
@@ -1090,6 +1329,7 @@ async function validateSemanticDeletion<
   edit: Extract<SemanticEdit<TBody>, { operation: "delete" }>,
   facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+  historicalSource: TUnit,
 ): Promise<
   | {
       readonly status: "ready";
@@ -1126,7 +1366,12 @@ async function validateSemanticDeletion<
       reason: "当前原文范围读取不足，无法确认原文仍已移除。",
     };
 
-  const relation = removedSourceRelation(edit, facts, matches);
+  const relation = removedSourceRelation(
+    edit,
+    facts,
+    matches,
+    historicalSource,
+  );
   if (relation.association.status === "unknown")
     return {
       status: "unprocessed",
@@ -1213,11 +1458,13 @@ function readDeleteEditObservation<
   facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
   edit: Extract<SemanticEdit<TBody>, { operation: "delete" }>,
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+  historicalSource: TUnit,
 ): SemanticEditObservation<TUnit, TTranslation, TBody, TUnavailable> {
   const relation = removedSourceRelation(
     edit,
     facts,
     config.translations?.matches,
+    historicalSource,
   );
   return {
     factsVersion: facts.version,
@@ -1244,6 +1491,7 @@ function removedSourceRelation<
   matches:
     | ((unit: TUnit, translation: TTranslation | TUnavailable) => boolean)
     | undefined,
+  historicalSource: TUnit,
 ): {
   readonly historicalSourceUnit: SourceUnitFact<TUnit>;
   readonly association: TranslationAssociationFact;
@@ -1260,7 +1508,7 @@ function removedSourceRelation<
   // 仅供显式历史匹配、定位和依赖回调使用，不伪装为当前 source 记录。
   const historicalSourceUnit: SourceUnitFact<TUnit> = {
     key: edit.sourceKey,
-    unit: expectedSource.historicalContent as TUnit,
+    unit: historicalSource,
     bodyAvailability: "available",
     scopeIndex: sourceScopeIndex,
   };
@@ -1309,12 +1557,10 @@ function removedSourceRelation<
       translations = facts.translations.records.filter(
         (translation) =>
           translation.language === edit.language &&
-          matches(
-            expectedSource.historicalContent as TUnit,
-            translation.translation,
-          ),
+          matches(historicalSource, translation.translation),
       );
-    } catch {
+    } catch (error) {
+      rethrowContractError(error);
       relationshipReadFailed = true;
     }
   }
@@ -1407,6 +1653,7 @@ async function confirmsSemanticEdit<
   >,
   facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+  historicalSource: TUnit | undefined,
 ): Promise<boolean> {
   if (edit.operation === "write") return confirmsEditContent(edit, observation);
 
@@ -1420,6 +1667,7 @@ async function confirmsSemanticEdit<
     edit,
     facts,
     config.translations?.matches,
+    requiredHistoricalSource(historicalSource),
   );
   if (
     sourceScopeIsComplete &&
@@ -1460,7 +1708,8 @@ async function confirmsSemanticDeletionTargetAbsent<
         sourceUnit: relation.historicalSourceUnit,
         translation,
       });
-    } catch {
+    } catch (error) {
+      rethrowContractError(error);
       return false;
     }
     if (resolution.status !== "located") return false;
@@ -1502,7 +1751,7 @@ function confirmsEditContent<
 }
 
 function snapshotJson(value: unknown, description: string): JsonValue {
-  return snapshotValue(value, description) as JsonValue;
+  return snapshotJsonValue(value, description);
 }
 
 function snapshotValue<TValue>(value: TValue, description: string): TValue {
@@ -1516,4 +1765,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function rethrowContractError(error: unknown): void {
   if (error instanceof StandardSchemaContractError) throw error;
+}
+
+function invalidSavedSemanticEdit(message: string): never {
+  throw new StandardSchemaContractError(
+    "保存的语义编辑",
+    "schema-mismatch",
+    `保存的语义编辑${message}`,
+  );
+}
+
+function requiredHistoricalSource<TUnit extends TranslationUnitInput>(
+  source: TUnit | undefined,
+): TUnit {
+  if (source === undefined) invalidSavedSemanticEdit("缺少已验证的历史原文。");
+  return source;
 }

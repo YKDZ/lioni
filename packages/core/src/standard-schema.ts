@@ -1,3 +1,11 @@
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | readonly JsonValue[]
+  | { readonly [key: string]: JsonValue };
+
 export type StandardSchemaV1Issue = {
   readonly message: string;
   readonly path?:
@@ -183,14 +191,21 @@ export async function validateWithStandardSchema<TInput, TOutput>(
 export function assertJsonValue(
   value: unknown,
   valueDescription: string,
-): void {
-  copyJsonValue(value, valueDescription);
+): asserts value is JsonValue {
+  snapshotJsonValue(value, valueDescription);
 }
 
-function copyJsonValue(value: unknown, valueDescription: string): unknown {
+export function snapshotJsonValue(
+  value: unknown,
+  valueDescription: string,
+): JsonValue {
+  return copyJsonValue(value, valueDescription);
+}
+
+function copyJsonValue(value: unknown, valueDescription: string): JsonValue {
   const active = new Set<object>();
 
-  function visit(current: unknown, path: string): unknown {
+  function visit(current: unknown, path: string): JsonValue {
     if (
       current === null ||
       typeof current === "string" ||
@@ -216,7 +231,7 @@ function copyJsonValue(value: unknown, valueDescription: string): unknown {
         const ownKeys = Reflect.ownKeys(current);
         if (ownKeys.some((key) => typeof key === "symbol"))
           throw invalidJson(location);
-        const result: unknown[] = [];
+        const result: JsonValue[] = [];
         for (let index = 0; index < current.length; index += 1) {
           if (!Object.hasOwn(current, index)) throw invalidJson(location);
           const descriptor = Object.getOwnPropertyDescriptor(
@@ -249,7 +264,7 @@ function copyJsonValue(value: unknown, valueDescription: string): unknown {
       const keys = Reflect.ownKeys(current);
       if (keys.some((key) => typeof key === "symbol"))
         throw invalidJson(location);
-      const result: Record<string, unknown> = {};
+      const result: Record<string, JsonValue> = {};
       for (const key of keys) {
         if (typeof key !== "string") throw invalidJson(location);
         const descriptor = Object.getOwnPropertyDescriptor(current, key);

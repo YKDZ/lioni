@@ -5,7 +5,6 @@ import { pathToFileURL } from "node:url";
 
 import {
   validateProcessingBaseline,
-  type ProcessingBaseline,
   type ProcessingBaselineStore,
 } from "./baselines.ts";
 import { frameworkConfigRunner } from "./config-capability.ts";
@@ -14,11 +13,8 @@ import {
   type FrameworkConfig,
   type TranslationUnitInput,
 } from "./index.ts";
-import {
-  validateUpdatePlan,
-  type UpdatePlan,
-  type UpdatePlanStore,
-} from "./plans.ts";
+import { validateUpdatePlan, type UpdatePlanStore } from "./plans.ts";
+import { StandardSchemaContractError } from "./standard-schema.ts";
 
 type FrameworkConfigConsumer<TResult> = <
   TUnit extends TranslationUnitInput,
@@ -66,14 +62,18 @@ export function createFileProcessingBaselineStore(
 
       let value: unknown;
       try {
-        value = JSON.parse(contents) as unknown;
+        value = JSON.parse(contents);
       } catch (error) {
-        throw new TypeError(`处理基线文件不是有效 JSON：${filePath}`, {
-          cause: error,
-        });
+        throw new StandardSchemaContractError(
+          "处理基线文件",
+          "invalid-json",
+          `处理基线文件不是有效 JSON：${filePath}`,
+          undefined,
+          { cause: error },
+        );
       }
-      validateProcessingBaseline(value as ProcessingBaseline);
-      return value as ProcessingBaseline;
+      validateProcessingBaseline(value);
+      return value;
     },
 
     async save(baseline) {
@@ -108,14 +108,18 @@ export function createFileUpdatePlanStore(filePath: string): UpdatePlanStore {
 
       let value: unknown;
       try {
-        value = JSON.parse(contents) as unknown;
+        value = JSON.parse(contents);
       } catch (error) {
-        throw new TypeError(`更新计划文件不是有效 JSON：${filePath}`, {
-          cause: error,
-        });
+        throw new StandardSchemaContractError(
+          "更新计划文件",
+          "invalid-json",
+          `更新计划文件不是有效 JSON：${filePath}`,
+          undefined,
+          { cause: error },
+        );
       }
-      validateUpdatePlan(value as UpdatePlan);
-      return value as UpdatePlan;
+      validateUpdatePlan(value);
+      return value;
     },
 
     async save(plan) {
@@ -124,7 +128,8 @@ export function createFileUpdatePlanStore(filePath: string): UpdatePlanStore {
       if (serialized === undefined)
         throw new TypeError("更新计划必须可序列化为 JSON。");
       const contents = `${serialized}\n`;
-      validateUpdatePlan(JSON.parse(contents) as UpdatePlan);
+      const roundTripped: unknown = JSON.parse(contents);
+      validateUpdatePlan(roundTripped);
       const directory = path.dirname(filePath);
       const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
       let moved = false;
