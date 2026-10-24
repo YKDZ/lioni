@@ -929,7 +929,42 @@ async function readMessageResource() {
 }
 
 const qualityChecks = [
-  createNumberChecker<Unit, Translation>({
+  createNumberChecker<Unit, Translation, Unit, string, string, never>({
+    select: ({ sourceUnit, candidate }) => {
+      if (sourceUnit === null)
+        return {
+          status: "incomplete",
+          issue: {
+            code: "sourceUnavailable",
+            message: "找不到对应原文。",
+          },
+        };
+      if (sourceUnit.bodyAvailability !== "available")
+        return {
+          status: "incomplete",
+          issue: {
+            code: "sourceUnavailable",
+            message: "原文正文不可用。",
+          },
+        };
+      if (typeof candidate.content !== "string")
+        return {
+          status: "incomplete",
+          issue: {
+            code: "textUnavailable",
+            message: "候选正文不是字符串。",
+          },
+        };
+      return {
+        status: "selected",
+        subject: {
+          sourceUnit,
+          sourceKey: candidate.sourceKey,
+          language: candidate.language,
+          content: candidate.content,
+        },
+      };
+    },
     sourceText: (unit) => unit.source,
     translationText: (content) => content,
     sourceLocation: (unit, _subject, range) => ({
@@ -1031,13 +1066,44 @@ import planConfig from "./plan.config.ts";
 import deletionConfig from "./deletion.config.ts";
 import qaConfig from "./qa.config.ts";
 
+type NumberUnit = { readonly source: string };
+type NumberTranslation = { readonly text: string };
+
 void readSourceFacts(config);
 void readFacts(config);
 void readFacts(qaConfig);
 void qaConfig.qualityChecks;
 void qaConfig.createQualityRequest;
-void createNumberChecker({
-  sourceText: (unit: { source: string }) => unit.source,
+void createNumberChecker<
+  NumberUnit,
+  NumberTranslation,
+  NumberUnit,
+  string,
+  string,
+  never
+>({
+  select: ({ sourceUnit, candidate }) => {
+    if (sourceUnit === null || sourceUnit.bodyAvailability !== "available")
+      return {
+        status: "incomplete",
+        issue: { code: "sourceUnavailable", message: "原文不可用。" },
+      };
+    if (typeof candidate.content !== "string")
+      return {
+        status: "incomplete",
+        issue: { code: "textUnavailable", message: "候选不是文本。" },
+      };
+    return {
+      status: "selected",
+      subject: {
+        sourceUnit,
+        sourceKey: candidate.sourceKey,
+        language: candidate.language,
+        content: candidate.content,
+      },
+    };
+  },
+  sourceText: (unit) => unit.source,
   translationText: (content) => content,
 });
 void readCompletion(completionConfig);

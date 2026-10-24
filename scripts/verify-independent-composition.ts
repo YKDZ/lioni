@@ -47,7 +47,7 @@ function runChecked(
 const compositionConfigSource = `import { readFileSync } from "node:fs";
 import {
   defineConfig,
-  defineQualityCheck,
+  bindQualityCheck,
   type CompletionResolution,
   type CompletionResolverInput,
   type FrameworkConfig,
@@ -55,14 +55,22 @@ import {
   type JsonValue,
   type QualityCheckDefinition,
   type QualityCheckInput,
+  type QualityCheckProjection,
+  type QualityCheckProjectionInput,
+  type QualityCheckRuleInput,
+  type QualityCheckSelection,
   type QualityCheckRequest,
   type QualityException,
+  type QualityObject,
+  type SourceUnitFact,
   type UpdatePolicyInput,
   type UpdateDecision,
   type StandardSchemaV1,
 } from "@lioni/core";
 import {
-  createNumberChecker,
+  compareNumberText,
+  numberTextInputSchema,
+  type NumberTextInput,
 } from "@lioni/checks";
 import { isRecord, standardSchema } from "./schemas.ts";
 
@@ -318,10 +326,13 @@ const guideModule: EntryModule = {
       : { action: "review", reason: "指南内容需要维护者复核。" },
 };
 
+function isCatalogUnit(unit: Unit): unit is CatalogUnit {
+  return unit.context.domain === "catalog";
+}
+
 function unitText(unit: Unit): string {
-  if (unit.context.domain === "catalog")
-    return (unit as CatalogUnit).source.label;
-  return (unit as GuideUnit).source.body;
+  if (isCatalogUnit(unit)) return unit.source.label;
+  return unit.source.body;
 }
 
 function translationText(content: unknown): string | undefined {
@@ -330,49 +341,155 @@ function translationText(content: unknown): string | undefined {
 
 function createDomainChecker(
   module: EntryModule,
-): QualityCheckDefinition<Unit, Translation> {
-  const checker = createNumberChecker<Unit, Translation>({
-    sourceText: unitText,
-    translationText,
-  });
-  return defineQualityCheck<
+): QualityCheckDefinition<
+  Unit,
+  Translation,
+  QualityObject,
+  TranslationContent,
+  never
+> {
+  type Subject = {
+    readonly sourceUnit: SourceUnitFact<Unit>;
+    readonly sourceKey: string;
+    readonly language: string;
+    readonly content: string;
+  };
+  return bindQualityCheck<
     Unit,
     Translation,
-    typeof qualityConfigurationSchema
+    typeof qualityConfigurationSchema,
+    typeof numberTextInputSchema,
+    Subject,
+    QualityObject,
+    TranslationContent,
+    never
   >({
     id: module.domain + "-numbers",
     configurationSchema: qualityConfigurationSchema,
     configuration: {
       options: module.checkConfiguration,
-      numbers: checker.configuration,
+      numbers: {
+        format: "ascii-decimal-v1",
+        comparison: "exact-multiset",
+      },
     },
-    check: (input: QualityCheckInput<Unit, Translation, JsonValue>) => {
-      if (
-        input.sourceUnit !== null &&
-        input.sourceUnit.unit.context.domain !== module.domain
-      )
+    inputSchema: numberTextInputSchema,
+    select: (
+      input: QualityCheckInput<
+        Unit,
+        Translation,
+        JsonValue,
+        TranslationContent,
+        never
+      >,
+    ): QualityCheckSelection<Subject> => {
+      const sourceUnit = input.sourceUnit;
+      if (sourceUnit === null)
         return {
-          status: "not-applicable",
-          diagnostics: [],
-          issues: [],
-          coverage: {
-            selected: 0,
-            evaluated: 0,
-            notApplicable: 0,
-            incomplete: 0,
-            failed: 0,
+          status: "incomplete",
+          issue: { code: "sourceUnavailable", message: "找不到对应原文。" },
+        };
+      if (
+        sourceUnit.unit.context.domain !== module.domain
+      )
+        return { status: "not-applicable" };
+      if (sourceUnit.bodyAvailability !== "available")
+        return {
+          status: "incomplete",
+          issue: {
+            code: "sourceUnavailable",
+            message: "原文正文不可用，无法核对数字。",
           },
         };
-      return checker.check({
-        ...input,
-        configuration: checker.configuration,
+      if (typeof input.candidate.content !== "string")
+        return {
+          status: "incomplete",
+          issue: {
+            code: "textUnavailable",
+            message: "候选正文不是可核对的字符串。",
+          },
+        };
+      return {
+        status: "selected",
+        subject: {
+          sourceUnit,
+          sourceKey: input.candidate.sourceKey,
+          language: input.candidate.language,
+          content: input.candidate.content,
+        },
+      };
+    },
+    project: (
+      input: QualityCheckProjectionInput<
+        Unit,
+        Translation,
+        JsonValue,
+        Subject,
+        TranslationContent,
+        never
+      >,
+    ): QualityCheckProjection<NumberTextInput> => {
+      const source = unitText(input.subject.sourceUnit.unit);
+      const target = translationText(input.subject.content);
+      if (target === undefined)
+        return {
+          status: "incomplete",
+          issue: {
+            code: "textUnavailable",
+            message: "无法取得候选译文的文本。",
+          },
+        };
+      return { status: "ready", value: { source, target } };
+    },
+    check: (
+      input: QualityCheckRuleInput<
+        Unit,
+        Translation,
+        JsonValue,
+        Subject,
+        NumberTextInput,
+        TranslationContent,
+        never
+      >,
+    ) => {
+      const subject = {
+        key: input.subject.sourceKey,
+        language: input.subject.language,
+      };
+      const association = input.facts.associations.find(
+        ({ sourceKey, language }) =>
+          sourceKey === subject.key && language === subject.language,
+      );
+      const record =
+        association?.status === "matched" &&
+        association.translationIndexes.length === 1
+          ? input.facts.translations.records[association.translationIndexes[0]!]
+          : undefined;
+      const defaultSourceLocation = {
+        language: null,
+        range:
+          input.facts.source.read.scopes[
+            input.subject.sourceUnit.scopeIndex
+          ]?.range,
+      };
+      const defaultTargetLocation = {
+        language: subject.language,
+        range: record?.range ?? null,
+        key: subject.key,
+      };
+      return compareNumberText({
+        ...input.projected,
+        subject,
+        sourceLocation: defaultSourceLocation,
+        targetLocation: defaultTargetLocation,
+        targetContent: input.subject.content,
       });
     },
   });
 }
 
 function requestForDomain(
-  facts: FrameworkFacts<Unit, Translation>,
+  facts: FrameworkFacts<Unit, Translation, TranslationContent, never>,
   domain: Domain,
 ): QualityCheckRequest {
   const candidates = facts.associations.flatMap((association) => {
@@ -384,15 +501,14 @@ function requestForDomain(
     const record = facts.translations.records[
       association.translationIndexes[0] as number
     ];
-    return record === undefined
-      ? []
-      : [
-          {
-            sourceKey: association.sourceKey,
-            language: association.language,
-            content: record.content,
-          },
-        ];
+    if (record?.bodyAvailability !== "available") return [];
+    return [
+      {
+        sourceKey: association.sourceKey,
+        language: association.language,
+        content: record.content,
+      },
+    ];
   });
   return {
     candidates,
