@@ -1242,9 +1242,7 @@ async function confirmsSemanticDeletionTargetAbsent<
   const targetRecords = facts.translations.records.filter(
     (translation) =>
       translation.language === edit.language &&
-      edit.expected.target.scopes.some((range) =>
-        isDeepStrictEqual(range, translation.range),
-      ),
+      isDeepStrictEqual(translation.range, edit.expected.target.range),
   );
   for (const translation of targetRecords) {
     let resolution: EditTargetResolution;

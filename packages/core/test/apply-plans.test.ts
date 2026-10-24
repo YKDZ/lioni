@@ -245,6 +245,107 @@ void describe("apply update plans", () => {
     }
   });
 
+  void it("confirms the saved target range despite unrelated unreadable records elsewhere", async () => {
+    type ScopedTranslation = Translation & {
+      readonly scope: "main" | "other";
+    };
+    const units: Unit[] = [{ id: "A", source: "Save" }];
+    const translations: ScopedTranslation[] = [
+      { id: "A", text: "Enregistrer", scope: "main", slot: "one" },
+      { id: "other", text: "Annuler", scope: "other", slot: "other" },
+    ];
+    const config = defineConfig<Unit, ScopedTranslation>({
+      source: {
+        read: () => ({
+          scopes: [
+            {
+              range: "source/messages.json",
+              enumeration: "complete",
+              records: units.map((value) => ({
+                value,
+                bodyAvailability: "available" as const,
+              })),
+            },
+          ],
+        }),
+      },
+      keyOf: (unit) => unit.id,
+      translations: {
+        languages: ["fr"],
+        contentOf: (translation) => translation.text,
+        read: (_language, sourceUnits) => ({
+          scopes: (["main", "other"] as const).map((scope) => ({
+            range: scope,
+            covers: sourceUnits.map(({ key }) => key),
+            enumeration: "complete" as const,
+            records: translations
+              .filter((translation) => translation.scope === scope)
+              .map((value) => ({
+                value,
+                bodyAvailability: "available" as const,
+              })),
+          })),
+        }),
+        matches: (unit, translation) => unit.id === translation.id,
+      },
+      updatePolicy: () => ({ action: "delete" }),
+      translationWriteback: {
+        locateExistingTarget: ({ translation }) =>
+          translation.translation.scope === "other"
+            ? {
+                status: "notWritable",
+                reason: "另一个 scope 中的记录不可定位。",
+              }
+            : {
+                status: "located",
+                locator: { slot: translation.translation.slot ?? "one" },
+              },
+        locateNewTarget: () => ({
+          status: "notWritable",
+          reason: "删除不创建目标。",
+        }),
+        write: ({ currentTranslation }) => {
+          if (currentTranslation === undefined)
+            throw new TypeError("删除需要现存目标。");
+          const index = translations.indexOf(currentTranslation.translation);
+          if (index < 0) throw new Error("已保存的目标已不存在。");
+          translations.splice(index, 1);
+        },
+      },
+    });
+    const baselineStore = new MemoryBaselineStore();
+    const matches = config.translations?.matches;
+    assert.ok(matches);
+    const baselineResult = await advanceProcessingBaseline(
+      baselineStore,
+      await readFacts(config),
+      [{ sourceKey: "A", language: "fr" }],
+      { matches },
+    );
+    assert.equal(baselineResult.outcome, "saved");
+    units.splice(0, units.length);
+    const plan = await createUpdatePlan(
+      await readFacts(config),
+      baselineStore.baseline,
+      config,
+    );
+    const edit = plan.items[0]?.edit;
+    assert.ok(edit);
+    if (edit.expected.target.status !== "present")
+      throw new TypeError("删除计划应保存存在的物理目标。");
+    assert.equal(edit.expected.target.range, "main");
+    assert.deepStrictEqual(edit.expected.target.scopes, ["main", "other"]);
+
+    const result = await applyUpdatePlan(plan, config, baselineStore);
+
+    assert.equal(result.contentResults[0]?.status, "written");
+    assert.equal(result.baselineResults[0]?.status, "advanced");
+    assert.deepStrictEqual(
+      translations.map(({ scope, slot }) => ({ scope, slot })),
+      [{ scope: "other", slot: "other" }],
+    );
+  });
+
   void it("rejects stale deletion source, target, location, dependency, and read inputs", async () => {
     const scenarios: readonly [
       string,

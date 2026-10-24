@@ -338,10 +338,11 @@ export default defineConfig<Unit, Translation>({
 import { defineConfig } from "@l10n/core";
 
 type Unit = { id: string; source: string; context: { file: string } };
-type Translation = { id: string; text: string; context: { file: string; key: string } };
+type Translation = { id: string; text: string; context: { file: string; key: string; readonly?: boolean } };
 type Resource = { enumeration: "complete" | "partial" | "failed"; records: Translation[] };
 const sourcePath = new URL("./deletion-resources/source.json", import.meta.url);
 const targetPath = new URL("./deletion-resources/fr.json", import.meta.url);
+const otherTargetPath = new URL("./deletion-resources/other.json", import.meta.url);
 const dependencyPath = new URL("./deletion-resources/dependencies.json", import.meta.url);
 
 export default defineConfig<Unit, Translation>({
@@ -362,14 +363,26 @@ export default defineConfig<Unit, Translation>({
     languages: ["fr"],
     contentOf: (translation) => translation.text,
     async read(_language, sourceUnits) {
-      const resource = JSON.parse(await readFile(targetPath, "utf8")) as Resource;
+      const [resource, otherResource] = await Promise.all([
+        readFile(targetPath, "utf8").then((value) => JSON.parse(value) as Resource),
+        readFile(otherTargetPath, "utf8").then((value) => JSON.parse(value) as Resource),
+      ]);
+      const covers = sourceUnits.map(({ key }) => key);
       return {
-        scopes: [{
-          range: "deletion-resources/fr.json",
-          covers: sourceUnits.map(({ key }) => key),
-          enumeration: resource.enumeration,
-          records: resource.records.map((value) => ({ value, bodyAvailability: "available" as const })),
-        }],
+        scopes: [
+          {
+            range: "deletion-resources/fr.json",
+            covers,
+            enumeration: resource.enumeration,
+            records: resource.records.map((value) => ({ value, bodyAvailability: "available" as const })),
+          },
+          {
+            range: "deletion-resources/other.json",
+            covers,
+            enumeration: otherResource.enumeration,
+            records: otherResource.records.map((value) => ({ value, bodyAvailability: "available" as const })),
+          },
+        ],
       };
     },
     matches: (unit, translation) => unit.id === translation.id,
@@ -378,10 +391,15 @@ export default defineConfig<Unit, Translation>({
     ? { action: "delete", reason: "清理已移除原文的目标译文。" }
     : { action: "none" },
   translationWriteback: {
-    locateExistingTarget: ({ translation }) => ({
-      status: "located",
-      locator: { file: "deletion-resources/fr.json", key: translation.translation.context.key },
-    }),
+    locateExistingTarget: ({ translation }) => translation.translation.context.readonly
+      ? { status: "notWritable", reason: "其他资源中的目标为只读。" }
+      : {
+          status: "located",
+          locator: {
+            file: translation.translation.context.file,
+            key: translation.translation.context.key,
+          },
+        },
     locateNewTarget: () => ({ status: "notWritable", reason: "删除场景不创建目标。" }),
     async dependencies() {
       return JSON.parse(await readFile(dependencyPath, "utf8")) as { revision: number };
@@ -418,6 +436,7 @@ import config from "./deletion.config.ts";
 const scenario = process.argv[2];
 const sourcePath = fileURLToPath(new URL("./deletion-resources/source.json", import.meta.url));
 const targetPath = fileURLToPath(new URL("./deletion-resources/fr.json", import.meta.url));
+const otherTargetPath = fileURLToPath(new URL("./deletion-resources/other.json", import.meta.url));
 const dependencyPath = fileURLToPath(new URL("./deletion-resources/dependencies.json", import.meta.url));
 const baselinePath = ".l10n/deletion-baseline.json";
 const planPath = ".l10n/deletion-plan.json";
@@ -431,7 +450,7 @@ if (scenario === "initialize") {
   assert.equal(result.outcome, "saved");
   assert.equal(result.selections[0]?.outcome, "advanced");
 } else if (scenario === "save-plan") {
-  const before = await Promise.all([readFile(sourcePath), readFile(targetPath), readFile(baselinePath)]);
+  const before = await Promise.all([readFile(sourcePath), readFile(targetPath), readFile(otherTargetPath), readFile(baselinePath)]);
   const facts = await readFacts(config);
   const plan = await createUpdatePlan(facts, await baselineStore.load(), config);
   const item = plan.items.find(({ sourceKey }) => sourceKey === "retired-message");
@@ -444,7 +463,7 @@ if (scenario === "initialize") {
   assert.equal("value" in (item?.expectedInput?.source ?? {}), false);
   assert.equal(item?.edit?.expected.source.presence, "removed");
   await planStore.save(plan);
-  assert.deepEqual(await Promise.all([readFile(sourcePath), readFile(targetPath), readFile(baselinePath)]), before);
+  assert.deepEqual(await Promise.all([readFile(sourcePath), readFile(targetPath), readFile(otherTargetPath), readFile(baselinePath)]), before);
 } else if (scenario === "read-plan") {
   const plan = await planStore.load();
   assert.ok(plan);
@@ -482,6 +501,10 @@ if (scenario === "initialize") {
       JSON.parse(await readFile(targetPath, "utf8")).records.map(({ id }) => id),
       ["unrelated-message"],
     );
+    assert.equal(
+      JSON.parse(await readFile(otherTargetPath, "utf8")).records[0]?.context.readonly,
+      true,
+    );
   }
 } else if (scenario === "verify") {
   const baseline = await baselineStore.load();
@@ -493,9 +516,13 @@ if (scenario === "initialize") {
     JSON.parse(await readFile(targetPath, "utf8")).records.map(({ id }) => id),
     ["unrelated-message"],
   );
+  assert.deepEqual(
+    JSON.parse(await readFile(otherTargetPath, "utf8")).records.map(({ id }) => id),
+    ["unmatched-other"],
+  );
   const facts = await readFacts(config);
   assert.equal(facts.source.units.some(({ key }) => key === "retired-message"), false);
-  assert.equal(facts.translations.records.length, 1);
+  assert.equal(facts.translations.records.length, 2);
 }
 
 console.log(JSON.stringify({ scenario, pid: process.pid }));
@@ -1967,6 +1994,23 @@ process.stdout.write("独立打包宿主：诊断候选默认写入，显式拒�
       }),
     ),
     writeFile(
+      path.join(consumerRoot, "deletion-resources", "other.json"),
+      JSON.stringify({
+        enumeration: "complete",
+        records: [
+          {
+            id: "unmatched-other",
+            text: "Lecture seule",
+            context: {
+              file: "deletion-resources/other.json",
+              key: "other.readonly",
+              readonly: true,
+            },
+          },
+        ],
+      }),
+    ),
+    writeFile(
       path.join(consumerRoot, "deletion-resources", "dependencies.json"),
       JSON.stringify({ revision: 1 }),
     ),
@@ -2314,7 +2358,7 @@ export async function verifyIndependentConsumer(): Promise<void> {
       ).stdout,
     );
     process.stdout.write(
-      "独立打包宿主：原文删除后新进程读取并保存计划；依赖变化及仍占据保存 locator 的关系变更均拒绝推进基线；正常 writer 删除准确目标并保留同 scope 无关记录，新进程回读确认后推进该范围基线。\n",
+      "独立打包宿主：多 scope 中删除准确目标，不受其他 scope 只读无关记录阻断；仍占据保存 locator 的关系变更不推进基线；正常删除保留同 scope 无关记录，新进程回读后推进该范围基线。\n",
     );
 
     process.stdout.write("运行语义编辑跨进程、真实资源和输入冲突场景…\n");
