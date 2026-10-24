@@ -19,13 +19,14 @@ import {
 import { createFileUpdatePlanStore } from "../src/node.ts";
 
 type Unit = { readonly id: string; readonly source: string };
-type Translation = { readonly id: string; text: string };
+type Translation = { id: string; text: string; readonly slot?: string };
 type MutableReadState = {
   sourceEnumeration?: "complete" | "partial" | "failed";
   translationEnumeration?: "complete" | "partial" | "failed";
   sourceRange?: string;
   translationRange?: string;
   location?: string;
+  unlocatableTranslationId?: string;
   dependencies?: JsonValue;
 };
 
@@ -50,6 +51,8 @@ function makeConfig(
     readonly updatePolicy?: UpdatePolicy<Unit, Translation>;
     readonly failWriteFor?: string;
     readonly ignoreWriteFor?: string;
+    readonly detachWriteFor?: string;
+    readonly partialReadAfterWriteFor?: string;
     readonly withWriteback?: boolean;
     readonly readState?: MutableReadState;
   } = {},
@@ -95,13 +98,23 @@ function makeConfig(
     ...(options.withWriteback
       ? {
           translationWriteback: {
-            locateExistingTarget: ({ translation }) => ({
-              status: "located" as const,
-              locator: {
-                id: translation.translation.id,
-                location: options.readState?.location ?? "locales/fr.json",
-              },
-            }),
+            locateExistingTarget: ({ translation }) =>
+              translation.translation.id ===
+              options.readState?.unlocatableTranslationId
+                ? {
+                    status: "notWritable" as const,
+                    reason: "该记录暂时无法解析宿主位置。",
+                  }
+                : {
+                    status: "located" as const,
+                    locator: {
+                      id:
+                        translation.translation.slot ??
+                        translation.translation.id,
+                      location:
+                        options.readState?.location ?? "locales/fr.json",
+                    },
+                  },
             locateNewTarget: ({ sourceUnit }) => ({
               status: "located" as const,
               locator: { id: sourceUnit.key },
@@ -112,6 +125,10 @@ function makeConfig(
                 if (currentTranslation === undefined)
                   throw new TypeError("需要现有译文删除目标。");
                 if (edit.sourceKey === options.ignoreWriteFor) return;
+                if (edit.sourceKey === options.detachWriteFor) {
+                  currentTranslation.translation.id = "B";
+                  return;
+                }
                 if (edit.sourceKey === options.failWriteFor)
                   throw new Error("目标资源不可写。");
                 const index = translations.indexOf(
@@ -119,6 +136,10 @@ function makeConfig(
                 );
                 if (index < 0) throw new Error("删除目标已不存在。");
                 (translations as Translation[]).splice(index, 1);
+                if (edit.sourceKey === options.partialReadAfterWriteFor) {
+                  if (options.readState !== undefined)
+                    options.readState.translationEnumeration = "partial";
+                }
                 return;
               }
               if (
@@ -171,7 +192,10 @@ async function establishBaseline(
 void describe("apply update plans", () => {
   void it("deletes a removed source target and advances its confirmed result", async () => {
     const units: Unit[] = [{ id: "A", source: "Save" }];
-    const translations: Translation[] = [{ id: "A", text: "Enregistrer" }];
+    const translations: Translation[] = [
+      { id: "A", text: "Enregistrer" },
+      { id: "unrelated", text: "Annuler" },
+    ];
     const initial = makeConfig(units, translations);
     const baselineStore = await establishBaseline(initial, ["A"]);
     units.splice(0, units.length);
@@ -204,7 +228,9 @@ void describe("apply update plans", () => {
 
       assert.equal(result.contentResults[0]?.status, "written");
       assert.equal(result.baselineResults[0]?.status, "advanced");
-      assert.deepStrictEqual(translations, []);
+      assert.deepStrictEqual(translations, [
+        { id: "unrelated", text: "Annuler" },
+      ]);
       assert.equal(
         baselineStore.baseline?.entries[0]?.source.presence,
         "removed",
@@ -328,6 +354,86 @@ void describe("apply update plans", () => {
     assert.equal(result.baselineResults[0]?.status, "notAttempted");
     assert.deepStrictEqual(translations, [{ id: "A", text: "Enregistrer" }]);
     assert.deepStrictEqual(baselineStore.baseline, baselineBefore);
+  });
+
+  void it("does not confirm deletion when the saved physical target remains", async () => {
+    const units: Unit[] = [{ id: "A", source: "Save" }];
+    const translations: Translation[] = [
+      { id: "A", slot: "physical-one", text: "Enregistrer" },
+    ];
+    const baselineStore = await establishBaseline(
+      makeConfig(units, translations),
+      ["A"],
+    );
+    units.splice(0, units.length);
+    const baselineBefore = structuredClone(baselineStore.baseline);
+    const config = makeConfig(units, translations, {
+      detachWriteFor: "A",
+      withWriteback: true,
+      updatePolicy: () => ({ action: "delete" }),
+    });
+    const plan = await createUpdatePlan(
+      await readFacts(config),
+      baselineStore.baseline,
+      config,
+    );
+
+    const result = await applyUpdatePlan(plan, config, baselineStore);
+
+    assert.equal(result.contentResults[0]?.status, "writeUnconfirmed");
+    assert.equal(result.baselineResults[0]?.status, "notAttempted");
+    assert.deepStrictEqual(translations, [
+      { id: "B", slot: "physical-one", text: "Enregistrer" },
+    ]);
+    assert.deepStrictEqual(baselineStore.baseline, baselineBefore);
+  });
+
+  void it("does not confirm deletion when the saved scope cannot be resolved", async () => {
+    const scenarios = ["locator", "partial-read"] as const;
+    for (const scenario of scenarios) {
+      const units: Unit[] = [{ id: "A", source: "Save" }];
+      const translations: Translation[] = [
+        { id: "A", text: "Enregistrer" },
+        { id: "unrelated", text: "Annuler" },
+      ];
+      const baselineStore = await establishBaseline(
+        makeConfig(units, translations),
+        ["A"],
+      );
+      units.splice(0, units.length);
+      const readState: MutableReadState = {
+        dependencies: { revision: 1 },
+      };
+      const config = makeConfig(units, translations, {
+        readState,
+        ...(scenario === "partial-read"
+          ? { partialReadAfterWriteFor: "A" }
+          : {}),
+        withWriteback: true,
+        updatePolicy: () => ({ action: "delete" }),
+      });
+      const plan = await createUpdatePlan(
+        await readFacts(config),
+        baselineStore.baseline,
+        config,
+      );
+      const baselineBefore = structuredClone(baselineStore.baseline);
+      if (scenario === "locator")
+        readState.unlocatableTranslationId = "unrelated";
+
+      const result = await applyUpdatePlan(plan, config, baselineStore);
+
+      assert.equal(
+        result.contentResults[0]?.status,
+        "writeUnconfirmed",
+        `${scenario} must not confirm deletion`,
+      );
+      assert.equal(result.baselineResults[0]?.status, "notAttempted");
+      assert.deepStrictEqual(baselineStore.baseline, baselineBefore);
+      assert.deepStrictEqual(translations, [
+        { id: "unrelated", text: "Annuler" },
+      ]);
+    }
   });
 
   void it("continues after one deletion write fails and advances only the confirmed target", async () => {

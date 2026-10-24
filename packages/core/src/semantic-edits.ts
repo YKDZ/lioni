@@ -723,7 +723,10 @@ export async function applySemanticEdits<
         results.push({
           ...base,
           status: "writeUnconfirmed",
-          reason: "写入已返回成功，但回读结果未确认候选内容。",
+          reason:
+            edit.operation === "delete"
+              ? "写入已返回成功，但回读未确认明确目标已删除。"
+              : "写入已返回成功，但回读结果未确认候选内容。",
           before,
           after,
         });
@@ -1214,11 +1217,53 @@ async function confirmsSemanticEdit<
     facts,
     config.translations?.matches,
   );
-  return (
+  if (
     sourceScopeIsComplete &&
     relation.association.coverageStatus === "complete" &&
     relation.association.status === "missing"
+  )
+    return confirmsSemanticDeletionTargetAbsent(edit, facts, relation, config);
+  return false;
+}
+
+async function confirmsSemanticDeletionTargetAbsent<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+>(
+  edit: Extract<SemanticEdit, { operation: "delete" }>,
+  facts: FrameworkFacts<TUnit, TTranslation>,
+  relation: ReturnType<typeof removedSourceRelation<TUnit, TTranslation>>,
+  config: FrameworkConfig<TUnit, TTranslation>,
+): Promise<boolean> {
+  const locateExistingTarget =
+    config.translationWriteback?.locateExistingTarget;
+  if (locateExistingTarget === undefined) return false;
+
+  const targetRecords = facts.translations.records.filter(
+    (translation) =>
+      translation.language === edit.language &&
+      edit.expected.target.scopes.some((range) =>
+        isDeepStrictEqual(range, translation.range),
+      ),
   );
+  for (const translation of targetRecords) {
+    let resolution: EditTargetResolution;
+    try {
+      resolution = await locateExistingTarget({
+        sourceUnit: relation.historicalSourceUnit,
+        translation,
+      });
+    } catch {
+      return false;
+    }
+    if (resolution.status !== "located") return false;
+    if (
+      isDeepStrictEqual(translation.range, edit.expected.target.range) &&
+      isDeepStrictEqual(resolution.locator, edit.target.locator)
+    )
+      return false;
+  }
+  return true;
 }
 
 function confirmsEditContent<TUnit extends TranslationUnitInput, TTranslation>(

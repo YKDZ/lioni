@@ -395,6 +395,13 @@ export default defineConfig<Unit, Translation>({
       const resource = JSON.parse(await readFile(targetPath, "utf8")) as Resource;
       const index = resource.records.findIndex(({ context }) => context.key === locator.key);
       if (index < 0) throw new Error("宿主明确的删除目标已不存在。");
+      if (process.argv[2] === "apply" && process.argv[3] === "physical-target-remains") {
+        const record = resource.records[index];
+        if (record === undefined) throw new Error("宿主删除目标读取失败。");
+        record.id = "detached-message";
+        await writeFile(targetPath, JSON.stringify(resource) + "\\n", "utf8");
+        return;
+      }
       resource.records.splice(index, 1);
       await writeFile(targetPath, JSON.stringify(resource) + "\\n", "utf8");
     },
@@ -458,10 +465,23 @@ if (scenario === "initialize") {
     assert.equal(await readFile(baselinePath, "utf8"), baselineBefore);
     const target = JSON.parse(await readFile(targetPath, "utf8"));
     assert.equal(target.records[0]?.text, "Enregistrer");
+  } else if (process.argv[3] === "physical-target-remains") {
+    assert.equal(item?.status, "writeUnconfirmed");
+    assert.equal(baselineResult?.status, "notAttempted");
+    assert.equal(await readFile(baselinePath, "utf8"), baselineBefore);
+    const target = JSON.parse(await readFile(targetPath, "utf8"));
+    assert.equal(target.records.length, 2);
+    assert.equal(
+      target.records.find(({ context }) => context.key === "archive.save")?.id,
+      "detached-message",
+    );
   } else {
     assert.equal(item?.status, "written");
     assert.equal(baselineResult?.status, "advanced");
-    assert.deepEqual(JSON.parse(await readFile(targetPath, "utf8")).records, []);
+    assert.deepEqual(
+      JSON.parse(await readFile(targetPath, "utf8")).records.map(({ id }) => id),
+      ["unrelated-message"],
+    );
   }
 } else if (scenario === "verify") {
   const baseline = await baselineStore.load();
@@ -469,10 +489,13 @@ if (scenario === "initialize") {
   assert.equal(entry?.source.presence, "removed");
   assert.equal(entry?.association.status, "missing");
   assert.equal(entry?.processed, true);
-  assert.deepEqual(JSON.parse(await readFile(targetPath, "utf8")).records, []);
+  assert.deepEqual(
+    JSON.parse(await readFile(targetPath, "utf8")).records.map(({ id }) => id),
+    ["unrelated-message"],
+  );
   const facts = await readFacts(config);
   assert.equal(facts.source.units.some(({ key }) => key === "retired-message"), false);
-  assert.equal(facts.translations.records.length, 0);
+  assert.equal(facts.translations.records.length, 1);
 }
 
 console.log(JSON.stringify({ scenario, pid: process.pid }));
@@ -1832,6 +1855,14 @@ process.stdout.write("独立打包宿主：编辑跨进程、冲突、依赖失�
               key: "archive.save",
             },
           },
+          {
+            id: "unrelated-message",
+            text: "Annuler",
+            context: {
+              file: "deletion-resources/fr.json",
+              key: "footer.cancel",
+            },
+          },
         ],
       }),
     ),
@@ -2113,6 +2144,12 @@ export async function verifyIndependentConsumer(): Promise<void> {
       "deletion-resources",
       "source.json",
     );
+    const deletionTargetPath = path.join(
+      consumerRoot,
+      "deletion-resources",
+      "fr.json",
+    );
+    const deletionTargetOriginal = await readFile(deletionTargetPath);
     const deletionDependencyPath = path.join(
       consumerRoot,
       "deletion-resources",
@@ -2158,6 +2195,14 @@ export async function verifyIndependentConsumer(): Promise<void> {
       "utf8",
     );
     process.stdout.write(
+      runChecked(
+        process.execPath,
+        ["deletion-host.mjs", "apply", "physical-target-remains"],
+        consumerRoot,
+      ).stdout,
+    );
+    await writeFile(deletionTargetPath, deletionTargetOriginal);
+    process.stdout.write(
       runChecked(process.execPath, ["deletion-host.mjs", "apply"], consumerRoot)
         .stdout,
     );
@@ -2169,7 +2214,7 @@ export async function verifyIndependentConsumer(): Promise<void> {
       ).stdout,
     );
     process.stdout.write(
-      "独立打包宿主：原文删除后新进程读取并保存计划；依赖变化时拒绝应用，恢复后 writer 删除实际文件目标，新进程回读确认不存在并推进该范围基线。\n",
+      "独立打包宿主：原文删除后新进程读取并保存计划；依赖变化及仍占据保存 locator 的关系变更均拒绝推进基线；正常 writer 删除准确目标并保留同 scope 无关记录，新进程回读确认后推进该范围基线。\n",
     );
 
     process.stdout.write("运行语义编辑跨进程、真实资源和输入冲突场景…\n");
