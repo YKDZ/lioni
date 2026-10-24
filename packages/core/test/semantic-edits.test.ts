@@ -14,7 +14,11 @@ import {
   type SemanticEditCandidate,
   type TranslationUnitInput,
 } from "../src/index.ts";
-import { sourceSchemaFromExamples } from "./source-schema.ts";
+import {
+  jsonValueSchema,
+  schemaFromExamples,
+  sourceSchemaFromExamples,
+} from "./source-schema.ts";
 
 function textContent(content: unknown): string {
   if (typeof content !== "string")
@@ -59,6 +63,8 @@ void describe("semantic edits", () => {
       keyOf: ({ context }) => context.key,
       translations: {
         languages: ["fr"],
+        schema: schemaFromExamples(translation),
+        contentSchema: jsonValueSchema,
         read(_language, sourceUnits) {
           return {
             scopes: [
@@ -160,6 +166,15 @@ void describe("semantic edits", () => {
       keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
       translations: {
         languages: ["fr"],
+        schema: schemaFromExamples({
+          text: "Enregistrer",
+          context: {
+            file: "locales/fr.json",
+            resourceKey: "messages.save",
+            sourceLine: 18,
+          },
+        }),
+        contentSchema: jsonValueSchema,
         read(_language, sourceUnits) {
           return {
             scopes: [
@@ -353,6 +368,8 @@ void describe("semantic edits", () => {
         },
         translations: {
           languages: ["fr"],
+          schema: schemaFromExamples(translation),
+          contentSchema: jsonValueSchema,
           read(_language, sourceUnits) {
             return {
               scopes: [
@@ -482,6 +499,15 @@ void describe("semantic edits", () => {
       keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
       translations: {
         languages: ["fr"],
+        schema: schemaFromExamples({
+          text: "Enregistrer",
+          context: {
+            file: "locales/fr.json",
+            resourceKey: "toolbar.save",
+            sourceLine: 18,
+          },
+        }),
+        contentSchema: jsonValueSchema,
         read(_language, sourceUnits) {
           return {
             scopes: [
@@ -605,6 +631,15 @@ void describe("semantic edits", () => {
       keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
       translations: {
         languages: ["fr"],
+        schema: schemaFromExamples({
+          text: "Enregistrer",
+          context: {
+            file: "locales/fr.json",
+            resourceKey: "toolbar.save",
+            sourceLine: 18,
+          },
+        }),
+        contentSchema: jsonValueSchema,
         read(_language, sourceUnits) {
           return {
             scopes: [
@@ -719,6 +754,11 @@ void describe("semantic edits", () => {
       keyOf: (unit) => `message:${unit.context.line}`,
       translations: {
         languages: ["fr"],
+        schema: schemaFromExamples({
+          text: "Enregistrer",
+          context: { file: "locales/fr.json", key: "shared" },
+        }),
+        contentSchema: jsonValueSchema,
         read(_language, sourceUnits) {
           return {
             scopes: [
