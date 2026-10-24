@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  analyzeQuality,
   defineConfig,
   readFacts,
   runQualityChecks,
+  StandardSchemaContractError,
   type QualityCheckRequest,
 } from "../src/index.ts";
 import { defineTestQualityCheck } from "./quality-check-fixture.ts";
@@ -14,6 +16,80 @@ import {
 } from "./source-schema.ts";
 
 void describe("quality checks", () => {
+  void it("rejects non-JSON dependencies before reporting a QA check failure", async () => {
+    const unit = { source: "Hello" };
+    const candidate = {
+      sourceKey: "message:hello",
+      language: "fr",
+      content: "Bonjour",
+    };
+    let observedDependencies: unknown;
+
+    function configFor(dependencies: unknown) {
+      return defineConfig({
+        source: {
+          schema: sourceSchemaFromExamples(unit),
+          read: () => ({
+            scopes: [
+              {
+                range: "messages.json",
+                enumeration: "complete" as const,
+                records: [
+                  { value: unit, bodyAvailability: "available" as const },
+                ],
+              },
+            ],
+          }),
+        },
+        keyOf: () => "message:hello",
+        createQualityRequest: () => ({
+          candidates: [candidate],
+          dependencies,
+        }),
+        qualityChecks: [
+          defineTestQualityCheck({
+            id: "dependency-observer",
+            configuration: {},
+            check(input) {
+              observedDependencies = input.dependencies;
+              return {
+                status: "complete",
+                diagnostics: [],
+                issues: [],
+                coverage: {
+                  selected: 1,
+                  evaluated: 1,
+                  notApplicable: 0,
+                  incomplete: 0,
+                  failed: 0,
+                },
+              };
+            },
+          }),
+        ],
+      });
+    }
+
+    await assert.rejects(
+      analyzeQuality(configFor(new Map([["policy", "strict"]]))),
+      (error: unknown) => {
+        assert.ok(error instanceof StandardSchemaContractError);
+        assert.equal(error.kind, "invalid-json");
+        assert.equal(error.valueDescription, "QA 输入与结果.dependencies");
+        return true;
+      },
+    );
+    assert.equal(observedDependencies, undefined);
+
+    const dependencies = { policy: { strict: true }, modes: ["short", "full"] };
+    const result = await analyzeQuality(configFor(dependencies));
+
+    assert.equal(result.status, "complete");
+    assert.deepEqual(result.dependencies, dependencies);
+    assert.deepEqual(observedDependencies, dependencies);
+    assert.equal(result.checks[0]?.issues.length, 0);
+  });
+
   void it("runs selected checks against one facts snapshot and retains findings", async () => {
     const unit = { source: "Hello {name}" };
     const translation = { text: "Bonjour" };

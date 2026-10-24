@@ -12,6 +12,7 @@ import {
   type QualityCheckDefinition,
   type QualityCheckRequest,
   type QualityRunResult,
+  type QualityObject,
 } from "./qa.ts";
 import {
   prepareSemanticEdit,
@@ -163,7 +164,10 @@ export type FrameworkConfig<
   readonly updatePolicy?: UpdatePolicy<TUnit, TTranslation>;
   readonly qualityChecks?: readonly QualityCheckDefinition<
     TUnit,
-    TTranslation
+    TTranslation,
+    QualityObject,
+    TBody,
+    TUnavailable
   >[];
   readonly createQualityRequest?: (
     facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
@@ -679,8 +683,10 @@ export async function readCompletion<
 export async function analyzeQuality<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
+  TUnavailable,
 >(
-  config: FrameworkConfig<TUnit, TTranslation>,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
   options: { readonly candidates?: readonly SemanticEditCandidate[] } = {},
 ): Promise<QualityRunResult> {
   const facts = await readFacts(config);
@@ -802,7 +808,13 @@ async function qualityRunMatchesInputs<
   facts: FrameworkFacts<TUnit, TTranslation>,
   candidate: SemanticEditCandidate,
   request: QualityCheckRequest,
-  checks: readonly QualityCheckDefinition<TUnit, TTranslation>[],
+  checks: readonly QualityCheckDefinition<
+    TUnit,
+    TTranslation,
+    QualityObject,
+    JsonValue,
+    never
+  >[],
   quality: QualityRunResult,
 ): Promise<boolean> {
   const configurationRun = await runQualityChecks(
@@ -887,9 +899,17 @@ function defaultQualityRequest<
 function configuredQualityChecks<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
+  TUnavailable,
 >(
-  config: FrameworkConfig<TUnit, TTranslation>,
-): readonly QualityCheckDefinition<TUnit, TTranslation>[] {
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+): readonly QualityCheckDefinition<
+  TUnit,
+  TTranslation,
+  QualityObject,
+  TBody,
+  TUnavailable
+>[] {
   const checks = config.qualityChecks;
   if (checks === undefined) return [];
   if (!Array.isArray(checks))
@@ -900,9 +920,11 @@ function configuredQualityChecks<
 async function createConfiguredQualityRequest<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
+  TUnavailable,
 >(
-  config: FrameworkConfig<TUnit, TTranslation>,
-  facts: FrameworkFacts<TUnit, TTranslation>,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
 ): Promise<QualityCheckRequest> {
   const request = config.createQualityRequest;
   if (request === undefined) return defaultQualityRequest(facts);
