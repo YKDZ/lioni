@@ -12,6 +12,7 @@ import {
   type SemanticEditCandidate,
   type TranslationUnitInput,
 } from "../src/index.ts";
+import { sourceSchemaFromExamples } from "./source-schema.ts";
 
 function textContent(content: unknown): string {
   if (typeof content !== "string")
@@ -42,6 +43,7 @@ void describe("semantic edits", () => {
     const translation = { text: "Enregistrer", state: "reviewed" };
     const config = defineConfig({
       source: {
+        schema: sourceSchemaFromExamples(source),
         read: () => ({
           scopes: [
             {
@@ -123,6 +125,14 @@ void describe("semantic edits", () => {
   void it("stores the host's actual target location and selected expectations", async () => {
     const config = defineConfig({
       source: {
+        schema: sourceSchemaFromExamples({
+          source: "Save",
+          context: {
+            file: "src/messages.ts",
+            line: 18,
+            screenshot: "shots/save.png",
+          },
+        }),
         read: () => ({
           scopes: [
             {
@@ -255,6 +265,7 @@ void describe("semantic edits", () => {
       ]);
       const config = defineConfig({
         source: {
+          schema: sourceSchemaFromExamples(source),
           read: () => ({
             scopes: [
               {
@@ -367,6 +378,14 @@ void describe("semantic edits", () => {
     };
     const config = defineConfig({
       source: {
+        schema: sourceSchemaFromExamples({
+          source: "Save",
+          context: {
+            file: "src/messages.ts",
+            line: 18,
+            screenshot: "shots/save-before.png",
+          },
+        }),
         read: () => ({
           scopes: [
             {
@@ -482,6 +501,14 @@ void describe("semantic edits", () => {
     const state: { translationText?: string } = {};
     const config = defineConfig({
       source: {
+        schema: sourceSchemaFromExamples({
+          source: "Save",
+          context: {
+            file: "src/messages.ts",
+            line: 18,
+            resourceKey: "toolbar.save",
+          },
+        }),
         read: () => ({
           scopes: [
             {
@@ -595,6 +622,10 @@ void describe("semantic edits", () => {
     const state = { translationText: "Shared original" };
     const config = defineConfig({
       source: {
+        schema: sourceSchemaFromExamples(
+          { source: "Save", context: { line: 18 } },
+          { source: "Submit", context: { line: 19 } },
+        ),
         read: () => ({
           scopes: [
             {

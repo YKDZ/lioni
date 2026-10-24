@@ -6,7 +6,67 @@ import {
   DuplicateTranslationUnitKeyError,
   readFacts,
   readSourceFacts,
+  StandardSchemaContractError,
 } from "../src/index.ts";
+import type { StandardSchemaV1 } from "../src/index.ts";
+import {
+  emptySourceSchema,
+  sourceSchemaFromExamples,
+} from "./source-schema.ts";
+
+type StructuredSource = string | readonly string[] | { readonly text: string };
+
+type ManualUnit = {
+  readonly source: StructuredSource;
+  readonly context: { readonly file: string; readonly line: number };
+};
+
+const manualSourceSchema: StandardSchemaV1<ManualUnit, ManualUnit> = {
+  "~standard": {
+    version: 1,
+    vendor: "lioni-test",
+    validate(value) {
+      return isManualUnit(value)
+        ? { value }
+        : { issues: [{ message: "原文单元结构不匹配。" }] };
+    },
+  },
+};
+
+const asyncManualSourceSchema: StandardSchemaV1<ManualUnit, ManualUnit> = {
+  "~standard": {
+    version: 1,
+    vendor: "lioni-test",
+    async validate(value) {
+      return isManualUnit(value)
+        ? { value }
+        : { issues: [{ message: "原文单元结构不匹配。" }] };
+    },
+  },
+};
+
+function isManualUnit(value: unknown): value is ManualUnit {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return false;
+  const unit = value as Record<string, unknown>;
+  if (typeof unit.context !== "object" || unit.context === null) return false;
+  const context = unit.context as Record<string, unknown>;
+  if (
+    typeof context.file !== "string" ||
+    typeof context.line !== "number" ||
+    !Number.isFinite(context.line)
+  )
+    return false;
+  if (typeof unit.source === "string") return true;
+  if (Array.isArray(unit.source))
+    return unit.source.every((entry) => typeof entry === "string");
+  return (
+    typeof unit.source === "object" &&
+    unit.source !== null &&
+    !Array.isArray(unit.source) &&
+    typeof (unit.source as Record<string, unknown>).text === "string"
+  );
+}
 
 function completeSource<T>(...values: readonly T[]) {
   return {
@@ -24,6 +84,189 @@ function completeSource<T>(...values: readonly T[]) {
 }
 
 void describe("framework facts", () => {
+  void it("validates synchronous and asynchronous source schemas without changing structure", async () => {
+    const units: ManualUnit[] = [
+      {
+        source: "Save",
+        context: { file: "messages.ts", line: 1 },
+      },
+      {
+        source: ["first", "second"],
+        context: { file: "messages.ts", line: 2 },
+      },
+      {
+        source: { text: "Submit" },
+        context: { file: "messages.ts", line: 3 },
+      },
+      {
+        source: "first",
+        context: { file: "messages.ts", line: 4 },
+      },
+      {
+        source: "second",
+        context: { file: "messages.ts", line: 5 },
+      },
+    ];
+    const facts = await readSourceFacts(
+      defineConfig({
+        source: {
+          schema: manualSourceSchema,
+          read: () => completeSource(...units),
+        },
+        keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
+      }),
+    );
+    const asyncFacts = await readSourceFacts(
+      defineConfig({
+        source: {
+          schema: asyncManualSourceSchema,
+          read: () => completeSource(...units),
+        },
+        keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
+      }),
+    );
+
+    assert.deepStrictEqual(
+      facts.units.map(({ unit }) => unit),
+      units,
+    );
+    assert.deepStrictEqual(
+      asyncFacts.units.map(({ unit }) => unit),
+      units,
+    );
+  });
+
+  void it("rejects schema mismatches and values that cannot be stored as JSON", async () => {
+    const invalidUnit = {
+      source: "Save",
+      context: { file: "messages.ts", line: 18 },
+      hostObject: new Date(0),
+    };
+    const invalidJsonConfig = defineConfig({
+      source: {
+        schema: manualSourceSchema,
+        read: () => completeSource(invalidUnit),
+      },
+      keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
+    });
+    await assert.rejects(
+      readSourceFacts(invalidJsonConfig),
+      (error: unknown) =>
+        error instanceof StandardSchemaContractError &&
+        error.kind === "invalid-json" &&
+        /JSON/u.test(error.message),
+    );
+
+    const invalidShapeUnit = {
+      source: 42,
+      context: { file: "messages.ts", line: 18 },
+    };
+    const schemaMismatchConfig = defineConfig({
+      source: {
+        schema: manualSourceSchema,
+        read: () => completeSource(invalidShapeUnit as unknown as ManualUnit),
+      },
+      keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
+    });
+    await assert.rejects(
+      readSourceFacts(schemaMismatchConfig),
+      (error: unknown) =>
+        error instanceof StandardSchemaContractError &&
+        error.kind === "schema-mismatch" &&
+        /原文单元 1/u.test(error.message),
+    );
+  });
+
+  void it("rejects schema output changes and in-place changes to the original unit", async () => {
+    const changedOutputSchema: StandardSchemaV1<ManualUnit, ManualUnit> = {
+      "~standard": {
+        version: 1,
+        vendor: "lioni-test",
+        validate(value) {
+          if (!isManualUnit(value))
+            return { issues: [{ message: "原文单元结构不匹配。" }] };
+          return {
+            value: {
+              ...value,
+              source:
+                typeof value.source === "string"
+                  ? `${value.source}!`
+                  : value.source,
+            },
+          };
+        },
+      },
+    };
+    const original = {
+      source: "Save",
+      context: { file: "messages.ts", line: 18 },
+    };
+    const changedConfig = defineConfig({
+      source: {
+        schema: changedOutputSchema,
+        read: () => completeSource(original),
+      },
+      keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
+    });
+    await assert.rejects(readSourceFacts(changedConfig), {
+      name: "StandardSchemaContractError",
+      kind: "output-changed",
+    });
+
+    const deletedFieldSchema: StandardSchemaV1<ManualUnit, ManualUnit> = {
+      "~standard": {
+        version: 1,
+        vendor: "lioni-test",
+        validate(value) {
+          if (!isManualUnit(value))
+            return { issues: [{ message: "原文单元结构不匹配。" }] };
+          return {
+            value: {
+              source: value.source,
+              context: { file: value.context.file },
+            } as unknown as ManualUnit,
+          };
+        },
+      },
+    };
+    const deletedFieldConfig = defineConfig({
+      source: {
+        schema: deletedFieldSchema,
+        read: () => completeSource(original),
+      },
+      keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
+    });
+    await assert.rejects(readSourceFacts(deletedFieldConfig), {
+      name: "StandardSchemaContractError",
+      kind: "output-changed",
+    });
+
+    const inPlaceSchema: StandardSchemaV1<ManualUnit, ManualUnit> = {
+      "~standard": {
+        version: 1,
+        vendor: "lioni-test",
+        validate(value) {
+          if (!isManualUnit(value))
+            return { issues: [{ message: "原文单元结构不匹配。" }] };
+          const unchangedResult = structuredClone(value);
+          Reflect.deleteProperty(value.context, "line");
+          return { value: unchangedResult };
+        },
+      },
+    };
+    const inPlaceConfig = defineConfig({
+      source: {
+        schema: inPlaceSchema,
+        read: () => completeSource(original),
+      },
+      keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
+    });
+    await assert.rejects(readSourceFacts(inPlaceConfig), {
+      name: "StandardSchemaContractError",
+      kind: "input-mutated",
+    });
+  });
+
   void it("reads raw source units and derives identity without reading translations", async () => {
     const rawUnit = {
       source: "Save",
@@ -37,6 +280,7 @@ void describe("framework facts", () => {
     let identityInput: typeof rawUnit | undefined;
     const config = defineConfig({
       source: {
+        schema: sourceSchemaFromExamples(rawUnit),
         read() {
           reads += 1;
           return completeSource(rawUnit);
@@ -64,16 +308,14 @@ void describe("framework facts", () => {
   });
 
   void it("reports duplicate identities instead of overwriting a source unit", async () => {
+    const duplicateUnits = [
+      { source: "Save", context: { file: "src/messages.ts", line: 18 } },
+      { source: "Submit", context: { file: "src/messages.ts", line: 18 } },
+    ];
     const config = defineConfig({
       source: {
-        read: () =>
-          completeSource(
-            { source: "Save", context: { file: "src/messages.ts", line: 18 } },
-            {
-              source: "Submit",
-              context: { file: "src/messages.ts", line: 18 },
-            },
-          ),
+        schema: sourceSchemaFromExamples(...duplicateUnits),
+        read: () => completeSource(...duplicateUnits),
       },
       keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
     });
@@ -92,6 +334,14 @@ void describe("framework facts", () => {
     const makeConfig = (screenshot: string) =>
       defineConfig({
         source: {
+          schema: sourceSchemaFromExamples({
+            source: "Save",
+            context: {
+              file: "src/messages.ts",
+              line: 18,
+              screenshot,
+            },
+          }),
           read: () =>
             completeSource({
               source: "Save",
@@ -116,6 +366,10 @@ void describe("framework facts", () => {
     const makeConfig = (source: string, file: string) =>
       defineConfig({
         source: {
+          schema: sourceSchemaFromExamples({
+            source: "Save",
+            context: { file: "src/a.ts", line: 18 },
+          }),
           read: () => completeSource({ source, context: { file, line: 18 } }),
         },
         keyOf: (unit) =>
@@ -136,6 +390,7 @@ void describe("framework facts", () => {
     const facts = await readSourceFacts(
       defineConfig({
         source: {
+          schema: sourceSchemaFromExamples(knownUnit),
           read: () => ({
             scopes: [
               {
@@ -176,7 +431,10 @@ void describe("framework facts", () => {
     let reads = 0;
     const facts = await readFacts(
       defineConfig({
-        source: { read: () => completeSource(...units) },
+        source: {
+          schema: sourceSchemaFromExamples(...units),
+          read: () => completeSource(...units),
+        },
         keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
         translations: {
           languages: ["fr"],
@@ -272,7 +530,10 @@ void describe("framework facts", () => {
     ];
     const facts = await readFacts(
       defineConfig({
-        source: { read: () => completeSource(...units) },
+        source: {
+          schema: sourceSchemaFromExamples(...units),
+          read: () => completeSource(...units),
+        },
         keyOf: (unit) => `message:${unit.context.line}`,
         translations: {
           languages: ["fr"],
@@ -365,7 +626,10 @@ void describe("framework facts", () => {
     let contentCalls = 0;
     const facts = await readFacts(
       defineConfig<(typeof units)[number], Translation>({
-        source: { read: () => completeSource(...units) },
+        source: {
+          schema: sourceSchemaFromExamples(...units),
+          read: () => completeSource(...units),
+        },
         keyOf: (unit) => `message:${unit.context.line}`,
         translations: {
           languages: ["fr", "de"],
@@ -501,6 +765,7 @@ void describe("framework facts", () => {
     const facts = await readSourceFacts(
       defineConfig({
         source: {
+          schema: emptySourceSchema,
           read() {
             throw new Error("source catalogue is unavailable");
           },
@@ -519,6 +784,10 @@ void describe("framework facts", () => {
     const facts = await readFacts(
       defineConfig({
         source: {
+          schema: sourceSchemaFromExamples({
+            source: "Save",
+            context: { line: 18 },
+          }),
           read: () => completeSource({ source: "Save", context: { line: 18 } }),
         },
         keyOf: (unit) => `message:${unit.context.line}`,

@@ -15,6 +15,7 @@ import {
   type UpdatePolicy,
 } from "../src/index.ts";
 import { createFileUpdatePlanStore } from "../src/node.ts";
+import { sourceSchemaFromExamples } from "./source-schema.ts";
 
 type Unit = {
   readonly id: string;
@@ -39,6 +40,10 @@ function makeConfig(
 ): FrameworkConfig<Unit, Translation> {
   return defineConfig({
     source: {
+      schema: sourceSchemaFromExamples<Unit>(
+        { id: "example", source: "example", context: { line: 0 } },
+        ...units,
+      ),
       read: () => ({
         scopes: [
           {

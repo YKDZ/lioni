@@ -7,6 +7,7 @@ import {
   readCompletion,
   readFacts,
 } from "../src/index.ts";
+import { sourceSchemaFromExamples } from "./source-schema.ts";
 
 void describe("completion", () => {
   void it("counts every known source and selected language, including a resource-free language", async () => {
@@ -17,6 +18,7 @@ void describe("completion", () => {
     const result = await readCompletion(
       defineConfig({
         source: {
+          schema: sourceSchemaFromExamples(...units),
           read: () => ({
             scopes: [
               {
@@ -139,6 +141,7 @@ void describe("completion", () => {
     const result = await readCompletion(
       defineConfig({
         source: {
+          schema: sourceSchemaFromExamples(unit),
           read: () => ({
             scopes: [
               {
@@ -221,6 +224,10 @@ void describe("completion", () => {
     const facts = await readFacts(
       defineConfig({
         source: {
+          schema: sourceSchemaFromExamples({
+            source: "Save",
+            context: { file: "messages.ts", line: 18 },
+          }),
           read: () => ({
             scopes: [
               {
@@ -294,6 +301,10 @@ void describe("completion", () => {
     const result = await readCompletion(
       defineConfig({
         source: {
+          schema: sourceSchemaFromExamples({
+            source: "Save",
+            context: { line: 18 },
+          }),
           read: () => ({
             scopes: [
               {

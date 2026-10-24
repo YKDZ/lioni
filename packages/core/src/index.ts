@@ -23,9 +23,24 @@ import type {
   SemanticEditCandidate,
   TranslationWritebackAdapter,
 } from "./semantic-edits.ts";
+import {
+  assertJsonValue,
+  validateWithStandardSchema,
+} from "./standard-schema.ts";
+import type {
+  PreservingStandardSchema,
+  StandardSchemaV1,
+} from "./standard-schema.ts";
 
 export * from "./completion.ts";
 export * from "./semantic-edits.ts";
+export { StandardSchemaContractError } from "./standard-schema.ts";
+export type {
+  StandardSchemaFailureKind,
+  StandardSchemaV1,
+  StandardSchemaV1Issue,
+  StandardSchemaV1Result,
+} from "./standard-schema.ts";
 export * from "./apply-plans.ts";
 export * from "./plans.ts";
 export * from "./qa.ts";
@@ -75,6 +90,7 @@ export type SourceRead<TUnit extends TranslationUnitInput> = {
 };
 
 export type SourceAdapter<TUnit extends TranslationUnitInput> = {
+  readonly schema: StandardSchemaV1<TUnit, TUnit>;
   read(): Awaitable<SourceRead<TUnit>>;
 };
 
@@ -119,6 +135,19 @@ export type FrameworkConfig<
   readonly createQualityRequest?: (
     facts: FrameworkFacts<TUnit, TTranslation>,
   ) => Awaitable<QualityCheckRequest>;
+};
+
+type DefineConfigInput<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TSchema,
+> = Omit<FrameworkConfig<NoInfer<TUnit>, TTranslation>, "source"> & {
+  readonly source: {
+    readonly schema: TSchema &
+      StandardSchemaV1<TUnit, TUnit> &
+      PreservingStandardSchema<TUnit, TSchema>;
+    read(): Awaitable<SourceRead<TUnit>>;
+  };
 };
 
 export type SourceUnitFact<TUnit extends TranslationUnitInput> = {
@@ -215,8 +244,12 @@ export class DuplicateTranslationUnitKeyError extends Error {
   }
 }
 
-export function defineConfig<TUnit extends TranslationUnitInput, TTranslation>(
-  config: FrameworkConfig<TUnit, TTranslation>,
+export function defineConfig<
+  TUnit extends TranslationUnitInput,
+  TTranslation = unknown,
+  TSchema = StandardSchemaV1<TUnit, TUnit>,
+>(
+  config: DefineConfigInput<TUnit, TTranslation, TSchema>,
 ): FrameworkConfig<TUnit, TTranslation> {
   return config;
 }
@@ -226,6 +259,10 @@ export function validateFrameworkConfig(value: unknown): void {
     throw new TypeError("宿主配置必须是 defineConfig(...) 的对象结果。");
   if (!isRecord(value.source) || typeof value.source.read !== "function")
     throw new TypeError("defineConfig 的 source.read 必须是函数。");
+  if (!isStandardSchema(value.source.schema))
+    throw new TypeError(
+      "defineConfig 的 source.schema 必须符合 Standard Schema v1。",
+    );
   if (typeof value.keyOf !== "function")
     throw new TypeError("defineConfig 的 keyOf 必须是函数。");
 
@@ -257,20 +294,28 @@ export async function readSourceFacts<
     errorMessage = error instanceof Error ? error.message : String(error);
   }
 
+  if (errorMessage === undefined) validateSourceRead(read);
+
   const firstIndexes = new Map<string, number>();
   const units: SourceUnitFact<TUnit>[] = [];
   const scopes = read?.scopes ?? [];
   for (const [scopeIndex, scope] of scopes.entries()) {
     for (const record of scope.records) {
       const index = units.length;
-      const key = config.keyOf(record.value);
+      const unit = await validateWithStandardSchema(
+        config.source.schema,
+        record.value,
+        `原文单元 ${index + 1}`,
+        { preserveValue: true, requireJson: true },
+      );
+      const key = config.keyOf(unit);
       const firstIndex = firstIndexes.get(key);
       if (firstIndex !== undefined)
         throw new DuplicateTranslationUnitKeyError(key, firstIndex, index);
       firstIndexes.set(key, index);
       units.push({
         key,
-        unit: record.value,
+        unit,
         bodyAvailability: record.bodyAvailability,
         scopeIndex,
       });
@@ -678,6 +723,46 @@ async function createConfiguredQualityRequest<
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isStandardSchema(value: unknown): value is StandardSchemaV1 {
+  if (!isRecord(value) || !isRecord(value["~standard"])) return false;
+  const standard = value["~standard"];
+  return (
+    standard.version === 1 &&
+    typeof standard.vendor === "string" &&
+    typeof standard.validate === "function"
+  );
+}
+
+function validateSourceRead(value: unknown): void {
+  if (!isRecord(value) || !Array.isArray(value.scopes))
+    throw new TypeError("source.read 必须返回包含 scopes 数组的读取结果。");
+
+  for (const [scopeIndex, scope] of value.scopes.entries()) {
+    if (
+      !isRecord(scope) ||
+      !Array.isArray(scope.records) ||
+      (scope.enumeration !== "complete" &&
+        scope.enumeration !== "partial" &&
+        scope.enumeration !== "failed") ||
+      (scope.error !== undefined && typeof scope.error !== "string")
+    )
+      throw new TypeError(
+        `source.read 的第 ${scopeIndex + 1} 个范围结构无效。`,
+      );
+    assertJsonValue(scope.range, `原文范围 ${scopeIndex + 1}`);
+    for (const [recordIndex, record] of scope.records.entries()) {
+      if (
+        !isRecord(record) ||
+        (record.bodyAvailability !== "available" &&
+          record.bodyAvailability !== "unavailable")
+      )
+        throw new TypeError(
+          `source.read 的第 ${scopeIndex + 1} 个范围中，第 ${recordIndex + 1} 条原文记录结构无效。`,
+        );
+    }
+  }
 }
 
 function snapshotJson(value: unknown, description: string): JsonValue {
