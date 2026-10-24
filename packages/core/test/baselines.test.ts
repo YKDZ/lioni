@@ -50,6 +50,7 @@ function makeScopedFacts(
     readonly enumeration?: "complete" | "partial" | "failed";
   }[],
   translationReadError?: string,
+  languages: readonly string[] = ["fr"],
 ) {
   return readFacts(
     defineConfig({
@@ -67,7 +68,7 @@ function makeScopedFacts(
       },
       keyOf: (unit) => unit.id,
       translations: {
-        languages: ["fr"],
+        languages,
         read: () => {
           if (translationReadError !== undefined)
             throw new Error(translationReadError);
@@ -273,6 +274,199 @@ void describe("processing baselines", () => {
         ["A", "unchanged", true],
         ["B", "unchanged", false],
         ["C", "added", false],
+      ],
+    );
+  });
+
+  void it("recognizes removal after advancing a new key in an existing source range", async () => {
+    const initialFacts = await makeFacts(
+      [{ id: "A", source: "Save" }],
+      [{ id: "A", text: "Enregistrer" }],
+    );
+    const store = new MemoryBaselineStore();
+    await advanceProcessingBaseline(store, initialFacts, [
+      { sourceKey: "A", language: "fr" },
+    ]);
+
+    const addedFacts = await makeFacts(
+      [
+        { id: "A", source: "Save" },
+        { id: "B", source: "Cancel" },
+      ],
+      [
+        { id: "A", text: "Enregistrer" },
+        { id: "B", text: "Annuler" },
+      ],
+    );
+    assert.equal(
+      compareProcessingBaseline(addedFacts, store.baseline).changes.find(
+        ({ sourceKey }) => sourceKey === "B",
+      )?.status,
+      "added",
+    );
+    await advanceProcessingBaseline(store, addedFacts, [
+      { sourceKey: "B", language: "fr" },
+    ]);
+
+    const removedFacts = await makeFacts(
+      [{ id: "A", source: "Save" }],
+      [
+        { id: "A", text: "Enregistrer" },
+        { id: "B", text: "Annuler" },
+      ],
+    );
+    assert.equal(
+      compareProcessingBaseline(removedFacts, store.baseline, {
+        matches: (unit, translation) => unit.id === translation.id,
+      }).changes.find(({ sourceKey }) => sourceKey === "B")?.status,
+      "source-removed",
+    );
+  });
+
+  void it("uses a key's complete source observation after an older partial scope", async () => {
+    const initialFacts = await makeScopedFacts(
+      [
+        {
+          range: "source-r1",
+          units: [{ id: "A", source: "Save" }],
+          enumeration: "partial",
+        },
+      ],
+      [
+        {
+          range: "target-r1",
+          covers: ["A"],
+          translations: [{ id: "A", text: "Enregistrer" }],
+        },
+      ],
+    );
+    const store = new MemoryBaselineStore();
+    await advanceProcessingBaseline(store, initialFacts, [
+      { sourceKey: "A", language: "fr" },
+    ]);
+
+    const completeFacts = await makeScopedFacts(
+      [
+        {
+          range: "source-r1",
+          units: [
+            { id: "A", source: "Save" },
+            { id: "B", source: "Cancel" },
+          ],
+        },
+      ],
+      [
+        {
+          range: "target-r1",
+          covers: ["A", "B"],
+          translations: [
+            { id: "A", text: "Enregistrer" },
+            { id: "B", text: "Annuler" },
+          ],
+        },
+      ],
+    );
+    assert.equal(
+      compareProcessingBaseline(completeFacts, store.baseline).changes.find(
+        ({ sourceKey }) => sourceKey === "B",
+      )?.status,
+      "history-insufficient",
+    );
+    await advanceProcessingBaseline(store, completeFacts, [
+      { sourceKey: "B", language: "fr" },
+    ]);
+    assert.equal(
+      store.baseline?.entries.find(({ sourceKey }) => sourceKey === "B")?.source
+        .enumeration,
+      "complete",
+    );
+
+    const removedFacts = await makeScopedFacts(
+      [{ range: "source-r1", units: [{ id: "A", source: "Save" }] }],
+      [
+        {
+          range: "target-r1",
+          covers: ["A"],
+          translations: [
+            { id: "A", text: "Enregistrer" },
+            { id: "B", text: "Annuler" },
+          ],
+        },
+      ],
+    );
+    assert.equal(
+      compareProcessingBaseline(removedFacts, store.baseline, {
+        matches: (unit, translation) => unit.id === translation.id,
+      }).changes.find(({ sourceKey }) => sourceKey === "B")?.status,
+      "source-removed",
+    );
+  });
+
+  void it("retains an unprocessed language pair when advancing a new source key", async () => {
+    const initialFacts = await makeScopedFacts(
+      [{ range: "source-r1", units: [{ id: "A", source: "Save" }] }],
+      [
+        {
+          range: "target-r1",
+          covers: ["A"],
+          translations: [{ id: "A", text: "Enregistrer" }],
+        },
+      ],
+      undefined,
+      ["fr", "de"],
+    );
+    const store = new MemoryBaselineStore();
+    await advanceProcessingBaseline(store, initialFacts, [
+      { sourceKey: "A", language: "fr" },
+    ]);
+
+    const addedFacts = await makeScopedFacts(
+      [
+        {
+          range: "source-r1",
+          units: [
+            { id: "A", source: "Save" },
+            { id: "B", source: "Cancel" },
+          ],
+        },
+      ],
+      [
+        {
+          range: "target-r1",
+          covers: ["A", "B"],
+          translations: [
+            { id: "A", text: "Enregistrer" },
+            { id: "B", text: "Annuler" },
+          ],
+        },
+      ],
+      undefined,
+      ["fr", "de"],
+    );
+    assert.deepStrictEqual(
+      compareProcessingBaseline(addedFacts, store.baseline)
+        .changes.filter(({ sourceKey }) => sourceKey === "B")
+        .map(({ language, status }) => [language, status]),
+      [
+        ["fr", "added"],
+        ["de", "added"],
+      ],
+    );
+    await advanceProcessingBaseline(store, addedFacts, [
+      { sourceKey: "B", language: "fr" },
+    ]);
+
+    assert.deepStrictEqual(
+      compareProcessingBaseline(addedFacts, store.baseline)
+        .changes.filter(({ sourceKey }) => sourceKey === "B")
+        .map(({ language, status, processed }) => [
+          language,
+          status,
+          processed,
+        ]),
+      [
+        ["fr", "unchanged", true],
+        ["de", "unchanged", false],
       ],
     );
   });
