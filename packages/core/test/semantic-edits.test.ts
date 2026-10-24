@@ -7,8 +7,10 @@ import {
   prepareSemanticEdit,
   readFacts,
   resolveSemanticEditInput,
+  StandardSchemaContractError,
   type FrameworkConfig,
   type FrameworkFacts,
+  type JsonValue,
   type SemanticEditCandidate,
   type TranslationUnitInput,
 } from "../src/index.ts";
@@ -206,7 +208,8 @@ void describe("semantic edits", () => {
           };
         },
         dependencies: ({ sourceUnit }) => ({
-          screenshot: sourceUnit.unit.context.screenshot,
+          screenshots: [sourceUnit.unit.context.screenshot],
+          sourceLine: sourceUnit.unit.context.line,
         }),
         write: () => undefined,
       },
@@ -248,9 +251,77 @@ void describe("semantic edits", () => {
           range: "locales/fr.json",
           scopes: ["locales/fr.json"],
         },
-        dependencies: { screenshot: "shots/save.png" },
+        dependencies: {
+          screenshots: ["shots/save.png"],
+          sourceLine: 18,
+        },
       },
     });
+  });
+
+  void it("rejects writeback dependencies that cannot be saved as JSON", async () => {
+    const source = { source: "Save", context: { key: "toolbar.save" } };
+    const translation = { text: "Enregistrer" };
+    const config = defineConfig({
+      source: {
+        schema: sourceSchemaFromExamples(source),
+        read: () => ({
+          scopes: [
+            {
+              range: "messages.json",
+              enumeration: "complete",
+              records: [{ value: source, bodyAvailability: "available" }],
+            },
+          ],
+        }),
+      },
+      keyOf: ({ context }) => context.key,
+      translations: {
+        languages: ["fr"],
+        read(_language, sourceUnits) {
+          return {
+            scopes: [
+              {
+                range: "locales/fr.json",
+                covers: sourceUnits.map(({ key }) => key),
+                enumeration: "complete",
+                records: [
+                  { value: translation, bodyAvailability: "available" },
+                ],
+              },
+            ],
+          };
+        },
+        matches: (unit, actualTranslation) =>
+          unit.context.key === "toolbar.save" &&
+          actualTranslation.text === "Enregistrer",
+        contentOf: (actualTranslation) => actualTranslation.text,
+      },
+      translationWriteback: {
+        locateExistingTarget: () => ({
+          status: "located",
+          locator: { file: "locales/fr.json", key: "toolbar.save" },
+        }),
+        locateNewTarget: () => ({
+          status: "notWritable",
+          reason: "本场景修改已有译文。",
+        }),
+        dependencies: () =>
+          new Map([["resource", "locales/fr.json"]]) as unknown as JsonValue,
+      },
+    });
+    const facts = await readFacts(config);
+
+    await assert.rejects(
+      resolveSemanticEditInput(
+        facts,
+        { sourceKey: "toolbar.save", language: "fr" },
+        config,
+      ),
+      (error: unknown) =>
+        error instanceof StandardSchemaContractError &&
+        error.kind === "invalid-json",
+    );
   });
 
   void it("keeps write observations stable while the host mutates its raw resource", async () => {

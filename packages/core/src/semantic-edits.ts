@@ -12,6 +12,10 @@ import type {
   TranslationAssociationFact,
   TranslationUnitInput,
 } from "./index.ts";
+import {
+  assertJsonValue,
+  StandardSchemaContractError,
+} from "./standard-schema.ts";
 
 export type JsonValue =
   | string
@@ -360,6 +364,7 @@ export async function resolveSemanticEditInput<
       },
     };
   } catch (error) {
+    rethrowContractError(error);
     return {
       status: "notWritable",
       reason: error instanceof Error ? error.message : String(error),
@@ -398,6 +403,7 @@ export async function resolveSemanticDeleteInput<
     sourceRangeSnapshot = snapshotJson(sourceRange, "历史原文范围");
     historicalSourceSnapshot = snapshotJson(historicalSource, "历史原文单元");
   } catch (error) {
+    rethrowContractError(error);
     return {
       status: "notWritable",
       reason: error instanceof Error ? error.message : String(error),
@@ -427,6 +433,7 @@ export async function resolveSemanticDeleteInput<
     try {
       range = snapshotJson(value, "目标译文范围");
     } catch (error) {
+      rethrowContractError(error);
       return {
         status: "notWritable",
         reason: error instanceof Error ? error.message : String(error),
@@ -484,6 +491,7 @@ export async function resolveSemanticDeleteInput<
         matches(historicalSource, translation.translation),
     );
   } catch (error) {
+    rethrowContractError(error);
     return {
       status: "notWritable",
       reason: error instanceof Error ? error.message : String(error),
@@ -559,6 +567,7 @@ export async function resolveSemanticDeleteInput<
       },
     };
   } catch (error) {
+    rethrowContractError(error);
     return {
       status: "notWritable",
       reason: error instanceof Error ? error.message : String(error),
@@ -592,6 +601,7 @@ export function prepareSemanticEdit(
       },
     };
   } catch (error) {
+    rethrowContractError(error);
     return {
       status: "notWritable",
       reason: error instanceof Error ? error.message : String(error),
@@ -617,6 +627,7 @@ export function prepareSemanticDeletion(
       },
     };
   } catch (error) {
+    rethrowContractError(error);
     return {
       status: "notWritable",
       reason: error instanceof Error ? error.message : String(error),
@@ -648,6 +659,7 @@ export async function applySemanticEdits<
     try {
       facts = await readFacts(config);
     } catch (error) {
+      rethrowContractError(error);
       results.push({
         ...base,
         status: "unprocessed",
@@ -732,6 +744,7 @@ export async function applySemanticEdits<
         });
       }
     } catch (error) {
+      rethrowContractError(error);
       results.push({
         ...base,
         status: "writeUnconfirmed",
@@ -792,6 +805,7 @@ async function validateSemanticEdit<
   try {
     currentSource = snapshotJson(sourceUnit.unit.source, "当前原文正文");
   } catch (error) {
+    rethrowContractError(error);
     return {
       status: "unprocessed",
       reason: error instanceof Error ? error.message : String(error),
@@ -867,6 +881,7 @@ async function validateSemanticEdit<
         "当前译文正文",
       );
     } catch (error) {
+      rethrowContractError(error);
       return {
         status: "unprocessed",
         reason: error instanceof Error ? error.message : String(error),
@@ -896,6 +911,7 @@ async function validateSemanticEdit<
             translation: currentTranslation,
           });
   } catch (error) {
+    rethrowContractError(error);
     return {
       status: "notWritable",
       reason: error instanceof Error ? error.message : String(error),
@@ -1004,6 +1020,7 @@ async function validateSemanticDeletion<
       translation: currentTranslation,
     });
   } catch (error) {
+    rethrowContractError(error);
     return {
       status: "notWritable",
       reason: error instanceof Error ? error.message : String(error),
@@ -1283,15 +1300,10 @@ function confirmsEditContent<TUnit extends TranslationUnitInput, TTranslation>(
 }
 
 function snapshotJson(value: unknown, description: string): JsonValue {
-  let serialized: string | undefined;
-  try {
-    serialized = JSON.stringify(value);
-  } catch (error) {
-    throw new TypeError(`${description}必须可序列化为 JSON。`, {
-      cause: error,
-    });
-  }
-  if (serialized === undefined)
-    throw new TypeError(`${description}必须可序列化为 JSON。`);
-  return JSON.parse(serialized) as JsonValue;
+  assertJsonValue(value, description);
+  return JSON.parse(JSON.stringify(value)) as JsonValue;
+}
+
+function rethrowContractError(error: unknown): void {
+  if (error instanceof StandardSchemaContractError) throw error;
 }
