@@ -10,7 +10,9 @@ const journey: CliJourney = {
   async setup({ workDir }) {
     await writeFile(
       path.join(workDir, "lioni.config.ts"),
-      `export default {
+      `import { defineConfig } from "@lioni/core";
+
+export default defineConfig({
   source: {
     schema: { "~standard": { version: 1, vendor: "facts-journey", validate(value) {
       const context = value?.context;
@@ -69,12 +71,14 @@ const journey: CliJourney = {
       unit.context.line === translation.context.line,
     contentOf: (translation) => translation.text
   }
-};
+});
 `,
     );
     await writeFile(
       path.join(workDir, "duplicate.config.ts"),
-      `export default {
+      `import { defineConfig } from "@lioni/core";
+
+export default defineConfig({
   source: {
     schema: { "~standard": { version: 1, vendor: "facts-journey", validate(value) {
       const context = value?.context;
@@ -94,39 +98,47 @@ const journey: CliJourney = {
     }] })
   },
   keyOf: (unit) => unit.context.file + ":" + unit.context.line
-};
+});
 `,
     );
     await writeFile(
       path.join(workDir, "qa.config.ts"),
-      `import baseConfig from "./lioni.config.ts";
+      `import { defineConfig, defineQualityCheck } from "@lioni/core";
+import baseConfig from "./lioni.config.ts";
 
-const check = {
-  id: "host-rule",
-  async prepare() {
-    return {
-      configuration: { enabled: true },
-      check() {
-        return {
-          status: "complete",
-          diagnostics: [],
-          issues: [],
-          coverage: {
-            selected: 1,
-            evaluated: 1,
-            notApplicable: 0,
-            incomplete: 0,
-            failed: 0
-          }
-        };
-      }
-    };
-  },
+const enabledConfigurationSchema = {
+  "~standard": {
+    version: 1,
+    vendor: "facts-journey-qa",
+    validate(value) {
+      return typeof value === "object" && value !== null && !Array.isArray(value) && typeof value.enabled === "boolean"
+        ? { value }
+        : { issues: [{ message: "检查器配置必须包含布尔型 enabled 字段。" }] };
+    }
+  }
 };
 
-export default {
+export default defineConfig({
   ...baseConfig,
-  qualityChecks: [check],
+  qualityChecks: [defineQualityCheck({
+    id: "host-rule",
+    configurationSchema: enabledConfigurationSchema,
+    configuration: { enabled: true },
+    check({ configuration }) {
+      return {
+        status: configuration.enabled ? "complete" : "not-applicable",
+        diagnostics: [],
+        issues: [],
+        coverage: {
+          selected: 1,
+          evaluated: 1,
+          notApplicable: 0,
+          incomplete: 0,
+          failed: 0
+        }
+      };
+    }
+  })],
   createQualityRequest(facts) {
     const candidates = facts.associations.flatMap((association) => {
       if (association.status !== "matched") return [];
@@ -142,7 +154,7 @@ export default {
       dependencies: { selectedBy: "defineConfig" },
     };
   },
-};
+});
 `,
     );
     await writeFile(

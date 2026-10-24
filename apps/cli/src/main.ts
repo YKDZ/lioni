@@ -363,38 +363,40 @@ function createCliContract(identity: CliCommandIdentity) {
         },
         async handler({ input, outcome }) {
           try {
-            const config = await loadConfig(input.config);
-            const facts = await readFacts(config);
-            return outcome.data.read({
-              ...facts,
-              source: {
-                ...facts.source,
-                read: {
-                  ...facts.source.read,
-                  scopes: facts.source.read.scopes.map((scope) => ({
-                    ...scope,
+            const loaded = await loadConfig(input.config);
+            return await loaded.use(async (config) => {
+              const facts = await readFacts(config);
+              return outcome.data.read({
+                ...facts,
+                source: {
+                  ...facts.source,
+                  read: {
+                    ...facts.source.read,
+                    scopes: facts.source.read.scopes.map((scope) => ({
+                      ...scope,
+                    })),
+                  },
+                  units: facts.source.units.map((unit) => ({ ...unit })),
+                },
+                translations: {
+                  reads: facts.translations.reads.map((read) => ({
+                    ...read,
+                    scopes: read.scopes.map((scope) => ({
+                      ...scope,
+                      covers: [...scope.covers],
+                      translationIndexes: [...scope.translationIndexes],
+                    })),
+                  })),
+                  records: facts.translations.records.map((record) => ({
+                    ...record,
                   })),
                 },
-                units: facts.source.units.map((unit) => ({ ...unit })),
-              },
-              translations: {
-                reads: facts.translations.reads.map((read) => ({
-                  ...read,
-                  scopes: read.scopes.map((scope) => ({
-                    ...scope,
-                    covers: [...scope.covers],
-                    translationIndexes: [...scope.translationIndexes],
-                  })),
+                associations: facts.associations.map((association) => ({
+                  ...association,
+                  scopeIndexes: [...association.scopeIndexes],
+                  translationIndexes: [...association.translationIndexes],
                 })),
-                records: facts.translations.records.map((record) => ({
-                  ...record,
-                })),
-              },
-              associations: facts.associations.map((association) => ({
-                ...association,
-                scopeIndexes: [...association.scopeIndexes],
-                translationIndexes: [...association.translationIndexes],
-              })),
+              });
             });
           } catch (error) {
             if (error instanceof DuplicateTranslationUnitKeyError)
@@ -491,17 +493,20 @@ function createCliContract(identity: CliCommandIdentity) {
         },
         async handler({ input, outcome }) {
           try {
-            const facts = await readCompletion(await loadConfig(input.config));
-            return outcome.data.read({
-              ...facts.completion,
-              scope: {
-                ...facts.completion.scope,
-                targetLanguages: [...facts.completion.scope.targetLanguages],
-              },
-              obligations: facts.completion.obligations.map((obligation) => ({
-                ...obligation,
-                translationIndexes: [...obligation.translationIndexes],
-              })),
+            const loaded = await loadConfig(input.config);
+            return await loaded.use(async (config) => {
+              const facts = await readCompletion(config);
+              return outcome.data.read({
+                ...facts.completion,
+                scope: {
+                  ...facts.completion.scope,
+                  targetLanguages: [...facts.completion.scope.targetLanguages],
+                },
+                obligations: facts.completion.obligations.map((obligation) => ({
+                  ...obligation,
+                  translationIndexes: [...obligation.translationIndexes],
+                })),
+              });
             });
           } catch (error) {
             if (error instanceof DuplicateTranslationUnitKeyError)
@@ -551,9 +556,11 @@ function createCliContract(identity: CliCommandIdentity) {
         },
         async handler({ input, outcome }) {
           try {
-            const config = await loadConfig(input.config);
-            const result = await analyzeQuality(config);
-            return outcome.data.checked(result);
+            const loaded = await loadConfig(input.config);
+            return await loaded.use(async (config) => {
+              const result = await analyzeQuality(config);
+              return outcome.data.checked(result);
+            });
           } catch (error) {
             return outcome.failure.checkFailed({
               message: error instanceof Error ? error.message : String(error),

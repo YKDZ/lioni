@@ -27,11 +27,11 @@ type Body = {
 declare const unknownPlan: unknown;
 validateUpdatePlan(unknownPlan);
 if (unknownPlan.items[0]?.decision.action === "candidate") {
-  // @ts-expect-error JSON structure validation cannot recover the host body type.
+  // @ts-expect-error JSON结构校验不能恢复宿主正文类型。
   const unvalidatedBody: Body = unknownPlan.items[0].decision.candidate.content;
   void unvalidatedBody;
 }
-// @ts-expect-error Only config-bound history validation can recover business types.
+// @ts-expect-error 只有绑定配置契约的历史校验才能恢复业务类型。
 validateUpdatePlan<Unit, Translation, Body>(unknownPlan);
 
 declare const unitSchema: StandardSchemaV1<Unit, Unit>;
