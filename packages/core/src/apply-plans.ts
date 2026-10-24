@@ -32,6 +32,8 @@ import {
 export type UpdatePlanContentResult<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody = JsonValue,
+  TUnavailable = never,
 > = {
   readonly sourceKey: string;
   readonly language: string;
@@ -39,10 +41,10 @@ export type UpdatePlanContentResult<
   readonly status:
     | "notAttempted"
     | "retained"
-    | SemanticEditResult<TUnit, TTranslation>["status"];
+    | SemanticEditResult<TUnit, TTranslation, TBody, TUnavailable>["status"];
   readonly reason?: string;
   readonly blocker?: UpdatePlanBlock;
-  readonly edit?: SemanticEditResult<TUnit, TTranslation>;
+  readonly edit?: SemanticEditResult<TUnit, TTranslation, TBody, TUnavailable>;
 };
 
 export type UpdatePlanBaselineResult = {
@@ -61,10 +63,14 @@ export type UpdatePlanBaselineResult = {
 export type UpdatePlanApplyResult<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody = JsonValue,
+  TUnavailable = never,
 > = {
   readonly contentResults: readonly UpdatePlanContentResult<
     TUnit,
-    TTranslation
+    TTranslation,
+    TBody,
+    TUnavailable
   >[];
   readonly baselineResults: readonly UpdatePlanBaselineResult[];
 };
@@ -73,16 +79,18 @@ export type UpdatePlanApplyResult<
 export async function applyUpdatePlan<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
+  TUnavailable,
 >(
-  plan: UpdatePlan<TUnit, TTranslation>,
-  config: FrameworkConfig<TUnit, TTranslation>,
+  plan: UpdatePlan<TUnit, TTranslation, TBody, TUnavailable>,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
   baselineStore: ProcessingBaselineStore,
-): Promise<UpdatePlanApplyResult<TUnit, TTranslation>> {
+): Promise<UpdatePlanApplyResult<TUnit, TTranslation, TBody, TUnavailable>> {
   validateUpdatePlan(plan);
 
   const contentResults = new Map<
     string,
-    UpdatePlanContentResult<TUnit, TTranslation>
+    UpdatePlanContentResult<TUnit, TTranslation, TBody, TUnavailable>
   >();
   const baselineResults = new Map<string, UpdatePlanBaselineResult>();
   for (const item of plan.items) {
@@ -120,7 +128,7 @@ export async function applyUpdatePlan<
     return finishResult(contentResults, baselineResults);
   }
 
-  let facts: FrameworkFacts<TUnit, TTranslation>;
+  let facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>;
   try {
     facts = await readFacts(config);
   } catch (error) {
@@ -146,8 +154,18 @@ export async function applyUpdatePlan<
       change,
     ]),
   );
-  const retainItems: UpdatePlanItem<TUnit["source"], TTranslation>[] = [];
-  const candidateItems: UpdatePlanItem<TUnit["source"], TTranslation>[] = [];
+  const retainItems: UpdatePlanItem<
+    TUnit["source"],
+    TTranslation,
+    TBody,
+    TUnavailable
+  >[] = [];
+  const candidateItems: UpdatePlanItem<
+    TUnit["source"],
+    TTranslation,
+    TBody,
+    TUnavailable
+  >[] = [];
 
   for (const item of actionable) {
     const id = pairKey(item.sourceKey, item.language);
@@ -183,7 +201,12 @@ export async function applyUpdatePlan<
   const confirmedSelections: ProcessingBaselineSelection[] =
     retainItems.map(itemPair);
   if (candidateItems.length > 0) {
-    let editResults: readonly SemanticEditResult<TUnit, TTranslation>[];
+    let editResults: readonly SemanticEditResult<
+      TUnit,
+      TTranslation,
+      TBody,
+      TUnavailable
+    >[];
     try {
       const edits = candidateItems.flatMap((item) =>
         item.edit === undefined ? [] : [item.edit],
@@ -242,7 +265,7 @@ export async function applyUpdatePlan<
   }
 
   if (confirmedSelections.length > 0) {
-    let afterFacts: FrameworkFacts<TUnit, TTranslation>;
+    let afterFacts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>;
     try {
       afterFacts = await readFacts(config);
     } catch (error) {
@@ -269,9 +292,14 @@ export async function applyUpdatePlan<
   return finishResult(contentResults, baselineResults);
 }
 
-function initialContentResult<TUnit extends TranslationUnitInput, TTranslation>(
-  item: UpdatePlanItem<TUnit["source"], TTranslation>,
-): UpdatePlanContentResult<TUnit, TTranslation> {
+function initialContentResult<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  item: UpdatePlanItem<TUnit["source"], TTranslation, TBody, TUnavailable>,
+): UpdatePlanContentResult<TUnit, TTranslation, TBody, TUnavailable> {
   return {
     ...itemPair(item),
     planStatus: item.status,
@@ -285,14 +313,19 @@ function initialContentResult<TUnit extends TranslationUnitInput, TTranslation>(
   };
 }
 
-function planInputConflict<TUnit extends TranslationUnitInput, TTranslation>(
-  item: UpdatePlanItem<TUnit["source"], TTranslation>,
-  plan: UpdatePlan<TUnit, TTranslation>,
+function planInputConflict<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  item: UpdatePlanItem<TUnit["source"], TTranslation, TBody, TUnavailable>,
+  plan: UpdatePlan<TUnit, TTranslation, TBody, TUnavailable>,
   baseline: ProcessingBaseline | undefined,
   change:
     | ReturnType<typeof compareProcessingBaseline>["changes"][number]
     | undefined,
-  config: FrameworkConfig<TUnit, TTranslation>,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
 ): UpdatePlanBlock | undefined {
   if (item.expectedInput === undefined || change?.current === undefined)
     return {
@@ -317,11 +350,16 @@ function planInputConflict<TUnit extends TranslationUnitInput, TTranslation>(
   return undefined;
 }
 
-function planPreviousMatches<TUnit extends TranslationUnitInput, TTranslation>(
-  item: UpdatePlanItem<TUnit["source"], TTranslation>,
-  plan: UpdatePlan<TUnit, TTranslation>,
+function planPreviousMatches<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  item: UpdatePlanItem<TUnit["source"], TTranslation, TBody, TUnavailable>,
+  plan: UpdatePlan<TUnit, TTranslation, TBody, TUnavailable>,
   baseline: ProcessingBaseline | undefined,
-  config: FrameworkConfig<TUnit, TTranslation>,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
 ): boolean {
   const current = baseline?.entries.find(
     (entry) =>
@@ -375,10 +413,15 @@ function sourceScopeEvidenceStillProvesAddition(
   );
 }
 
-function matchesExpectedInput<TUnit extends TranslationUnitInput, TTranslation>(
-  expected: UpdatePlanObservation<TUnit["source"], TTranslation>,
+function matchesExpectedInput<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  expected: UpdatePlanObservation<TUnit["source"], TTranslation, TUnavailable>,
   current: ProcessingBaselineEntry,
-  config: FrameworkConfig<TUnit, TTranslation>,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
 ): boolean {
   if (
     expected.source.presence !== current.source.presence ||
@@ -431,9 +474,11 @@ function matchesExpectedInput<TUnit extends TranslationUnitInput, TTranslation>(
 function snapshotTranslationContent<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
+  TUnavailable,
 >(
-  config: FrameworkConfig<TUnit, TTranslation>,
-  translation: TTranslation,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+  translation: TTranslation | TUnavailable,
   bodyAvailability: "available" | "unavailable",
 ): JsonValue {
   if (bodyAvailability !== "available") return null;
@@ -442,7 +487,7 @@ function snapshotTranslationContent<
     throw new TypeError("实际译文没有业务内容读取适配器。");
   let serialized: string | undefined;
   try {
-    serialized = JSON.stringify(contentOf(translation));
+    serialized = JSON.stringify(contentOf(translation as TTranslation));
   } catch (error) {
     throw new TypeError("译文业务内容必须可序列化为 JSON。", {
       cause: error,
@@ -503,9 +548,22 @@ function recordBaselineResults(
   }
 }
 
-function failActionableItems<TUnit extends TranslationUnitInput, TTranslation>(
-  items: readonly UpdatePlanItem<TUnit["source"], TTranslation>[],
-  contentResults: Map<string, UpdatePlanContentResult<TUnit, TTranslation>>,
+function failActionableItems<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  items: readonly UpdatePlanItem<
+    TUnit["source"],
+    TTranslation,
+    TBody,
+    TUnavailable
+  >[],
+  contentResults: Map<
+    string,
+    UpdatePlanContentResult<TUnit, TTranslation, TBody, TUnavailable>
+  >,
   baselineResults: Map<string, UpdatePlanBaselineResult>,
   baselineStatus: "failed" | "notAttempted",
   reason: string,
@@ -526,10 +584,18 @@ function failActionableItems<TUnit extends TranslationUnitInput, TTranslation>(
   }
 }
 
-function finishResult<TUnit extends TranslationUnitInput, TTranslation>(
-  contentResults: Map<string, UpdatePlanContentResult<TUnit, TTranslation>>,
+function finishResult<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  contentResults: Map<
+    string,
+    UpdatePlanContentResult<TUnit, TTranslation, TBody, TUnavailable>
+  >,
   baselineResults: Map<string, UpdatePlanBaselineResult>,
-): UpdatePlanApplyResult<TUnit, TTranslation> {
+): UpdatePlanApplyResult<TUnit, TTranslation, TBody, TUnavailable> {
   return {
     contentResults: [...contentResults.values()],
     baselineResults: [...baselineResults.values()],

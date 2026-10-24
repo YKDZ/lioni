@@ -17,6 +17,7 @@ import {
 import {
   prepareSemanticEdit,
   resolveSemanticEditInput,
+  validateSemanticEditCandidate,
   type SemanticEditPreparation,
 } from "./semantic-edits.ts";
 import type {
@@ -159,9 +160,16 @@ export type FrameworkConfig<
   >;
   readonly translationWriteback?: TranslationWritebackAdapter<
     TUnit,
-    TTranslation
+    TTranslation,
+    TBody,
+    TUnavailable
   >;
-  readonly updatePolicy?: UpdatePolicy<TUnit, TTranslation>;
+  readonly updatePolicy?: UpdatePolicy<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable
+  >;
   readonly qualityChecks?: readonly QualityCheckDefinition<
     TUnit,
     TTranslation,
@@ -703,21 +711,21 @@ export type QualityWriteCondition = (
   quality: QualityRunResult,
 ) => Awaitable<boolean>;
 
-export type PrepareQualityConditionedSemanticEditOptions = {
-  readonly candidate: SemanticEditCandidate;
+export type PrepareQualityConditionedSemanticEditOptions<TBody = JsonValue> = {
+  readonly candidate: SemanticEditCandidate<TBody>;
   readonly condition?: QualityWriteCondition;
   readonly quality?: QualityRunResult;
 };
 
-export type QualityConditionedSemanticEditResult =
+export type QualityConditionedSemanticEditResult<TBody = JsonValue> =
   | {
       readonly status: "not-required";
-      readonly preparation: SemanticEditPreparation;
+      readonly preparation: SemanticEditPreparation<TBody>;
     }
   | {
       readonly status: "passed";
       readonly quality: QualityRunResult;
-      readonly preparation: SemanticEditPreparation;
+      readonly preparation: SemanticEditPreparation<TBody>;
     }
   | {
       readonly status: "rejected";
@@ -735,14 +743,16 @@ export type QualityConditionedSemanticEditResult =
 export async function prepareQualityConditionedSemanticEdit<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
+  TUnavailable,
 >(
-  config: FrameworkConfig<TUnit, TTranslation>,
-  options: PrepareQualityConditionedSemanticEditOptions,
-): Promise<QualityConditionedSemanticEditResult> {
-  const candidate = snapshotJson(
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+  options: PrepareQualityConditionedSemanticEditOptions<TBody>,
+): Promise<QualityConditionedSemanticEditResult<TBody>> {
+  const candidate = await validateSemanticEditCandidate(
     options.candidate,
-    "译文候选",
-  ) as SemanticEditCandidate;
+    config,
+  );
   const { condition } = options;
   const providedQuality =
     condition === undefined || options.quality === undefined
@@ -757,14 +767,18 @@ export async function prepareQualityConditionedSemanticEdit<
 
   const checks = configuredQualityChecks(config);
   const configuredRequest = await createConfiguredQualityRequest(config, facts);
-  const request = { ...configuredRequest, candidates: [candidate] };
+  const qualityCandidate = snapshotJson(
+    candidate,
+    "译文候选",
+  ) as SemanticEditCandidate;
+  const request = { ...configuredRequest, candidates: [qualityCandidate] };
   const quality =
     providedQuality ?? (await runQualityChecks(facts, request, checks));
   if (
     providedQuality !== undefined &&
     !(await qualityRunMatchesInputs(
       facts,
-      candidate,
+      qualityCandidate,
       configuredRequest,
       checks,
       quality,
@@ -786,34 +800,38 @@ export async function prepareQualityConditionedSemanticEdit<
 async function prepareCandidateEdit<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
+  TUnavailable,
 >(
-  facts: FrameworkFacts<TUnit, TTranslation>,
-  candidate: SemanticEditCandidate,
-  config: FrameworkConfig<TUnit, TTranslation>,
-): Promise<SemanticEditPreparation> {
+  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
+  candidate: SemanticEditCandidate<TBody>,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+): Promise<SemanticEditPreparation<TBody>> {
   const resolved = await resolveSemanticEditInput(
     facts,
     { sourceKey: candidate.sourceKey, language: candidate.language },
     config,
   );
   return resolved.status === "resolved"
-    ? prepareSemanticEdit(resolved.input, candidate)
+    ? prepareSemanticEdit(resolved.input, candidate, config)
     : resolved;
 }
 
 async function qualityRunMatchesInputs<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
+  TUnavailable,
 >(
-  facts: FrameworkFacts<TUnit, TTranslation>,
+  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
   candidate: SemanticEditCandidate,
   request: QualityCheckRequest,
   checks: readonly QualityCheckDefinition<
     TUnit,
     TTranslation,
     QualityObject,
-    JsonValue,
-    never
+    TBody,
+    TUnavailable
   >[],
   quality: QualityRunResult,
 ): Promise<boolean> {

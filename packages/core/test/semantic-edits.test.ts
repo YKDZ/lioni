@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import {
   applySemanticEdits,
   defineConfig,
+  prepareQualityConditionedSemanticEdit,
   prepareSemanticEdit,
   readFacts,
   resolveSemanticEditInput,
@@ -12,6 +13,7 @@ import {
   type FrameworkFacts,
   type JsonValue,
   type SemanticEditCandidate,
+  type StandardSchemaV1,
   type TranslationUnitInput,
 } from "../src/index.ts";
 import {
@@ -29,10 +31,12 @@ function textContent(content: unknown): string {
 async function resolveAndPrepareSemanticEdit<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
+  TUnavailable,
 >(
-  facts: FrameworkFacts<TUnit, TTranslation>,
-  candidate: SemanticEditCandidate,
-  config: FrameworkConfig<TUnit, TTranslation>,
+  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
+  candidate: SemanticEditCandidate<TBody>,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
 ) {
   const resolved = await resolveSemanticEditInput(
     facts,
@@ -40,7 +44,7 @@ async function resolveAndPrepareSemanticEdit<
     config,
   );
   if (resolved.status !== "resolved") return resolved;
-  return prepareSemanticEdit(resolved.input, candidate);
+  return prepareSemanticEdit(resolved.input, candidate, config);
 }
 
 void describe("semantic edits", () => {
@@ -116,7 +120,11 @@ void describe("semantic edits", () => {
 
     assert.equal(resolved.status, "resolved");
     if (resolved.status !== "resolved") return;
-    const prepared = prepareSemanticEdit(resolved.input, candidate);
+    const prepared = await prepareSemanticEdit(
+      resolved.input,
+      candidate,
+      config,
+    );
 
     assert.equal(prepared.status, "prepared");
     if (prepared.status !== "prepared") return;
@@ -128,6 +136,125 @@ void describe("semantic edits", () => {
       text: "Enregistrer",
       state: "reviewed",
     });
+  });
+
+  void it("validates an independent async string body before direct write and reread", async () => {
+    const source = {
+      source: ["Open", "Save"],
+      context: { key: "toolbar.save" },
+    };
+    const state = { text: "Enregistrer", writes: 0, validations: 0 };
+    const translation = { key: "toolbar.save", text: "Enregistrer" };
+    const contentSchema: StandardSchemaV1<string, string> = {
+      "~standard": {
+        version: 1,
+        vendor: "lioni-test-async-body",
+        async validate(value) {
+          state.validations += 1;
+          await Promise.resolve();
+          return typeof value === "string"
+            ? { value }
+            : { issues: [{ message: "译文正文必须是字符串。" }] };
+        },
+      },
+    };
+    const config = defineConfig({
+      source: {
+        schema: sourceSchemaFromExamples(source),
+        read: () => ({
+          scopes: [
+            {
+              range: "messages.json",
+              enumeration: "complete",
+              records: [{ value: source, bodyAvailability: "available" }],
+            },
+          ],
+        }),
+      },
+      keyOf: (unit) => unit.context.key,
+      translations: {
+        languages: ["fr"],
+        schema: schemaFromExamples(translation),
+        contentSchema,
+        read(_language, sourceUnits) {
+          return {
+            scopes: [
+              {
+                range: "locales/fr.json",
+                covers: sourceUnits.map(({ key }) => key),
+                enumeration: "complete",
+                records: [
+                  {
+                    value: { key: translation.key, text: state.text },
+                    bodyAvailability: "available",
+                  },
+                ],
+              },
+            ],
+          };
+        },
+        matches: (unit, actualTranslation) =>
+          unit.context.key === actualTranslation.key,
+        contentOf: (actualTranslation) => actualTranslation.text,
+      },
+      translationWriteback: {
+        locateExistingTarget: ({ translation: actualTranslation }) => ({
+          status: "located",
+          locator: actualTranslation.translation.key,
+        }),
+        locateNewTarget: () => ({
+          status: "notWritable",
+          reason: "本场景修改已有译文。",
+        }),
+        write({ edit }) {
+          if (edit.operation !== "write")
+            throw new Error("本场景只支持写入候选正文。");
+          state.text = edit.content;
+          state.writes += 1;
+        },
+      },
+    });
+    const candidate: SemanticEditCandidate<string> = {
+      sourceKey: "toolbar.save",
+      language: "fr",
+      content: "Sauvegarder",
+    };
+
+    await assert.rejects(
+      prepareQualityConditionedSemanticEdit(config, {
+        candidate: {
+          ...candidate,
+          content: 42,
+        } as unknown as SemanticEditCandidate<string>,
+      }),
+      (error: unknown) =>
+        error instanceof StandardSchemaContractError &&
+        error.kind === "schema-mismatch",
+    );
+    assert.equal(state.writes, 0);
+
+    const preparation = await prepareQualityConditionedSemanticEdit(config, {
+      candidate,
+    });
+    assert.equal(preparation.status, "not-required");
+    if (preparation.status !== "not-required") return;
+    assert.equal(preparation.preparation.status, "prepared");
+    if (preparation.preparation.status !== "prepared") return;
+    assert.equal(preparation.preparation.edit.content, "Sauvegarder");
+    assert.equal(state.text, "Enregistrer");
+
+    const savedEdit = JSON.parse(
+      JSON.stringify(preparation.preparation.edit),
+    ) as typeof preparation.preparation.edit;
+    const applied = await applySemanticEdits([savedEdit], config);
+    assert.equal(applied.results[0]?.status, "written");
+    assert.equal(
+      applied.results[0]?.after?.translations[0]?.content,
+      "Sauvegarder",
+    );
+    assert.equal(state.text, "Sauvegarder");
+    assert.ok(state.validations >= 4);
+    assert.equal(state.writes, 1);
   });
 
   void it("stores the host's actual target location and selected expectations", async () => {
@@ -293,6 +420,8 @@ void describe("semantic edits", () => {
       keyOf: ({ context }) => context.key,
       translations: {
         languages: ["fr"],
+        schema: schemaFromExamples(translation),
+        contentSchema: jsonValueSchema,
         read(_language, sourceUnits) {
           return {
             scopes: [
