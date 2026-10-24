@@ -572,6 +572,7 @@ import {
   readCompletion,
   readFacts,
   readSourceFacts,
+  resolveSemanticEditInput,
 } from "@l10n/core";
 import {
   createFileProcessingBaselineStore,
@@ -613,11 +614,18 @@ void createFileUpdatePlanStore(".l10n/update-plan.json");
 void readFacts(editConfig).then(async (facts) => {
   const sourceUnit = facts.source.units[0];
   if (sourceUnit === undefined) return;
-  const prepared = await prepareSemanticEdit(facts, {
+  const candidate = {
     sourceKey: sourceUnit.key,
     language: "fr",
     content: "Edited translation",
-  }, editConfig);
+  };
+  const resolved = await resolveSemanticEditInput(
+    facts,
+    { sourceKey: candidate.sourceKey, language: candidate.language },
+    editConfig,
+  );
+  if (resolved.status !== "resolved") return;
+  const prepared = prepareSemanticEdit(resolved.input, candidate);
   if (prepared.status === "prepared")
     return applySemanticEdits([prepared.edit], editConfig);
 });
@@ -1280,12 +1288,27 @@ await writeFile(editPath + ".result.json", JSON.stringify(result), "utf8");
 import { readFile, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import { applySemanticEdits, prepareSemanticEdit, readFacts } from "@l10n/core";
+import {
+  applySemanticEdits,
+  prepareSemanticEdit,
+  readFacts,
+  resolveSemanticEditInput,
+} from "@l10n/core";
 import config from "./edits.config.ts";
 
 async function prepare(sourceKey, content) {
   const facts = await readFacts(config);
-  const result = await prepareSemanticEdit(facts, { sourceKey, language: "fr", content }, config);
+  const resolved = await resolveSemanticEditInput(
+    facts,
+    { sourceKey, language: "fr" },
+    config,
+  );
+  if (resolved.status !== "resolved") return resolved;
+  const result = prepareSemanticEdit(resolved.input, {
+    sourceKey,
+    language: "fr",
+    content,
+  });
   assert.equal(result.status, "prepared", result.reason);
   return result.edit;
 }
@@ -1423,10 +1446,9 @@ const factsAfter = await readFacts(config);
 assert.equal(factsAfter.associations.find(({ sourceKey }) => sourceKey === "source:18")?.status, "matched");
 assert.equal(factsAfter.associations.find(({ sourceKey }) => sourceKey === "source:19")?.status, "matched");
 const noLocationFacts = await readFacts(config);
-const noLocation = await prepareSemanticEdit(noLocationFacts, {
+const noLocation = await resolveSemanticEditInput(noLocationFacts, {
   sourceKey: "source:23",
   language: "fr",
-  content: "Cannot be located",
 }, config);
 assert.equal(noLocation.status, "notWritable");
 
