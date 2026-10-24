@@ -11,6 +11,8 @@ import {
 import type { StandardSchemaV1 } from "../src/index.ts";
 import {
   emptySourceSchema,
+  jsonValueSchema,
+  schemaFromExamples,
   sourceSchemaFromExamples,
 } from "./source-schema.ts";
 
@@ -464,6 +466,11 @@ void describe("framework facts", () => {
               ],
             };
           },
+          schema: schemaFromExamples({
+            text: "Enregistrer",
+            context: { sourceLine: 18 },
+          }),
+          contentSchema: jsonValueSchema,
           matches(unit, translation) {
             return translation.context.sourceLine === unit.context.line;
           },
@@ -537,6 +544,11 @@ void describe("framework facts", () => {
         keyOf: (unit) => `message:${unit.context.line}`,
         translations: {
           languages: ["fr"],
+          schema: schemaFromExamples({
+            text: "Enregistrer",
+            context: { line: 18 },
+          }),
+          contentSchema: jsonValueSchema,
           read(_language, sourceUnits) {
             return {
               scopes: [
@@ -620,12 +632,12 @@ void describe("framework facts", () => {
       { source: "Cancel", context: { line: 20 } },
     ];
     type Translation = {
-      readonly text?: string;
+      readonly text: string;
       readonly context: { readonly sourceLines: readonly number[] };
     };
     let contentCalls = 0;
     const facts = await readFacts(
-      defineConfig<(typeof units)[number], Translation>({
+      defineConfig({
         source: {
           schema: sourceSchemaFromExamples(...units),
           read: () => completeSource(...units),
@@ -633,6 +645,14 @@ void describe("framework facts", () => {
         keyOf: (unit) => `message:${unit.context.line}`,
         translations: {
           languages: ["fr", "de"],
+          schema: schemaFromExamples<Translation>({
+            text: "Enregistrer",
+            context: { sourceLines: [18, 19] },
+          }),
+          unavailableSchema: schemaFromExamples({
+            context: { sourceLines: [20] },
+          }),
+          contentSchema: jsonValueSchema,
           read(language, sourceUnits) {
             if (language === "de") throw new Error("catalogue is unavailable");
             return {
@@ -669,8 +689,6 @@ void describe("framework facts", () => {
           },
           contentOf(translation) {
             contentCalls += 1;
-            if (typeof translation.text !== "string")
-              throw new Error("缺少可用正文不应进入内容转换。");
             return translation.text;
           },
         },
@@ -747,7 +765,10 @@ void describe("framework facts", () => {
     );
     assert.equal(facts.translations.records.length, 3);
     assert.equal(contentCalls, 2);
-    assert.equal(facts.translations.records[1]?.content, null);
+    assert.equal(
+      Object.hasOwn(facts.translations.records[1]!, "content"),
+      false,
+    );
     assert.equal(
       facts.translations.records[1]?.bodyAvailability,
       "unavailable",
@@ -793,6 +814,8 @@ void describe("framework facts", () => {
         keyOf: (unit) => `message:${unit.context.line}`,
         translations: {
           languages: ["fr"],
+          schema: schemaFromExamples({ text: "Example" }),
+          contentSchema: jsonValueSchema,
           read: () => ({ scopes: [] }),
           matches: () => false,
           contentOf: () => null,
@@ -813,5 +836,185 @@ void describe("framework facts", () => {
         translationIndexes: [],
       },
     ]);
+  });
+
+  void it("keeps list sources, available records, unavailable records, and string bodies distinct", async () => {
+    type AvailableTranslation = {
+      readonly id: string;
+      readonly sourceLine: number;
+      readonly text: string;
+    };
+    type UnavailableTranslation = {
+      readonly id: string;
+      readonly sourceLine: number;
+    };
+    const units = [
+      {
+        source: ["Save", "Submit"],
+        context: { file: "messages.json", line: 18 },
+      },
+      {
+        source: ["Cancel"],
+        context: { file: "messages.json", line: 19 },
+      },
+    ];
+    const available: AvailableTranslation = {
+      id: "save",
+      sourceLine: 18,
+      text: "Enregistrer",
+    };
+    const unavailable: UnavailableTranslation = {
+      id: "cancel",
+      sourceLine: 19,
+    };
+    let contentReads = 0;
+    const facts = await readFacts(
+      defineConfig({
+        source: {
+          schema: sourceSchemaFromExamples(...units),
+          read: () => completeSource(...units),
+        },
+        keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
+        translations: {
+          languages: ["fr"],
+          schema: schemaFromExamples<AvailableTranslation>(available),
+          unavailableSchema:
+            schemaFromExamples<UnavailableTranslation>(unavailable),
+          contentSchema: schemaFromExamples<string>("Enregistrer"),
+          read: () => ({
+            scopes: [
+              {
+                range: "messages.fr.json",
+                covers: ["messages.json:18", "messages.json:19"],
+                enumeration: "complete",
+                records: [
+                  { value: available, bodyAvailability: "available" },
+                  { value: unavailable, bodyAvailability: "unavailable" },
+                ],
+              },
+            ],
+          }),
+          matches: (unit, translation) =>
+            unit.context.line === translation.sourceLine,
+          contentOf(translation) {
+            contentReads += 1;
+            return translation.text;
+          },
+        },
+      }),
+    );
+
+    assert.equal(contentReads, 1);
+    assert.deepStrictEqual(
+      facts.translations.records.map((record) =>
+        record.bodyAvailability === "available"
+          ? {
+              bodyAvailability: record.bodyAvailability,
+              translation: record.translation,
+              content: record.content,
+            }
+          : {
+              bodyAvailability: record.bodyAvailability,
+              translation: record.translation,
+              hasContent: Object.hasOwn(record, "content"),
+            },
+      ),
+      [
+        {
+          bodyAvailability: "available",
+          translation: available,
+          content: "Enregistrer",
+        },
+        {
+          bodyAvailability: "unavailable",
+          translation: unavailable,
+          hasContent: false,
+        },
+      ],
+    );
+    assert.deepStrictEqual(
+      facts.associations.map(({ status }) => status),
+      ["matched", "unavailable"],
+    );
+  });
+
+  void it("rejects an available translation that fails its declared schema", async () => {
+    type Translation = { readonly id: string; readonly text: string };
+    const unit = { source: "Save", context: { line: 18 } };
+    const validTranslation: Translation = { id: "save", text: "Save" };
+    const invalidTranslation = { id: 7, text: "Save" };
+    const config = defineConfig({
+      source: {
+        schema: sourceSchemaFromExamples(unit),
+        read: () => completeSource(unit),
+      },
+      keyOf: (value) => `message:${value.context.line}`,
+      translations: {
+        languages: ["fr"],
+        schema: schemaFromExamples<Translation>(validTranslation),
+        contentSchema: schemaFromExamples<string>("Enregistrer"),
+        read: () => ({
+          scopes: [
+            {
+              range: "messages.fr.json",
+              covers: ["message:18"],
+              enumeration: "complete",
+              records: [
+                {
+                  value: invalidTranslation as unknown as Translation,
+                  bodyAvailability: "available",
+                },
+              ],
+            },
+          ],
+        }),
+        matches: () => true,
+        contentOf: (translation) => translation.text,
+      },
+    });
+
+    await assert.rejects(
+      readFacts(config),
+      (error: unknown) =>
+        error instanceof StandardSchemaContractError &&
+        error.kind === "schema-mismatch",
+    );
+  });
+
+  void it("rejects non-JSON translation content before recording facts", async () => {
+    type Translation = { readonly id: string; readonly text: string };
+    const unit = { source: "Save", context: { line: 18 } };
+    const translation: Translation = { id: "save", text: "Save" };
+    const config = defineConfig({
+      source: {
+        schema: sourceSchemaFromExamples(unit),
+        read: () => completeSource(unit),
+      },
+      keyOf: (value) => `message:${value.context.line}`,
+      translations: {
+        languages: ["fr"],
+        schema: schemaFromExamples<Translation>(translation),
+        contentSchema: schemaFromExamples<string>("Enregistrer"),
+        read: () => ({
+          scopes: [
+            {
+              range: "messages.fr.json",
+              covers: ["message:18"],
+              enumeration: "complete",
+              records: [{ value: translation, bodyAvailability: "available" }],
+            },
+          ],
+        }),
+        matches: () => true,
+        contentOf: () => new Date() as unknown as string,
+      },
+    });
+
+    await assert.rejects(
+      readFacts(config),
+      (error: unknown) =>
+        error instanceof StandardSchemaContractError &&
+        error.kind === "invalid-json",
+    );
   });
 });
