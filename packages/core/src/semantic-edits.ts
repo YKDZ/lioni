@@ -12,6 +12,11 @@ import type {
   TranslationAssociationFact,
   TranslationUnitInput,
 } from "./index.ts";
+import {
+  assertJsonValue,
+  StandardSchemaContractError,
+  validateWithStandardSchema,
+} from "./standard-schema.ts";
 
 export type JsonValue =
   | string
@@ -26,10 +31,10 @@ export type SemanticEditTarget = {
   readonly locator: JsonValue;
 };
 
-export type SemanticEditCandidate = {
+export type SemanticEditCandidate<TBody = JsonValue> = {
   readonly sourceKey: string;
   readonly language: string;
-  readonly content: JsonValue;
+  readonly content: TBody;
 };
 
 export type SemanticEditSourceExpectation =
@@ -44,65 +49,65 @@ export type SemanticEditSourceExpectation =
       readonly historicalContent: JsonValue;
     };
 
-export type SemanticEditTargetExpectation =
+export type SemanticEditTargetExpectation<TBody = JsonValue> =
   | { readonly status: "missing" }
   | {
       readonly status: "present";
-      readonly content: JsonValue;
+      readonly content: TBody;
       readonly range: JsonValue;
       readonly scopes: readonly JsonValue[];
     };
 
-type SemanticEditExpected = {
+type SemanticEditExpected<TBody = JsonValue> = {
   readonly source: SemanticEditSourceExpectation;
-  readonly target: SemanticEditTargetExpectation;
+  readonly target: SemanticEditTargetExpectation<TBody>;
   readonly dependencies: JsonValue;
 };
 
-type SemanticEditBase = {
+type SemanticEditBase<TBody = JsonValue> = {
   readonly createdFromFactsVersion: string;
   readonly sourceKey: string;
   readonly language: string;
   readonly target: SemanticEditTarget;
-  readonly expected: SemanticEditExpected;
+  readonly expected: SemanticEditExpected<TBody>;
 };
 
-export type SemanticEdit =
-  | (SemanticEditBase & {
+export type SemanticEdit<TBody = JsonValue> =
+  | (SemanticEditBase<TBody> & {
       readonly formatVersion: "lioni.semantic-edit/v2";
       readonly operation: "write";
-      readonly content: JsonValue;
+      readonly content: TBody;
       readonly target: SemanticEditTarget;
-      readonly expected: SemanticEditExpected & {
+      readonly expected: SemanticEditExpected<TBody> & {
         readonly source: Extract<
           SemanticEditSourceExpectation,
           { presence: "present" }
         >;
       };
     })
-  | (SemanticEditBase & {
+  | (SemanticEditBase<TBody> & {
       readonly formatVersion: "lioni.semantic-edit/v2";
       readonly operation: "delete";
       readonly content?: never;
       readonly target: SemanticEditTarget & { readonly kind: "existing" };
-      readonly expected: SemanticEditExpected & {
+      readonly expected: SemanticEditExpected<TBody> & {
         readonly source: Extract<
           SemanticEditSourceExpectation,
           { presence: "removed" }
         >;
         readonly target: Extract<
-          SemanticEditTargetExpectation,
+          SemanticEditTargetExpectation<TBody>,
           { status: "present" }
         >;
       };
     });
 
-export type SemanticEditInput = {
+export type SemanticEditInput<TBody = JsonValue> = {
   readonly createdFromFactsVersion: string;
   readonly sourceKey: string;
   readonly language: string;
   readonly target: SemanticEditTarget;
-  readonly expected: SemanticEditExpected & {
+  readonly expected: SemanticEditExpected<TBody> & {
     readonly source: Extract<
       SemanticEditSourceExpectation,
       { presence: "present" }
@@ -110,39 +115,50 @@ export type SemanticEditInput = {
   };
 };
 
-export type SemanticDeleteInput = {
+export type SemanticDeleteInput<TBody = JsonValue> = {
   readonly createdFromFactsVersion: string;
   readonly sourceKey: string;
   readonly language: string;
   readonly target: SemanticEditTarget & { readonly kind: "existing" };
-  readonly expected: SemanticEditExpected & {
+  readonly expected: SemanticEditExpected<TBody> & {
     readonly source: Extract<
       SemanticEditSourceExpectation,
       { presence: "removed" }
     >;
     readonly target: Extract<
-      SemanticEditTargetExpectation,
+      SemanticEditTargetExpectation<TBody>,
       { status: "present" }
     >;
   };
 };
 
-export type SemanticEditSubject = Pick<
-  SemanticEditCandidate,
-  "sourceKey" | "language"
->;
+export type SemanticEditSubject = {
+  readonly sourceKey: string;
+  readonly language: string;
+};
 
 export type EditTargetResolution =
   | { readonly status: "located"; readonly locator: JsonValue }
   | { readonly status: "notWritable"; readonly reason: string };
 
+type AvailableTranslationFact<TTranslation, TBody, TUnavailable> = Extract<
+  ActualTranslationFact<TTranslation, TBody, TUnavailable>,
+  { readonly bodyAvailability: "available" }
+>;
+
 export type TranslationWritebackAdapter<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody = JsonValue,
+  TUnavailable = never,
 > = {
   readonly locateExistingTarget: (input: {
     readonly sourceUnit: SourceUnitFact<TUnit>;
-    readonly translation: ActualTranslationFact<TTranslation>;
+    readonly translation: AvailableTranslationFact<
+      TTranslation,
+      TBody,
+      TUnavailable
+    >;
   }) => Awaitable<EditTargetResolution>;
   readonly locateNewTarget: (input: {
     readonly sourceUnit: SourceUnitFact<TUnit>;
@@ -152,43 +168,59 @@ export type TranslationWritebackAdapter<
     readonly sourceUnit: SourceUnitFact<TUnit>;
     readonly language: string;
     readonly association: TranslationAssociationFact;
-    readonly translations: readonly ActualTranslationFact<TTranslation>[];
+    readonly translations: readonly AvailableTranslationFact<
+      TTranslation,
+      TBody,
+      TUnavailable
+    >[];
   }) => Awaitable<JsonValue | undefined>;
   readonly write?: (input: {
-    readonly edit: SemanticEdit;
+    readonly edit: SemanticEdit<TBody>;
     readonly sourceUnit: SourceUnitFact<TUnit>;
     readonly target: SemanticEditTarget;
-    readonly currentTranslation?: ActualTranslationFact<TTranslation>;
+    readonly currentTranslation?: AvailableTranslationFact<
+      TTranslation,
+      TBody,
+      TUnavailable
+    >;
   }) => Awaitable<void>;
 };
 
-export type SemanticEditPreparation =
-  | { readonly status: "prepared"; readonly edit: SemanticEdit }
+export type SemanticEditPreparation<TBody = JsonValue> =
+  | { readonly status: "prepared"; readonly edit: SemanticEdit<TBody> }
   | { readonly status: "notWritable"; readonly reason: string };
 
-export type SemanticEditInputResolution =
-  | { readonly status: "resolved"; readonly input: SemanticEditInput }
+export type SemanticEditInputResolution<TBody = JsonValue> =
+  | { readonly status: "resolved"; readonly input: SemanticEditInput<TBody> }
   | { readonly status: "notWritable"; readonly reason: string };
 
-export type SemanticDeleteInputResolution =
-  | { readonly status: "resolved"; readonly input: SemanticDeleteInput }
+export type SemanticDeleteInputResolution<TBody = JsonValue> =
+  | { readonly status: "resolved"; readonly input: SemanticDeleteInput<TBody> }
   | { readonly status: "notWritable"; readonly reason: string };
 
 export type SemanticEditObservation<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody = JsonValue,
+  TUnavailable = never,
 > = {
   readonly factsVersion: string;
   readonly sourceReadStatus: SourceReadFact["status"];
   readonly translationReadStatus: CoverageStatus | null;
   readonly sourceUnit: SourceUnitFact<TUnit> | null;
   readonly association: TranslationAssociationFact | null;
-  readonly translations: readonly ActualTranslationFact<TTranslation>[];
+  readonly translations: readonly ActualTranslationFact<
+    TTranslation,
+    TBody,
+    TUnavailable
+  >[];
 };
 
 export type SemanticEditResult<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody = JsonValue,
+  TUnavailable = never,
 > = {
   readonly sourceKey: string;
   readonly language: string;
@@ -200,25 +232,44 @@ export type SemanticEditResult<
     | "writeFailed"
     | "unprocessed";
   readonly reason?: string;
-  readonly before?: SemanticEditObservation<TUnit, TTranslation>;
-  readonly after?: SemanticEditObservation<TUnit, TTranslation>;
+  readonly before?: SemanticEditObservation<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable
+  >;
+  readonly after?: SemanticEditObservation<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable
+  >;
 };
 
 export type SemanticEditBatchResult<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody = JsonValue,
+  TUnavailable = never,
 > = {
-  readonly results: readonly SemanticEditResult<TUnit, TTranslation>[];
+  readonly results: readonly SemanticEditResult<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable
+  >[];
 };
 
 export async function resolveSemanticEditInput<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
+  TUnavailable,
 >(
-  facts: FrameworkFacts<TUnit, TTranslation>,
+  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
   subject: SemanticEditSubject,
-  config: FrameworkConfig<TUnit, TTranslation>,
-): Promise<SemanticEditInputResolution> {
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+): Promise<SemanticEditInputResolution<TBody>> {
   const adapter = config.translationWriteback;
   if (adapter === undefined)
     return {
@@ -276,7 +327,9 @@ export async function resolveSemanticEditInput<
       reason: "目标范围读取不完整，无法确认唯一写入目标。",
     };
 
-  let currentTranslation: ActualTranslationFact<TTranslation> | undefined;
+  let currentTranslation:
+    | AvailableTranslationFact<TTranslation, TBody, TUnavailable>
+    | undefined;
   let targetScopes: JsonValue[] = [];
   if (association.status === "matched") {
     if (association.translationIndexes.length !== 1)
@@ -284,16 +337,17 @@ export async function resolveSemanticEditInput<
         status: "notWritable",
         reason: "关联结果没有唯一译文索引。",
       };
-    currentTranslation =
+    const matchedTranslation =
       facts.translations.records[association.translationIndexes[0] as number];
     if (
-      currentTranslation === undefined ||
-      currentTranslation.bodyAvailability !== "available"
+      matchedTranslation === undefined ||
+      matchedTranslation.bodyAvailability !== "available"
     )
       return {
         status: "notWritable",
         reason: "现有译文正文不可用，无法核对目标输入。",
       };
+    currentTranslation = matchedTranslation;
     const translationRead = facts.translations.reads.find(
       ({ language }) => language === subject.language,
     );
@@ -308,7 +362,7 @@ export async function resolveSemanticEditInput<
   const translations =
     currentTranslation === undefined ? [] : [currentTranslation];
   let target: SemanticEditTarget;
-  let expectedTarget: SemanticEdit["expected"]["target"];
+  let expectedTarget: SemanticEditTargetExpectation<TBody>;
   try {
     const resolution =
       currentTranslation === undefined
@@ -331,7 +385,7 @@ export async function resolveSemanticEditInput<
         ? { status: "missing" }
         : {
             status: "present",
-            content: snapshotJson(currentTranslation.content, "现有译文正文"),
+            content: snapshotValue(currentTranslation.content, "现有译文正文"),
             range: snapshotJson(currentTranslation.range, "目标译文范围"),
             scopes: targetScopes,
           };
@@ -360,6 +414,7 @@ export async function resolveSemanticEditInput<
       },
     };
   } catch (error) {
+    rethrowContractError(error);
     return {
       status: "notWritable",
       reason: error instanceof Error ? error.message : String(error),
@@ -371,14 +426,16 @@ export async function resolveSemanticEditInput<
 export async function resolveSemanticDeleteInput<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
+  TUnavailable,
 >(
-  facts: FrameworkFacts<TUnit, TTranslation>,
+  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
   subject: SemanticEditSubject,
   historicalSource: TUnit,
   sourceRange: unknown,
   targetScopeRanges: readonly unknown[],
-  config: FrameworkConfig<TUnit, TTranslation>,
-): Promise<SemanticDeleteInputResolution> {
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+): Promise<SemanticDeleteInputResolution<TBody>> {
   const adapter = config.translationWriteback;
   const matches = config.translations?.matches;
   if (adapter === undefined || matches === undefined)
@@ -398,6 +455,7 @@ export async function resolveSemanticDeleteInput<
     sourceRangeSnapshot = snapshotJson(sourceRange, "历史原文范围");
     historicalSourceSnapshot = snapshotJson(historicalSource, "历史原文单元");
   } catch (error) {
+    rethrowContractError(error);
     return {
       status: "notWritable",
       reason: error instanceof Error ? error.message : String(error),
@@ -427,6 +485,7 @@ export async function resolveSemanticDeleteInput<
     try {
       range = snapshotJson(value, "目标译文范围");
     } catch (error) {
+      rethrowContractError(error);
       return {
         status: "notWritable",
         reason: error instanceof Error ? error.message : String(error),
@@ -473,7 +532,11 @@ export async function resolveSemanticDeleteInput<
     bodyAvailability: "available",
     scopeIndex: sourceScopeIndex,
   };
-  let targetTranslations: ActualTranslationFact<TTranslation>[];
+  let targetTranslations: ActualTranslationFact<
+    TTranslation,
+    TBody,
+    TUnavailable
+  >[];
   try {
     targetTranslations = facts.translations.records.filter(
       (translation) =>
@@ -484,6 +547,7 @@ export async function resolveSemanticDeleteInput<
         matches(historicalSource, translation.translation),
     );
   } catch (error) {
+    rethrowContractError(error);
     return {
       status: "notWritable",
       reason: error instanceof Error ? error.message : String(error),
@@ -528,7 +592,7 @@ export async function resolveSemanticDeleteInput<
       association,
       translations: [currentTranslation],
     });
-    const targetContent = snapshotJson(
+    const targetContent = snapshotValue(
       currentTranslation.content,
       "待删除译文正文",
     );
@@ -559,6 +623,7 @@ export async function resolveSemanticDeleteInput<
       },
     };
   } catch (error) {
+    rethrowContractError(error);
     return {
       status: "notWritable",
       reason: error instanceof Error ? error.message : String(error),
@@ -566,11 +631,53 @@ export async function resolveSemanticDeleteInput<
   }
 }
 
+export async function validateSemanticEditCandidate<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  value: unknown,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+): Promise<SemanticEditCandidate<TBody>> {
+  if (
+    !isRecord(value) ||
+    typeof value.sourceKey !== "string" ||
+    typeof value.language !== "string" ||
+    !Object.hasOwn(value, "content")
+  )
+    throw new TypeError(
+      "译文候选必须包含字符串 sourceKey、language 和 content。",
+    );
+
+  const contentSchema = config.translations?.contentSchema;
+  if (contentSchema === undefined)
+    throw new TypeError("验证译文候选需要 translations.contentSchema。");
+  const content = await validateWithStandardSchema(
+    contentSchema,
+    value.content,
+    "译文候选正文",
+    { preserveValue: true, requireJson: true },
+  );
+  return {
+    sourceKey: value.sourceKey,
+    language: value.language,
+    content: snapshotValue(content, "译文候选正文"),
+  };
+}
+
 /** 根据已经解析的输入和候选纯计算可保存的语义编辑。 */
-export function prepareSemanticEdit(
-  input: SemanticEditInput,
-  candidate: SemanticEditCandidate,
-): SemanticEditPreparation {
+export async function prepareSemanticEdit<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  input: SemanticEditInput<TBody>,
+  candidateValue: SemanticEditCandidate<TBody>,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+): Promise<SemanticEditPreparation<TBody>> {
+  const candidate = await validateSemanticEditCandidate(candidateValue, config);
   if (
     input.sourceKey !== candidate.sourceKey ||
     input.language !== candidate.language
@@ -581,17 +688,18 @@ export function prepareSemanticEdit(
     };
 
   try {
-    const snapshot = snapshotJson(input, "已解析编辑输入") as SemanticEditInput;
+    const snapshot = snapshotValue(input, "已解析编辑输入");
     return {
       status: "prepared",
       edit: {
         ...snapshot,
         formatVersion: "lioni.semantic-edit/v2",
         operation: "write",
-        content: snapshotJson(candidate.content, "候选内容"),
+        content: snapshotValue(candidate.content, "候选内容"),
       },
     };
   } catch (error) {
+    rethrowContractError(error);
     return {
       status: "notWritable",
       reason: error instanceof Error ? error.message : String(error),
@@ -600,14 +708,11 @@ export function prepareSemanticEdit(
 }
 
 /** 将已经解析的删除输入固化为不含伪造内容值的语义编辑。 */
-export function prepareSemanticDeletion(
-  input: SemanticDeleteInput,
-): SemanticEditPreparation {
+export function prepareSemanticDeletion<TBody = JsonValue>(
+  input: SemanticDeleteInput<TBody>,
+): SemanticEditPreparation<TBody> {
   try {
-    const snapshot = snapshotJson(
-      input,
-      "已解析删除输入",
-    ) as SemanticDeleteInput;
+    const snapshot = snapshotValue(input, "已解析删除输入");
     return {
       status: "prepared",
       edit: {
@@ -617,6 +722,7 @@ export function prepareSemanticDeletion(
       },
     };
   } catch (error) {
+    rethrowContractError(error);
     return {
       status: "notWritable",
       reason: error instanceof Error ? error.message : String(error),
@@ -624,15 +730,53 @@ export function prepareSemanticDeletion(
   }
 }
 
+async function validateSavedSemanticEdit<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  value: SemanticEdit<TBody>,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+): Promise<SemanticEdit<TBody>> {
+  const snapshot = snapshotValue(value, "保存的语义编辑");
+  if (
+    !isRecord(snapshot) ||
+    typeof snapshot.sourceKey !== "string" ||
+    typeof snapshot.language !== "string" ||
+    (snapshot.operation !== "write" && snapshot.operation !== "delete")
+  )
+    throw new TypeError("保存的语义编辑结构无效。");
+
+  if (snapshot.operation === "delete") return snapshot;
+  const candidate = await validateSemanticEditCandidate(
+    {
+      sourceKey: snapshot.sourceKey,
+      language: snapshot.language,
+      content: snapshot.content,
+    },
+    config,
+  );
+  return { ...snapshot, content: candidate.content } as SemanticEdit<TBody>;
+}
+
 export async function applySemanticEdits<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
+  TUnavailable,
 >(
-  edits: readonly SemanticEdit[],
-  config: FrameworkConfig<TUnit, TTranslation>,
-): Promise<SemanticEditBatchResult<TUnit, TTranslation>> {
-  const results: SemanticEditResult<TUnit, TTranslation>[] = [];
-  for (const edit of edits) {
+  edits: readonly SemanticEdit<TBody>[],
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+): Promise<SemanticEditBatchResult<TUnit, TTranslation, TBody, TUnavailable>> {
+  const results: SemanticEditResult<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable
+  >[] = [];
+  for (const unvalidatedEdit of edits) {
+    const edit = await validateSavedSemanticEdit(unvalidatedEdit, config);
     const base = { sourceKey: edit.sourceKey, language: edit.language };
     const adapter = config.translationWriteback;
     if (adapter === undefined || adapter.write === undefined) {
@@ -644,10 +788,11 @@ export async function applySemanticEdits<
       continue;
     }
 
-    let facts: FrameworkFacts<TUnit, TTranslation>;
+    let facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>;
     try {
       facts = await readFacts(config);
     } catch (error) {
+      rethrowContractError(error);
       results.push({
         ...base,
         status: "unprocessed",
@@ -687,7 +832,9 @@ export async function applySemanticEdits<
           : { currentTranslation: validation.currentTranslation }),
       });
     } catch (error) {
-      let after: SemanticEditObservation<TUnit, TTranslation> | undefined;
+      let after:
+        | SemanticEditObservation<TUnit, TTranslation, TBody, TUnavailable>
+        | undefined;
       try {
         const afterFacts = await readFacts(config);
         after = snapshotEditObservation(
@@ -732,6 +879,7 @@ export async function applySemanticEdits<
         });
       }
     } catch (error) {
+      rethrowContractError(error);
       results.push({
         ...base,
         status: "writeUnconfirmed",
@@ -746,16 +894,27 @@ export async function applySemanticEdits<
 async function validateSemanticEdit<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
+  TUnavailable,
 >(
-  edit: SemanticEdit,
-  observation: SemanticEditObservation<TUnit, TTranslation>,
-  facts: FrameworkFacts<TUnit, TTranslation>,
-  config: FrameworkConfig<TUnit, TTranslation>,
+  edit: SemanticEdit<TBody>,
+  observation: SemanticEditObservation<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable
+  >,
+  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
 ): Promise<
   | {
       readonly status: "ready";
       readonly sourceUnit: SourceUnitFact<TUnit>;
-      readonly currentTranslation?: ActualTranslationFact<TTranslation>;
+      readonly currentTranslation?: AvailableTranslationFact<
+        TTranslation,
+        TBody,
+        TUnavailable
+      >;
     }
   | {
       readonly status: "conflict" | "notWritable" | "unprocessed";
@@ -792,6 +951,7 @@ async function validateSemanticEdit<
   try {
     currentSource = snapshotJson(sourceUnit.unit.source, "当前原文正文");
   } catch (error) {
+    rethrowContractError(error);
     return {
       status: "unprocessed",
       reason: error instanceof Error ? error.message : String(error),
@@ -825,7 +985,9 @@ async function validateSemanticEdit<
       reason: "当前译文正文不可用，无法核对目标输入。",
     };
 
-  let currentTranslation: ActualTranslationFact<TTranslation> | undefined;
+  let currentTranslation:
+    | AvailableTranslationFact<TTranslation, TBody, TUnavailable>
+    | undefined;
   if (edit.expected.target.status === "missing") {
     if (edit.target.kind !== "create")
       return {
@@ -850,23 +1012,25 @@ async function validateSemanticEdit<
       return { status: "unprocessed", reason: "当前目标范围读取不完整。" };
     if (association.translationIndexes.length !== 1)
       return { status: "conflict", reason: "当前译文不再是唯一匹配目标。" };
-    currentTranslation = observation.translations[0];
+    const matchedTranslation = observation.translations[0];
     if (
-      currentTranslation === undefined ||
-      currentTranslation.bodyAvailability !== "available"
+      matchedTranslation === undefined ||
+      matchedTranslation.bodyAvailability !== "available"
     )
       return { status: "unprocessed", reason: "当前译文正文不可用。" };
+    currentTranslation = matchedTranslation;
     if (
       !isDeepStrictEqual(currentTranslation.range, edit.expected.target.range)
     )
       return { status: "conflict", reason: "目标译文所在范围已变化。" };
-    let currentTargetContent: JsonValue;
+    let currentTargetContent: TBody;
     try {
-      currentTargetContent = snapshotJson(
+      currentTargetContent = snapshotValue(
         currentTranslation.content,
         "当前译文正文",
       );
     } catch (error) {
+      rethrowContractError(error);
       return {
         status: "unprocessed",
         reason: error instanceof Error ? error.message : String(error),
@@ -884,7 +1048,8 @@ async function validateSemanticEdit<
         sourceUnit,
         language: edit.language,
         association,
-        translations: observation.translations,
+        translations:
+          currentTranslation === undefined ? [] : [currentTranslation],
       })) ?? null,
       "当前编辑依赖",
     );
@@ -896,6 +1061,7 @@ async function validateSemanticEdit<
             translation: currentTranslation,
           });
   } catch (error) {
+    rethrowContractError(error);
     return {
       status: "notWritable",
       reason: error instanceof Error ? error.message : String(error),
@@ -918,15 +1084,21 @@ async function validateSemanticEdit<
 async function validateSemanticDeletion<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
+  TUnavailable,
 >(
-  edit: Extract<SemanticEdit, { operation: "delete" }>,
-  facts: FrameworkFacts<TUnit, TTranslation>,
-  config: FrameworkConfig<TUnit, TTranslation>,
+  edit: Extract<SemanticEdit<TBody>, { operation: "delete" }>,
+  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
 ): Promise<
   | {
       readonly status: "ready";
       readonly sourceUnit: SourceUnitFact<TUnit>;
-      readonly currentTranslation: ActualTranslationFact<TTranslation>;
+      readonly currentTranslation: AvailableTranslationFact<
+        TTranslation,
+        TBody,
+        TUnavailable
+      >;
     }
   | {
       readonly status: "conflict" | "notWritable" | "unprocessed";
@@ -975,18 +1147,22 @@ async function validateSemanticDeletion<
       status: "conflict",
       reason: "预期存在的删除目标已不存在。",
     };
-  const currentTranslation = relation.translations[0];
-  if (currentTranslation === undefined)
+  const matchedTranslation = relation.translations[0];
+  if (
+    matchedTranslation === undefined ||
+    matchedTranslation.bodyAvailability !== "available"
+  )
     return {
       status: "unprocessed",
       reason: "当前删除目标无法唯一定位。",
     };
+  const currentTranslation = matchedTranslation;
 
-  let currentContent: JsonValue;
+  let currentContent: TBody;
   let dependencies: JsonValue;
   let resolution: EditTargetResolution;
   try {
-    currentContent = snapshotJson(
+    currentContent = snapshotValue(
       currentTranslation.content,
       "当前删除目标正文",
     );
@@ -995,7 +1171,7 @@ async function validateSemanticDeletion<
         sourceUnit: relation.historicalSourceUnit,
         language: edit.language,
         association: relation.association,
-        translations: relation.translations,
+        translations: [currentTranslation],
       })) ?? null,
       "当前编辑依赖",
     );
@@ -1004,6 +1180,7 @@ async function validateSemanticDeletion<
       translation: currentTranslation,
     });
   } catch (error) {
+    rethrowContractError(error);
     return {
       status: "notWritable",
       reason: error instanceof Error ? error.message : String(error),
@@ -1030,11 +1207,13 @@ async function validateSemanticDeletion<
 function readDeleteEditObservation<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
+  TUnavailable,
 >(
-  facts: FrameworkFacts<TUnit, TTranslation>,
-  edit: Extract<SemanticEdit, { operation: "delete" }>,
-  config: FrameworkConfig<TUnit, TTranslation>,
-): SemanticEditObservation<TUnit, TTranslation> {
+  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
+  edit: Extract<SemanticEdit<TBody>, { operation: "delete" }>,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+): SemanticEditObservation<TUnit, TTranslation, TBody, TUnavailable> {
   const relation = removedSourceRelation(
     edit,
     facts,
@@ -1057,14 +1236,22 @@ function readDeleteEditObservation<
 function removedSourceRelation<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
+  TUnavailable,
 >(
-  edit: Extract<SemanticEdit, { operation: "delete" }>,
-  facts: FrameworkFacts<TUnit, TTranslation>,
-  matches: ((unit: TUnit, translation: TTranslation) => boolean) | undefined,
+  edit: Extract<SemanticEdit<TBody>, { operation: "delete" }>,
+  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
+  matches:
+    | ((unit: TUnit, translation: TTranslation | TUnavailable) => boolean)
+    | undefined,
 ): {
   readonly historicalSourceUnit: SourceUnitFact<TUnit>;
   readonly association: TranslationAssociationFact;
-  readonly translations: readonly ActualTranslationFact<TTranslation>[];
+  readonly translations: readonly ActualTranslationFact<
+    TTranslation,
+    TBody,
+    TUnavailable
+  >[];
 } {
   const expectedSource = edit.expected.source;
   const sourceScopeIndex = facts.source.read.scopes.findIndex(({ range }) =>
@@ -1114,7 +1301,8 @@ function removedSourceRelation<
               )
             ? "failed"
             : "incomplete";
-  let translations: ActualTranslationFact<TTranslation>[] = [];
+  let translations: ActualTranslationFact<TTranslation, TBody, TUnavailable>[] =
+    [];
   let relationshipReadFailed = matches === undefined;
   if (matches !== undefined) {
     try {
@@ -1154,11 +1342,16 @@ function removedSourceRelation<
   };
 }
 
-function readEditObservation<TUnit extends TranslationUnitInput, TTranslation>(
-  facts: FrameworkFacts<TUnit, TTranslation>,
+function readEditObservation<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
   sourceKey: string,
   language: string,
-): SemanticEditObservation<TUnit, TTranslation> {
+): SemanticEditObservation<TUnit, TTranslation, TBody, TUnavailable> {
   const sourceUnit =
     facts.source.units.find(({ key }) => key === sourceKey) ?? null;
   const association =
@@ -1186,23 +1379,34 @@ function readEditObservation<TUnit extends TranslationUnitInput, TTranslation>(
 function snapshotEditObservation<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
+  TUnavailable,
 >(
-  observation: SemanticEditObservation<TUnit, TTranslation>,
-): SemanticEditObservation<TUnit, TTranslation> {
-  return snapshotJson(observation, "编辑事实观察") as SemanticEditObservation<
+  observation: SemanticEditObservation<
     TUnit,
-    TTranslation
-  >;
+    TTranslation,
+    TBody,
+    TUnavailable
+  >,
+): SemanticEditObservation<TUnit, TTranslation, TBody, TUnavailable> {
+  return snapshotValue(observation, "编辑事实观察");
 }
 
 async function confirmsSemanticEdit<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
+  TUnavailable,
 >(
-  edit: SemanticEdit,
-  observation: SemanticEditObservation<TUnit, TTranslation>,
-  facts: FrameworkFacts<TUnit, TTranslation>,
-  config: FrameworkConfig<TUnit, TTranslation>,
+  edit: SemanticEdit<TBody>,
+  observation: SemanticEditObservation<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable
+  >,
+  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
 ): Promise<boolean> {
   if (edit.operation === "write") return confirmsEditContent(edit, observation);
 
@@ -1229,11 +1433,15 @@ async function confirmsSemanticEdit<
 async function confirmsSemanticDeletionTargetAbsent<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
+  TUnavailable,
 >(
-  edit: Extract<SemanticEdit, { operation: "delete" }>,
-  facts: FrameworkFacts<TUnit, TTranslation>,
-  relation: ReturnType<typeof removedSourceRelation<TUnit, TTranslation>>,
-  config: FrameworkConfig<TUnit, TTranslation>,
+  edit: Extract<SemanticEdit<TBody>, { operation: "delete" }>,
+  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
+  relation: ReturnType<
+    typeof removedSourceRelation<TUnit, TTranslation, TBody, TUnavailable>
+  >,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
 ): Promise<boolean> {
   const locateExistingTarget =
     config.translationWriteback?.locateExistingTarget;
@@ -1245,6 +1453,7 @@ async function confirmsSemanticDeletionTargetAbsent<
       isDeepStrictEqual(translation.range, edit.expected.target.range),
   );
   for (const translation of targetRecords) {
+    if (translation.bodyAvailability !== "available") return false;
     let resolution: EditTargetResolution;
     try {
       resolution = await locateExistingTarget({
@@ -1264,9 +1473,19 @@ async function confirmsSemanticDeletionTargetAbsent<
   return true;
 }
 
-function confirmsEditContent<TUnit extends TranslationUnitInput, TTranslation>(
-  edit: Extract<SemanticEdit, { operation: "write" }>,
-  observation: SemanticEditObservation<TUnit, TTranslation>,
+function confirmsEditContent<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  edit: Extract<SemanticEdit<TBody>, { operation: "write" }>,
+  observation: SemanticEditObservation<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable
+  >,
 ): boolean {
   if (
     observation.association?.status !== "matched" ||
@@ -1277,21 +1496,24 @@ function confirmsEditContent<TUnit extends TranslationUnitInput, TTranslation>(
   if (translation === undefined || translation.bodyAvailability !== "available")
     return false;
   return isDeepStrictEqual(
-    snapshotJson(translation.content, "回读译文正文"),
+    snapshotValue(translation.content, "回读译文正文"),
     edit.content,
   );
 }
 
 function snapshotJson(value: unknown, description: string): JsonValue {
-  let serialized: string | undefined;
-  try {
-    serialized = JSON.stringify(value);
-  } catch (error) {
-    throw new TypeError(`${description}必须可序列化为 JSON。`, {
-      cause: error,
-    });
-  }
-  if (serialized === undefined)
-    throw new TypeError(`${description}必须可序列化为 JSON。`);
-  return JSON.parse(serialized) as JsonValue;
+  return snapshotValue(value, description) as JsonValue;
+}
+
+function snapshotValue<TValue>(value: TValue, description: string): TValue {
+  assertJsonValue(value, description);
+  return JSON.parse(JSON.stringify(value)) as TValue;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function rethrowContractError(error: unknown): void {
+  if (error instanceof StandardSchemaContractError) throw error;
 }

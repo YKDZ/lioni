@@ -36,6 +36,18 @@ const unitSchema: StandardSchemaV1<Unit, Unit> = {
   },
 };
 
+const stringBodySchema: StandardSchemaV1<string, string> = {
+  "~standard": {
+    version: 1,
+    vendor: "qa-configuration-test",
+    validate(value) {
+      return typeof value === "string"
+        ? { value }
+        : { issues: [{ message: "expected string content" }] };
+    },
+  },
+};
+
 const thresholdSchema: StandardSchemaV1<
   ThresholdInput,
   ThresholdConfiguration
@@ -138,6 +150,25 @@ function qualityConfig(
       }),
     },
     keyOf: ({ id }) => id,
+    translations: {
+      languages: ["fr"],
+      schema: unitSchema,
+      contentSchema: stringBodySchema,
+      read(_language, sourceUnits) {
+        return {
+          scopes: [
+            {
+              range: "messages.fr.json",
+              covers: sourceUnits.map(({ key }) => key),
+              enumeration: "complete",
+              records: [],
+            },
+          ],
+        };
+      },
+      matches: (unit, translation) => unit.id === translation.id,
+      contentOf: (translation) => translation.source,
+    },
     qualityChecks,
   });
 }

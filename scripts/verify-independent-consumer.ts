@@ -1134,7 +1134,7 @@ void readFacts(editConfig).then(async (facts) => {
     editConfig,
   );
   if (resolved.status !== "resolved") return;
-  const prepared = prepareSemanticEdit(resolved.input, candidate);
+  const prepared = await prepareSemanticEdit(resolved.input, candidate, editConfig);
   if (prepared.status === "prepared")
     return applySemanticEdits([prepared.edit], editConfig);
 });
@@ -1891,11 +1891,11 @@ async function prepare(sourceKey, content) {
     config,
   );
   if (resolved.status !== "resolved") return resolved;
-  const result = prepareSemanticEdit(resolved.input, {
+  const result = await prepareSemanticEdit(resolved.input, {
     sourceKey,
     language: "fr",
     content,
-  });
+  }, config);
   assert.equal(result.status, "prepared", result.reason);
   return result.edit;
 }
