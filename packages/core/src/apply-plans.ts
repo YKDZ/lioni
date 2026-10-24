@@ -5,6 +5,7 @@ import {
   compareProcessingBaseline,
   validateProcessingBaseline,
   type ProcessingBaseline,
+  type ProcessingBaselineChange,
   type ProcessingBaselineEntry,
   type ProcessingBaselineSelection,
   type ProcessingBaselineStore,
@@ -17,7 +18,7 @@ import type {
   TranslationUnitInput,
 } from "./index.ts";
 import {
-  validateUpdatePlan,
+  validateUpdatePlanHistory,
   type UpdatePlan,
   type UpdatePlanBlock,
   type UpdatePlanItem,
@@ -28,6 +29,7 @@ import {
   applySemanticEdits,
   type SemanticEditResult,
 } from "./semantic-edits.ts";
+import { StandardSchemaContractError } from "./standard-schema.ts";
 
 export type UpdatePlanContentResult<
   TUnit extends TranslationUnitInput,
@@ -82,18 +84,18 @@ export async function applyUpdatePlan<
   TBody,
   TUnavailable,
 >(
-  plan: UpdatePlan<TUnit, TTranslation, TBody, TUnavailable>,
+  plan: unknown,
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
   baselineStore: ProcessingBaselineStore,
 ): Promise<UpdatePlanApplyResult<TUnit, TTranslation, TBody, TUnavailable>> {
-  validateUpdatePlan(plan);
+  const validatedPlan = await validateUpdatePlanHistory(plan, config);
 
   const contentResults = new Map<
     string,
     UpdatePlanContentResult<TUnit, TTranslation, TBody, TUnavailable>
   >();
   const baselineResults = new Map<string, UpdatePlanBaselineResult>();
-  for (const item of plan.items) {
+  for (const item of validatedPlan.items) {
     const id = pairKey(item.sourceKey, item.language);
     contentResults.set(id, initialContentResult(item));
     baselineResults.set(id, {
@@ -106,7 +108,7 @@ export async function applyUpdatePlan<
     });
   }
 
-  const actionable = plan.items.filter(
+  const actionable = validatedPlan.items.filter(
     ({ status }) =>
       status === "candidate" || status === "delete" || status === "retain",
   );
@@ -118,6 +120,7 @@ export async function applyUpdatePlan<
     baseline = await baselineStore.load();
     if (baseline !== undefined) validateProcessingBaseline(baseline);
   } catch (error) {
+    rethrowContractError(error);
     failActionableItems(
       actionable,
       contentResults,
@@ -132,6 +135,7 @@ export async function applyUpdatePlan<
   try {
     facts = await readFacts(config);
   } catch (error) {
+    rethrowContractError(error);
     failActionableItems(
       actionable,
       contentResults,
@@ -142,12 +146,7 @@ export async function applyUpdatePlan<
     return finishResult(contentResults, baselineResults);
   }
 
-  const matches = config.translations?.matches;
-  const comparison = compareProcessingBaseline(
-    facts,
-    baseline,
-    matches === undefined ? {} : { matches },
-  );
+  const comparison = await compareProcessingBaseline(facts, baseline, config);
   const changesByPair = new Map(
     comparison.changes.map((change) => [
       pairKey(change.sourceKey, change.language),
@@ -158,23 +157,24 @@ export async function applyUpdatePlan<
     TUnit["source"],
     TTranslation,
     TBody,
-    TUnavailable
+    TUnavailable,
+    TUnit
   >[] = [];
   const candidateItems: UpdatePlanItem<
     TUnit["source"],
     TTranslation,
     TBody,
-    TUnavailable
+    TUnavailable,
+    TUnit
   >[] = [];
 
   for (const item of actionable) {
     const id = pairKey(item.sourceKey, item.language);
     const conflict = planInputConflict(
       item,
-      plan,
+      validatedPlan,
       baseline,
       changesByPair.get(id),
-      config,
     );
     if (conflict !== undefined) {
       contentResults.set(id, {
@@ -213,6 +213,7 @@ export async function applyUpdatePlan<
       );
       editResults = (await applySemanticEdits(edits, config)).results;
     } catch (error) {
+      rethrowContractError(error);
       failActionableItems(
         candidateItems,
         contentResults,
@@ -269,6 +270,7 @@ export async function applyUpdatePlan<
     try {
       afterFacts = await readFacts(config);
     } catch (error) {
+      rethrowContractError(error);
       const reason = `内容结果已确认，但重新读取事实失败：${errorMessage(error)}`;
       for (const selection of confirmedSelections) {
         baselineResults.set(pairKey(selection.sourceKey, selection.language), {
@@ -284,12 +286,16 @@ export async function applyUpdatePlan<
       baselineStore,
       afterFacts,
       confirmedSelections,
-      matches === undefined ? {} : { matches },
+      config,
     );
     recordBaselineResults(confirmedSelections, result, baselineResults);
   }
 
   return finishResult(contentResults, baselineResults);
+}
+
+function rethrowContractError(error: unknown): void {
+  if (error instanceof StandardSchemaContractError) throw error;
 }
 
 function initialContentResult<
@@ -298,7 +304,13 @@ function initialContentResult<
   TBody,
   TUnavailable,
 >(
-  item: UpdatePlanItem<TUnit["source"], TTranslation, TBody, TUnavailable>,
+  item: UpdatePlanItem<
+    TUnit["source"],
+    TTranslation,
+    TBody,
+    TUnavailable,
+    TUnit
+  >,
 ): UpdatePlanContentResult<TUnit, TTranslation, TBody, TUnavailable> {
   return {
     ...itemPair(item),
@@ -319,25 +331,30 @@ function planInputConflict<
   TBody,
   TUnavailable,
 >(
-  item: UpdatePlanItem<TUnit["source"], TTranslation, TBody, TUnavailable>,
+  item: UpdatePlanItem<
+    TUnit["source"],
+    TTranslation,
+    TBody,
+    TUnavailable,
+    TUnit
+  >,
   plan: UpdatePlan<TUnit, TTranslation, TBody, TUnavailable>,
   baseline: ProcessingBaseline | undefined,
   change:
-    | ReturnType<typeof compareProcessingBaseline>["changes"][number]
+    | ProcessingBaselineChange<TUnit, TTranslation, TUnavailable>
     | undefined,
-  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
 ): UpdatePlanBlock | undefined {
   if (item.expectedInput === undefined || change?.current === undefined)
     return {
       code: "missingCurrentInput",
       message: "当前缺少计划所需的可靠事实。",
     };
-  if (!planPreviousMatches(item, plan, baseline, config))
+  if (!planPreviousMatches(item, plan, baseline, change))
     return {
       code: "planBaselineChanged",
       message: "处理基线已变化，保存计划已过期。",
     };
-  if (!matchesExpectedInput(item.expectedInput, change.current, config))
+  if (!matchesExpectedInput(item.expectedInput, change.current))
     return {
       code: "planInputChanged",
       message: "原文、译文或相关范围已变化，保存计划已过期。",
@@ -356,15 +373,20 @@ function planPreviousMatches<
   TBody,
   TUnavailable,
 >(
-  item: UpdatePlanItem<TUnit["source"], TTranslation, TBody, TUnavailable>,
+  item: UpdatePlanItem<
+    TUnit["source"],
+    TTranslation,
+    TBody,
+    TUnavailable,
+    TUnit
+  >,
   plan: UpdatePlan<TUnit, TTranslation, TBody, TUnavailable>,
   baseline: ProcessingBaseline | undefined,
-  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+  change:
+    | ProcessingBaselineChange<TUnit, TTranslation, TUnavailable>
+    | undefined,
 ): boolean {
-  const current = baseline?.entries.find(
-    (entry) =>
-      entry.sourceKey === item.sourceKey && entry.language === item.language,
-  );
+  const current = change?.previous;
   if (item.previous !== undefined)
     return current !== undefined && isDeepStrictEqual(current, item.previous);
   if (current !== undefined)
@@ -373,7 +395,7 @@ function planPreviousMatches<
       !current.processed &&
       item.expectedInput !== undefined &&
       entryIsReliable(current) &&
-      matchesExpectedInput(item.expectedInput, current, config)
+      matchesExpectedInput(item.expectedInput, current)
     );
   if (item.change !== "added") return true;
   if (baseline === undefined || item.current === undefined) return false;
@@ -416,12 +438,10 @@ function sourceScopeEvidenceStillProvesAddition(
 function matchesExpectedInput<
   TUnit extends TranslationUnitInput,
   TTranslation,
-  TBody,
   TUnavailable,
 >(
   expected: UpdatePlanObservation<TUnit["source"], TTranslation, TUnavailable>,
-  current: ProcessingBaselineEntry,
-  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+  current: ProcessingBaselineEntry<TUnit, TTranslation, TUnavailable>,
 ): boolean {
   if (
     expected.source.presence !== current.source.presence ||
@@ -431,8 +451,8 @@ function matchesExpectedInput<
   )
     return false;
   if (expected.source.presence === "present") {
-    const unit = current.source.unit as TUnit;
-    if (!isDeepStrictEqual(expected.source.value, unit.source)) return false;
+    if (!isDeepStrictEqual(expected.source.value, current.source.unit.source))
+      return false;
   }
 
   const association = expected.association;
@@ -445,57 +465,15 @@ function matchesExpectedInput<
   )
     return false;
 
-  try {
-    return association.translations.every((translation, index) => {
-      const currentTranslation = currentAssociation.translations[index];
-      if (
-        currentTranslation === undefined ||
-        translation.bodyAvailability !== currentTranslation.bodyAvailability ||
-        !isDeepStrictEqual(translation.range, currentTranslation.range)
-      )
-        return false;
-      const expectedContent = snapshotTranslationContent(
-        config,
-        translation.translation,
-        translation.bodyAvailability,
-      );
-      const currentContent = snapshotTranslationContent(
-        config,
-        currentTranslation.translation as TTranslation,
-        currentTranslation.bodyAvailability,
-      );
-      return isDeepStrictEqual(expectedContent, currentContent);
-    });
-  } catch {
-    return false;
-  }
-}
-
-function snapshotTranslationContent<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TBody,
-  TUnavailable,
->(
-  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
-  translation: TTranslation | TUnavailable,
-  bodyAvailability: "available" | "unavailable",
-): JsonValue {
-  if (bodyAvailability !== "available") return null;
-  const contentOf = config.translations?.contentOf;
-  if (contentOf === undefined)
-    throw new TypeError("实际译文没有业务内容读取适配器。");
-  let serialized: string | undefined;
-  try {
-    serialized = JSON.stringify(contentOf(translation as TTranslation));
-  } catch (error) {
-    throw new TypeError("译文业务内容必须可序列化为 JSON。", {
-      cause: error,
-    });
-  }
-  if (serialized === undefined)
-    throw new TypeError("译文业务内容必须可序列化为 JSON。");
-  return JSON.parse(serialized) as JsonValue;
+  return association.translations.every((translation, index) => {
+    const currentTranslation = currentAssociation.translations[index];
+    return (
+      currentTranslation !== undefined &&
+      translation.bodyAvailability === currentTranslation.bodyAvailability &&
+      isDeepStrictEqual(translation.range, currentTranslation.range) &&
+      isDeepStrictEqual(translation.translation, currentTranslation.translation)
+    );
+  });
 }
 
 function entryIsReliable(entry: ProcessingBaselineEntry): boolean {
@@ -558,7 +536,8 @@ function failActionableItems<
     TUnit["source"],
     TTranslation,
     TBody,
-    TUnavailable
+    TUnavailable,
+    TUnit
   >[],
   contentResults: Map<
     string,

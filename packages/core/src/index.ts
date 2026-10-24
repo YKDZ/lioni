@@ -46,18 +46,34 @@ export type {
   StandardSchemaV1Result,
 } from "./standard-schema.ts";
 export * from "./apply-plans.ts";
-export * from "./plans.ts";
+export {
+  createUpdatePlan,
+  defaultUpdatePolicy,
+  validateUpdatePlanHistory,
+  validateUpdatePlan,
+} from "./plans.ts";
+export type {
+  UpdateDecision,
+  UpdatePlan,
+  UpdatePlanBlock,
+  UpdatePlanBlockCode,
+  UpdatePlanData,
+  UpdatePlanDataItem,
+  UpdatePlanItem,
+  UpdatePlanObservation,
+  UpdatePlanStatus,
+  UpdatePlanStore,
+  UpdatePolicy,
+  UpdatePolicyInput,
+} from "./plans.ts";
 export * from "./qa.ts";
 export {
   advanceProcessingBaseline,
   compareProcessingBaseline,
   type ProcessingBaseline,
-  type ProcessingBaselineAdvanceOptions,
   type ProcessingBaselineAdvanceResult,
   type ProcessingBaselineChange,
-  type ProcessingBaselineCompareOptions,
   type ProcessingBaselineEntry,
-  type ProcessingBaselineMatch,
   type ProcessingBaselineSelection,
   type ProcessingBaselineSourceScope,
   type ProcessingBaselineStore,
@@ -409,15 +425,15 @@ export function defineConfig<
 
 export function validateFrameworkConfig(value: unknown): void {
   if (!isRecord(value))
-    throw new TypeError("宿主配置必须是 defineConfig(...) 的对象结果。");
+    invalidFrameworkConfig("宿主配置必须是 defineConfig(...) 的对象结果。");
   if (!isRecord(value.source) || typeof value.source.read !== "function")
-    throw new TypeError("defineConfig 的 source.read 必须是函数。");
+    invalidFrameworkConfig("defineConfig 的 source.read 必须是函数。");
   if (!isStandardSchema(value.source.schema))
-    throw new TypeError(
+    invalidFrameworkConfig(
       "defineConfig 的 source.schema 必须符合 Standard Schema v1。",
     );
   if (typeof value.keyOf !== "function")
-    throw new TypeError("defineConfig 的 keyOf 必须是函数。");
+    invalidFrameworkConfig("defineConfig 的 keyOf 必须是函数。");
 
   const translations = value.translations;
   if (translations === undefined) return;
@@ -433,9 +449,17 @@ export function validateFrameworkConfig(value: unknown): void {
     (translations.unavailableSchema !== undefined &&
       !isStandardSchema(translations.unavailableSchema))
   )
-    throw new TypeError(
+    invalidFrameworkConfig(
       "defineConfig 的 translations 必须提供语言列表、记录与正文 schema、read、matches 与 contentOf 函数。",
     );
+}
+
+function invalidFrameworkConfig(message: string): never {
+  throw new StandardSchemaContractError(
+    "defineConfig 配置",
+    "schema-mismatch",
+    message,
+  );
 }
 
 export async function readSourceFacts<
@@ -967,7 +991,10 @@ function isStandardSchema(value: unknown): value is StandardSchemaV1 {
 
 function validateSourceRead(value: unknown): void {
   if (!isRecord(value) || !Array.isArray(value.scopes))
-    throw new TypeError("source.read 必须返回包含 scopes 数组的读取结果。");
+    invalidReadStructure(
+      "source.read",
+      "source.read 必须返回包含 scopes 数组的读取结果。",
+    );
 
   for (const [scopeIndex, scope] of value.scopes.entries()) {
     if (
@@ -978,7 +1005,8 @@ function validateSourceRead(value: unknown): void {
         scope.enumeration !== "failed") ||
       (scope.error !== undefined && typeof scope.error !== "string")
     )
-      throw new TypeError(
+      invalidReadStructure(
+        "source.read",
         `source.read 的第 ${scopeIndex + 1} 个范围结构无效。`,
       );
     assertJsonValue(scope.range, `原文范围 ${scopeIndex + 1}`);
@@ -988,7 +1016,8 @@ function validateSourceRead(value: unknown): void {
         (record.bodyAvailability !== "available" &&
           record.bodyAvailability !== "unavailable")
       )
-        throw new TypeError(
+        invalidReadStructure(
+          "source.read",
           `source.read 的第 ${scopeIndex + 1} 个范围中，第 ${recordIndex + 1} 条原文记录结构无效。`,
         );
     }
@@ -997,7 +1026,8 @@ function validateSourceRead(value: unknown): void {
 
 function validateTranslationRead(value: unknown): void {
   if (!isRecord(value) || !Array.isArray(value.scopes))
-    throw new TypeError(
+    invalidReadStructure(
+      "translations.read",
       "translations.read 必须返回包含 scopes 数组的读取结果。",
     );
 
@@ -1012,7 +1042,8 @@ function validateTranslationRead(value: unknown): void {
         scope.enumeration !== "failed") ||
       (scope.error !== undefined && typeof scope.error !== "string")
     )
-      throw new TypeError(
+      invalidReadStructure(
+        "translations.read",
         `translations.read 的第 ${scopeIndex + 1} 个范围结构无效。`,
       );
     assertJsonValue(scope.range, `译文范围 ${scopeIndex + 1}`);
@@ -1022,11 +1053,19 @@ function validateTranslationRead(value: unknown): void {
         (record.bodyAvailability !== "available" &&
           record.bodyAvailability !== "unavailable")
       )
-        throw new TypeError(
+        invalidReadStructure(
+          "translations.read",
           `translations.read 的第 ${scopeIndex + 1} 个范围中，第 ${recordIndex + 1} 条译文记录结构无效。`,
         );
     }
   }
+}
+
+function invalidReadStructure(
+  adapter: "source.read" | "translations.read",
+  message: string,
+): never {
+  throw new StandardSchemaContractError(adapter, "schema-mismatch", message);
 }
 
 function snapshotJson(value: unknown, description: string): JsonValue {

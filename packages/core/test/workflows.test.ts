@@ -6,6 +6,7 @@ import {
   analyzeQuality,
   defineConfig,
   prepareQualityConditionedSemanticEdit,
+  StandardSchemaContractError,
   type QualityCheckInput,
   type JsonValue,
 } from "../src/index.ts";
@@ -581,10 +582,13 @@ void describe("configured analysis workflow", () => {
       },
       keyOf: ({ id }) => id,
     });
-    await assert.rejects(analyzeQuality(invalidSourceConfig), {
-      name: "TypeError",
-      message: "defineConfig 的 source.read 必须是函数。",
-    });
+    await assert.rejects(
+      analyzeQuality(invalidSourceConfig),
+      (error: unknown) =>
+        error instanceof StandardSchemaContractError &&
+        error.kind === "schema-mismatch" &&
+        error.message === "defineConfig 的 source.read 必须是函数。",
+    );
 
     const invalidRequestConfig = defineConfig({
       source: {

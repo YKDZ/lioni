@@ -48,6 +48,131 @@ async function resolveAndPrepareSemanticEdit<
 }
 
 void describe("semantic edits", () => {
+  void it("rejects an invalid saved source observation before current matching or writeback", async () => {
+    const source = { id: "A", source: "Save" };
+    const translation = { id: "A", text: "Enregistrer" };
+    let matchesCalls = 0;
+    let writeCalls = 0;
+    let malformedSourceRead = false;
+    const config = defineConfig({
+      source: {
+        schema: sourceSchemaFromExamples(source),
+        read: () =>
+          malformedSourceRead
+            ? ({
+                scopes: [
+                  {
+                    range: "messages.json",
+                    enumeration: "complete",
+                    records: "wrong",
+                  },
+                ],
+              } as never)
+            : {
+                scopes: [
+                  {
+                    range: "messages.json",
+                    enumeration: "complete",
+                    records: [{ value: source, bodyAvailability: "available" }],
+                  },
+                ],
+              },
+      },
+      keyOf: (unit) => unit.id,
+      translations: {
+        languages: ["fr"],
+        schema: schemaFromExamples(translation),
+        contentSchema: jsonValueSchema,
+        contentOf: (value) => value.text,
+        read: (_language, units) => ({
+          scopes: [
+            {
+              range: "fr.json",
+              covers: units.map(({ key }) => key),
+              enumeration: "complete",
+              records: [{ value: translation, bodyAvailability: "available" }],
+            },
+          ],
+        }),
+        matches: () => {
+          matchesCalls += 1;
+          return true;
+        },
+      },
+      translationWriteback: {
+        locateExistingTarget: () => ({ status: "located", locator: "A" }),
+        locateNewTarget: () => ({
+          status: "notWritable",
+          reason: "此场景不会新建译文。",
+        }),
+        write: () => {
+          writeCalls += 1;
+        },
+      },
+    });
+    const facts = await readFacts(config);
+    const resolved = await resolveSemanticEditInput(
+      facts,
+      { sourceKey: "A", language: "fr" },
+      config,
+    );
+    assert.equal(resolved.status, "resolved");
+    if (resolved.status !== "resolved") return;
+    const prepared = await prepareSemanticEdit(
+      resolved.input,
+      { sourceKey: "A", language: "fr", content: "Updated" },
+      config,
+    );
+    assert.equal(prepared.status, "prepared");
+    if (prepared.status !== "prepared" || prepared.edit.operation !== "write")
+      return;
+
+    matchesCalls = 0;
+    malformedSourceRead = true;
+    await assert.rejects(
+      () => applySemanticEdits([prepared.edit], config),
+      StandardSchemaContractError,
+    );
+    malformedSourceRead = false;
+    const invalidConfig = {
+      ...config,
+      translations: { ...config.translations, schema: undefined },
+    } as unknown as typeof config;
+    await assert.rejects(
+      () => applySemanticEdits([prepared.edit], invalidConfig),
+      (error: unknown) =>
+        error instanceof StandardSchemaContractError &&
+        error.kind === "schema-mismatch",
+    );
+    const invalidEdit = {
+      ...prepared.edit,
+      expected: {
+        ...prepared.edit.expected,
+        source: { ...prepared.edit.expected.source, content: 7 },
+      },
+    };
+    await assert.rejects(() => applySemanticEdits([invalidEdit], config), {
+      name: "StandardSchemaContractError",
+    });
+    const invalidHistoricalUnit = {
+      ...prepared.edit,
+      expected: {
+        ...prepared.edit.expected,
+        source: {
+          ...prepared.edit.expected.source,
+          unit: { id: "A", source: 7 },
+          content: 7,
+        },
+      },
+    };
+    await assert.rejects(
+      () => applySemanticEdits([invalidHistoricalUnit], config),
+      { name: "StandardSchemaContractError" },
+    );
+    assert.equal(matchesCalls, 0);
+    assert.equal(writeCalls, 0);
+  });
+
   void it("prepares a structured edit without a writer, QA, or baseline", async () => {
     const source = { source: "Save", context: { key: "toolbar.save" } };
     const translation = { text: "Enregistrer", state: "reviewed" };
@@ -385,6 +510,14 @@ void describe("semantic edits", () => {
         source: {
           presence: "present",
           range: "src/messages.ts",
+          unit: {
+            source: "Save",
+            context: {
+              file: "src/messages.ts",
+              line: 18,
+              screenshot: "shots/save.png",
+            },
+          },
           content: "Save",
         },
         target: {

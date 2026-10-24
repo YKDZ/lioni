@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
-  advanceProcessingBaseline,
-  compareProcessingBaseline,
+  advanceProcessingBaseline as advanceBaselineWithConfig,
+  compareProcessingBaseline as compareBaselineWithConfig,
   createUpdatePlan,
   defineConfig,
   readFacts,
+  type FrameworkFacts,
+  type JsonValue,
   type ProcessingBaseline,
   type ProcessingBaselineStore,
 } from "../src/index.ts";
@@ -30,6 +32,40 @@ const translationSchema = schemaFromExamples<Translation>({
   text: "example",
   id: "example",
 });
+
+const historyConfig = defineConfig({
+  source: {
+    schema: sourceSchemaFromExamples<Unit>({
+      id: "example",
+      source: "example",
+    }),
+    read: () => ({ scopes: [] }),
+  },
+  keyOf: (unit) => unit.id,
+  translations: {
+    languages: ["fr", "de"],
+    schema: translationSchema,
+    contentSchema: jsonValueSchema,
+    contentOf: () => null,
+    read: () => ({ scopes: [] }),
+    matches: (unit, translation) => unit.id === translation.id,
+  },
+});
+
+function compareProcessingBaseline(
+  facts: FrameworkFacts<Unit, Translation, JsonValue, never>,
+  baseline?: ProcessingBaseline,
+) {
+  return compareBaselineWithConfig(facts, baseline, historyConfig);
+}
+
+function advanceProcessingBaseline(
+  store: ProcessingBaselineStore,
+  facts: FrameworkFacts<Unit, Translation, JsonValue, never>,
+  selections: readonly { sourceKey: string; language: string }[],
+) {
+  return advanceBaselineWithConfig(store, facts, selections, historyConfig);
+}
 
 function makeFacts(
   units: readonly Unit[],
@@ -144,7 +180,7 @@ void describe("processing baselines", () => {
     );
 
     assert.deepStrictEqual(
-      compareProcessingBaseline(facts).changes.map(
+      (await compareProcessingBaseline(facts)).changes.map(
         ({ sourceKey, language, status }) => [sourceKey, language, status],
       ),
       [
@@ -171,7 +207,7 @@ void describe("processing baselines", () => {
       ],
     );
     assert.deepStrictEqual(
-      compareProcessingBaseline(facts, store.baseline).changes.map(
+      (await compareProcessingBaseline(facts, store.baseline)).changes.map(
         ({ sourceKey, status, processed }) => [sourceKey, status, processed],
       ),
       [
@@ -202,10 +238,9 @@ void describe("processing baselines", () => {
       [],
       "target resource unavailable",
     );
-    const comparison = compareProcessingBaseline(
+    const comparison = await compareProcessingBaseline(
       targetUnavailable,
       store.baseline,
-      { matches: (unit, translation) => unit.id === translation.id },
     );
     const removal = comparison.changes.find(
       ({ sourceKey }) => sourceKey === "A",
@@ -219,22 +254,16 @@ void describe("processing baselines", () => {
       store,
       targetUnavailable,
       [{ sourceKey: "A", language: "fr" }],
-      { matches: (unit, translation) => unit.id === translation.id },
     );
     assert.equal(advanceAttempt.outcome, "unchanged");
     assert.equal(advanceAttempt.selections[0]?.outcome, "unknown");
     assert.strictEqual(store.baseline, baselineBefore);
 
-    const plan = await createUpdatePlan(targetUnavailable, store.baseline, {
-      translations: {
-        languages: ["fr"],
-        schema: translationSchema,
-        contentSchema: jsonValueSchema,
-        read: () => ({ scopes: [] }),
-        matches: (unit, translation) => unit.id === translation.id,
-        contentOf: () => null,
-      },
-    });
+    const plan = await createUpdatePlan(
+      targetUnavailable,
+      store.baseline,
+      historyConfig,
+    );
     const planItem = plan.items.find(({ sourceKey }) => sourceKey === "A");
     assert.equal(planItem?.change, "source-removed");
     assert.equal(planItem?.expectedInput?.association.status, "unknown");
@@ -242,6 +271,54 @@ void describe("processing baselines", () => {
     assert.equal(planItem?.decision.action, "retain");
     assert.equal(planItem?.status, "blocked");
     assert.equal(planItem?.blocker?.code, "translationCoverageIncomplete");
+  });
+
+  void it("rejects a history source that no longer satisfies the current contract", async () => {
+    const initialFacts = await makeFacts(
+      [{ id: "A", source: "Save" }],
+      [{ id: "A", text: "Enregistrer" }],
+    );
+    const store = new MemoryBaselineStore();
+    await advanceProcessingBaseline(store, initialFacts, [
+      { sourceKey: "A", language: "fr" },
+    ]);
+    assert.ok(store.baseline);
+
+    const removedFacts = await makeFacts(
+      [],
+      [{ id: "A", text: "Enregistrer" }],
+    );
+    let matchesCalls = 0;
+    const invalidBaseline: ProcessingBaseline = {
+      ...store.baseline,
+      entries: store.baseline.entries.map((entry) =>
+        entry.sourceKey === "A"
+          ? {
+              ...entry,
+              source: {
+                ...entry.source,
+                unit: { id: "A", source: 7 },
+              },
+            }
+          : entry,
+      ),
+    };
+
+    await assert.rejects(
+      async () =>
+        compareBaselineWithConfig(removedFacts, invalidBaseline, {
+          ...historyConfig,
+          translations: {
+            ...historyConfig.translations!,
+            matches: () => {
+              matchesCalls += 1;
+              return true;
+            },
+          },
+        }),
+      { name: "StandardSchemaContractError" },
+    );
+    assert.equal(matchesCalls, 0);
   });
 
   void it("keeps an unselected item old and distinguishes it from a later addition", async () => {
@@ -274,9 +351,13 @@ void describe("processing baselines", () => {
     );
 
     assert.deepStrictEqual(
-      compareProcessingBaseline(changedFacts, store.baseline).changes.map(
-        ({ sourceKey, status, processed }) => [sourceKey, status, processed],
-      ),
+      (
+        await compareProcessingBaseline(changedFacts, store.baseline)
+      ).changes.map(({ sourceKey, status, processed }) => [
+        sourceKey,
+        status,
+        processed,
+      ]),
       [
         ["A", "changed", true],
         ["B", "unchanged", false],
@@ -288,9 +369,13 @@ void describe("processing baselines", () => {
       { sourceKey: "A", language: "fr" },
     ]);
     assert.deepStrictEqual(
-      compareProcessingBaseline(changedFacts, store.baseline).changes.map(
-        ({ sourceKey, status, processed }) => [sourceKey, status, processed],
-      ),
+      (
+        await compareProcessingBaseline(changedFacts, store.baseline)
+      ).changes.map(({ sourceKey, status, processed }) => [
+        sourceKey,
+        status,
+        processed,
+      ]),
       [
         ["A", "unchanged", true],
         ["B", "unchanged", false],
@@ -320,9 +405,9 @@ void describe("processing baselines", () => {
       ],
     );
     assert.equal(
-      compareProcessingBaseline(addedFacts, store.baseline).changes.find(
-        ({ sourceKey }) => sourceKey === "B",
-      )?.status,
+      (
+        await compareProcessingBaseline(addedFacts, store.baseline)
+      ).changes.find(({ sourceKey }) => sourceKey === "B")?.status,
       "added",
     );
     await advanceProcessingBaseline(store, addedFacts, [
@@ -337,9 +422,9 @@ void describe("processing baselines", () => {
       ],
     );
     assert.equal(
-      compareProcessingBaseline(removedFacts, store.baseline, {
-        matches: (unit, translation) => unit.id === translation.id,
-      }).changes.find(({ sourceKey }) => sourceKey === "B")?.status,
+      (
+        await compareProcessingBaseline(removedFacts, store.baseline)
+      ).changes.find(({ sourceKey }) => sourceKey === "B")?.status,
       "source-removed",
     );
   });
@@ -388,9 +473,9 @@ void describe("processing baselines", () => {
       ],
     );
     assert.equal(
-      compareProcessingBaseline(completeFacts, store.baseline).changes.find(
-        ({ sourceKey }) => sourceKey === "B",
-      )?.status,
+      (
+        await compareProcessingBaseline(completeFacts, store.baseline)
+      ).changes.find(({ sourceKey }) => sourceKey === "B")?.status,
       "history-insufficient",
     );
     await advanceProcessingBaseline(store, completeFacts, [
@@ -416,9 +501,9 @@ void describe("processing baselines", () => {
       ],
     );
     assert.equal(
-      compareProcessingBaseline(removedFacts, store.baseline, {
-        matches: (unit, translation) => unit.id === translation.id,
-      }).changes.find(({ sourceKey }) => sourceKey === "B")?.status,
+      (
+        await compareProcessingBaseline(removedFacts, store.baseline)
+      ).changes.find(({ sourceKey }) => sourceKey === "B")?.status,
       "source-removed",
     );
   });
@@ -465,8 +550,8 @@ void describe("processing baselines", () => {
       ["fr", "de"],
     );
     assert.deepStrictEqual(
-      compareProcessingBaseline(addedFacts, store.baseline)
-        .changes.filter(({ sourceKey }) => sourceKey === "B")
+      (await compareProcessingBaseline(addedFacts, store.baseline)).changes
+        .filter(({ sourceKey }) => sourceKey === "B")
         .map(({ language, status }) => [language, status]),
       [
         ["fr", "added"],
@@ -478,8 +563,8 @@ void describe("processing baselines", () => {
     ]);
 
     assert.deepStrictEqual(
-      compareProcessingBaseline(addedFacts, store.baseline)
-        .changes.filter(({ sourceKey }) => sourceKey === "B")
+      (await compareProcessingBaseline(addedFacts, store.baseline)).changes
+        .filter(({ sourceKey }) => sourceKey === "B")
         .map(({ language, status, processed }) => [
           language,
           status,
@@ -525,9 +610,9 @@ void describe("processing baselines", () => {
       ],
     );
     assert.equal(
-      compareProcessingBaseline(completeFacts, store.baseline).changes.find(
-        ({ sourceKey }) => sourceKey === "B",
-      )?.status,
+      (
+        await compareProcessingBaseline(completeFacts, store.baseline)
+      ).changes.find(({ sourceKey }) => sourceKey === "B")?.status,
       "history-insufficient",
     );
 
@@ -535,9 +620,9 @@ void describe("processing baselines", () => {
       { sourceKey: "A", language: "fr" },
     ]);
     assert.equal(
-      compareProcessingBaseline(completeFacts, store.baseline).changes.find(
-        ({ sourceKey }) => sourceKey === "B",
-      )?.status,
+      (
+        await compareProcessingBaseline(completeFacts, store.baseline)
+      ).changes.find(({ sourceKey }) => sourceKey === "B")?.status,
       "history-insufficient",
     );
   });
@@ -569,9 +654,9 @@ void describe("processing baselines", () => {
       ],
     );
     assert.equal(
-      compareProcessingBaseline(onlyOtherRanges, store.baseline).changes.find(
-        ({ sourceKey }) => sourceKey === "A",
-      )?.status,
+      (
+        await compareProcessingBaseline(onlyOtherRanges, store.baseline)
+      ).changes.find(({ sourceKey }) => sourceKey === "A")?.status,
       "unknown",
     );
 
@@ -594,9 +679,9 @@ void describe("processing baselines", () => {
       ],
     );
     assert.equal(
-      compareProcessingBaseline(oldSourcePartial, store.baseline).changes.find(
-        ({ sourceKey }) => sourceKey === "A",
-      )?.status,
+      (
+        await compareProcessingBaseline(oldSourcePartial, store.baseline)
+      ).changes.find(({ sourceKey }) => sourceKey === "A")?.status,
       "unknown",
     );
 
@@ -619,10 +704,8 @@ void describe("processing baselines", () => {
         },
       ],
     );
-    const partialTargetRemoval = compareProcessingBaseline(
-      oldTargetPartial,
-      store.baseline,
-      { matches: (unit, translation) => unit.id === translation.id },
+    const partialTargetRemoval = (
+      await compareProcessingBaseline(oldTargetPartial, store.baseline)
     ).changes.find(({ sourceKey }) => sourceKey === "A");
     assert.equal(partialTargetRemoval?.status, "source-removed");
     assert.equal(partialTargetRemoval?.current?.association.status, "unknown");
@@ -634,16 +717,7 @@ void describe("processing baselines", () => {
     const partialTargetPlan = await createUpdatePlan(
       oldTargetPartial,
       store.baseline,
-      {
-        translations: {
-          languages: ["fr"],
-          schema: translationSchema,
-          contentSchema: jsonValueSchema,
-          read: () => ({ scopes: [] }),
-          matches: (unit, translation) => unit.id === translation.id,
-          contentOf: () => null,
-        },
-      },
+      historyConfig,
     );
     const partialTargetItem = partialTargetPlan.items.find(
       ({ sourceKey }) => sourceKey === "A",
@@ -680,9 +754,11 @@ void describe("processing baselines", () => {
       [{ range: "target-r1", covers: [], translations: [] }],
     );
     assert.equal(
-      compareProcessingBaseline(
-        completeCurrentSource,
-        partialHistoryStore.baseline,
+      (
+        await compareProcessingBaseline(
+          completeCurrentSource,
+          partialHistoryStore.baseline,
+        )
       ).changes.find(({ sourceKey }) => sourceKey === "A")?.status,
       "unknown",
     );
@@ -705,9 +781,8 @@ void describe("processing baselines", () => {
         },
       ],
     );
-    const removal = compareProcessingBaseline(
-      oldRangesComplete,
-      store.baseline,
+    const removal = (
+      await compareProcessingBaseline(oldRangesComplete, store.baseline)
     ).changes.find(({ sourceKey }) => sourceKey === "A");
     assert.equal(removal?.status, "source-removed");
     assert.equal(oldRangesComplete.translations.records.length, 2);
@@ -738,12 +813,9 @@ void describe("processing baselines", () => {
       [{ range: "source-r1", units: [] }],
       [{ range: "target-r1", covers: [], translations: [] }],
     );
-    const advanced = await advanceProcessingBaseline(
-      store,
-      removedFacts,
-      [{ sourceKey: "A", language: "fr" }],
-      { matches: (unit, translation) => unit.id === translation.id },
-    );
+    const advanced = await advanceProcessingBaseline(store, removedFacts, [
+      { sourceKey: "A", language: "fr" },
+    ]);
     assert.equal(advanced.outcome, "saved");
     assert.equal(advanced.selections[0]?.outcome, "advanced");
     assert.equal(advanced.baseline?.entries[0]?.source.presence, "removed");
@@ -763,9 +835,9 @@ void describe("processing baselines", () => {
       ],
     );
     assert.equal(
-      compareProcessingBaseline(targetReturned, advanced.baseline, {
-        matches: (unit, translation) => unit.id === translation.id,
-      }).changes.find(({ sourceKey }) => sourceKey === "A")?.status,
+      (
+        await compareProcessingBaseline(targetReturned, advanced.baseline)
+      ).changes.find(({ sourceKey }) => sourceKey === "A")?.status,
       "changed",
     );
   });
@@ -811,6 +883,6 @@ void describe("processing baselines", () => {
     assert.equal(failed.outcome, "failed");
     assert.equal(failed.failure?.phase, "save");
     assert.equal(failed.failure?.message, "disk is read-only");
-    assert.strictEqual(failed.baseline, previous);
+    assert.deepEqual(failed.baseline, previous);
   });
 });

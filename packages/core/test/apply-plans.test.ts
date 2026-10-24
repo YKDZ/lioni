@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
@@ -10,6 +10,7 @@ import {
   createUpdatePlan,
   defineConfig,
   readFacts,
+  StandardSchemaContractError,
   type FrameworkConfig,
   type JsonValue,
   type ProcessingBaseline,
@@ -17,7 +18,10 @@ import {
   type StandardSchemaV1,
   type UpdatePolicy,
 } from "../src/index.ts";
-import { createFileUpdatePlanStore } from "../src/node.ts";
+import {
+  createFileProcessingBaselineStore,
+  createFileUpdatePlanStore,
+} from "../src/node.ts";
 import {
   jsonValueSchema,
   schemaFromExamples,
@@ -61,6 +65,7 @@ function makeConfig(
     readonly partialReadAfterWriteFor?: string;
     readonly withWriteback?: boolean;
     readonly readState?: MutableReadState;
+    readonly onLocateExisting?: () => void;
   } = {},
 ) {
   return defineConfig<
@@ -119,9 +124,10 @@ function makeConfig(
     ...(options.withWriteback
       ? {
           translationWriteback: {
-            locateExistingTarget: ({ translation }) =>
-              translation.translation.id ===
-              options.readState?.unlocatableTranslationId
+            locateExistingTarget: ({ translation }) => {
+              options.onLocateExisting?.();
+              return translation.translation.id ===
+                options.readState?.unlocatableTranslationId
                 ? {
                     status: "notWritable" as const,
                     reason: "该记录暂时无法解析宿主位置。",
@@ -135,7 +141,8 @@ function makeConfig(
                       location:
                         options.readState?.location ?? "locales/fr.json",
                     },
-                  },
+                  };
+            },
             locateNewTarget: ({ sourceUnit }) => ({
               status: "located" as const,
               locator: { id: sourceUnit.key },
@@ -198,19 +205,111 @@ async function establishBaseline(
 ): Promise<MemoryBaselineStore> {
   const store = new MemoryBaselineStore();
   const facts = await readFacts(config);
-  const matches = config.translations?.matches;
-  assert.ok(matches);
   const result = await advanceProcessingBaseline(
     store,
     facts,
     sourceKeys.map((sourceKey) => ({ sourceKey, language: "fr" })),
-    { matches },
+    config,
   );
   assert.equal(result.outcome, "saved");
   return store;
 }
 
 void describe("apply update plans", () => {
+  void it("propagates malformed persisted baseline JSON as a contract error", async () => {
+    const translations: Translation[] = [{ id: "A", text: "Enregistrer" }];
+    const oldConfig = makeConfig([{ id: "A", source: "Save" }], translations);
+    const baseline = await establishBaseline(oldConfig, ["A"]);
+    const config = makeConfig([{ id: "A", source: "Save now" }], translations, {
+      withWriteback: true,
+      updatePolicy: candidatePolicy(() => "Sauvegarder"),
+    });
+    const plan = await createUpdatePlan(
+      await readFacts(config),
+      baseline.baseline,
+      config,
+    );
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "lioni-invalid-baseline-"),
+    );
+    const baselinePath = path.join(directory, "processing-baseline.json");
+    const fileStore = createFileProcessingBaselineStore(baselinePath);
+    try {
+      await writeFile(baselinePath, "{\n", "utf8");
+      const facts = await readFacts(config);
+      await assert.rejects(
+        () =>
+          advanceProcessingBaseline(
+            fileStore,
+            facts,
+            [{ sourceKey: "A", language: "fr" }],
+            config,
+          ),
+        StandardSchemaContractError,
+      );
+      await assert.rejects(
+        () => applyUpdatePlan(plan, config, fileStore),
+        StandardSchemaContractError,
+      );
+      assert.deepEqual(translations, [{ id: "A", text: "Enregistrer" }]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  void it("validates a saved deletion source before locating its target", async () => {
+    const units: Unit[] = [{ id: "A", source: "Save" }];
+    const translations: Translation[] = [{ id: "A", text: "Enregistrer" }];
+    const baselineStore = await establishBaseline(
+      makeConfig(units, translations),
+      ["A"],
+    );
+    units.splice(0, units.length);
+    let locateCalls = 0;
+    const config = makeConfig(units, translations, {
+      withWriteback: true,
+      updatePolicy: () => ({ action: "delete" }),
+      onLocateExisting: () => {
+        locateCalls += 1;
+      },
+    });
+    const plan = await createUpdatePlan(
+      await readFacts(config),
+      baselineStore.baseline,
+      config,
+    );
+    assert.equal(plan.items[0]?.edit?.operation, "delete");
+    assert.equal(locateCalls, 1);
+
+    const invalidPlan = structuredClone(plan) as unknown as {
+      items: {
+        edit: {
+          expected: {
+            source: { historicalContent: { source: unknown } };
+          };
+        };
+      }[];
+    };
+    const item = invalidPlan.items[0];
+    assert.ok(item);
+    item.edit.expected.source.historicalContent.source = 7;
+    const baselineBefore = structuredClone(baselineStore.baseline);
+    locateCalls = 0;
+
+    await assert.rejects(
+      () =>
+        applyUpdatePlan(
+          invalidPlan as unknown as typeof plan,
+          config,
+          baselineStore,
+        ),
+      StandardSchemaContractError,
+    );
+    assert.equal(locateCalls, 0);
+    assert.deepEqual(translations, [{ id: "A", text: "Enregistrer" }]);
+    assert.deepEqual(baselineStore.baseline, baselineBefore);
+  });
+
   void it("deletes a removed source target and advances its confirmed result", async () => {
     const units: Unit[] = [{ id: "A", source: "Save" }];
     const translations: Translation[] = [
@@ -345,13 +444,11 @@ void describe("apply update plans", () => {
       },
     });
     const baselineStore = new MemoryBaselineStore();
-    const matches = config.translations?.matches;
-    assert.ok(matches);
     const baselineResult = await advanceProcessingBaseline(
       baselineStore,
       await readFacts(config),
       [{ sourceKey: "A", language: "fr" }],
-      { matches },
+      config,
     );
     assert.equal(baselineResult.outcome, "saved");
     units.splice(0, units.length);
@@ -741,13 +838,11 @@ void describe("apply update plans", () => {
       config,
     );
 
-    const matches = config.translations?.matches;
-    assert.ok(matches);
     const otherKeyAdvance = await advanceProcessingBaseline(
       baselineStore,
       await readFacts(config),
       [{ sourceKey: "C", language: "fr" }],
-      { matches },
+      config,
     );
     assert.equal(otherKeyAdvance.outcome, "saved");
     assert.equal(

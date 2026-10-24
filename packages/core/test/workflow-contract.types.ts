@@ -1,4 +1,8 @@
-import { defineConfig } from "../src/index.ts";
+import {
+  defineConfig,
+  validateUpdatePlan,
+  validateUpdatePlanHistory,
+} from "../src/index.ts";
 import type {
   SemanticEditCandidate,
   StandardSchemaV1,
@@ -19,6 +23,16 @@ type Body = {
   readonly message: string;
   readonly state: "draft" | "reviewed";
 };
+
+declare const unknownPlan: unknown;
+validateUpdatePlan(unknownPlan);
+if (unknownPlan.items[0]?.decision.action === "candidate") {
+  // @ts-expect-error JSON structure validation cannot recover the host body type.
+  const unvalidatedBody: Body = unknownPlan.items[0].decision.candidate.content;
+  void unvalidatedBody;
+}
+// @ts-expect-error Only config-bound history validation can recover business types.
+validateUpdatePlan<Unit, Translation, Body>(unknownPlan);
 
 declare const unitSchema: StandardSchemaV1<Unit, Unit>;
 declare const translationSchema: StandardSchemaV1<Translation, Translation>;
@@ -66,14 +80,31 @@ const config = defineConfig({
       }
     },
   },
-  updatePolicy: () => ({
-    action: "candidate",
-    candidate: {
-      sourceKey: "toolbar.save",
-      language: "fr",
-      content: { message: "Enregistrer", state: "reviewed" as const },
-    },
-  }),
+  updatePolicy(input) {
+    const previousSource: string | undefined = input.previous?.source.value;
+    const currentSource: string | undefined = input.expectedInput?.source.value;
+    void previousSource;
+    void currentSource;
+    // @ts-expect-error Historical source bodies keep the source schema's string type.
+    const invalidPreviousSource: number | undefined =
+      input.previous?.source.value;
+    void invalidPreviousSource;
+    return {
+      action: "candidate",
+      candidate: {
+        sourceKey: "toolbar.save",
+        language: "fr",
+        content: { message: "Enregistrer", state: "reviewed" as const },
+      },
+    };
+  },
+});
+
+void validateUpdatePlanHistory(unknownPlan, config).then((validatedPlan) => {
+  const item = validatedPlan.items[0];
+  if (item?.decision.action !== "candidate") return;
+  const validatedBody: Body = item.decision.candidate.content;
+  void validatedBody;
 });
 
 const configuredBody: Body = config.translations!.contentOf({

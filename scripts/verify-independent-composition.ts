@@ -182,7 +182,7 @@ type EntryModule = {
   ) => CompletionResolution;
   readonly updatePolicy: (
     input: UpdatePolicyInput<Unit, Translation>,
-  ) => UpdateDecision;
+  ) => UpdateDecision<TranslationContent>;
 };
 
 function readJson(file: string): unknown {
@@ -780,9 +780,23 @@ async function prepare() {
   );
   assert.ok(localCatalogCheck);
   assert.deepEqual(
-    localCatalogCheck,
-    catalogCheck,
+    { ...localCatalogCheck, coverage: undefined },
+    { ...catalogCheck, coverage: undefined },
   );
+  assert.deepEqual(localCatalogCheck.coverage, {
+    selected: 1,
+    evaluated: 1,
+    notApplicable: 0,
+    incomplete: 0,
+    failed: 0,
+  });
+  assert.deepEqual(catalogCheck.coverage, {
+    selected: 2,
+    evaluated: 1,
+    notApplicable: 1,
+    incomplete: 0,
+    failed: 0,
+  });
   assert.deepEqual(
     catalogQa.diagnostics,
     aggregateQa.diagnostics.filter(({ ruleId }) => ruleId === "catalog-numbers"),
@@ -791,7 +805,24 @@ async function prepare() {
   const localGuideCheck = guideQa.checks.find(({ id }) => id === "guide-numbers");
   assert.ok(guideCheck);
   assert.ok(localGuideCheck);
-  assert.deepEqual(localGuideCheck, guideCheck);
+  assert.deepEqual(
+    { ...localGuideCheck, coverage: undefined },
+    { ...guideCheck, coverage: undefined },
+  );
+  assert.deepEqual(localGuideCheck.coverage, {
+    selected: 1,
+    evaluated: 1,
+    notApplicable: 0,
+    incomplete: 0,
+    failed: 0,
+  });
+  assert.deepEqual(guideCheck.coverage, {
+    selected: 2,
+    evaluated: 1,
+    notApplicable: 1,
+    incomplete: 0,
+    failed: 0,
+  });
   assert.deepEqual(
     guideQa.diagnostics,
     aggregateQa.diagnostics.filter(({ ruleId }) => ruleId === "guide-numbers"),
@@ -877,7 +908,7 @@ async function prepare() {
     baselineStore,
     facts,
     [{ sourceKey: "catalog:save", language: "fr" }],
-    { matches: aggregateConfig.translations.matches },
+    aggregateConfig,
   );
   assert.equal(baselineResult.outcome, "saved");
   const baseline = await baselineStore.load();
@@ -905,7 +936,7 @@ async function prepare() {
     localBaselineStore,
     catalogFacts,
     [{ sourceKey: "catalog:save", language: "fr" }],
-    { matches: catalogConfig.translations.matches },
+    catalogConfig,
   );
   assert.equal(localBaselineResult.outcome, "saved");
   const localBaseline = await localBaselineStore.load();
@@ -928,7 +959,7 @@ async function prepare() {
     guideComparisonStore,
     facts,
     [{ sourceKey: "guide:save", language: "fr" }],
-    { matches: aggregateConfig.translations.matches },
+    aggregateConfig,
   );
   assert.equal(guideComparison.outcome, "saved");
   const guideAggregateBaseline = await guideComparisonStore.load();
@@ -937,7 +968,7 @@ async function prepare() {
     localGuideBaselineStore,
     guideFacts,
     [{ sourceKey: "guide:save", language: "fr" }],
-    { matches: guideConfig.translations.matches },
+    guideConfig,
   );
   assert.equal(localGuideAdvance.outcome, "saved");
   const localGuideBaseline = await localGuideBaselineStore.load();
