@@ -277,6 +277,51 @@ void describe("processing baselines", () => {
     );
   });
 
+  void it("recognizes removal after advancing a new key in an existing source range", async () => {
+    const initialFacts = await makeFacts(
+      [{ id: "A", source: "Save" }],
+      [{ id: "A", text: "Enregistrer" }],
+    );
+    const store = new MemoryBaselineStore();
+    await advanceProcessingBaseline(store, initialFacts, [
+      { sourceKey: "A", language: "fr" },
+    ]);
+
+    const addedFacts = await makeFacts(
+      [
+        { id: "A", source: "Save" },
+        { id: "B", source: "Cancel" },
+      ],
+      [
+        { id: "A", text: "Enregistrer" },
+        { id: "B", text: "Annuler" },
+      ],
+    );
+    assert.equal(
+      compareProcessingBaseline(addedFacts, store.baseline).changes.find(
+        ({ sourceKey }) => sourceKey === "B",
+      )?.status,
+      "added",
+    );
+    await advanceProcessingBaseline(store, addedFacts, [
+      { sourceKey: "B", language: "fr" },
+    ]);
+
+    const removedFacts = await makeFacts(
+      [{ id: "A", source: "Save" }],
+      [
+        { id: "A", text: "Enregistrer" },
+        { id: "B", text: "Annuler" },
+      ],
+    );
+    assert.equal(
+      compareProcessingBaseline(removedFacts, store.baseline, {
+        matches: (unit, translation) => unit.id === translation.id,
+      }).changes.find(({ sourceKey }) => sourceKey === "B")?.status,
+      "source-removed",
+    );
+  });
+
   void it("does not call an unobserved old item new after a partial scope is later completed", async () => {
     const initialFacts = await makeScopedFacts(
       [

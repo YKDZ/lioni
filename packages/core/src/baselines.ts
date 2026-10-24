@@ -388,6 +388,22 @@ export async function advanceProcessingBaseline<
       }
     }
   }
+  const sourceKeysByRange = new Map<string, string[]>();
+  for (const entry of updates.values()) {
+    const rangeKey = canonicalJson(entry.source.range);
+    const sourceKeys = sourceKeysByRange.get(rangeKey) ?? [];
+    sourceKeys.push(entry.sourceKey);
+    sourceKeysByRange.set(rangeKey, sourceKeys);
+  }
+  sourceScopes = sourceScopes.map((scope) => {
+    const sourceKeys = sourceKeysByRange.get(canonicalJson(scope.range));
+    return sourceKeys === undefined
+      ? scope
+      : {
+          ...scope,
+          sourceKeys: [...new Set([...scope.sourceKeys, ...sourceKeys])],
+        };
+  });
   for (const [id, entry] of updates) entries.set(id, entry);
 
   const next: ProcessingBaseline = {
