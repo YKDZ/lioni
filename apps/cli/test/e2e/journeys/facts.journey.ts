@@ -9,7 +9,7 @@ const journey: CliJourney = {
   modes: ["source", "distribution"],
   async setup({ workDir }) {
     await writeFile(
-      path.join(workDir, "l10n.config.ts"),
+      path.join(workDir, "lioni.config.ts"),
       `export default {
   source: {
     read: () => ({ scopes: [{
@@ -69,8 +69,8 @@ const journey: CliJourney = {
     );
     await writeFile(
       path.join(workDir, "qa.config.ts"),
-      `import type { QualityCheckDefinition, TranslationUnitInput } from "@l10n/core";
-import baseConfig from "./l10n.config.ts";
+      `import type { QualityCheckDefinition, TranslationUnitInput } from "@lioni/core";
+import baseConfig from "./lioni.config.ts";
 
 const check: QualityCheckDefinition<TranslationUnitInput, unknown> = {
   id: "host-rule",
@@ -114,18 +114,18 @@ export default {
     );
     await writeFile(
       path.join(workDir, "no-checks.config.ts"),
-      `export { default } from "./l10n.config.ts";\n`,
+      `export { default } from "./lioni.config.ts";\n`,
     );
   },
   commands() {
     return [
       {
         name: "structured source and translation facts",
-        args: ["facts", "l10n.config.ts"],
+        args: ["facts", "lioni.config.ts"],
       },
       {
         name: "readable source and translation facts",
-        args: ["facts", "l10n.config.ts", "--output-format", "text"],
+        args: ["facts", "lioni.config.ts", "--output-format", "text"],
       },
       {
         name: "duplicate source identity",
@@ -370,7 +370,7 @@ export default {
     assert.equal(results[6]?.exitCode, 0);
     assert.match(results[6]?.stdout ?? "", /facts/u);
     assert.equal(results[7]?.exitCode, 0);
-    assert.equal(results[7]?.stdout, "l10n 0.0.0\n");
+    assert.equal(results[7]?.stdout, "lioni 0.0.0\n");
   },
 };
 

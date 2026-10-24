@@ -21,7 +21,7 @@ const repositoryRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
 );
-const packageNames = ["@l10n/core", "@l10n/checks", "@l10n/cli"] as const;
+const packageNames = ["@lioni/core", "@lioni/checks", "@lioni/cli"] as const;
 
 type CommandResult = {
   readonly status: number;
@@ -69,8 +69,8 @@ async function writeConsumerFiles(
   artifactRoot: string,
 ): Promise<void> {
   const packageFiles = packageNames.map((packageName) => {
-    const shortName = packageName.slice("@l10n/".length);
-    const tarball = path.join(artifactRoot, `l10n-${shortName}-0.0.0.tgz`);
+    const shortName = packageName.slice("@lioni/".length);
+    const tarball = path.join(artifactRoot, `lioni-${shortName}-0.0.0.tgz`);
     const relativeTarball = path
       .relative(consumerRoot, tarball)
       .split(path.sep)
@@ -79,7 +79,7 @@ async function writeConsumerFiles(
   });
   const dependencies = Object.fromEntries(packageFiles);
   const packageJson = {
-    name: "l10n-independent-consumer",
+    name: "lioni-independent-consumer",
     private: true,
     packageManager: "pnpm@12.9.1",
     type: "module",
@@ -89,11 +89,11 @@ async function writeConsumerFiles(
     },
   };
   const coreTarball = path
-    .relative(consumerRoot, path.join(artifactRoot, "l10n-core-0.0.0.tgz"))
+    .relative(consumerRoot, path.join(artifactRoot, "lioni-core-0.0.0.tgz"))
     .split(path.sep)
     .join("/");
-  const workspaceConfig = `overrides:\n  "@l10n/core@0.0.0": "file:${coreTarball}"\n`;
-  const configSource = `import { defineConfig } from "@l10n/core";
+  const workspaceConfig = `overrides:\n  "@lioni/core@0.0.0": "file:${coreTarball}"\n`;
+  const configSource = `import { defineConfig } from "@lioni/core";
 
 type Unit = {
   readonly source: string;
@@ -178,7 +178,7 @@ const config = defineConfig<Unit, Translation>({
 
 export default config;
 `;
-  const duplicateConfigSource = `import { defineConfig } from "@l10n/core";
+  const duplicateConfigSource = `import { defineConfig } from "@lioni/core";
 
 export default defineConfig({
   source: {
@@ -199,7 +199,7 @@ export default defineConfig({
 });
 `;
   const completionConfigSource = `import { readFileSync } from "node:fs";
-import { defineConfig } from "@l10n/core";
+import { defineConfig } from "@lioni/core";
 
 type Translation = {
   text: string;
@@ -255,7 +255,7 @@ export default defineConfig<Unit, Translation>({
 });
 `;
   const planConfigSource = `import { readFile, writeFile } from "node:fs/promises";
-import { defineConfig } from "@l10n/core";
+import { defineConfig } from "@lioni/core";
 
 type Unit = {
   readonly id: string;
@@ -335,7 +335,7 @@ export default defineConfig<Unit, Translation>({
 });
 `;
   const deletionConfigSource = `import { readFile, writeFile } from "node:fs/promises";
-import { defineConfig } from "@l10n/core";
+import { defineConfig } from "@lioni/core";
 
 type Unit = { id: string; source: string; context: { file: string } };
 type Translation = { id: string; text: string; context: { file: string; key: string; readonly?: boolean } };
@@ -429,8 +429,8 @@ export default defineConfig<Unit, Translation>({
   const deletionHostSource = `import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { advanceProcessingBaseline, applyUpdatePlan, createUpdatePlan, readFacts } from "@l10n/core";
-import { createFileProcessingBaselineStore, createFileUpdatePlanStore } from "@l10n/core/node";
+import { advanceProcessingBaseline, applyUpdatePlan, createUpdatePlan, readFacts } from "@lioni/core";
+import { createFileProcessingBaselineStore, createFileUpdatePlanStore } from "@lioni/core/node";
 import config from "./deletion.config.ts";
 
 const scenario = process.argv[2];
@@ -438,8 +438,8 @@ const sourcePath = fileURLToPath(new URL("./deletion-resources/source.json", imp
 const targetPath = fileURLToPath(new URL("./deletion-resources/fr.json", import.meta.url));
 const otherTargetPath = fileURLToPath(new URL("./deletion-resources/other.json", import.meta.url));
 const dependencyPath = fileURLToPath(new URL("./deletion-resources/dependencies.json", import.meta.url));
-const baselinePath = ".l10n/deletion-baseline.json";
-const planPath = ".l10n/deletion-plan.json";
+const baselinePath = ".lioni/deletion-baseline.json";
+const planPath = ".lioni/deletion-plan.json";
 const baselineStore = createFileProcessingBaselineStore(baselinePath);
 const planStore = createFileUpdatePlanStore(planPath);
 
@@ -528,7 +528,7 @@ if (scenario === "initialize") {
 console.log(JSON.stringify({ scenario, pid: process.pid }));
 `;
   const editsConfigSource = `import { readFileSync, writeFileSync } from "node:fs";
-import { defineConfig } from "@l10n/core";
+import { defineConfig } from "@lioni/core";
 
 type Unit = {
   source: string;
@@ -695,8 +695,8 @@ export default defineConfig<Unit, Translation>({
 });
 `;
   const qaConfigSource = `import { readFile } from "node:fs/promises";
-import { defineConfig, type FrameworkFacts } from "@l10n/core";
-import { createNumberChecker } from "@l10n/checks";
+import { defineConfig, type FrameworkFacts } from "@lioni/core";
+import { createNumberChecker } from "@lioni/checks";
 
 type Unit = {
   readonly source: string;
@@ -786,7 +786,7 @@ export default defineConfig<Unit, Translation>({
   createQualityRequest,
 });
 `;
-  const typecheckSource = `import { createNumberChecker } from "@l10n/checks";
+  const typecheckSource = `import { createNumberChecker } from "@lioni/checks";
 import {
   applySemanticEdits,
   advanceProcessingBaseline,
@@ -801,12 +801,12 @@ import {
   readFacts,
   readSourceFacts,
   resolveSemanticEditInput,
-} from "@l10n/core";
+} from "@lioni/core";
 import {
   createFileProcessingBaselineStore,
   createFileUpdatePlanStore,
-} from "@l10n/core/node";
-import config from "./l10n.config.ts";
+} from "@lioni/core/node";
+import config from "./lioni.config.ts";
 import completionConfig from "./completion.config.ts";
 import editConfig from "./edits.config.ts";
 import planConfig from "./plan.config.ts";
@@ -829,13 +829,13 @@ void readFacts(completionConfig).then((facts) =>
 void compareProcessingBaseline;
 void advanceProcessingBaseline;
 void readFacts(deletionConfig);
-void createFileProcessingBaselineStore(".l10n/processing-baseline.json");
+void createFileProcessingBaselineStore(".lioni/processing-baseline.json");
 void readFacts(planConfig).then(async (facts) => {
-  const baselineStore = createFileProcessingBaselineStore(".l10n/plan-baseline.json");
+  const baselineStore = createFileProcessingBaselineStore(".lioni/plan-baseline.json");
   const plan = await createUpdatePlan(facts, await baselineStore.load(), planConfig);
   return applyUpdatePlan(plan, planConfig, baselineStore);
 });
-void createFileUpdatePlanStore(".l10n/update-plan.json");
+void createFileUpdatePlanStore(".lioni/update-plan.json");
 void readFacts(editConfig).then(async (facts) => {
   const sourceUnit = facts.source.units[0];
   if (sourceUnit === undefined) return;
@@ -866,7 +866,7 @@ void analyzeQuality(editConfig, {
 `;
   const resumeConfigSource = `import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "@l10n/core";
+import { defineConfig } from "@lioni/core";
 
 type Unit = { id: string; source: string };
 type Translation = { sourceId: string; text: string; path: string };
@@ -937,18 +937,18 @@ import {
   compareProcessingBaseline,
   createUpdatePlan,
   readFacts,
-} from "@l10n/core";
+} from "@lioni/core";
 import {
   createFileProcessingBaselineStore,
   createFileUpdatePlanStore,
-} from "@l10n/core/node";
+} from "@lioni/core/node";
 import config from "./resume.config.ts";
 
 const ids = ["A", "B", "C"];
 const baselineSelections = ids.map((sourceKey) => ({ sourceKey, language: "fr" }));
-const baselinePath = ".l10n/resume-baseline.json";
+const baselinePath = ".lioni/resume-baseline.json";
 const baselineStore = createFileProcessingBaselineStore(baselinePath);
-const planStore = createFileUpdatePlanStore(".l10n/resume-plan.json");
+const planStore = createFileUpdatePlanStore(".lioni/resume-plan.json");
 const readTarget = async (id) => JSON.parse(await readFile("resume-resources/fr/" + id + ".json", "utf8"));
 const entry = (baseline, id) => baseline?.entries.find(({ sourceKey }) => sourceKey === id);
 const findResult = (results, id) => results.find(({ sourceKey }) => sourceKey === id);
@@ -1076,7 +1076,7 @@ if (scenario === "initialize") {
       types: ["node"],
     },
     files: [
-      "l10n.config.ts",
+      "lioni.config.ts",
       "completion.config.ts",
       "edits.config.ts",
       "plan.config.ts",
@@ -1092,9 +1092,9 @@ import { spawnSync } from "node:child_process";
 import { readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { analyzeQuality, defineConfig, DuplicateTranslationUnitKeyError, readFacts, readSourceFacts } from "@l10n/core";
-import "@l10n/checks";
-import config, { translationReadCount } from "./l10n.config.ts";
+import { analyzeQuality, defineConfig, DuplicateTranslationUnitKeyError, readFacts, readSourceFacts } from "@lioni/core";
+import "@lioni/checks";
+import config, { translationReadCount } from "./lioni.config.ts";
 import qaConfig from "./qa.config.ts";
 
 const repositoryRoot = ${JSON.stringify(repositoryRoot)};
@@ -1153,18 +1153,18 @@ await assert.rejects(readSourceFacts({
   keyOf: (unit) => unit.context.file,
 }), DuplicateTranslationUnitKeyError);
 
-for (const packageName of ["@l10n/core", "@l10n/checks"]) {
+for (const packageName of ["@lioni/core", "@lioni/checks"]) {
   const resolved = fileURLToPath(import.meta.resolve(packageName));
   assert.ok(!resolved.startsWith(repositoryRoot + path.sep), resolved);
 }
-const cliPackage = await realpath(path.join(process.cwd(), "node_modules", "@l10n", "cli"));
+const cliPackage = await realpath(path.join(process.cwd(), "node_modules", "@lioni", "cli"));
 assert.ok(!cliPackage.startsWith(repositoryRoot + path.sep), cliPackage);
 
-const executable = path.join(process.cwd(), "node_modules", ".bin", process.platform === "win32" ? "l10n.cmd" : "l10n");
-const structured = spawnSync(executable, ["facts", "l10n.config.ts"], { encoding: "utf8", shell: process.platform === "win32" });
+const executable = path.join(process.cwd(), "node_modules", ".bin", process.platform === "win32" ? "lioni.cmd" : "lioni");
+const structured = spawnSync(executable, ["facts", "lioni.config.ts"], { encoding: "utf8", shell: process.platform === "win32" });
 assert.equal(structured.status, 0, structured.stderr);
 assert.deepEqual(JSON.parse(structured.stdout).data, facts);
-const readable = spawnSync(executable, ["facts", "l10n.config.ts", "--output-format", "text"], { encoding: "utf8", shell: process.platform === "win32" });
+const readable = spawnSync(executable, ["facts", "lioni.config.ts", "--output-format", "text"], { encoding: "utf8", shell: process.platform === "win32" });
 assert.equal(readable.status, 0, readable.stderr);
 for (const content of [facts.version, facts.source.units[0].key, "shots/save.png", "unknown", "conflict", "missing", "unavailable", "German catalogue unavailable"])
   assert.ok(readable.stdout.includes(content));
@@ -1173,7 +1173,7 @@ assert.equal(duplicate.status, 1);
 assert.equal(JSON.parse(duplicate.stderr).variant, "duplicateIdentity");
 assert.equal(JSON.parse(duplicate.stderr).data.key, "src/messages.ts");
 
-const noChecks = spawnSync(executable, ["qa", "l10n.config.ts"], { encoding: "utf8", shell: process.platform === "win32" });
+const noChecks = spawnSync(executable, ["qa", "lioni.config.ts"], { encoding: "utf8", shell: process.platform === "win32" });
 assert.equal(noChecks.status, 0, noChecks.stderr);
 assert.equal(JSON.parse(noChecks.stdout).data.status, "not-run");
 
@@ -1272,7 +1272,7 @@ import { writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { evaluateCompletion, readCompletion, readFacts } from "@l10n/core";
+import { evaluateCompletion, readCompletion, readFacts } from "@lioni/core";
 import completionConfig from "./completion.config.ts";
 
 const initial = await readCompletion(completionConfig);
@@ -1292,7 +1292,7 @@ const resourcePath = fileURLToPath(new URL("./completion-resources/fr.json", imp
 await writeFile(resourcePath, JSON.stringify([
   { text: "Save", context: { sourceLine: 18 } }
 ]), "utf8");
-const executable = path.join(process.cwd(), "node_modules", ".bin", process.platform === "win32" ? "l10n.cmd" : "l10n");
+const executable = path.join(process.cwd(), "node_modules", ".bin", process.platform === "win32" ? "lioni.cmd" : "lioni");
 const updated = spawnSync(executable, ["completion", "completion.config.ts"], { encoding: "utf8", shell: process.platform === "win32" });
 assert.equal(updated.status, 0, updated.stderr);
 const report = JSON.parse(updated.stdout).data;
@@ -1310,8 +1310,8 @@ assert.ok(readable.stdout.includes("完成率：25.0%"));
   const baselineHostSource = `import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { advanceProcessingBaseline, compareProcessingBaseline, defineConfig, readFacts } from "@l10n/core";
-import { createFileProcessingBaselineStore } from "@l10n/core/node";
+import { advanceProcessingBaseline, compareProcessingBaseline, defineConfig, readFacts } from "@lioni/core";
+import { createFileProcessingBaselineStore } from "@lioni/core/node";
 
 const scenario = process.argv[2];
 const baselinePath = path.join(process.cwd(), "processing-baseline.json");
@@ -1412,11 +1412,11 @@ if (scenario === "establish") {
   const updatePlanHostSource = `import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { advanceProcessingBaseline, applyUpdatePlan, compareProcessingBaseline, createUpdatePlan, readFacts } from "@l10n/core";
+import { advanceProcessingBaseline, applyUpdatePlan, compareProcessingBaseline, createUpdatePlan, readFacts } from "@lioni/core";
 import {
   createFileProcessingBaselineStore,
   createFileUpdatePlanStore,
-} from "@l10n/core/node";
+} from "@lioni/core/node";
 import config from "./plan.config.ts";
 
 const scenario = process.argv[2];
@@ -1517,7 +1517,7 @@ if (scenario === "establish") {
 }
 `;
   const editApplySource = `import { readFile, writeFile } from "node:fs/promises";
-import { applySemanticEdits } from "@l10n/core";
+import { applySemanticEdits } from "@lioni/core";
 import config from "./edits.config.ts";
 
 const editPath = process.argv[2];
@@ -1537,7 +1537,7 @@ import {
   prepareSemanticEdit,
   readFacts,
   resolveSemanticEditInput,
-} from "@l10n/core";
+} from "@lioni/core";
 import config from "./edits.config.ts";
 
 async function prepare(sourceKey, content) {
@@ -1567,7 +1567,7 @@ async function applyInNewProcess(name, edits) {
 }
 
 async function baselineState() {
-  const directory = path.join(process.cwd(), ".l10n");
+  const directory = path.join(process.cwd(), ".lioni");
   const files = await readdir(directory, { withFileTypes: true });
   return Object.fromEntries(await Promise.all(
     files.filter((entry) => entry.isFile()).map(async ({ name }) => [
@@ -1920,7 +1920,7 @@ process.stdout.write("独立打包宿主：诊断候选默认写入，显式拒�
       JSON.stringify(packageJson, null, 2),
     ),
     writeFile(path.join(consumerRoot, "pnpm-workspace.yaml"), workspaceConfig),
-    writeFile(path.join(consumerRoot, "l10n.config.ts"), configSource),
+    writeFile(path.join(consumerRoot, "lioni.config.ts"), configSource),
     writeFile(
       path.join(consumerRoot, "duplicate.config.ts"),
       duplicateConfigSource,
@@ -2066,7 +2066,7 @@ process.stdout.write("独立打包宿主：诊断候选默认写入，显式拒�
 
 export async function verifyIndependentConsumer(): Promise<void> {
   const temporaryRoot = await mkdtemp(
-    path.join(tmpdir(), "l10n-independent-consumer-"),
+    path.join(tmpdir(), "lioni-independent-consumer-"),
   );
   const artifactRoot = path.join(temporaryRoot, "artifacts");
   const consumerRoot = path.join(temporaryRoot, "consumer");
@@ -2086,8 +2086,8 @@ export async function verifyIndependentConsumer(): Promise<void> {
     }
 
     for (const packageName of packageNames) {
-      const shortName = packageName.slice("@l10n/".length);
-      const tarball = path.join(artifactRoot, `l10n-${shortName}-0.0.0.tgz`);
+      const shortName = packageName.slice("@lioni/".length);
+      const tarball = path.join(artifactRoot, `lioni-${shortName}-0.0.0.tgz`);
       const digest = createHash("sha256")
         .update(await readFile(tarball))
         .digest("hex");
@@ -2200,7 +2200,7 @@ export async function verifyIndependentConsumer(): Promise<void> {
     const resumeResources = path.join(consumerRoot, "resume-resources");
     const resumeSourcePath = path.join(resumeResources, "source.json");
     const resumeTranslations = path.join(resumeResources, "fr");
-    const resumeBaselineDirectory = path.join(consumerRoot, ".l10n");
+    const resumeBaselineDirectory = path.join(consumerRoot, ".lioni");
     await Promise.all([
       mkdir(resumeTranslations, { recursive: true }),
       mkdir(resumeBaselineDirectory, { recursive: true }),
@@ -2302,7 +2302,7 @@ export async function verifyIndependentConsumer(): Promise<void> {
     );
 
     process.stdout.write("验证已打包制品删除译文的跨进程资源链…\n");
-    await mkdir(path.join(consumerRoot, ".l10n"), { recursive: true });
+    await mkdir(path.join(consumerRoot, ".lioni"), { recursive: true });
     const deletionSourcePath = path.join(
       consumerRoot,
       "deletion-resources",
@@ -2389,7 +2389,7 @@ export async function verifyIndependentConsumer(): Promise<void> {
     );
     process.stdout.write(editRuntime.stdout);
   } finally {
-    if (process.env.L10N_KEEP_CONSUMER === "1") {
+    if (process.env.LIONI_KEEP_CONSUMER === "1") {
       process.stdout.write(`保留独立制品与资源现场：${temporaryRoot}\n`);
     } else {
       await rm(temporaryRoot, { recursive: true, force: true });

@@ -1,9 +1,9 @@
 {
-  "name": "@l10n/cli",
+  "name": "@lioni/cli",
   "version": "0.0.0",
   "private": true,
   "bin": {
-    "l10n": "./dist/cli.js"
+    "lioni": "./dist/cli.js"
   },
   "files": [
     "dist"
@@ -21,13 +21,13 @@
     "typecheck": "tsc -p tsconfig.json --noEmit --pretty false"
   },
   "dependencies": {
-    "@l10n/core": "workspace:*",
+    "@lioni/core": "workspace:*",
     "@valibot/to-json-schema": "catalog:",
     "@ykdz/cli-contract": "catalog:",
     "valibot": "catalog:"
   },
   "devDependencies": {
-    "@l10n/typescript-config": "workspace:*",
+    "@lioni/typescript-config": "workspace:*",
     "@types/node": "catalog:",
     "oxfmt": "catalog:",
     "oxlint": "catalog:",

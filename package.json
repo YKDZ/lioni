@@ -1,5 +1,5 @@
 {
-  "name": "l10n",
+  "name": "lioni",
   "private": true,
   "type": "module",
   "scripts": {
@@ -16,7 +16,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit --pretty false"
   },
   "devDependencies": {
-    "@l10n/typescript-config": "workspace:*",
+    "@lioni/typescript-config": "workspace:*",
     "@types/node": "catalog:",
     "oxfmt": "catalog:",
     "oxlint": "catalog:",

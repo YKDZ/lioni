@@ -6,7 +6,7 @@ import type {
   QualityLocation,
   QualitySubject,
   TranslationUnitInput,
-} from "@l10n/core";
+} from "@lioni/core";
 
 export type NumberCheckerOptions<
   TUnit extends TranslationUnitInput,

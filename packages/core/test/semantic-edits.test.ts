@@ -216,7 +216,7 @@ void describe("semantic edits", () => {
     assert.equal(prepared.status, "prepared");
     if (prepared.status !== "prepared") return;
     assert.deepStrictEqual(JSON.parse(JSON.stringify(prepared.edit)), {
-      formatVersion: "l10n.semantic-edit/v2",
+      formatVersion: "lioni.semantic-edit/v2",
       operation: "write",
       createdFromFactsVersion: facts.version,
       sourceKey: "src/messages.ts:18",

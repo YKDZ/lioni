@@ -1,5 +1,5 @@
 {
-  "extends": "@l10n/typescript-config/base.json",
+  "extends": "@lioni/typescript-config/base.json",
   "compilerOptions": {
     "customConditions": ["source"],
     "erasableSyntaxOnly": true,

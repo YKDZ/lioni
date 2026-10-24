@@ -6,7 +6,7 @@ import {
   defineConfig,
   type BodyAvailability,
   type JsonValue,
-} from "@l10n/core";
+} from "@lioni/core";
 
 import { createNumberChecker } from "../src/index.ts";
 

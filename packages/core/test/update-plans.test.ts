@@ -182,7 +182,7 @@ void describe("update plans", () => {
     });
     assert.equal(item?.edit?.expected.target.status, "present");
 
-    const directory = await mkdtemp(path.join(os.tmpdir(), "l10n-plan-"));
+    const directory = await mkdtemp(path.join(os.tmpdir(), "lioni-plan-"));
     const store = createFileUpdatePlanStore(
       path.join(directory, "update-plan.json"),
     );

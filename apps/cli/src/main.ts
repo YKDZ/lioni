@@ -5,8 +5,8 @@ import {
   readFacts,
   readCompletion,
   type QualityRunResult,
-} from "@l10n/core";
-import { loadConfig } from "@l10n/core/node";
+} from "@lioni/core";
+import { loadConfig } from "@lioni/core/node";
 import {
   CliWriteError,
   defineCli,

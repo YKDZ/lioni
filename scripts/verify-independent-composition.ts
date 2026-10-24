@@ -57,10 +57,10 @@ import {
   type QualityException,
   type UpdatePolicyInput,
   type UpdateDecision,
-} from "@l10n/core";
+} from "@lioni/core";
 import {
   createNumberChecker,
-} from "@l10n/checks";
+} from "@lioni/checks";
 
 type CatalogUnit = {
   readonly source: { readonly label: string };
@@ -435,11 +435,11 @@ import {
   evaluateCompletion,
   readFacts,
   runQualityChecks,
-} from "@l10n/core";
+} from "@lioni/core";
 import {
   createFileProcessingBaselineStore,
   createFileUpdatePlanStore,
-} from "@l10n/core/node";
+} from "@lioni/core/node";
 import aggregateConfig, {
   catalogConfig,
   guideConfig,
@@ -904,7 +904,7 @@ export async function verifyCompositionConsumer(
     consumerRoot,
     "node_modules",
     ".bin",
-    process.platform === "win32" ? "l10n.cmd" : "l10n",
+    process.platform === "win32" ? "lioni.cmd" : "lioni",
   );
   const initialQa = runChecked(
     executable,

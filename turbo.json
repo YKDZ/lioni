@@ -41,7 +41,7 @@
     },
     "//#verify:independent-consumer": {
       "cache": false,
-      "dependsOn": ["@l10n/cli#test"],
+      "dependsOn": ["@lioni/cli#test"],
       "outputs": [],
       "tags": ["quality:heavy"]
     },

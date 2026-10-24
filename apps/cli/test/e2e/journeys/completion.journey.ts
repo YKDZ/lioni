@@ -9,7 +9,7 @@ const journey: CliJourney = {
   modes: ["source", "distribution"],
   async setup({ workDir }) {
     await writeFile(
-      path.join(workDir, "l10n.config.ts"),
+      path.join(workDir, "lioni.config.ts"),
       `export default {
   source: {
     read: () => ({ scopes: [{
@@ -97,10 +97,13 @@ const journey: CliJourney = {
   },
   commands() {
     return [
-      { name: "structured completion", args: ["completion", "l10n.config.ts"] },
+      {
+        name: "structured completion",
+        args: ["completion", "lioni.config.ts"],
+      },
       {
         name: "readable completion",
-        args: ["completion", "l10n.config.ts", "--output-format", "text"],
+        args: ["completion", "lioni.config.ts", "--output-format", "text"],
       },
       {
         name: "unknown source total",

@@ -1,5 +1,5 @@
 {
-  "name": "@l10n/core",
+  "name": "@lioni/core",
   "version": "0.0.0",
   "private": true,
   "files": [
@@ -36,7 +36,7 @@
     "prepack": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && pnpm exec turbo run build --filter=."
   },
   "devDependencies": {
-    "@l10n/typescript-config": "workspace:*",
+    "@lioni/typescript-config": "workspace:*",
     "@types/node": "catalog:",
     "oxfmt": "catalog:",
     "oxlint": "catalog:",

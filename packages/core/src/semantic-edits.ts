@@ -69,7 +69,7 @@ type SemanticEditBase = {
 
 export type SemanticEdit =
   | (SemanticEditBase & {
-      readonly formatVersion: "l10n.semantic-edit/v2";
+      readonly formatVersion: "lioni.semantic-edit/v2";
       readonly operation: "write";
       readonly content: JsonValue;
       readonly target: SemanticEditTarget;
@@ -81,7 +81,7 @@ export type SemanticEdit =
       };
     })
   | (SemanticEditBase & {
-      readonly formatVersion: "l10n.semantic-edit/v2";
+      readonly formatVersion: "lioni.semantic-edit/v2";
       readonly operation: "delete";
       readonly content?: never;
       readonly target: SemanticEditTarget & { readonly kind: "existing" };
@@ -586,7 +586,7 @@ export function prepareSemanticEdit(
       status: "prepared",
       edit: {
         ...snapshot,
-        formatVersion: "l10n.semantic-edit/v2",
+        formatVersion: "lioni.semantic-edit/v2",
         operation: "write",
         content: snapshotJson(candidate.content, "候选内容"),
       },
@@ -612,7 +612,7 @@ export function prepareSemanticDeletion(
       status: "prepared",
       edit: {
         ...snapshot,
-        formatVersion: "l10n.semantic-edit/v2",
+        formatVersion: "lioni.semantic-edit/v2",
         operation: "delete",
       },
     };
@@ -762,7 +762,7 @@ async function validateSemanticEdit<
       readonly reason: string;
     }
 > {
-  if (edit.formatVersion !== "l10n.semantic-edit/v2")
+  if (edit.formatVersion !== "lioni.semantic-edit/v2")
     return { status: "unprocessed", reason: "不支持的语义编辑版本。" };
 
   if (edit.operation === "delete")

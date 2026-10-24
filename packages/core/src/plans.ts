@@ -710,7 +710,7 @@ function isSemanticEdit(value: unknown): value is SemanticEdit {
   if (typeof value !== "object" || value === null) return false;
   const edit = value as Record<string, unknown>;
   if (
-    edit.formatVersion !== "l10n.semantic-edit/v2" ||
+    edit.formatVersion !== "lioni.semantic-edit/v2" ||
     typeof edit.createdFromFactsVersion !== "string" ||
     typeof edit.sourceKey !== "string" ||
     typeof edit.language !== "string" ||

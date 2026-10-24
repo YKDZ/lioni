@@ -211,7 +211,7 @@ void describe("apply update plans", () => {
     assert.equal(plan.items[0]?.status, "delete");
 
     const directory = await mkdtemp(
-      path.join(os.tmpdir(), "l10n-delete-plan-"),
+      path.join(os.tmpdir(), "lioni-delete-plan-"),
     );
     const planStore = createFileUpdatePlanStore(
       path.join(directory, "update-plan.json"),
@@ -627,7 +627,9 @@ void describe("apply update plans", () => {
     assert.equal(plan.items[0]?.status, "candidate");
     assert.equal(plan.items[0]?.edit?.content, "Sauvegarder");
 
-    const directory = await mkdtemp(path.join(os.tmpdir(), "l10n-saved-plan-"));
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "lioni-saved-plan-"),
+    );
     const planStore = createFileUpdatePlanStore(
       path.join(directory, "update-plan.json"),
     );
