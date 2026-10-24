@@ -404,6 +404,23 @@ export async function advanceProcessingBaseline<
           sourceKeys: [...new Set([...scope.sourceKeys, ...sourceKeys])],
         };
   });
+  const previouslyObservedKeys = new Set(
+    (previous?.entries ?? []).map(({ sourceKey }) => sourceKey),
+  );
+  for (const entry of updates.values()) {
+    if (previouslyObservedKeys.has(entry.sourceKey)) continue;
+    for (const pair of observedPairs) {
+      if (
+        pair.sourceKey === entry.sourceKey &&
+        !entries.has(pairKey(pair.sourceKey, pair.language))
+      ) {
+        entries.set(pairKey(pair.sourceKey, pair.language), {
+          ...pair.entry,
+          processed: false,
+        });
+      }
+    }
+  }
   for (const [id, entry] of updates) entries.set(id, entry);
 
   const next: ProcessingBaseline = {
@@ -678,7 +695,6 @@ function confirmedSourceRemovalScope<
     !historicalScopes.some(
       (scope) =>
         sameJson(scope.range, previous.source.range) &&
-        scope.enumeration === "complete" &&
         scope.sourceKeys.includes(previous.sourceKey),
     )
   )
