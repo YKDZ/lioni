@@ -9,6 +9,7 @@ import {
   StandardSchemaContractError,
   type QualityCheckDefinition,
   type QualityCheckOutcome,
+  type SemanticEditCandidate,
   type StandardSchemaV1,
 } from "../src/index.ts";
 
@@ -364,6 +365,37 @@ void describe("quality checker configuration contracts", () => {
         return true;
       },
     );
+  });
+
+  void it("rejects candidate bodies that violate the declared content schema", async () => {
+    let checkerCalled = false;
+    const checker = defineQualityCheck<Unit, unknown, typeof thresholdSchema>({
+      id: "candidate-schema",
+      configurationSchema: thresholdSchema,
+      configuration: {},
+      check: () => {
+        checkerCalled = true;
+        return completeOutcome();
+      },
+    });
+    const invalidCandidate = {
+      sourceKey: "save",
+      language: "fr",
+      content: { text: "not the declared string body" },
+    } as unknown as SemanticEditCandidate<string>;
+
+    await assert.rejects(
+      analyzeQuality(qualityConfig([checker]), {
+        candidates: [invalidCandidate],
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof StandardSchemaContractError);
+        assert.equal(error.kind, "schema-mismatch");
+        assert.equal(error.valueDescription, "译文候选正文");
+        return true;
+      },
+    );
+    assert.equal(checkerCalled, false);
   });
 
   void it("matches cached QA results against the parsed configuration", async () => {

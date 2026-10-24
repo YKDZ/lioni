@@ -8,8 +8,11 @@ import {
   defineQualityCheck,
   QualityCheckBindingError,
   StandardSchemaContractError,
+  type QualityCheckDefinition,
   type QualityCheckInput,
   type QualityCheckOutcome,
+  type QualityObject,
+  type SemanticEditCandidate,
   type StandardSchemaV1,
   type TranslationUnitInput,
 } from "../src/index.ts";
@@ -27,6 +30,15 @@ type ListUnit = TranslationUnitInput & {
 };
 
 type MixedUnit = TextUnit | ListUnit;
+type MixedBody = string | readonly string[];
+type MixedTranslation = {
+  readonly key: string;
+  readonly content: MixedBody;
+};
+type MixedUnavailableTranslation = {
+  readonly key: string;
+  readonly reason: string;
+};
 
 type ProjectedText = {
   readonly source: string;
@@ -41,6 +53,64 @@ const mixedUnitSchema: StandardSchemaV1<MixedUnit, MixedUnit> = {
       return isMixedUnit(value)
         ? { value }
         : { issues: [{ message: "原文单元结构不匹配。" }] };
+    },
+  },
+};
+
+const mixedTranslationSchema: StandardSchemaV1<
+  MixedTranslation,
+  MixedTranslation
+> = {
+  "~standard": {
+    version: 1,
+    vendor: "qa-binding-test",
+    validate(value) {
+      if (
+        typeof value !== "object" ||
+        value === null ||
+        Array.isArray(value) ||
+        !("key" in value) ||
+        typeof value.key !== "string" ||
+        !("content" in value) ||
+        !isMixedBody(value.content)
+      )
+        return { issues: [{ message: "译文记录结构不匹配。" }] };
+      return { value: { key: value.key, content: value.content } };
+    },
+  },
+};
+
+const mixedUnavailableTranslationSchema: StandardSchemaV1<
+  MixedUnavailableTranslation,
+  MixedUnavailableTranslation
+> = {
+  "~standard": {
+    version: 1,
+    vendor: "qa-binding-test",
+    validate(value) {
+      if (
+        typeof value !== "object" ||
+        value === null ||
+        Array.isArray(value) ||
+        !("key" in value) ||
+        typeof value.key !== "string" ||
+        !("reason" in value) ||
+        typeof value.reason !== "string"
+      )
+        return { issues: [{ message: "不可用译文记录结构不匹配。" }] };
+      return { value: { key: value.key, reason: value.reason } };
+    },
+  },
+};
+
+const mixedBodySchema: StandardSchemaV1<MixedBody, MixedBody> = {
+  "~standard": {
+    version: 1,
+    vendor: "qa-binding-test",
+    validate(value) {
+      return isMixedBody(value)
+        ? { value }
+        : { issues: [{ message: "正文必须是字符串或字符串列表。" }] };
     },
   },
 };
@@ -121,6 +191,14 @@ function isMixedUnit(value: unknown): value is MixedUnit {
   );
 }
 
+function isMixedBody(value: unknown): value is MixedBody {
+  return (
+    typeof value === "string" ||
+    (Array.isArray(value) &&
+      value.every((entry: unknown) => typeof entry === "string"))
+  );
+}
+
 function readMixedSource() {
   const units: readonly MixedUnit[] = [
     { kind: "text", key: "message", source: "Total 12" },
@@ -143,11 +221,67 @@ function readMixedSource() {
   };
 }
 
+const mixedTranslations = {
+  languages: ["fr"],
+  schema: mixedTranslationSchema,
+  unavailableSchema: mixedUnavailableTranslationSchema,
+  contentSchema: mixedBodySchema,
+  contentOf: ({ content }: MixedTranslation) => content,
+  read: (_language: string, sourceUnits: readonly { key: string }[]) => ({
+    scopes: [
+      {
+        range: "fr.json",
+        covers: sourceUnits.map(({ key }) => key),
+        enumeration: "complete" as const,
+        records: [
+          {
+            value: { key: "message", content: "Total 12" },
+            bodyAvailability: "available" as const,
+          },
+          {
+            value: { key: "rows", content: ["Reference 7"] },
+            bodyAvailability: "available" as const,
+          },
+          {
+            value: { key: "unknown", reason: "译文正文暂不可读。" },
+            bodyAvailability: "unavailable" as const,
+          },
+        ],
+      },
+    ],
+  }),
+  matches: (
+    unit: MixedUnit,
+    translation: MixedTranslation | MixedUnavailableTranslation,
+  ) => unit.key === translation.key,
+};
+
+function qualityConfig(
+  qualityChecks: readonly QualityCheckDefinition<
+    MixedUnit,
+    MixedTranslation,
+    QualityObject,
+    MixedBody,
+    MixedUnavailableTranslation
+  >[],
+  candidates: readonly SemanticEditCandidate<MixedBody>[],
+) {
+  return defineConfig({
+    source: readMixedSource(),
+    keyOf: ({ key }) => key,
+    translations: mixedTranslations,
+    qualityChecks,
+    createQualityRequest: () => ({ candidates, dependencies: {} }),
+  });
+}
+
 function selectedText(
   input: QualityCheckInput<
     MixedUnit,
-    unknown,
-    { readonly includeListEvidence: boolean }
+    MixedTranslation,
+    { readonly includeListEvidence: boolean },
+    MixedBody,
+    MixedUnavailableTranslation
   >,
 ) {
   const sourceUnit = input.sourceUnit;
@@ -179,6 +313,11 @@ function selectedText(
 
 void describe("quality check bindings", () => {
   void it("projects selected text while preserving full mixed facts and other outcomes", async () => {
+    const candidates = [
+      { sourceKey: "message", language: "fr", content: "Total 12" },
+      { sourceKey: "rows", language: "fr", content: ["Reference 7"] },
+      { sourceKey: "message", language: "fr", content: ["wrong shape"] },
+    ];
     const checker = bindQualityCheck({
       id: "text-number-context",
       configurationSchema: checkerConfigurationSchema,
@@ -200,6 +339,22 @@ void describe("quality check bindings", () => {
         );
         const listSource =
           listUnit?.unit.kind === "list" ? listUnit.unit.source : undefined;
+        const listTranslation = input.facts.translations.records.find(
+          (record) =>
+            record.bodyAvailability === "available" &&
+            record.translation.key === "rows",
+        );
+        const listBody: readonly string[] | undefined =
+          listTranslation?.bodyAvailability === "available" &&
+          Array.isArray(listTranslation.content)
+            ? listTranslation.content
+            : undefined;
+        const unavailableTranslation = input.facts.translations.records.find(
+          (record) => record.bodyAvailability === "unavailable",
+        );
+        const keepsUnavailableFact =
+          unavailableTranslation?.bodyAvailability === "unavailable" &&
+          unavailableTranslation.translation.reason === "译文正文暂不可读。";
         const sameProjection =
           currentUnit.source === currentInput.source &&
           input.candidate.content === currentInput.target;
@@ -207,6 +362,8 @@ void describe("quality check bindings", () => {
           input.configuration.includeListEvidence &&
           listUnit?.unit.kind === "list" &&
           listSource !== undefined &&
+          listBody !== undefined &&
+          keepsUnavailableFact &&
           sameProjection
             ? [
                 {
@@ -233,6 +390,19 @@ void describe("quality check bindings", () => {
                       },
                       value: listSource,
                     },
+                    {
+                      role: "list-translation-body",
+                      object: {
+                        kind: "translation-unit",
+                        key: "rows",
+                        language: "fr",
+                      },
+                      location: {
+                        language: "fr",
+                        range: listTranslation?.range ?? null,
+                      },
+                      value: listBody,
+                    },
                   ],
                 },
               ]
@@ -240,17 +410,7 @@ void describe("quality check bindings", () => {
         return completeOutcome(diagnostics);
       },
     });
-    const candidates = [
-      { sourceKey: "message", language: "fr", content: "Total 12" },
-      { sourceKey: "rows", language: "fr", content: ["Reference 7"] },
-      { sourceKey: "message", language: "fr", content: ["wrong shape"] },
-    ];
-    const config = defineConfig<MixedUnit>({
-      source: readMixedSource(),
-      keyOf: ({ key }) => key,
-      qualityChecks: [checker],
-      createQualityRequest: () => ({ candidates, dependencies: {} }),
-    });
+    const config = qualityConfig([checker], candidates);
 
     const result = await analyzeQuality(config);
 
@@ -271,6 +431,11 @@ void describe("quality check bindings", () => {
     assert.deepEqual(result.diagnostics[0]?.evidence[0]?.value, [
       "Reference 7",
     ]);
+    assert.deepEqual(result.diagnostics[0]?.evidence[1]?.value, [
+      "Reference 7",
+    ]);
+    const mixedBody: MixedBody = result.candidates[1]!.content;
+    assert.deepEqual(mixedBody, ["Reference 7"]);
   });
 
   void it("rejects an invalid projection through the public QA workflow", async () => {
@@ -294,17 +459,10 @@ void describe("quality check bindings", () => {
       project: () => ({ status: "ready", value: 42 }),
       check: () => completeOutcome(),
     });
-    const config = defineConfig<MixedUnit>({
-      source: readMixedSource(),
-      keyOf: ({ key }) => key,
-      qualityChecks: [checker],
-      createQualityRequest: () => ({
-        candidates: [
-          { sourceKey: "message", language: "fr", content: "Total 12" },
-        ],
-        dependencies: {},
-      }),
-    });
+    const config = qualityConfig(
+      [checker],
+      [{ sourceKey: "message", language: "fr", content: "Total 12" }],
+    );
 
     await assert.rejects(analyzeQuality(config), (error: unknown) => {
       assert.ok(error instanceof StandardSchemaContractError);
@@ -337,17 +495,10 @@ void describe("quality check bindings", () => {
       },
       check: () => completeOutcome(),
     });
-    const config = defineConfig<MixedUnit>({
-      source: readMixedSource(),
-      keyOf: ({ key }) => key,
-      qualityChecks: [checker],
-      createQualityRequest: () => ({
-        candidates: [
-          { sourceKey: "message", language: "fr", content: "Total 12" },
-        ],
-        dependencies: {},
-      }),
-    });
+    const config = qualityConfig(
+      [checker],
+      [{ sourceKey: "message", language: "fr", content: "Total 12" }],
+    );
 
     await assert.rejects(analyzeQuality(config), (error: unknown) => {
       assert.ok(error instanceof QualityCheckBindingError);

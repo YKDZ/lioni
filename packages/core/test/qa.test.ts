@@ -20,6 +20,7 @@ import {
 void describe("quality checks", () => {
   void it("rejects non-JSON dependencies before reporting a QA check failure", async () => {
     const unit = { source: "Hello" };
+    const translation = { text: "Bonjour" };
     const candidate = {
       sourceKey: "message:hello",
       language: "fr",
@@ -44,6 +45,28 @@ void describe("quality checks", () => {
           }),
         },
         keyOf: () => "message:hello",
+        translations: {
+          languages: ["fr"],
+          schema: schemaFromExamples(translation),
+          contentSchema: jsonValueSchema,
+          contentOf: ({ text }) => text,
+          read: (_language, sourceUnits) => ({
+            scopes: [
+              {
+                range: "fr.json",
+                covers: sourceUnits.map(({ key }) => key),
+                enumeration: "complete" as const,
+                records: [
+                  {
+                    value: translation,
+                    bodyAvailability: "available" as const,
+                  },
+                ],
+              },
+            ],
+          }),
+          matches: () => true,
+        },
         createQualityRequest: () => ({
           candidates: [candidate],
           dependencies,
