@@ -434,6 +434,12 @@ export async function resolveSemanticDeleteInput<
   targetScopeRanges: readonly unknown[],
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
 ): Promise<SemanticDeleteInputResolution<TBody>> {
+  const validatedHistoricalSource = await validateWithStandardSchema(
+    config.source.schema,
+    historicalSource,
+    "删除输入历史原文",
+    { preserveValue: true, requireJson: true },
+  );
   const adapter = config.translationWriteback;
   const matches = config.translations?.matches;
   if (adapter === undefined || matches === undefined)
@@ -451,7 +457,10 @@ export async function resolveSemanticDeleteInput<
   let historicalSourceSnapshot: JsonValue;
   try {
     sourceRangeSnapshot = snapshotJson(sourceRange, "历史原文范围");
-    historicalSourceSnapshot = snapshotJson(historicalSource, "历史原文单元");
+    historicalSourceSnapshot = snapshotJson(
+      validatedHistoricalSource,
+      "历史原文单元",
+    );
   } catch (error) {
     rethrowContractError(error);
     return {
@@ -526,7 +535,7 @@ export async function resolveSemanticDeleteInput<
   // 仅为宿主重定位和依赖计算保留的历史输入，不加入当前原文事实。
   const historicalSourceUnit: SourceUnitFact<TUnit> = {
     key: subject.sourceKey,
-    unit: historicalSource,
+    unit: validatedHistoricalSource,
     bodyAvailability: "available",
     scopeIndex: sourceScopeIndex,
   };
@@ -542,7 +551,7 @@ export async function resolveSemanticDeleteInput<
         scopeRanges.some((range) =>
           isDeepStrictEqual(range, translation.range),
         ) &&
-        matches(historicalSource, translation.translation),
+        matches(validatedHistoricalSource, translation.translation),
     );
   } catch (error) {
     rethrowContractError(error);

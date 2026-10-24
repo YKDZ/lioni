@@ -28,6 +28,7 @@ import type {
 } from "./semantic-edits.ts";
 import {
   assertJsonValue,
+  snapshotJsonValue,
   StandardSchemaContractError,
   validateWithStandardSchema,
 } from "./standard-schema.ts";
@@ -477,6 +478,7 @@ export async function readSourceFacts<
   try {
     read = await config.source.read();
   } catch (error) {
+    if (error instanceof StandardSchemaContractError) throw error;
     errorMessage = error instanceof Error ? error.message : String(error);
   }
 
@@ -553,6 +555,7 @@ export async function readFacts<
       try {
         read = await translationAdapter.read(language, source.units);
       } catch (error) {
+        if (error instanceof StandardSchemaContractError) throw error;
         errorMessage = error instanceof Error ? error.message : String(error);
       }
 
@@ -1075,17 +1078,7 @@ function invalidReadStructure(
 }
 
 function snapshotJson(value: unknown, description: string): JsonValue {
-  let serialized: string | undefined;
-  try {
-    serialized = JSON.stringify(value);
-  } catch (error) {
-    throw new TypeError(`${description}必须可序列化为 JSON。`, {
-      cause: error,
-    });
-  }
-  if (serialized === undefined)
-    throw new TypeError(`${description}必须可序列化为 JSON。`);
-  return JSON.parse(serialized) as JsonValue;
+  return snapshotJsonValue(value, description);
 }
 
 function readStatus(

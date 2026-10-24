@@ -187,7 +187,7 @@ function createChecks() {
     check: (input) => {
       observed.set("minimum-length", input.configuration);
       const minimum: number = input.configuration.threshold;
-      // @ts-expect-error the checker receives the schema's output type
+      // @ts-expect-error 检查器接收到的配置类型应与 schema 输出类型一致。
       const wrongType: string = input.configuration.threshold;
       void wrongType;
       return completeOutcome(
@@ -303,7 +303,7 @@ void describe("quality checker configuration contracts", () => {
     >({
       id: "minimum-length",
       configurationSchema: thresholdSchema,
-      // @ts-expect-error the declared input shape rejects invalid static configuration
+      // @ts-expect-error 静态配置值不符合声明的输入类型。
       configuration: { threshold: "three" },
       check: () => completeOutcome(),
     });

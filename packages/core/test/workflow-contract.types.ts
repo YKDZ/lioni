@@ -85,7 +85,7 @@ const config = defineConfig({
     const currentSource: string | undefined = input.expectedInput?.source.value;
     void previousSource;
     void currentSource;
-    // @ts-expect-error Historical source bodies keep the source schema's string type.
+    // @ts-expect-error 历史原文正文应保留原文 schema 的字符串类型。
     const invalidPreviousSource: number | undefined =
       input.previous?.source.value;
     void invalidPreviousSource;
@@ -124,7 +124,7 @@ defineConfig({
     matches: () => true,
     contentOf: (translation) => translation.body,
   },
-  // @ts-expect-error Update policies must return a body accepted by contentSchema.
+  // @ts-expect-error 更新策略候选正文必须符合 contentSchema。
   updatePolicy: () => ({
     action: "candidate",
     candidate: {
@@ -143,7 +143,7 @@ const invalidCandidate: SemanticEditCandidate<Body> = {
   language: "fr",
   content: {
     message: "Enregistrer",
-    // @ts-expect-error The declared body has only these two states.
+    // @ts-expect-error 声明的正文只允许这两种状态。
     state: "accepted",
   },
 };

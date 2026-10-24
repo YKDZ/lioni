@@ -801,6 +801,133 @@ void describe("framework facts", () => {
     assert.deepStrictEqual(facts.units, []);
   });
 
+  void it("propagates schema contract errors through a nested source reader", async () => {
+    type Unit = { readonly source: string };
+    const schema = sourceSchemaFromExamples<Unit>({ source: "Save" });
+    const nested = defineConfig({
+      source: {
+        schema,
+        read: () => completeSource({ source: 42 } as unknown as Unit),
+      },
+      keyOf: () => "nested",
+    });
+    const outer = defineConfig({
+      source: {
+        schema,
+        async read() {
+          await readSourceFacts(nested);
+          return { scopes: [] };
+        },
+      },
+      keyOf: () => "outer",
+    });
+
+    await assert.rejects(readFacts(outer), StandardSchemaContractError);
+  });
+
+  void it("propagates schema contract errors through a nested translation reader", async () => {
+    type Translation = { readonly id: string; readonly text: string };
+    const unit = { source: "Save" };
+    const sourceSchema = sourceSchemaFromExamples(unit);
+    const translationSchema = schemaFromExamples<Translation>({
+      id: "save",
+      text: "Enregistrer",
+    });
+    const nested = defineConfig({
+      source: {
+        schema: sourceSchema,
+        read: () => completeSource(unit),
+      },
+      keyOf: () => "save",
+      translations: {
+        languages: ["fr"],
+        schema: translationSchema,
+        contentSchema: jsonValueSchema,
+        read: () => ({
+          scopes: [
+            {
+              range: "fr.json",
+              covers: ["save"],
+              enumeration: "complete",
+              records: [
+                {
+                  value: {
+                    id: 7,
+                    text: "Enregistrer",
+                  } as unknown as Translation,
+                  bodyAvailability: "available",
+                },
+              ],
+            },
+          ],
+        }),
+        matches: () => true,
+        contentOf: (translation) => translation.text,
+      },
+    });
+    const outer = defineConfig({
+      source: {
+        schema: sourceSchema,
+        read: () => completeSource(unit),
+      },
+      keyOf: () => "save",
+      translations: {
+        languages: ["fr"],
+        schema: translationSchema,
+        contentSchema: jsonValueSchema,
+        async read() {
+          await readFacts(nested);
+          return { scopes: [] };
+        },
+        matches: () => true,
+        contentOf: (translation) => translation.text,
+      },
+    });
+
+    await assert.rejects(readFacts(outer), StandardSchemaContractError);
+  });
+
+  void it("keeps ordinary adapter TypeErrors as failed reads", async () => {
+    const unit = { source: "Save" };
+    const schema = sourceSchemaFromExamples(unit);
+    const sourceFacts = await readSourceFacts(
+      defineConfig({
+        source: {
+          schema,
+          read() {
+            throw new TypeError("source adapter type error");
+          },
+        },
+        keyOf: () => "save",
+      }),
+    );
+    assert.equal(sourceFacts.read.status, "failed");
+    assert.equal(sourceFacts.read.error, "source adapter type error");
+
+    const translation: { readonly text: string } = { text: "Enregistrer" };
+    const facts = await readFacts(
+      defineConfig({
+        source: { schema, read: () => completeSource(unit) },
+        keyOf: () => "save",
+        translations: {
+          languages: ["fr"],
+          schema: schemaFromExamples(translation),
+          contentSchema: jsonValueSchema,
+          read() {
+            throw new TypeError("translation adapter type error");
+          },
+          matches: () => true,
+          contentOf: (value) => value.text,
+        },
+      }),
+    );
+    assert.equal(facts.translations.reads[0]?.status, "failed");
+    assert.equal(
+      facts.translations.reads[0]?.error,
+      "translation adapter type error",
+    );
+  });
+
   void it("keeps a target language unknown when its resources were not read", async () => {
     const facts = await readFacts(
       defineConfig({

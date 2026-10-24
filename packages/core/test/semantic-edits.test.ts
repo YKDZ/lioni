@@ -7,6 +7,7 @@ import {
   prepareQualityConditionedSemanticEdit,
   prepareSemanticEdit,
   readFacts,
+  resolveSemanticDeleteInput,
   resolveSemanticEditInput,
   StandardSchemaContractError,
   type FrameworkConfig,
@@ -171,6 +172,104 @@ void describe("semantic edits", () => {
     );
     assert.equal(matchesCalls, 0);
     assert.equal(writeCalls, 0);
+  });
+
+  void it("validates a directly supplied delete history before matching or locating", async () => {
+    type Unit = { readonly id: string; readonly source: string };
+    type Translation = { readonly id: string; readonly text: string };
+    const unit: Unit = { id: "removed", source: "" };
+    const translation: Translation = {
+      id: "removed",
+      text: "Cible",
+    };
+    let matchesCalls = 0;
+    let locateCalls = 0;
+    const sourceSchema: StandardSchemaV1<Unit, Unit> = {
+      "~standard": {
+        version: 1,
+        vendor: "lioni-test-delete-history",
+        validate(value) {
+          if (
+            typeof value === "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            typeof (value as Record<string, unknown>).id === "string" &&
+            typeof (value as Record<string, unknown>).source === "string" &&
+            (value as Record<string, unknown>).source !== ""
+          )
+            return { value: value as Unit };
+          return { issues: [{ message: "原文单元必须包含非空正文。" }] };
+        },
+      },
+    };
+    const config = defineConfig({
+      source: {
+        schema: sourceSchema,
+        read: () => ({
+          scopes: [{ range: "src", enumeration: "complete", records: [] }],
+        }),
+      },
+      keyOf: ({ id }) => id,
+      translations: {
+        languages: ["fr"],
+        schema: schemaFromExamples(translation),
+        contentSchema: jsonValueSchema,
+        read: () => ({
+          scopes: [
+            {
+              range: "fr",
+              covers: [],
+              enumeration: "complete",
+              records: [{ value: translation, bodyAvailability: "available" }],
+            },
+          ],
+        }),
+        matches: (historicalUnit, actualTranslation) => {
+          matchesCalls += 1;
+          return historicalUnit.id === actualTranslation.id;
+        },
+        contentOf: (actualTranslation) => actualTranslation.text,
+      },
+      translationWriteback: {
+        locateExistingTarget: () => {
+          locateCalls += 1;
+          return { status: "located", locator: "removed" };
+        },
+        locateNewTarget: () => ({
+          status: "notWritable",
+          reason: "此场景不会新建译文。",
+        }),
+      },
+    });
+    const facts = await readFacts(config);
+
+    await assert.rejects(
+      resolveSemanticDeleteInput(
+        facts,
+        { sourceKey: "removed", language: "fr" },
+        unit,
+        "src",
+        ["fr"],
+        config,
+      ),
+      (error: unknown) =>
+        error instanceof StandardSchemaContractError &&
+        error.kind === "schema-mismatch",
+    );
+    assert.equal(matchesCalls, 0);
+    assert.equal(locateCalls, 0);
+
+    const result = await resolveSemanticDeleteInput(
+      facts,
+      { sourceKey: "removed", language: "fr" },
+      { ...unit, source: "Removed" },
+      "src",
+      ["fr"],
+      config,
+    );
+    assert.equal(result.status, "resolved");
+    assert.equal(matchesCalls, 1);
+    assert.equal(locateCalls, 1);
   });
 
   void it("prepares a structured edit without a writer, QA, or baseline", async () => {

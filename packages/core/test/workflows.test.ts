@@ -762,4 +762,29 @@ void describe("configured analysis workflow", () => {
     assert.equal(explicitInputMismatch.status, "input-mismatch");
     assert.equal(conditionCalled, false);
   });
+
+  void it("rejects non-JSON cached quality before calling the host condition", async () => {
+    const { candidate, config } = diagnosedEditScenario();
+    const quality = await analyzeQuality(config, { candidates: [candidate] });
+    const malformedQuality = Object.assign({}, quality, {
+      dependencies: new Map([["lost", "evidence"]]),
+    });
+    let conditionCalled = false;
+
+    await assert.rejects(
+      () =>
+        prepareQualityConditionedSemanticEdit(config, {
+          candidate,
+          quality: malformedQuality,
+          condition: () => {
+            conditionCalled = true;
+            return true;
+          },
+        }),
+      (error: unknown) =>
+        error instanceof StandardSchemaContractError &&
+        error.kind === "invalid-json",
+    );
+    assert.equal(conditionCalled, false);
+  });
 });

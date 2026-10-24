@@ -29,7 +29,12 @@ import {
 } from "./source-schema.ts";
 
 type Unit = { readonly id: string; readonly source: string };
-type Translation = { id: string; text: string; readonly slot?: string };
+type Translation = {
+  id: string;
+  text: string;
+  note?: string;
+  readonly slot?: string;
+};
 type MutableReadState = {
   sourceEnumeration?: "complete" | "partial" | "failed";
   translationEnumeration?: "complete" | "partial" | "failed";
@@ -63,11 +68,13 @@ function makeConfig(
     readonly ignoreWriteFor?: string;
     readonly detachWriteFor?: string;
     readonly partialReadAfterWriteFor?: string;
+    readonly contentSchema?: StandardSchemaV1<JsonValue, JsonValue>;
     readonly withWriteback?: boolean;
     readonly readState?: MutableReadState;
     readonly onLocateExisting?: () => void;
   } = {},
 ) {
+  const contentSchema = options.contentSchema ?? jsonValueSchema;
   return defineConfig<
     Unit,
     StandardSchemaV1<Unit, Unit>,
@@ -100,7 +107,7 @@ function makeConfig(
         id: "example",
         text: "example",
       }),
-      contentSchema: jsonValueSchema,
+      contentSchema,
       read: (_language, sourceUnits) => ({
         scopes: [
           {
@@ -778,6 +785,85 @@ void describe("apply update plans", () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+
+  void it("applies a saved plan after unrelated translation metadata changes", async () => {
+    const asyncContentSchema: StandardSchemaV1<JsonValue, JsonValue> = {
+      "~standard": {
+        version: 1,
+        vendor: "lioni-test-async-plan-content",
+        async validate(value) {
+          await Promise.resolve();
+          return jsonValueSchema["~standard"].validate(value);
+        },
+      },
+    };
+    const translation: Translation = {
+      id: "A",
+      text: "Enregistrer",
+      note: "first",
+    };
+    const initial = makeConfig([{ id: "A", source: "Save" }], [translation], {
+      contentSchema: asyncContentSchema,
+    });
+    const baselineStore = await establishBaseline(initial, ["A"]);
+    const config = makeConfig(
+      [{ id: "A", source: "Save now" }],
+      [translation],
+      {
+        contentSchema: asyncContentSchema,
+        withWriteback: true,
+        updatePolicy: candidatePolicy(() => "Sauvegarder"),
+      },
+    );
+    const plan = await createUpdatePlan(
+      await readFacts(config),
+      baselineStore.baseline,
+      config,
+    );
+    assert.equal(plan.items[0]?.status, "candidate");
+
+    translation.note = "second";
+
+    const result = await applyUpdatePlan(plan, config, baselineStore);
+
+    assert.equal(result.contentResults[0]?.status, "written");
+    assert.equal(result.baselineResults[0]?.status, "advanced");
+    assert.equal(translation.text, "Sauvegarder");
+    assert.equal(translation.note, "second");
+  });
+
+  void it("rejects a saved plan when an explicitly declared dependency changes", async () => {
+    const translation: Translation = {
+      id: "A",
+      text: "Enregistrer",
+      note: "first",
+    };
+    const readState: MutableReadState = { dependencies: { note: "first" } };
+    const initial = makeConfig([{ id: "A", source: "Save" }], [translation]);
+    const baselineStore = await establishBaseline(initial, ["A"]);
+    const config = makeConfig(
+      [{ id: "A", source: "Save now" }],
+      [translation],
+      {
+        readState,
+        withWriteback: true,
+        updatePolicy: candidatePolicy(() => "Sauvegarder"),
+      },
+    );
+    const plan = await createUpdatePlan(
+      await readFacts(config),
+      baselineStore.baseline,
+      config,
+    );
+    assert.equal(plan.items[0]?.status, "candidate");
+    readState.dependencies = { note: "second" };
+
+    const result = await applyUpdatePlan(plan, config, baselineStore);
+
+    assert.equal(result.contentResults[0]?.status, "conflict");
+    assert.equal(result.baselineResults[0]?.status, "notAttempted");
+    assert.equal(translation.text, "Enregistrer");
   });
 
   void it("advances a valid retain decision without changing translation content", async () => {
