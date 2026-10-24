@@ -590,6 +590,41 @@ void describe("configured analysis workflow", () => {
       assert.equal(rejected.quality.diagnostics.length, 1);
   });
 
+  void it("keeps candidate content bound while an asynchronous condition waits", async () => {
+    const { candidate: baseCandidate, config } = diagnosedEditScenario();
+    const candidate = { ...baseCandidate, content: "Checked text" };
+    let releaseCondition: () => void = () => {};
+    const conditionGate = new Promise<void>((resolve) => {
+      releaseCondition = resolve;
+    });
+    let enterCondition: () => void = () => {};
+    const conditionEntered = new Promise<void>((resolve) => {
+      enterCondition = resolve;
+    });
+    let checkedContent: unknown;
+
+    const pending = prepareQualityConditionedSemanticEdit(config, {
+      candidate,
+      condition: async (quality) => {
+        checkedContent = quality.candidates[0]?.content;
+        enterCondition();
+        await conditionGate;
+        return true;
+      },
+    });
+    await conditionEntered;
+    candidate.content = "Unchecked changed text";
+    releaseCondition();
+    const result = await pending;
+
+    assert.equal(checkedContent, "Checked text");
+    assert.equal(result.status, "passed");
+    if (result.status !== "passed") return;
+    assert.equal(result.preparation.status, "prepared");
+    if (result.preparation.status === "prepared")
+      assert.equal(result.preparation.edit.content, "Checked text");
+  });
+
   void it("rejects an old quality result when its candidate or inputs differ", async () => {
     const { candidate, config, setRequestVersion } = diagnosedEditScenario();
     const quality = await analyzeQuality(config, { candidates: [candidate] });

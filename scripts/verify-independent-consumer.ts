@@ -1762,6 +1762,37 @@ assert.equal(conditionCalled, false);
 assert.equal(await readFile(cataloguePath, "utf8"), beforeReject);
 assert.deepEqual(await baselineState(), baselineBeforeReject);
 
+let releaseQualityCondition = () => {};
+const qualityConditionGate = new Promise((resolve) => {
+  releaseQualityCondition = resolve;
+});
+let enterQualityCondition = () => {};
+const qualityConditionEntered = new Promise((resolve) => {
+  enterQualityCondition = resolve;
+});
+let checkedContent;
+const raceCandidate = { ...candidate, content: "Checked package text" };
+const pendingCondition = prepareQualityConditionedSemanticEdit(config, {
+  candidate: raceCandidate,
+  condition: async (currentQuality) => {
+    checkedContent = currentQuality.candidates[0]?.content;
+    enterQualityCondition();
+    await qualityConditionGate;
+    return true;
+  },
+});
+await qualityConditionEntered;
+raceCandidate.content = "Unchecked package text";
+releaseQualityCondition();
+const raceResult = await pendingCondition;
+assert.equal(checkedContent, "Checked package text");
+assert.equal(raceResult.status, "passed");
+assert.equal(raceResult.preparation.status, "prepared");
+if (raceResult.preparation.status !== "prepared") throw new Error("异步候选未准备。");
+assert.equal(raceResult.preparation.edit.content, "Checked package text");
+assert.equal(await readFile(cataloguePath, "utf8"), beforeReject);
+assert.deepEqual(await baselineState(), baselineBeforeReject);
+
 const allowed = await prepareQualityConditionedSemanticEdit(config, { candidate });
 assert.equal(allowed.status, "not-required");
 assert.equal(allowed.preparation.status, "prepared");
@@ -1776,7 +1807,7 @@ assert.equal(
 );
 
 process.stdout.write("独立打包宿主：编辑跨进程、冲突、依赖失效、失败和未处理结果通过。\\n");
-process.stdout.write("独立打包宿主：诊断候选默认写入，显式拒绝和过期检查结果均未修改资源。\\n");
+process.stdout.write("独立打包宿主：诊断候选默认写入，显式拒绝、过期结果及异步候选变化均受核对。\\n");
 `;
 
   const editSources = [

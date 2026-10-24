@@ -487,9 +487,8 @@ export type QualityConditionedSemanticEditResult =
     };
 
 /**
- * Uses a host-selected QA condition to gate preparation of one semantic edit.
- * Without a condition, quality checks are not required and the candidate follows
- * the ordinary semantic-edit preparation path.
+ * 根据宿主选择的质量条件决定是否准备语义编辑。
+ * 未提供条件时不要求执行质量检查，候选仍走普通语义编辑准备流程。
  */
 export async function prepareQualityConditionedSemanticEdit<
   TUnit extends TranslationUnitInput,
@@ -498,8 +497,16 @@ export async function prepareQualityConditionedSemanticEdit<
   config: FrameworkConfig<TUnit, TTranslation>,
   options: PrepareQualityConditionedSemanticEditOptions,
 ): Promise<QualityConditionedSemanticEditResult> {
+  const candidate = snapshotJson(
+    options.candidate,
+    "译文候选",
+  ) as SemanticEditCandidate;
+  const { condition } = options;
+  const providedQuality =
+    condition === undefined || options.quality === undefined
+      ? undefined
+      : (snapshotJson(options.quality, "QA 结果") as QualityRunResult);
   const facts = await readFacts(config);
-  const { candidate, condition } = options;
   if (condition === undefined)
     return {
       status: "not-required",
@@ -510,9 +517,9 @@ export async function prepareQualityConditionedSemanticEdit<
   const configuredRequest = await createConfiguredQualityRequest(config, facts);
   const request = { ...configuredRequest, candidates: [candidate] };
   const quality =
-    options.quality ?? (await runQualityChecks(facts, request, checks));
+    providedQuality ?? (await runQualityChecks(facts, request, checks));
   if (
-    options.quality !== undefined &&
+    providedQuality !== undefined &&
     !qualityRunMatchesInputs(
       facts,
       candidate,
