@@ -371,7 +371,7 @@ void describe("quality checks", () => {
       exceptions: [
         {
           id: "allow-a",
-          ruleId: "message-placeholders",
+          ruleId: "example-rule",
           scope: {
             object: { kind: "translation-unit", key: "A", language: "fr" },
           },
@@ -407,7 +407,7 @@ void describe("quality checks", () => {
 
     const result = await runQualityChecks(facts, request, [
       {
-        id: "message-placeholders",
+        id: "example-rule",
         configuration: {},
         check: () => outcome,
       },
@@ -427,7 +427,7 @@ void describe("quality checks", () => {
       })),
       [
         {
-          ruleId: "message-placeholders",
+          ruleId: "example-rule",
           object: { kind: "translation-unit", key: "A", language: "fr" },
           handling: {
             status: "excepted",
@@ -436,7 +436,7 @@ void describe("quality checks", () => {
           },
         },
         {
-          ruleId: "message-placeholders",
+          ruleId: "example-rule",
           object: { kind: "translation-unit", key: "B", language: "fr" },
           handling: { status: "active" },
         },

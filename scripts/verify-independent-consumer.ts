@@ -696,7 +696,7 @@ export default defineConfig<Unit, Translation>({
 `;
   const qaConfigSource = `import { readFile } from "node:fs/promises";
 import { defineConfig, type FrameworkFacts } from "@l10n/core";
-import { createMessagePlaceholderChecker, createRelationshipChecker } from "@l10n/checks";
+import { createNumberChecker } from "@l10n/checks";
 
 type Unit = {
   readonly source: string;
@@ -716,7 +716,7 @@ async function readMessageResource() {
 }
 
 const qualityChecks = [
-  createMessagePlaceholderChecker<Unit, Translation>({
+  createNumberChecker<Unit, Translation>({
     sourceText: (unit) => unit.source,
     translationText: (content) => content,
     sourceLocation: (unit, _subject, range) => ({
@@ -727,23 +727,6 @@ const qualityChecks = [
       ...range,
       key: translation?.nativeKey ?? subject.key,
     }),
-    configuration: { grammar: "simple-placeholders-v1" },
-  }),
-  createRelationshipChecker<Unit, Translation, {
-    readonly constraint: string;
-  }>({
-    id: "same-target-text",
-    relationshipKind: "same-target-text",
-    configuration: { constraint: "target text is equal" },
-    translationLocation: (translation, subject, range) => ({
-      ...range,
-      key: translation?.nativeKey ?? subject.key,
-    }),
-    evaluate: ({ members }) =>
-      new Set(members.map(({ content }) => content))
-        .size > 1
-        ? { severity: "error", message: "关系成员应使用相同译文。" }
-        : undefined,
   }),
 ];
 
@@ -759,38 +742,12 @@ function createQualityRequest(facts: FrameworkFacts<Unit, Translation>) {
     candidates: record === undefined
       ? []
       : [{ sourceKey: "sha256:save", language: "fr", content: record.content }],
-    relationships: [
-      {
-        kind: "same-target-text",
-        key: "approved-variation",
-        members: [
-          { key: "sha256:submit", language: "fr" },
-          { key: "sha256:save", language: "fr" },
-        ],
-      },
-      {
-        kind: "same-target-text",
-        key: "strict-variation",
-        members: [
-          { key: "sha256:save", language: "fr" },
-          { key: "sha256:submit", language: "fr" },
-        ],
-      },
-    ],
-    exceptions: [
-      {
-        id: "approved-variation",
-        ruleId: "same-target-text",
-        scope: {
-          location: {
-            language: "fr",
-            range: "locales/fr.json",
-            key: "submit_button",
-          },
-        },
-        reason: "保留宿主现有按钮译法。",
-      },
-    ],
+    exceptions: [{
+      id: "approved-number-difference",
+      ruleId: "number-correspondence",
+      scope: { object: { kind: "translation-unit", key: "sha256:save", language: "fr" } },
+      reason: "数字差异已由维护者确认。",
+    }],
     dependencies: {},
   };
 }
@@ -802,7 +759,7 @@ export default defineConfig<Unit, Translation>({
         range: "src/messages.ts",
         enumeration: "complete",
         records: [
-          { value: { source: "Hello {name}", nativeId: "save", context: { file: "src/messages.ts", line: 18 } }, bodyAvailability: "available" },
+          { value: { source: "Hello 12 and 3.14", nativeId: "save", context: { file: "src/messages.ts", line: 18 } }, bodyAvailability: "available" },
           { value: { source: "Save", nativeId: "submit", context: { file: "src/messages.ts", line: 19 } }, bodyAvailability: "available" },
         ],
       }],
@@ -829,7 +786,7 @@ export default defineConfig<Unit, Translation>({
   createQualityRequest,
 });
 `;
-  const typecheckSource = `import { createMessagePlaceholderChecker } from "@l10n/checks";
+  const typecheckSource = `import { createNumberChecker } from "@l10n/checks";
 import {
   applySemanticEdits,
   advanceProcessingBaseline,
@@ -861,7 +818,7 @@ void readFacts(config);
 void readFacts(qaConfig);
 void qaConfig.qualityChecks;
 void qaConfig.createQualityRequest;
-void createMessagePlaceholderChecker({
+void createNumberChecker({
   sourceText: (unit: { source: string }) => unit.source,
   translationText: (content) => content,
 });
@@ -1135,9 +1092,10 @@ import { spawnSync } from "node:child_process";
 import { readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { defineConfig, DuplicateTranslationUnitKeyError, readFacts, readSourceFacts } from "@l10n/core";
+import { analyzeQuality, defineConfig, DuplicateTranslationUnitKeyError, readFacts, readSourceFacts } from "@l10n/core";
 import "@l10n/checks";
 import config, { translationReadCount } from "./l10n.config.ts";
+import qaConfig from "./qa.config.ts";
 
 const repositoryRoot = ${JSON.stringify(repositoryRoot)};
 const sourceFacts = await readSourceFacts(config);
@@ -1259,33 +1217,36 @@ assert.deepEqual(
     ["sha256:submit", "matched", false],
   ],
 );
-assert.equal(initialResult.diagnostics.length, 3);
-assert.equal(initialResult.diagnostics[0].ruleId, "message-placeholders");
+assert.equal(initialResult.diagnostics.length, 1);
+assert.equal(initialResult.diagnostics[0].ruleId, "number-correspondence");
 assert.equal(initialResult.diagnostics[0].evidence.length, 2);
 assert.equal(initialResult.diagnostics[0].object.key, "sha256:save");
 assert.equal(initialResult.diagnostics[0].location.key, "save_label");
-assert.deepEqual(initialResult.diagnostics.slice(1).map(({ object, location, handling }) => [
-  object.key,
-  location.key,
-  handling,
-]), [
-  ["approved-variation", "submit_button", {
-    status: "excepted",
-    exceptionId: "approved-variation",
-    reason: "保留宿主现有按钮译法。",
-  }],
-  ["strict-variation", "save_label", { status: "active" }],
-]);
+assert.deepEqual(initialResult.diagnostics[0].handling, {
+  status: "excepted",
+  exceptionId: "approved-number-difference",
+  reason: "数字差异已由维护者确认。",
+});
 assert.deepEqual(await readFile(qaResource), originalResource);
 
 const readableQa = spawnSync(executable, ["qa", "qa.config.ts", "--output-format", "text"], { encoding: "utf8", shell: process.platform === "win32" });
 assert.equal(readableQa.status, 0, readableQa.stderr);
-assert.ok(readableQa.stdout.includes("位置键 submit_button"));
-assert.ok(readableQa.stdout.includes("例外 approved-variation：保留宿主现有按钮译法。"));
+assert.ok(readableQa.stdout.includes("位置键 save_label"));
+assert.ok(readableQa.stdout.includes("例外 approved-number-difference：数字差异已由维护者确认。"));
+
+const reorderedNumbers = await analyzeQuality(qaConfig, {
+  candidates: [{ sourceKey: "sha256:save", language: "fr", content: "3.14 puis 12" }],
+});
+assert.equal(reorderedNumbers.status, "complete");
+assert.deepEqual(reorderedNumbers.diagnostics, []);
+const repeatedNumber = await analyzeQuality(qaConfig, {
+  candidates: [{ sourceKey: "sha256:save", language: "fr", content: "3.14, 12, 12" }],
+});
+assert.equal(repeatedNumber.diagnostics[0]?.message, "译文多出数字：12。");
 
 const editedResource = Buffer.from(JSON.stringify({
   messages: [
-    { sourceId: "save", nativeKey: "save_label", text: "Bonjour" },
+    { sourceId: "save", nativeKey: "save_label", text: "Bonjour 3.14 et 12" },
     { sourceId: "submit", nativeKey: "submit_button", text: "Bonjour" },
   ],
 }));
@@ -1295,9 +1256,7 @@ assert.equal(editedQa.status, 0, editedQa.stderr);
 const editedResult = JSON.parse(editedQa.stdout).data;
 assert.equal(editedResult.status, "complete");
 assert.notEqual(editedResult.version, initialResult.version);
-assert.equal(editedResult.diagnostics.length, 1);
-assert.equal(editedResult.diagnostics[0].ruleId, "message-placeholders");
-assert.equal(editedResult.diagnostics[0].handling.status, "active");
+assert.deepEqual(editedResult.diagnostics, []);
 assert.deepEqual(await readFile(qaResource), editedResource);
 
 const baselineHost = path.join(process.cwd(), "baseline-host.mjs");

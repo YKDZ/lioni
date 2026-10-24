@@ -59,8 +59,7 @@ import {
   type UpdateDecision,
 } from "@l10n/core";
 import {
-  createMessagePlaceholderChecker,
-  createRelationshipChecker,
+  createNumberChecker,
 } from "@l10n/checks";
 
 type CatalogUnit = {
@@ -208,12 +207,12 @@ function readGuideTargets(): TargetResource {
 }
 
 const catalogException: QualityException = {
-  id: "catalog-approved-format",
-  ruleId: "catalog-format",
+  id: "catalog-approved-numbers",
+  ruleId: "catalog-numbers",
   scope: {
     object: { kind: "translation-unit", key: "catalog:save", language: "fr" },
   },
-  reason: "目录中的占位符由维护者单独确认。",
+  reason: "目录中的数字差异由维护者单独确认。",
 };
 
 const catalogModule: EntryModule = {
@@ -223,7 +222,7 @@ const catalogModule: EntryModule = {
   readUnits: readCatalogUnits,
   readTargets: () => readCatalogTargets(),
   exception: catalogException,
-  checkConfiguration: { grammar: "catalog-message-v1" },
+  checkConfiguration: { domain: "catalog" },
   resolveCompletion: ({ translations }) => {
     const target = translations[0]?.translation;
     return (
@@ -244,7 +243,7 @@ const guideModule: EntryModule = {
   translationRange: "composition/guide-fr.json",
   readUnits: readGuideUnits,
   readTargets: () => readGuideTargets(),
-  checkConfiguration: { grammar: "guide-message-v2" },
+  checkConfiguration: { domain: "guide" },
   resolveCompletion: ({ translations }) => {
     const target = translations[0]?.translation;
     return (
@@ -272,14 +271,13 @@ function translationText(content: unknown): string | undefined {
 function createDomainChecker(
   module: EntryModule,
 ): QualityCheckDefinition<Unit, Translation> {
-  const checker = createMessagePlaceholderChecker<Unit, Translation>({
+  const checker = createNumberChecker<Unit, Translation>({
     sourceText: unitText,
     translationText,
-    configuration: module.checkConfiguration,
   });
   return {
-    id: module.domain + "-format",
-    configuration: module.checkConfiguration,
+    id: module.domain + "-numbers",
+    configuration: { options: module.checkConfiguration, numbers: checker.configuration },
     check(input: QualityCheckInput<Unit, Translation>) {
       if (
         input.sourceUnit !== null &&
@@ -301,26 +299,6 @@ function createDomainChecker(
     },
   };
 }
-
-const crossDomainChecker = createRelationshipChecker<
-  Unit,
-  Translation,
-  { readonly relation: string }
->({
-  id: "cross-domain-same-text",
-  relationshipKind: "same-text",
-  configuration: { relation: "equal target message" },
-  translationLocation: (translation, subject, location) =>
-    translation === undefined
-      ? { ...location, key: subject.key }
-      : { ...location, key: translation.nativeKey },
-  evaluate: ({ members }) => {
-    const texts = members.map(({ content }) => translationText(content));
-    return new Set(texts).size === 1
-      ? undefined
-      : { severity: "error", message: "跨输入关系成员的译文不同。" };
-  },
-});
 
 function requestForDomain(
   facts: FrameworkFacts<Unit, Translation>,
@@ -373,7 +351,6 @@ function createInputConfig(
 ): FrameworkConfig<Unit, Translation> {
   const qualityChecks = [
     ...modules.map(createDomainChecker),
-    ...(modules.length > 1 ? [crossDomainChecker] : []),
   ];
   return defineConfig<Unit, Translation>({
     source: {
@@ -606,10 +583,10 @@ async function prepare() {
     guideRequest,
     guideConfig.qualityChecks ?? [],
   );
-  const catalogCheck = aggregateQa.checks.find(({ id }) => id === "catalog-format");
+  const catalogCheck = aggregateQa.checks.find(({ id }) => id === "catalog-numbers");
   assert.ok(catalogCheck);
   const localCatalogCheck = catalogQa.checks.find(
-    ({ id }) => id === "catalog-format",
+    ({ id }) => id === "catalog-numbers",
   );
   assert.ok(localCatalogCheck);
   assert.deepEqual(
@@ -618,16 +595,16 @@ async function prepare() {
   );
   assert.deepEqual(
     catalogQa.diagnostics,
-    aggregateQa.diagnostics.filter(({ ruleId }) => ruleId === "catalog-format"),
+    aggregateQa.diagnostics.filter(({ ruleId }) => ruleId === "catalog-numbers"),
   );
-  const guideCheck = aggregateQa.checks.find(({ id }) => id === "guide-format");
-  const localGuideCheck = guideQa.checks.find(({ id }) => id === "guide-format");
+  const guideCheck = aggregateQa.checks.find(({ id }) => id === "guide-numbers");
+  const localGuideCheck = guideQa.checks.find(({ id }) => id === "guide-numbers");
   assert.ok(guideCheck);
   assert.ok(localGuideCheck);
   assert.deepEqual(localGuideCheck, guideCheck);
   assert.deepEqual(
     guideQa.diagnostics,
-    aggregateQa.diagnostics.filter(({ ruleId }) => ruleId === "guide-format"),
+    aggregateQa.diagnostics.filter(({ ruleId }) => ruleId === "guide-numbers"),
   );
   assert.equal(aggregateQa.status, "complete");
   assert.equal(catalogQa.status, "complete");
@@ -638,22 +615,13 @@ async function prepare() {
     ["catalog:save", "guide:save"],
   );
   assert.equal(
-    aggregateQa.diagnostics.find(({ ruleId }) => ruleId === "catalog-format")?.handling.status,
+    aggregateQa.diagnostics.find(({ ruleId }) => ruleId === "catalog-numbers")?.handling.status,
     "excepted",
   );
   assert.equal(
-    aggregateQa.diagnostics.find(({ ruleId }) => ruleId === "guide-format")?.handling.status,
+    aggregateQa.diagnostics.find(({ ruleId }) => ruleId === "guide-numbers")?.handling.status,
     "active",
   );
-  assert.equal(
-    aggregateQa.checks.find(({ id }) => id === "cross-domain-same-text")?.status,
-    "not-applicable",
-  );
-  assert.equal(
-    aggregateQa.diagnostics.some(({ ruleId }) => ruleId === "cross-domain-same-text"),
-    false,
-  );
-
   const selectedRequest = {
     ...aggregateRequest,
     candidates: catalogRequest.candidates,
@@ -714,48 +682,6 @@ async function prepare() {
   const afterConfiguredQa = await completionAfterQa(aggregateQa);
   const afterUnexceptedQa = await completionAfterQa(withoutExceptions);
   assert.deepEqual(afterConfiguredQa.obligations, afterUnexceptedQa.obligations);
-
-  const crossRequest = {
-    ...aggregateRequest,
-    candidates: aggregateRequest.candidates.filter(
-      ({ sourceKey }) => sourceKey === "catalog:save",
-    ),
-    relationships: [
-      {
-        kind: "same-text",
-        key: "catalog-guide-save",
-        members: [
-          { key: "guide:save", language: "fr" },
-          { key: "catalog:save", language: "fr" },
-        ],
-      },
-    ],
-  };
-  const crossQa = await runQualityChecks(facts, crossRequest, aggregateChecks);
-  const crossDiagnostic = crossQa.diagnostics.find(
-    ({ ruleId }) => ruleId === "cross-domain-same-text",
-  );
-  assert.ok(crossDiagnostic);
-  assert.deepEqual(crossDiagnostic.object.members[0], {
-    key: "guide:save",
-    language: "fr",
-  });
-  assert.equal(crossDiagnostic.location.range, "composition/guide-fr.json");
-  assert.equal(crossDiagnostic.evidence.length, 2);
-  assert.deepEqual(
-    crossQa.factCoverage.associations.find(
-      ({ sourceKey }) => sourceKey === "guide:save",
-    ),
-    {
-      sourceKey: "guide:save",
-      language: "fr",
-      status: "matched",
-      coverageStatus: "complete",
-      scopeIndexes: [1],
-      translationIndexes: [1],
-      candidateSelected: false,
-    },
-  );
 
   const baselineResult = await advanceProcessingBaseline(
     baselineStore,
@@ -870,39 +796,6 @@ async function observe() {
   assert.equal(currentGuide.decision.action, "review");
   assert.equal(currentGuide.status, "review");
   assert.equal(currentGuide.expectedInput?.association.translations[0]?.translation.content.message, "Sauver");
-  const currentRequest = await aggregateConfig.createQualityRequest(facts);
-  const currentRelationshipQa = await runQualityChecks(
-    facts,
-    {
-      ...currentRequest,
-      candidates: currentRequest.candidates.filter(
-        ({ sourceKey }) => sourceKey === "catalog:save",
-      ),
-      relationships: [
-        {
-          kind: "same-text",
-          key: "catalog-guide-save",
-          members: [
-            { key: "guide:save", language: "fr" },
-            { key: "catalog:save", language: "fr" },
-          ],
-        },
-      ],
-    },
-    aggregateConfig.qualityChecks ?? [],
-  );
-  assert.equal(
-    currentRelationshipQa.checks.find(
-      ({ id }) => id === "cross-domain-same-text",
-    )?.status,
-    "complete",
-  );
-  assert.equal(
-    currentRelationshipQa.diagnostics.some(
-      ({ ruleId }) => ruleId === "cross-domain-same-text",
-    ),
-    false,
-  );
   const currentCatalog = planItem(currentPlan, "catalog:save");
   assert.equal(currentCatalog.processed, true);
   await planStore.save(currentPlan);
@@ -939,7 +832,7 @@ export async function writeCompositionConsumerFiles(
         items: [
           {
             nativeKey: "save",
-            label: "Save {name}",
+            label: "Save 12",
             file: "catalog/messages.ts",
             line: 12,
             screenshot: "catalog/shots/save.png",
@@ -953,7 +846,7 @@ export async function writeCompositionConsumerFiles(
         pages: [
           {
             id: "save",
-            body: "Guide {topic}",
+            body: "Guide 34",
             resource: "guide/menu.md",
             row: 4,
           },
@@ -1031,12 +924,12 @@ export async function verifyCompositionConsumer(
   assert.equal(initialResult.version, prepared.version);
   assert.equal(initialResult.candidates.length, 2);
   assert.equal(
-    initialResult.diagnostics.find(({ ruleId }) => ruleId === "catalog-format")
+    initialResult.diagnostics.find(({ ruleId }) => ruleId === "catalog-numbers")
       ?.handling.status,
     "excepted",
   );
   assert.equal(
-    initialResult.diagnostics.find(({ ruleId }) => ruleId === "guide-format")
+    initialResult.diagnostics.find(({ ruleId }) => ruleId === "guide-numbers")
       ?.handling.status,
     "active",
   );
@@ -1067,7 +960,7 @@ export async function verifyCompositionConsumer(
   assert.equal(updatedResult.status, "complete");
   assert.notEqual(updatedResult.version, initialResult.version);
   assert.equal(
-    updatedResult.diagnostics.find(({ ruleId }) => ruleId === "guide-format")
+    updatedResult.diagnostics.find(({ ruleId }) => ruleId === "guide-numbers")
       ?.handling.status,
     "active",
   );
@@ -1086,6 +979,6 @@ export async function verifyCompositionConsumer(
   assert.equal(planObservation.version, updatedResult.version);
   assert.equal(planObservation.guideChange, "changed");
   process.stdout.write(
-    "独立打包宿主：异构输入组合、局部 QA/完成/更新策略、跨输入关系和外部修改后的 CLI/保存计划观察通过。\n",
+    "独立打包宿主：异构输入组合、局部数字 QA/完成/更新策略和外部修改后的 CLI/保存计划观察通过。\n",
   );
 }
