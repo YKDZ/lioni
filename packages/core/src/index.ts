@@ -6,7 +6,12 @@ import {
 } from "./completion.ts";
 import type { CompletionFacts, CompletionPolicy } from "./completion.ts";
 import type { UpdatePolicy } from "./plans.ts";
-import type { QualityCheckDefinition, QualityCheckRequest } from "./qa.ts";
+import {
+  runQualityChecks,
+  type QualityCheckDefinition,
+  type QualityCheckRequest,
+  type QualityRunResult,
+} from "./qa.ts";
 import type { TranslationWritebackAdapter } from "./semantic-edits.ts";
 
 export * from "./completion.ts";
@@ -204,10 +209,33 @@ export function defineConfig<TUnit extends TranslationUnitInput, TTranslation>(
   return config;
 }
 
+export function validateFrameworkConfig(value: unknown): void {
+  if (!isRecord(value))
+    throw new TypeError("宿主配置必须是 defineConfig(...) 的对象结果。");
+  if (!isRecord(value.source) || typeof value.source.read !== "function")
+    throw new TypeError("defineConfig 的 source.read 必须是函数。");
+  if (typeof value.keyOf !== "function")
+    throw new TypeError("defineConfig 的 keyOf 必须是函数。");
+
+  const translations = value.translations;
+  if (translations === undefined) return;
+  if (
+    !isRecord(translations) ||
+    !Array.isArray(translations.languages) ||
+    translations.languages.some((language) => typeof language !== "string") ||
+    typeof translations.read !== "function" ||
+    typeof translations.matches !== "function"
+  )
+    throw new TypeError(
+      "defineConfig 的 translations 必须提供语言列表、read 与 matches 函数。",
+    );
+}
+
 export async function readSourceFacts<
   TUnit extends TranslationUnitInput,
   TTranslation,
 >(config: FrameworkConfig<TUnit, TTranslation>): Promise<SourceFacts<TUnit>> {
+  validateFrameworkConfig(config);
   let read: SourceRead<TUnit> | undefined;
   let errorMessage: string | undefined;
   try {
@@ -264,6 +292,7 @@ export async function readFacts<
 >(
   config: FrameworkConfig<TUnit, TTranslation>,
 ): Promise<FrameworkFacts<TUnit, TTranslation>> {
+  validateFrameworkConfig(config);
   const source = await readSourceFacts(config);
   const translationAdapter = config.translations;
   const translations = {
@@ -371,15 +400,84 @@ export async function readCompletion<
 >(
   config: FrameworkConfig<TUnit, TTranslation>,
 ): Promise<CompletionFacts<TUnit, TTranslation>> {
+  validateFrameworkConfig(config);
   const policy = config.completion;
   if (policy === undefined)
     throw new CompletionConfigurationError("missingPolicy");
+  if (
+    !isRecord(policy) ||
+    typeof policy.criterion !== "string" ||
+    typeof policy.resolveCompletion !== "function"
+  )
+    throw new TypeError(
+      "defineConfig 的 completion 必须提供 criterion 与 resolveCompletion 函数。",
+    );
   if (config.translations === undefined)
     throw new CompletionConfigurationError("missingTranslations");
 
   const facts = await readFacts(config);
   const completion = await evaluateCompletion(facts, policy);
   return { ...facts, completion };
+}
+
+export async function analyzeQuality<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+>(config: FrameworkConfig<TUnit, TTranslation>): Promise<QualityRunResult> {
+  const facts = await readFacts(config);
+  const checks = configuredQualityChecks(config);
+  const request = await createConfiguredQualityRequest(config, facts);
+  return runQualityChecks(facts, request, checks);
+}
+
+function defaultQualityRequest<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+>(facts: FrameworkFacts<TUnit, TTranslation>): QualityCheckRequest {
+  const subjects = facts.associations.map(({ sourceKey, language }) => ({
+    key: sourceKey,
+    language,
+  }));
+  return {
+    subjects,
+    evidenceScope: subjects.map(({ key, language }) => ({
+      kind: "translation-unit",
+      key,
+      language,
+    })),
+    dependencies: {},
+  };
+}
+
+function configuredQualityChecks<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+>(
+  config: FrameworkConfig<TUnit, TTranslation>,
+): readonly QualityCheckDefinition<TUnit, TTranslation>[] {
+  const checks = config.qualityChecks;
+  if (checks === undefined) return [];
+  if (!Array.isArray(checks))
+    throw new TypeError("defineConfig 的 qualityChecks 必须是检查器数组。");
+  return checks;
+}
+
+async function createConfiguredQualityRequest<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+>(
+  config: FrameworkConfig<TUnit, TTranslation>,
+  facts: FrameworkFacts<TUnit, TTranslation>,
+): Promise<QualityCheckRequest> {
+  const request = config.createQualityRequest;
+  if (request === undefined) return defaultQualityRequest(facts);
+  if (typeof request !== "function")
+    throw new TypeError("defineConfig 的 createQualityRequest 必须是函数。");
+  return await request(facts);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function readStatus(

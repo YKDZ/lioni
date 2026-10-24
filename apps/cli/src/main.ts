@@ -1,19 +1,12 @@
-import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
-
 import {
+  analyzeQuality,
   CompletionConfigurationError,
   DuplicateTranslationUnitKeyError,
   readFacts,
   readCompletion,
-  runQualityChecks,
-  type FrameworkConfig,
-  type FrameworkFacts,
-  type QualityCheckDefinition,
-  type QualityCheckRequest,
   type QualityRunResult,
-  type TranslationUnitInput,
 } from "@l10n/core";
+import { loadConfig } from "@l10n/core/node";
 import {
   CliWriteError,
   defineCli,
@@ -190,29 +183,6 @@ function completionStatusText(status: string): string {
   );
 }
 
-type CliConfigModule = {
-  readonly default?: unknown;
-};
-
-async function loadConfigModule(configPath: string): Promise<CliConfigModule> {
-  const configUrl = pathToFileURL(resolve(process.cwd(), configPath));
-  return (await import(configUrl.href)) as CliConfigModule;
-}
-
-function frameworkConfig(
-  configModule: CliConfigModule,
-): FrameworkConfig<TranslationUnitInput> {
-  if (configModule.default === undefined)
-    throw new TypeError("宿主配置必须默认导出 defineConfig(...) 的结果。");
-  return configModule.default as FrameworkConfig<TranslationUnitInput>;
-}
-
-async function loadConfig(
-  configPath: string,
-): Promise<FrameworkConfig<TranslationUnitInput>> {
-  return frameworkConfig(await loadConfigModule(configPath));
-}
-
 function qualityStatusText(status: string): string {
   return (
     {
@@ -248,46 +218,6 @@ function qualityText(value: unknown): ReturnType<typeof text.lines> {
       ),
     ),
   ]);
-}
-
-function defaultQualityRequest<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
->(facts: FrameworkFacts<TUnit, TTranslation>): QualityCheckRequest {
-  const subjects = facts.associations.map(({ sourceKey, language }) => ({
-    key: sourceKey,
-    language,
-  }));
-  return {
-    subjects,
-    evidenceScope: subjects.map(({ key, language }) => ({
-      kind: "translation-unit",
-      key,
-      language,
-    })),
-    dependencies: {},
-  };
-}
-
-function configuredQualityChecks(
-  config: FrameworkConfig<TranslationUnitInput>,
-): readonly QualityCheckDefinition<TranslationUnitInput, unknown>[] {
-  const checks = config.qualityChecks;
-  if (checks === undefined) return [];
-  if (!Array.isArray(checks))
-    throw new TypeError("defineConfig 的 qualityChecks 必须是检查器数组。");
-  return checks;
-}
-
-async function createConfiguredQualityRequest(
-  config: FrameworkConfig<TranslationUnitInput>,
-  facts: FrameworkFacts<TranslationUnitInput, unknown>,
-): Promise<QualityCheckRequest> {
-  const request = config.createQualityRequest;
-  if (request === undefined) return defaultQualityRequest(facts);
-  if (typeof request !== "function")
-    throw new TypeError("defineConfig 的 createQualityRequest 必须是函数。");
-  return await request(facts);
 }
 
 function createCliContract(identity: CliCommandIdentity) {
@@ -600,12 +530,8 @@ function createCliContract(identity: CliCommandIdentity) {
         },
         async handler({ input, outcome }) {
           try {
-            const configModule = await loadConfigModule(input.config);
-            const config = frameworkConfig(configModule);
-            const facts = await readFacts(config);
-            const checks = configuredQualityChecks(config);
-            const request = await createConfiguredQualityRequest(config, facts);
-            const result = await runQualityChecks(facts, request, checks);
+            const config = await loadConfig(input.config);
+            const result = await analyzeQuality(config);
             return outcome.data.checked(result);
           } catch (error) {
             return outcome.failure.checkFailed({

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import {
   validateProcessingBaseline,
@@ -8,10 +9,33 @@ import {
   type ProcessingBaselineStore,
 } from "./baselines.ts";
 import {
+  validateFrameworkConfig,
+  type FrameworkConfig,
+  type TranslationUnitInput,
+} from "./index.ts";
+import {
   validateUpdatePlan,
   type UpdatePlan,
   type UpdatePlanStore,
 } from "./plans.ts";
+
+/** 从 Node.js 配置模块加载并验证默认导出的宿主配置。 */
+export async function loadConfig<
+  TUnit extends TranslationUnitInput = TranslationUnitInput,
+  TTranslation = unknown,
+>(configPath: string): Promise<FrameworkConfig<TUnit, TTranslation>> {
+  const configUrl = pathToFileURL(path.resolve(process.cwd(), configPath));
+  const configModule = (await import(configUrl.href)) as {
+    readonly default?: unknown;
+  };
+  if (configModule.default === undefined)
+    throw new TypeError("宿主配置必须默认导出 defineConfig(...) 的结果。");
+  validateFrameworkConfig(configModule.default);
+  return configModule.default as unknown as FrameworkConfig<
+    TUnit,
+    TTranslation
+  >;
+}
 
 /** 为 Node.js 宿主创建文件处理基线存储。 */
 export function createFileProcessingBaselineStore(
