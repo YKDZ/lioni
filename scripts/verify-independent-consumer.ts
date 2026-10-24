@@ -105,7 +105,7 @@ export function standardSchema<T>(
       validate(value) {
         return isValue(value)
           ? { value }
-          : { issues: [{ message: "Independent consumer schema mismatch." }] };
+          : { issues: [{ message: "独立消费者数据结构不匹配。" }] };
       },
     },
   };
