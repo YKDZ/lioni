@@ -12,6 +12,7 @@ import type {
 import type { SemanticEditCandidate } from "./semantic-edits.ts";
 import {
   assertJsonValue,
+  StandardSchemaContractError,
   validateWithStandardSchema,
 } from "./standard-schema.ts";
 import type { StandardSchemaV1 } from "./standard-schema.ts";
@@ -340,6 +341,7 @@ export async function runQualityChecks<
         statuses.push(outcome.status);
         addCoverage(coverage, outcome.coverage);
       } catch (error) {
+        if (error instanceof StandardSchemaContractError) throw error;
         statuses.push("failed");
         coverage.selected += 1;
         coverage.failed += 1;
@@ -394,16 +396,8 @@ function addCoverage(
 }
 
 function snapshotQualityData<TValue>(value: TValue): TValue {
-  if (value === undefined) return value;
-  let serialized: string | undefined;
-  try {
-    serialized = JSON.stringify(value);
-  } catch (error) {
-    throw new TypeError("QA 输入与结果必须可序列化为 JSON。", { cause: error });
-  }
-  if (serialized === undefined)
-    throw new TypeError("QA 输入与结果必须可序列化为 JSON。");
-  return JSON.parse(serialized) as TValue;
+  assertJsonValue(value, "QA 输入与结果");
+  return structuredClone(value);
 }
 
 function handlingFor(
