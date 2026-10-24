@@ -7,7 +7,11 @@ import {
   readCompletion,
   readFacts,
 } from "../src/index.ts";
-import { sourceSchemaFromExamples } from "./source-schema.ts";
+import {
+  jsonValueSchema,
+  schemaFromExamples,
+  sourceSchemaFromExamples,
+} from "./source-schema.ts";
 
 void describe("completion", () => {
   void it("counts every known source and selected language, including a resource-free language", async () => {
@@ -35,6 +39,11 @@ void describe("completion", () => {
         keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
         translations: {
           languages: ["fr", "de"],
+          schema: schemaFromExamples({
+            text: "Save",
+            context: { sourceLine: 18 },
+          }),
+          contentSchema: jsonValueSchema,
           read(language, sourceUnits) {
             return {
               scopes: [
@@ -155,6 +164,11 @@ void describe("completion", () => {
         keyOf: (value) => `${value.context.file}:${value.context.line}`,
         translations: {
           languages: ["fr", "de"],
+          schema: schemaFromExamples({
+            text: "Enregistrer",
+            context: { sourceLine: 18 },
+          }),
+          contentSchema: jsonValueSchema,
           read(language, sourceUnits) {
             if (language === "de") throw new Error("catalogue unavailable");
             return {
@@ -249,6 +263,11 @@ void describe("completion", () => {
         keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
         translations: {
           languages: ["fr"],
+          schema: schemaFromExamples({
+            text: "Save",
+            context: { sourceLine: 18 },
+          }),
+          contentSchema: jsonValueSchema,
           read(_language, sourceUnits) {
             return {
               scopes: [
@@ -327,6 +346,15 @@ void describe("completion", () => {
         keyOf: (unit) => String(unit.context.line),
         translations: {
           languages: ["fr"],
+          schema: schemaFromExamples({
+            text: "Save",
+            context: { line: 18 },
+          }),
+          unavailableSchema: schemaFromExamples({
+            id: "unavailable",
+            context: { line: 18 },
+          }),
+          contentSchema: jsonValueSchema,
           read(_language, sourceUnits) {
             return {
               scopes: [
@@ -336,7 +364,7 @@ void describe("completion", () => {
                   enumeration: "complete",
                   records: [
                     {
-                      value: { text: "Enregistrer", context: { line: 18 } },
+                      value: { id: "unavailable", context: { line: 18 } },
                       bodyAvailability: "unavailable",
                     },
                   ],
@@ -351,12 +379,17 @@ void describe("completion", () => {
         completion: {
           criterion: "要求译文正文可用",
           resolveCompletion({ association, translations }) {
-            if (association.status === "unavailable")
+            const translation = translations[0];
+            if (translation?.bodyAvailability === "unavailable")
               return {
                 status: "unknown",
                 reason: "译文记录已发现，但正文不可用。",
               };
-            return translations.length > 0;
+            return (
+              translation?.bodyAvailability === "available" &&
+              typeof translation.content === "string" &&
+              association.status === "matched"
+            );
           },
         },
       }),
