@@ -221,17 +221,21 @@ export function compareProcessingBaseline<
       continue;
     }
 
-    const removalIsReliable = confirmsRemoval(facts, previous);
-    const current =
-      removalIsReliable && options.matches !== undefined
-        ? currentRemovedEntry(facts, previous, options.matches)
+    const current = currentRemovedEntry(
+      facts,
+      previous,
+      baseline.sourceScopes,
+      options.matches,
+    );
+    const comparedRemoval =
+      previous.source.presence === "removed" && current !== undefined
+        ? comparePresentEntry(previous, current)
         : undefined;
-    const status: ProcessingChangeStatus = !removalIsReliable
-      ? "unknown"
-      : current?.association.status === "conflict"
-        ? "conflict"
-        : previous.source.presence === "removed" && current !== undefined
-          ? comparePresentEntry(previous, current)
+    const status: ProcessingChangeStatus =
+      current === undefined
+        ? "unknown"
+        : comparedRemoval === "changed" || comparedRemoval === "unchanged"
+          ? comparedRemoval
           : "source-removed";
     changes.push({
       sourceKey: previous.sourceKey,
@@ -304,7 +308,12 @@ export async function advanceProcessingBaseline<
         selectionResults.push({ ...selection, outcome: "unknown" });
         continue;
       }
-      current = currentRemovedEntry(facts, oldEntry, options.matches);
+      current = currentRemovedEntry(
+        facts,
+        oldEntry,
+        previous?.sourceScopes ?? [],
+        options.matches,
+      );
       if (current === undefined) {
         selectionResults.push({ ...selection, outcome: "unknown" });
         continue;
@@ -638,18 +647,26 @@ function sameObservedState(
   );
 }
 
-function confirmsRemoval<TUnit extends TranslationUnitInput, TTranslation>(
+function confirmedSourceRemovalScope<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+>(
   facts: FrameworkFacts<TUnit, TTranslation>,
   previous: ProcessingBaselineEntry,
-): boolean {
+  historicalScopes: readonly ProcessingBaselineSourceScope[],
+):
+  | FrameworkFacts<TUnit, TTranslation>["source"]["read"]["scopes"][number]
+  | undefined {
   if (
     previous.source.enumeration !== "complete" ||
-    previous.association.coverageStatus !== "complete" ||
-    previous.association.status === "unknown" ||
-    previous.association.status === "conflict" ||
-    previous.association.scopes.length === 0
+    !historicalScopes.some(
+      (scope) =>
+        sameJson(scope.range, previous.source.range) &&
+        scope.enumeration === "complete" &&
+        scope.sourceKeys.includes(previous.sourceKey),
+    )
   )
-    return false;
+    return undefined;
 
   const currentSourceScopes = facts.source.read.scopes.filter(({ range }) =>
     sameJson(range, previous.source.range),
@@ -658,60 +675,66 @@ function confirmsRemoval<TUnit extends TranslationUnitInput, TTranslation>(
     currentSourceScopes.length === 0 ||
     currentSourceScopes.some(({ enumeration }) => enumeration !== "complete")
   )
-    return false;
-
-  const currentLanguageRead = facts.translations.reads.find(
-    (read) => read.language === previous.language,
-  );
-  if (currentLanguageRead === undefined) return false;
-  return previous.association.scopes.every((oldScope) => {
-    const currentScopes = currentLanguageRead.scopes.filter(({ range }) =>
-      sameJson(range, oldScope.range),
-    );
-    return (
-      currentScopes.length > 0 &&
-      currentScopes.every(({ enumeration }) => enumeration === "complete")
-    );
-  });
+    return undefined;
+  return currentSourceScopes[0];
 }
 
 function currentRemovedEntry<TUnit extends TranslationUnitInput, TTranslation>(
   facts: FrameworkFacts<TUnit, TTranslation>,
   previous: ProcessingBaselineEntry,
-  matches: ProcessingBaselineMatch<TUnit, TTranslation>,
+  historicalScopes: readonly ProcessingBaselineSourceScope[],
+  matches?: ProcessingBaselineMatch<TUnit, TTranslation>,
 ): ProcessingBaselineEntry | undefined {
-  if (!confirmsRemoval(facts, previous)) return undefined;
+  const sourceScope = confirmedSourceRemovalScope(
+    facts,
+    previous,
+    historicalScopes,
+  );
+  if (sourceScope === undefined) return undefined;
   const languageRead = facts.translations.reads.find(
     (read) => read.language === previous.language,
   );
-  const sourceScope = facts.source.read.scopes.find(({ range }) =>
-    sameJson(range, previous.source.range),
-  );
-  if (languageRead === undefined || sourceScope === undefined) return undefined;
 
-  const scopes = previous.association.scopes.flatMap((oldScope) =>
-    languageRead.scopes
-      .filter(({ range }) => sameJson(range, oldScope.range))
-      .map((scope) => ({
-        range: scope.range,
-        covers: [previous.sourceKey],
-        enumeration: scope.enumeration,
-      })),
+  const scopes =
+    languageRead === undefined
+      ? []
+      : previous.association.scopes.flatMap((oldScope) =>
+          languageRead.scopes
+            .filter(({ range }) => sameJson(range, oldScope.range))
+            .map((scope) => ({
+              range: scope.range,
+              covers: [previous.sourceKey],
+              enumeration: scope.enumeration,
+            })),
+        );
+  const missingHistoricalScope = previous.association.scopes.some(
+    (oldScope) => !scopes.some(({ range }) => sameJson(range, oldScope.range)),
   );
-  const currentTranslations = facts.translations.records.filter(
-    (record) =>
-      record.language === previous.language &&
-      scopes.some(({ range }) => sameJson(range, record.range)) &&
-      matches(previous.source.unit as TUnit, record.translation),
+  const coverageStatus = removedAssociationCoverage(
+    languageRead,
+    previous.association.scopes,
+    scopes,
+    missingHistoricalScope,
   );
+  const currentTranslations =
+    matches === undefined
+      ? []
+      : facts.translations.records.filter(
+          (record) =>
+            record.language === previous.language &&
+            scopes.some(({ range }) => sameJson(range, record.range)) &&
+            matches(previous.source.unit as TUnit, record.translation),
+        );
   const status: TranslationAssociationStatus =
     currentTranslations.length > 1
       ? "conflict"
-      : currentTranslations.length === 0
-        ? "missing"
-        : currentTranslations[0]?.bodyAvailability === "available"
-          ? "matched"
-          : "unavailable";
+      : matches === undefined || coverageStatus !== "complete"
+        ? "unknown"
+        : currentTranslations.length === 0
+          ? "missing"
+          : currentTranslations[0]?.bodyAvailability === "available"
+            ? "matched"
+            : "unavailable";
 
   return {
     ...previous,
@@ -723,11 +746,33 @@ function currentRemovedEntry<TUnit extends TranslationUnitInput, TTranslation>(
     },
     association: {
       status,
-      coverageStatus: "complete",
+      coverageStatus,
       scopes,
       translations: currentTranslations.map(baselineTranslation),
     },
   };
+}
+
+function removedAssociationCoverage(
+  languageRead:
+    | FrameworkFacts<
+        TranslationUnitInput,
+        unknown
+      >["translations"]["reads"][number]
+    | undefined,
+  previousScopes: readonly ProcessingBaselineTranslationScope[],
+  currentScopes: readonly ProcessingBaselineTranslationScope[],
+  missingHistoricalScope: boolean,
+): CoverageStatus {
+  if (languageRead === undefined) return "notRead";
+  if (languageRead.error !== undefined) return "failed";
+  if (previousScopes.length === 0) return "notRead";
+  if (currentScopes.some(({ enumeration }) => enumeration === "failed"))
+    return "failed";
+  if (missingHistoricalScope) return "incomplete";
+  if (currentScopes.some(({ enumeration }) => enumeration === "partial"))
+    return "incomplete";
+  return "complete";
 }
 
 function uniqueSelections(
