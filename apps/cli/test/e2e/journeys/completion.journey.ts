@@ -32,6 +32,19 @@ const journey: CliJourney = {
   keyOf: (unit) => unit.context.file + ":" + unit.context.line,
   translations: {
     languages: ["fr", "de"],
+    schema: { "~standard": { version: 1, vendor: "completion-journey-translation", validate(value) {
+      const context = value?.context;
+      return typeof value === "object" && value !== null && !Array.isArray(value) &&
+        typeof value.text === "string" && typeof context === "object" && context !== null &&
+        typeof context.sourceLine === "number"
+        ? { value }
+        : { issues: [{ message: "译文记录结构不匹配。" }] };
+    } } },
+    contentSchema: { "~standard": { version: 1, vendor: "completion-journey-content", validate(value) {
+      return typeof value === "string"
+        ? { value }
+        : { issues: [{ message: "译文正文必须是字符串。" }] };
+    } } },
     read(language, sourceUnits) {
       return { scopes: [{
         range: "locales/" + language + ".json",
@@ -74,6 +87,19 @@ const journey: CliJourney = {
   keyOf: (unit) => String(unit.context.line),
   translations: {
     languages: ["fr"],
+    schema: { "~standard": { version: 1, vendor: "completion-journey-translation", validate(value) {
+      const context = value?.context;
+      return typeof value === "object" && value !== null && !Array.isArray(value) &&
+        typeof value.text === "string" && typeof context === "object" && context !== null &&
+        typeof context.sourceLine === "number"
+        ? { value }
+        : { issues: [{ message: "译文记录结构不匹配。" }] };
+    } } },
+    contentSchema: { "~standard": { version: 1, vendor: "completion-journey-content", validate(value) {
+      return typeof value === "string"
+        ? { value }
+        : { issues: [{ message: "译文正文必须是字符串。" }] };
+    } } },
     read: (language, sourceUnits) => ({ scopes: [{
       range: "locales/fr.json",
       covers: sourceUnits.map(({ key }) => key),

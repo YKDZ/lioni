@@ -193,7 +193,7 @@ type DefineConfigInput<
     readonly schema: TSchema &
       StandardSchemaV1<TUnit, TUnit> &
       PreservingStandardSchema<TUnit, TSchema>;
-    read(): Awaitable<SourceRead<TUnit>>;
+    read(): Awaitable<SourceRead<NoInfer<TUnit>>>;
   };
   readonly translations?: TranslationAdapterInput<
     NoInfer<TUnit>,
@@ -239,11 +239,11 @@ type TranslationAdapterInput<
   ) => NoInfer<SchemaOutput<TContentSchema>>;
   read(
     language: string,
-    sourceUnits: readonly SourceUnitFact<TUnit>[],
+    sourceUnits: readonly SourceUnitFact<NoInfer<TUnit>>[],
   ): Awaitable<
     TranslationRead<
-      SchemaOutput<TTranslationSchema>,
-      SchemaOutput<TUnavailableSchema>
+      NoInfer<SchemaOutput<TTranslationSchema>>,
+      NoInfer<SchemaOutput<TUnavailableSchema>>
     >
   >;
   matches: (

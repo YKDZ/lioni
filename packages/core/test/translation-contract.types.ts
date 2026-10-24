@@ -35,9 +35,32 @@ const unavailableSchema = schemaFromExamples<UnavailableTranslation>({
   sourceLine: 19,
 });
 const contentSchema = schemaFromExamples<string>("Enregistrer");
+const actualUnit = {
+  source: ["Save", "Submit"],
+  context: { line: 18 },
+};
+const actualAvailableTranslation = {
+  id: "save",
+  sourceLine: 18,
+  text: "Enregistrer",
+};
+const actualUnavailableTranslation = { id: "submit", sourceLine: 19 };
 
 const config = defineConfig({
-  source: { schema: sourceSchema, read: () => ({ scopes: [] }) },
+  source: {
+    schema: sourceSchema,
+    read: () => ({
+      scopes: [
+        {
+          range: "messages.json",
+          enumeration: "complete",
+          records: [
+            { value: actualUnit, bodyAvailability: "available" as const },
+          ],
+        },
+      ],
+    }),
+  },
   keyOf(unit) {
     const strings: readonly string[] = unit.source;
     const line: number = unit.context.line;
@@ -50,7 +73,25 @@ const config = defineConfig({
     schema: availableSchema,
     unavailableSchema,
     contentSchema,
-    read: () => ({ scopes: [] }),
+    read: () => ({
+      scopes: [
+        {
+          range: "locales/fr.json",
+          covers: ["18:2"],
+          enumeration: "complete",
+          records: [
+            {
+              value: actualAvailableTranslation,
+              bodyAvailability: "available" as const,
+            },
+            {
+              value: actualUnavailableTranslation,
+              bodyAvailability: "unavailable" as const,
+            },
+          ],
+        },
+      ],
+    }),
     matches(unit, translation) {
       const sourceLine: number = translation.sourceLine;
       const line: number = unit.context.line;
