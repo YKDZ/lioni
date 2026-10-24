@@ -8,6 +8,7 @@ import {
   prepareQualityConditionedSemanticEdit,
   type QualityCheckInput,
 } from "../src/index.ts";
+import { defineTestQualityCheck } from "./quality-check-fixture.ts";
 import { sourceSchemaFromExamples } from "./source-schema.ts";
 
 type Unit = {
@@ -71,9 +72,9 @@ function diagnosedEditScenario() {
       },
     },
     qualityChecks: [
-      {
+      defineTestQualityCheck({
         id: "needs-review",
-        configuration: undefined,
+        configuration: {},
         check: ({ candidate }) => ({
           status: "complete",
           diagnostics: [
@@ -102,7 +103,7 @@ function diagnosedEditScenario() {
             failed: 0,
           },
         }),
-      },
+      }),
     ],
     createQualityRequest: () => ({
       candidates: [],
@@ -178,7 +179,7 @@ void describe("configured analysis workflow", () => {
         contentOf: ({ text }) => ({ text }),
       },
       qualityChecks: [
-        {
+        defineTestQualityCheck({
           id: "candidate-observer",
           configuration: {},
           check(input) {
@@ -201,7 +202,7 @@ void describe("configured analysis workflow", () => {
               },
             };
           },
-        },
+        }),
       ],
     });
 
@@ -317,7 +318,7 @@ void describe("configured analysis workflow", () => {
         },
       },
       qualityChecks: [
-        {
+        defineTestQualityCheck({
           id: "must-not-run",
           configuration: {},
           check() {
@@ -335,7 +336,7 @@ void describe("configured analysis workflow", () => {
               },
             };
           },
-        },
+        }),
       ],
     });
 
@@ -458,7 +459,7 @@ void describe("configured analysis workflow", () => {
         contentOf: ({ text }) => text,
       },
       qualityChecks: [
-        {
+        defineTestQualityCheck<Unit, Translation>({
           id: "translation-present",
           configuration: { enabled: true },
           check: (input) => {
@@ -476,7 +477,7 @@ void describe("configured analysis workflow", () => {
               },
             };
           },
-        },
+        }),
       ],
     });
 
