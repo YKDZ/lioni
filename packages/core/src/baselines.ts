@@ -3,11 +3,17 @@ import type {
   BodyAvailability,
   CoverageStatus,
   EnumerationCompleteness,
+  FrameworkConfig,
   FrameworkFacts,
   TranslationAssociationStatus,
   TranslationUnitInput,
 } from "./index.ts";
 import type { JsonValue } from "./semantic-edits.ts";
+import {
+  assertJsonValue,
+  StandardSchemaContractError,
+  validateWithStandardSchema,
+} from "./standard-schema.ts";
 
 export type ProcessingBaselineTranslationScope = {
   readonly range: unknown;
@@ -15,19 +21,32 @@ export type ProcessingBaselineTranslationScope = {
   readonly enumeration: EnumerationCompleteness;
 };
 
-export type ProcessingBaselineTranslation = {
-  readonly range: unknown;
-  readonly translation: unknown;
-  readonly bodyAvailability: BodyAvailability;
-};
+export type ProcessingBaselineTranslation<
+  TTranslation = unknown,
+  TUnavailable = unknown,
+> =
+  | {
+      readonly range: unknown;
+      readonly translation: TTranslation;
+      readonly bodyAvailability: "available";
+    }
+  | {
+      readonly range: unknown;
+      readonly translation: TUnavailable;
+      readonly bodyAvailability: "unavailable";
+    };
 
-export type ProcessingBaselineEntry = {
+export type ProcessingBaselineEntry<
+  TUnit = unknown,
+  TTranslation = unknown,
+  TUnavailable = unknown,
+> = {
   readonly sourceKey: string;
   readonly language: string;
   readonly processed: boolean;
   readonly source: {
     readonly presence: "present" | "removed";
-    readonly unit: unknown;
+    readonly unit: TUnit;
     readonly bodyAvailability: BodyAvailability;
     readonly range: unknown;
     readonly enumeration: EnumerationCompleteness;
@@ -36,13 +55,24 @@ export type ProcessingBaselineEntry = {
     readonly status: TranslationAssociationStatus;
     readonly coverageStatus: CoverageStatus;
     readonly scopes: readonly ProcessingBaselineTranslationScope[];
-    readonly translations: readonly ProcessingBaselineTranslation[];
+    readonly translations: readonly ProcessingBaselineTranslation<
+      TTranslation,
+      TUnavailable
+    >[];
   };
 };
 
-export type ProcessingBaseline = {
+export type ProcessingBaseline<
+  TUnit = unknown,
+  TTranslation = unknown,
+  TUnavailable = unknown,
+> = {
   readonly formatVersion: 1;
-  readonly entries: readonly ProcessingBaselineEntry[];
+  readonly entries: readonly ProcessingBaselineEntry<
+    TUnit,
+    TTranslation,
+    TUnavailable
+  >[];
   readonly sourceScopes: readonly ProcessingBaselineSourceScope[];
 };
 
@@ -74,23 +104,43 @@ export type ProcessingChangeStatus =
   | "unknown"
   | "conflict";
 
-export type ProcessingBaselineChange = {
+export type ProcessingBaselineChange<
+  TUnit = unknown,
+  TTranslation = unknown,
+  TUnavailable = unknown,
+> = {
   readonly sourceKey: string;
   readonly language: string;
   readonly status: ProcessingChangeStatus;
   readonly processed: boolean;
-  readonly previous?: ProcessingBaselineEntry;
-  readonly current?: ProcessingBaselineEntry;
+  readonly previous?: ProcessingBaselineEntry<
+    TUnit,
+    TTranslation,
+    TUnavailable
+  >;
+  readonly current?: ProcessingBaselineEntry<TUnit, TTranslation, TUnavailable>;
 };
 
-export type ProcessingBaselineComparison = {
+export type ProcessingBaselineComparison<
+  TUnit = unknown,
+  TTranslation = unknown,
+  TUnavailable = unknown,
+> = {
   readonly available: boolean;
-  readonly changes: readonly ProcessingBaselineChange[];
+  readonly changes: readonly ProcessingBaselineChange<
+    TUnit,
+    TTranslation,
+    TUnavailable
+  >[];
 };
 
-export type ProcessingBaselineAdvanceResult = {
+export type ProcessingBaselineAdvanceResult<
+  TUnit = unknown,
+  TTranslation = unknown,
+  TUnavailable = unknown,
+> = {
   readonly outcome: "saved" | "unchanged" | "failed";
-  readonly baseline?: ProcessingBaseline;
+  readonly baseline?: ProcessingBaseline<TUnit, TTranslation, TUnavailable>;
   readonly selections: readonly {
     readonly sourceKey: string;
     readonly language: string;
@@ -100,28 +150,6 @@ export type ProcessingBaselineAdvanceResult = {
     readonly phase: "load" | "save";
     readonly message: string;
   };
-};
-
-export type ProcessingBaselineMatch<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TUnavailable = never,
-> = (unit: TUnit, translation: TTranslation | TUnavailable) => boolean;
-
-export type ProcessingBaselineCompareOptions<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TUnavailable = never,
-> = {
-  readonly matches?: ProcessingBaselineMatch<TUnit, TTranslation, TUnavailable>;
-};
-
-export type ProcessingBaselineAdvanceOptions<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TUnavailable = never,
-> = {
-  readonly matches?: ProcessingBaselineMatch<TUnit, TTranslation, TUnavailable>;
 };
 
 type UnitWithKey<TUnit extends TranslationUnitInput> = {
@@ -136,20 +164,16 @@ const FORMAT_VERSION = 1;
 /**
  * 将当前事实与已保存的处理历史比较。此函数只读；缺少历史时会如实报告。
  */
-export function compareProcessingBaseline<
+export async function compareProcessingBaseline<
   TUnit extends TranslationUnitInput,
   TTranslation,
   TBody = JsonValue,
   TUnavailable = never,
 >(
   facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
-  baseline?: ProcessingBaseline,
-  options: ProcessingBaselineCompareOptions<
-    TUnit,
-    TTranslation,
-    TUnavailable
-  > = {},
-): ProcessingBaselineComparison {
+  baseline: ProcessingBaseline | undefined,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+): Promise<ProcessingBaselineComparison<TUnit, TTranslation, TUnavailable>> {
   if (baseline === undefined) {
     return {
       available: false,
@@ -163,8 +187,22 @@ export function compareProcessingBaseline<
     };
   }
 
-  validateProcessingBaseline(baseline);
-  const changes: ProcessingBaselineChange[] = [];
+  const validated = await validateProcessingBaselineHistory(baseline, config);
+  return compareValidatedProcessingBaseline(facts, validated, config);
+}
+
+function compareValidatedProcessingBaseline<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
+  baseline: ProcessingBaseline<TUnit, TTranslation, TUnavailable>,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+): ProcessingBaselineComparison<TUnit, TTranslation, TUnavailable> {
+  const changes: ProcessingBaselineChange<TUnit, TTranslation, TUnavailable>[] =
+    [];
   const compared = new Set<string>();
   const previousByPair = new Map(
     baseline.entries.map((entry) => [
@@ -235,7 +273,7 @@ export function compareProcessingBaseline<
       facts,
       previous,
       baseline.sourceScopes,
-      options.matches,
+      config.translations?.matches,
     );
     const comparedRemoval =
       previous.source.presence === "removed" && current !== undefined
@@ -273,17 +311,13 @@ export async function advanceProcessingBaseline<
   store: ProcessingBaselineStore,
   facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
   selections: readonly ProcessingBaselineSelection[],
-  options: ProcessingBaselineAdvanceOptions<
-    TUnit,
-    TTranslation,
-    TUnavailable
-  > = {},
-): Promise<ProcessingBaselineAdvanceResult> {
-  let previous: ProcessingBaseline | undefined;
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+): Promise<ProcessingBaselineAdvanceResult<TUnit, TTranslation, TUnavailable>> {
+  let loaded: ProcessingBaseline | undefined;
   try {
-    previous = await store.load();
-    if (previous !== undefined) validateProcessingBaseline(previous);
+    loaded = await store.load();
   } catch (error) {
+    rethrowContractError(error);
     return {
       outcome: "failed",
       selections: selections.map(({ sourceKey, language }) => ({
@@ -294,6 +328,10 @@ export async function advanceProcessingBaseline<
       failure: { phase: "load", message: errorMessage(error) },
     };
   }
+  const previous =
+    loaded === undefined
+      ? undefined
+      : await validateProcessingBaselineHistory(loaded, config);
 
   const selectionResults: {
     sourceKey: string;
@@ -304,12 +342,17 @@ export async function advanceProcessingBaseline<
   const observedByPair = new Map(
     observedPairs.map((pair) => [pairKey(pair.sourceKey, pair.language), pair]),
   );
-  const updates = new Map<string, ProcessingBaselineEntry>();
+  const updates = new Map<
+    string,
+    ProcessingBaselineEntry<TUnit, TTranslation, TUnavailable>
+  >();
   for (const selection of uniqueSelections(selections)) {
     const pair = observedByPair.get(
       pairKey(selection.sourceKey, selection.language),
     );
-    let current: ProcessingBaselineEntry | undefined = pair?.entry;
+    let current:
+      | ProcessingBaselineEntry<TUnit, TTranslation, TUnavailable>
+      | undefined = pair?.entry;
     if (pair === undefined) {
       const oldEntry = previous?.entries.find(
         (entry) =>
@@ -320,7 +363,7 @@ export async function advanceProcessingBaseline<
         selectionResults.push({ ...selection, outcome: "notFound" });
         continue;
       }
-      if (options.matches === undefined) {
+      if (config.translations?.matches === undefined) {
         selectionResults.push({ ...selection, outcome: "unknown" });
         continue;
       }
@@ -328,7 +371,7 @@ export async function advanceProcessingBaseline<
         facts,
         oldEntry,
         previous?.sourceScopes ?? [],
-        options.matches,
+        config.translations.matches,
       );
       if (current === undefined) {
         selectionResults.push({ ...selection, outcome: "unknown" });
@@ -362,7 +405,10 @@ export async function advanceProcessingBaseline<
     };
   }
 
-  const entries = new Map<string, ProcessingBaselineEntry>();
+  const entries = new Map<
+    string,
+    ProcessingBaselineEntry<TUnit, TTranslation, TUnavailable>
+  >();
   let sourceScopes: ProcessingBaselineSourceScope[];
   if (previous === undefined) {
     sourceScopes = snapshotSourceScopes(facts);
@@ -439,7 +485,7 @@ export async function advanceProcessingBaseline<
   }
   for (const [id, entry] of updates) entries.set(id, entry);
 
-  const next: ProcessingBaseline = {
+  const next: ProcessingBaseline<TUnit, TTranslation, TUnavailable> = {
     formatVersion: FORMAT_VERSION,
     entries: [...entries.values()],
     sourceScopes,
@@ -448,6 +494,7 @@ export async function advanceProcessingBaseline<
     await store.save(next);
     return { outcome: "saved", baseline: next, selections: selectionResults };
   } catch (error) {
+    rethrowContractError(error);
     return {
       outcome: "failed",
       ...(previous === undefined ? {} : { baseline: previous }),
@@ -462,34 +509,36 @@ export async function advanceProcessingBaseline<
 }
 
 export function validateProcessingBaseline(
-  value: ProcessingBaseline,
+  value: unknown,
 ): asserts value is ProcessingBaseline {
+  assertJsonValue(value, "处理基线");
+  if (!isRecord(value)) invalidBaseline("格式无效或版本不受支持。");
+  const entries = value.entries;
+  const sourceScopes = value.sourceScopes;
   if (
-    typeof value !== "object" ||
-    value === null ||
     value.formatVersion !== FORMAT_VERSION ||
-    !Array.isArray(value.entries) ||
-    !Array.isArray(value.sourceScopes)
-  ) {
-    throw new TypeError("处理基线格式无效或版本不受支持。");
-  }
+    !isUnknownArray(entries) ||
+    !isUnknownArray(sourceScopes)
+  )
+    invalidBaseline("格式无效或版本不受支持。");
 
   const seen = new Set<string>();
-  for (const entry of value.entries) {
+  for (const entry of entries) {
     if (
-      typeof entry !== "object" ||
-      entry === null ||
+      !isRecord(entry) ||
       typeof entry.sourceKey !== "string" ||
       typeof entry.language !== "string" ||
       typeof entry.processed !== "boolean" ||
-      typeof entry.source !== "object" ||
-      entry.source === null ||
+      !isRecord(entry.source) ||
+      !Object.hasOwn(entry.source, "unit") ||
+      !Object.hasOwn(entry.source, "range") ||
       (entry.source.presence !== "present" &&
         entry.source.presence !== "removed") ||
-      !Array.isArray(entry.association?.scopes) ||
-      !Array.isArray(entry.association?.translations)
+      !isRecord(entry.association) ||
+      !isUnknownArray(entry.association.scopes) ||
+      !isUnknownArray(entry.association.translations)
     ) {
-      throw new TypeError("处理基线包含无效条目。");
+      invalidBaseline("包含无效条目。");
     }
     if (
       !isAssociationStatus(entry.association.status) ||
@@ -497,42 +546,132 @@ export function validateProcessingBaseline(
       !isBodyAvailability(entry.source.bodyAvailability) ||
       !isEnumerationCompleteness(entry.source.enumeration)
     ) {
-      throw new TypeError("处理基线包含无效状态。");
+      invalidBaseline("包含无效状态。");
     }
-    for (const scope of entry.association.scopes) {
+    for (const [index, scope] of entry.association.scopes.entries()) {
       if (
-        typeof scope !== "object" ||
-        scope === null ||
-        !Array.isArray(scope.covers) ||
+        !isRecord(scope) ||
+        !Object.hasOwn(scope, "range") ||
+        !isUnknownArray(scope.covers) ||
+        scope.covers.some((key) => typeof key !== "string") ||
         !isEnumerationCompleteness(scope.enumeration)
-      ) {
-        throw new TypeError("处理基线包含无效范围依据。");
-      }
+      )
+        invalidBaseline("包含无效译文范围依据。");
+      assertJsonValue(scope.range, `处理基线译文范围 ${index + 1}`);
     }
-    for (const translation of entry.association.translations) {
+    for (const [
+      index,
+      translation,
+    ] of entry.association.translations.entries()) {
       if (
-        typeof translation !== "object" ||
-        translation === null ||
+        !isRecord(translation) ||
+        !Object.hasOwn(translation, "range") ||
+        !Object.hasOwn(translation, "translation") ||
         !isBodyAvailability(translation.bodyAvailability)
-      ) {
-        throw new TypeError("处理基线包含无效译文依据。");
-      }
+      )
+        invalidBaseline("包含无效译文依据。");
+      assertJsonValue(translation.range, `处理基线译文记录范围 ${index + 1}`);
+      assertJsonValue(translation.translation, `处理基线译文记录 ${index + 1}`);
     }
+    assertJsonValue(entry.source.unit, `处理基线原文 ${entry.sourceKey}`);
+    assertJsonValue(entry.source.range, `处理基线原文范围 ${entry.sourceKey}`);
     const id = pairKey(entry.sourceKey, entry.language);
-    if (seen.has(id)) throw new TypeError("处理基线包含重复的源身份与语言。");
+    if (seen.has(id)) invalidBaseline("包含重复的源身份与语言。");
     seen.add(id);
   }
-  for (const scope of value.sourceScopes) {
+  for (const [index, scope] of sourceScopes.entries()) {
     if (
-      typeof scope !== "object" ||
-      scope === null ||
+      !isRecord(scope) ||
+      !Object.hasOwn(scope, "range") ||
       !isEnumerationCompleteness(scope.enumeration) ||
-      !Array.isArray(scope.sourceKeys) ||
-      scope.sourceKeys.some((key: unknown) => typeof key !== "string")
+      !isUnknownArray(scope.sourceKeys) ||
+      scope.sourceKeys.some((key) => typeof key !== "string")
     ) {
-      throw new TypeError("处理基线包含无效的原文范围依据。");
+      invalidBaseline("包含无效的原文范围依据。");
     }
+    assertJsonValue(scope.range, `处理基线原文范围依据 ${index + 1}`);
   }
+}
+
+/** 将持久化结构按当前装配的 schema 验证并窄化为内部可消费的视图。 */
+export async function validateProcessingBaselineHistory<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  value: unknown,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+): Promise<ProcessingBaseline<TUnit, TTranslation, TUnavailable>> {
+  validateProcessingBaseline(value);
+  const entries: ProcessingBaselineEntry<TUnit, TTranslation, TUnavailable>[] =
+    [];
+  for (const entry of value.entries) {
+    const unit = await validateWithStandardSchema(
+      config.source.schema,
+      entry.source.unit,
+      `处理基线原文 ${entry.sourceKey}`,
+      { preserveValue: true, requireJson: true },
+    );
+    const translations: ProcessingBaselineTranslation<
+      TTranslation,
+      TUnavailable
+    >[] = [];
+    for (const [index, previous] of entry.association.translations.entries()) {
+      const adapter = config.translations;
+      if (adapter === undefined)
+        throw new StandardSchemaContractError(
+          `处理基线译文 ${entry.sourceKey}/${entry.language}`,
+          "schema-mismatch",
+          "当前装配未声明处理历史所需的译文契约。",
+        );
+      if (previous.bodyAvailability === "available") {
+        const translation = await validateWithStandardSchema(
+          adapter.schema,
+          previous.translation,
+          `处理基线译文 ${entry.sourceKey}/${entry.language} #${index + 1}`,
+          { preserveValue: true, requireJson: true },
+        );
+        const content = adapter.contentOf(translation);
+        await validateWithStandardSchema(
+          adapter.contentSchema,
+          content,
+          `处理基线译文正文 ${entry.sourceKey}/${entry.language} #${index + 1}`,
+          { preserveValue: true, requireJson: true },
+        );
+        translations.push({
+          ...previous,
+          bodyAvailability: "available",
+          translation,
+        });
+      } else {
+        const unavailableSchema = adapter.unavailableSchema;
+        if (unavailableSchema === undefined)
+          throw new StandardSchemaContractError(
+            `处理基线不可用译文 ${entry.sourceKey}/${entry.language}`,
+            "schema-mismatch",
+            "当前装配未声明处理历史中的不可用译文契约。",
+          );
+        const translation = await validateWithStandardSchema(
+          unavailableSchema,
+          previous.translation,
+          `处理基线不可用译文 ${entry.sourceKey}/${entry.language} #${index + 1}`,
+          { preserveValue: true, requireJson: true },
+        );
+        translations.push({
+          ...previous,
+          bodyAvailability: "unavailable",
+          translation,
+        });
+      }
+    }
+    entries.push({
+      ...entry,
+      source: { ...entry.source, unit },
+      association: { ...entry.association, translations },
+    });
+  }
+  return { ...value, entries };
 }
 
 function currentPairs<
@@ -545,12 +684,12 @@ function currentPairs<
 ): readonly {
   readonly sourceKey: string;
   readonly language: string;
-  readonly entry: ProcessingBaselineEntry;
+  readonly entry: ProcessingBaselineEntry<TUnit, TTranslation, TUnavailable>;
 }[] {
   const pairs: {
     sourceKey: string;
     language: string;
-    entry: ProcessingBaselineEntry;
+    entry: ProcessingBaselineEntry<TUnit, TTranslation, TUnavailable>;
   }[] = [];
   const readsByLanguage = new Map(
     facts.translations.reads.map((read) => [read.language, read]),
@@ -637,7 +776,7 @@ function currentEntry<
         TUnavailable
       >["associations"][number]
     | undefined,
-): ProcessingBaselineEntry {
+): ProcessingBaselineEntry<TUnit, TTranslation, TUnavailable> {
   const sourceScope = facts.source.read.scopes[source.scopeIndex];
   const scopes =
     languageRead === undefined || association === undefined
@@ -685,11 +824,17 @@ function currentEntry<
 
 function baselineTranslation<TTranslation, TBody, TUnavailable>(
   translation: ActualTranslationFact<TTranslation, TBody, TUnavailable>,
-): ProcessingBaselineTranslation {
+): ProcessingBaselineTranslation<TTranslation, TUnavailable> {
+  if (translation.bodyAvailability === "available")
+    return {
+      range: translation.range,
+      translation: translation.translation,
+      bodyAvailability: "available",
+    };
   return {
     range: translation.range,
     translation: translation.translation,
-    bodyAvailability: translation.bodyAvailability,
+    bodyAvailability: "unavailable",
   };
 }
 
@@ -728,7 +873,7 @@ function confirmedSourceRemovalScope<
   TUnavailable,
 >(
   facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
-  previous: ProcessingBaselineEntry,
+  previous: ProcessingBaselineEntry<TUnit, TTranslation, TUnavailable>,
   historicalScopes: readonly ProcessingBaselineSourceScope[],
 ):
   | FrameworkFacts<
@@ -766,10 +911,10 @@ function currentRemovedEntry<
   TUnavailable,
 >(
   facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
-  previous: ProcessingBaselineEntry,
+  previous: ProcessingBaselineEntry<TUnit, TTranslation, TUnavailable>,
   historicalScopes: readonly ProcessingBaselineSourceScope[],
-  matches?: ProcessingBaselineMatch<TUnit, TTranslation, TUnavailable>,
-): ProcessingBaselineEntry | undefined {
+  matches?: (unit: TUnit, translation: TTranslation | TUnavailable) => boolean,
+): ProcessingBaselineEntry<TUnit, TTranslation, TUnavailable> | undefined {
   const sourceScope = confirmedSourceRemovalScope(
     facts,
     previous,
@@ -808,7 +953,7 @@ function currentRemovedEntry<
           (record) =>
             record.language === previous.language &&
             scopes.some(({ range }) => sameJson(range, record.range)) &&
-            matches(previous.source.unit as TUnit, record.translation),
+            matches(previous.source.unit, record.translation),
         );
   const status: TranslationAssociationStatus =
     currentTranslations.length > 1
@@ -928,6 +1073,26 @@ function isEnumerationCompleteness(
     completeness === "partial" ||
     completeness === "failed"
   );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isUnknownArray(value: unknown): value is unknown[] {
+  return Array.isArray(value);
+}
+
+function invalidBaseline(message: string): never {
+  throw new StandardSchemaContractError(
+    "处理基线",
+    "schema-mismatch",
+    `处理基线${message}`,
+  );
+}
+
+function rethrowContractError(error: unknown): void {
+  if (error instanceof StandardSchemaContractError) throw error;
 }
 
 function errorMessage(error: unknown): string {
