@@ -13,6 +13,7 @@ import { readFacts } from "./index.ts";
 import type {
   FrameworkConfig,
   FrameworkFacts,
+  JsonValue,
   TranslationUnitInput,
 } from "./index.ts";
 import {
@@ -409,20 +410,46 @@ function matchesExpectedInput<TUnit extends TranslationUnitInput, TTranslation>(
         !isDeepStrictEqual(translation.range, currentTranslation.range)
       )
         return false;
-      const targetContent = config.translationWriteback?.targetContent;
-      const expectedContent =
-        targetContent === undefined
-          ? translation.translation
-          : targetContent(translation.translation);
-      const currentContent =
-        targetContent === undefined
-          ? currentTranslation.translation
-          : targetContent(currentTranslation.translation as TTranslation);
+      const expectedContent = snapshotTranslationContent(
+        config,
+        translation.translation,
+        translation.bodyAvailability,
+      );
+      const currentContent = snapshotTranslationContent(
+        config,
+        currentTranslation.translation as TTranslation,
+        currentTranslation.bodyAvailability,
+      );
       return isDeepStrictEqual(expectedContent, currentContent);
     });
   } catch {
     return false;
   }
+}
+
+function snapshotTranslationContent<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+>(
+  config: FrameworkConfig<TUnit, TTranslation>,
+  translation: TTranslation,
+  bodyAvailability: "available" | "unavailable",
+): JsonValue {
+  if (bodyAvailability !== "available") return null;
+  const contentOf = config.translations?.contentOf;
+  if (contentOf === undefined)
+    throw new TypeError("实际译文没有业务内容读取适配器。");
+  let serialized: string | undefined;
+  try {
+    serialized = JSON.stringify(contentOf(translation));
+  } catch (error) {
+    throw new TypeError("译文业务内容必须可序列化为 JSON。", {
+      cause: error,
+    });
+  }
+  if (serialized === undefined)
+    throw new TypeError("译文业务内容必须可序列化为 JSON。");
+  return JSON.parse(serialized) as JsonValue;
 }
 
 function entryIsReliable(entry: ProcessingBaselineEntry): boolean {

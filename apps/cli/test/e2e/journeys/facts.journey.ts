@@ -44,7 +44,8 @@ const journey: CliJourney = {
     }] }),
     matches: (unit, translation) =>
       unit.context.file === translation.context.file &&
-      unit.context.line === translation.context.line
+      unit.context.line === translation.context.line,
+    contentOf: (translation) => translation.text
   }
 };
 `,
@@ -74,14 +75,14 @@ import baseConfig from "./l10n.config.ts";
 const check: QualityCheckDefinition<TranslationUnitInput, unknown> = {
   id: "host-rule",
   configuration: { enabled: true },
-  check({ subjects }) {
+  check() {
     return {
       status: "complete",
       diagnostics: [],
       issues: [],
       coverage: {
-        selected: subjects.length,
-        evaluated: subjects.length,
+        selected: 1,
+        evaluated: 1,
         notApplicable: 0,
         incomplete: 0,
         failed: 0
@@ -94,17 +95,17 @@ export default {
   ...baseConfig,
   qualityChecks: [check],
   createQualityRequest(facts) {
-    const subjects = facts.associations.map(({ sourceKey, language }) => ({
-      key: sourceKey,
-      language,
-    }));
+    const candidates = facts.associations.flatMap((association) => {
+      if (association.status !== "matched") return [];
+      const record = facts.translations.records[association.translationIndexes[0]];
+      return record === undefined ? [] : [{
+        sourceKey: association.sourceKey,
+        language: association.language,
+        content: record.content
+      }];
+    });
     return {
-      subjects,
-      evidenceScope: subjects.map(({ key, language }) => ({
-        kind: "translation-unit",
-        key,
-        language,
-      })),
+      candidates,
       dependencies: { selectedBy: "defineConfig" },
     };
   },
@@ -135,6 +136,10 @@ export default {
         args: ["qa", "qa.config.ts"],
       },
       {
+        name: "readable QA candidate summary",
+        args: ["qa", "qa.config.ts", "--output-format", "text"],
+      },
+      {
         name: "QA without a configured checker",
         args: ["qa", "no-checks.config.ts"],
       },
@@ -147,7 +152,8 @@ export default {
     const readable = results[1];
     const duplicate = results[2];
     const qa = results[3];
-    const noChecks = results[4];
+    const qaText = results[4];
+    const noChecks = results[5];
     assert.equal(
       structured?.exitCode,
       0,
@@ -190,6 +196,7 @@ export default {
               text: string;
               context: { file: string; line: number };
             };
+            content: string;
             bodyAvailability: string;
           }[];
         };
@@ -245,6 +252,7 @@ export default {
           text: "Enregistrer",
           context: { file: "src/messages.ts", line: 18 },
         },
+        content: "Enregistrer",
         bodyAvailability: "available",
       },
       {
@@ -256,6 +264,7 @@ export default {
           text: "Avis",
           context: { file: "legacy/messages.ts", line: 999 },
         },
+        content: "Avis",
         bodyAvailability: "available",
       },
     ]);
@@ -289,18 +298,45 @@ export default {
     const qaResult = JSON.parse(qa?.stdout ?? "") as {
       data: {
         status: string;
-        subjects: readonly { key: string; language: string }[];
+        candidates: readonly {
+          sourceKey: string;
+          language: string;
+          content: string;
+        }[];
         dependencies: { selectedBy: string };
+        factCoverage: {
+          associations: readonly {
+            sourceKey: string;
+            language: string;
+            status: string;
+            candidateSelected: boolean;
+          }[];
+        };
         checks: readonly { id: string; configuration: { enabled: boolean } }[];
       };
     };
     assert.equal(qaResult.data.status, "complete");
-    assert.deepEqual(qaResult.data.subjects, [
-      { key: "src/messages.ts:18", language: "fr" },
+    assert.deepEqual(qaResult.data.candidates, [
+      {
+        sourceKey: "src/messages.ts:18",
+        language: "fr",
+        content: "Enregistrer",
+      },
     ]);
     assert.deepEqual(qaResult.data.dependencies, {
       selectedBy: "defineConfig",
     });
+    assert.deepEqual(qaResult.data.factCoverage.associations, [
+      {
+        sourceKey: "src/messages.ts:18",
+        language: "fr",
+        status: "matched",
+        coverageStatus: "complete",
+        scopeIndexes: [0],
+        translationIndexes: [0],
+        candidateSelected: true,
+      },
+    ]);
     assert.deepEqual(qaResult.data.checks, [
       {
         id: "host-rule",
@@ -317,16 +353,24 @@ export default {
         },
       },
     ]);
+    assert.equal(
+      qaText?.exitCode,
+      0,
+      `${qaText?.stdout ?? ""}${qaText?.stderr ?? ""}`,
+    );
+    assert.equal(qaText?.stderr, "");
+    assert.match(qaText?.stdout ?? "", /检查候选：1；诊断：0/u);
+    assert.match(qaText?.stdout ?? "", /原文读取：完整；译文读取：fr 完整/u);
     assert.equal(noChecks?.exitCode, 0);
     assert.equal(
       (JSON.parse(noChecks?.stdout ?? "") as { data: { status: string } }).data
         .status,
       "not-run",
     );
-    assert.equal(results[5]?.exitCode, 0);
-    assert.match(results[5]?.stdout ?? "", /facts/u);
     assert.equal(results[6]?.exitCode, 0);
-    assert.equal(results[6]?.stdout, "l10n 0.0.0\n");
+    assert.match(results[6]?.stdout ?? "", /facts/u);
+    assert.equal(results[7]?.exitCode, 0);
+    assert.equal(results[7]?.stdout, "l10n 0.0.0\n");
   },
 };
 

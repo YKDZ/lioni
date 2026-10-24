@@ -76,6 +76,7 @@ function makeConfig(
         ],
       }),
       matches: (unit, translation) => unit.id === translation.id,
+      contentOf: (translation) => translation.text,
     },
     ...(options.updatePolicy === undefined
       ? {}
@@ -83,7 +84,6 @@ function makeConfig(
     ...(options.withWriteback
       ? {
           translationWriteback: {
-            targetContent: (translation) => translation.text,
             locateExistingTarget: ({ translation }) => ({
               status: "located" as const,
               locator: { id: translation.translation.id },

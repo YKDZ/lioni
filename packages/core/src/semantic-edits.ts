@@ -63,7 +63,6 @@ export type TranslationWritebackAdapter<
   TUnit extends TranslationUnitInput,
   TTranslation,
 > = {
-  readonly targetContent: (translation: TTranslation) => JsonValue;
   readonly locateExistingTarget: (input: {
     readonly sourceUnit: SourceUnitFact<TUnit>;
     readonly translation: ActualTranslationFact<TTranslation>;
@@ -235,10 +234,7 @@ export async function resolveSemanticEditInput<
         ? { status: "missing" }
         : {
             status: "present",
-            content: snapshotJson(
-              adapter.targetContent(currentTranslation.translation),
-              "现有译文正文",
-            ),
+            content: snapshotJson(currentTranslation.content, "现有译文正文"),
           };
     const dependencies = await adapter.dependencies?.({
       sourceUnit,
@@ -393,7 +389,7 @@ export async function applySemanticEdits<
         edit.language,
       );
       const after = snapshotEditObservation(afterObservation);
-      if (confirmsEditContent(edit, afterObservation, adapter)) {
+      if (confirmsEditContent(edit, afterObservation)) {
         results.push({ ...base, status: "written", before, after });
       } else {
         results.push({
@@ -521,7 +517,7 @@ async function validateSemanticEdit<
     let currentTargetContent: JsonValue;
     try {
       currentTargetContent = snapshotJson(
-        adapter.targetContent(currentTranslation.translation),
+        currentTranslation.content,
         "当前译文正文",
       );
     } catch (error) {
@@ -617,7 +613,6 @@ function snapshotEditObservation<
 function confirmsEditContent<TUnit extends TranslationUnitInput, TTranslation>(
   edit: SemanticEdit,
   observation: SemanticEditObservation<TUnit, TTranslation>,
-  adapter: TranslationWritebackAdapter<TUnit, TTranslation>,
 ): boolean {
   if (
     observation.association?.status !== "matched" ||
@@ -628,10 +623,7 @@ function confirmsEditContent<TUnit extends TranslationUnitInput, TTranslation>(
   if (translation === undefined || translation.bodyAvailability !== "available")
     return false;
   return isDeepStrictEqual(
-    snapshotJson(
-      adapter.targetContent(translation.translation),
-      "回读译文正文",
-    ),
+    snapshotJson(translation.content, "回读译文正文"),
     edit.content,
   );
 }

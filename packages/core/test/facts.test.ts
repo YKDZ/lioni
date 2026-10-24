@@ -209,6 +209,7 @@ void describe("framework facts", () => {
           matches(unit, translation) {
             return translation.context.sourceLine === unit.context.line;
           },
+          contentOf: () => null,
         },
       }),
     );
@@ -257,6 +258,7 @@ void describe("framework facts", () => {
         text: "Enregistrer",
         context: { sourceLine: 18 },
       },
+      content: null,
       bodyAvailability: "available",
     });
     assert.match(facts.version, /^sha256:[a-f0-9]{64}$/u);
@@ -313,6 +315,7 @@ void describe("framework facts", () => {
           matches(unit, translation) {
             return unit.context.line === translation.context.line;
           },
+          contentOf: () => null,
         },
       }),
     );
@@ -355,8 +358,13 @@ void describe("framework facts", () => {
       { source: "Submit", context: { line: 19 } },
       { source: "Cancel", context: { line: 20 } },
     ];
+    type Translation = {
+      readonly text?: string;
+      readonly context: { readonly sourceLines: readonly number[] };
+    };
+    let contentCalls = 0;
     const facts = await readFacts(
-      defineConfig({
+      defineConfig<(typeof units)[number], Translation>({
         source: { read: () => completeSource(...units) },
         keyOf: (unit) => `message:${unit.context.line}`,
         translations: {
@@ -379,7 +387,6 @@ void describe("framework facts", () => {
                     },
                     {
                       value: {
-                        text: "unreadable",
                         context: { sourceLines: [20] },
                       },
                       bodyAvailability: "unavailable",
@@ -395,6 +402,12 @@ void describe("framework facts", () => {
           },
           matches(unit, translation) {
             return translation.context.sourceLines.includes(unit.context.line);
+          },
+          contentOf(translation) {
+            contentCalls += 1;
+            if (typeof translation.text !== "string")
+              throw new Error("缺少可用正文不应进入内容转换。");
+            return translation.text;
           },
         },
       }),
@@ -469,6 +482,15 @@ void describe("framework facts", () => {
       ],
     );
     assert.equal(facts.translations.records.length, 3);
+    assert.equal(contentCalls, 2);
+    assert.equal(facts.translations.records[1]?.content, null);
+    assert.equal(
+      facts.translations.records[1]?.bodyAvailability,
+      "unavailable",
+    );
+    assert.deepStrictEqual(facts.translations.records[1]?.translation, {
+      context: { sourceLines: [20] },
+    });
     assert.deepStrictEqual(facts.translations.records[2]?.translation, {
       text: "Orphan",
       context: { sourceLines: [] },
@@ -504,6 +526,7 @@ void describe("framework facts", () => {
           languages: ["fr"],
           read: () => ({ scopes: [] }),
           matches: () => false,
+          contentOf: () => null,
         },
       }),
     );

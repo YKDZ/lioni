@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmod,
   mkdir,
@@ -94,9 +95,18 @@ async function writeConsumerFiles(
   const workspaceConfig = `overrides:\n  "@l10n/core@0.0.0": "file:${coreTarball}"\n`;
   const configSource = `import { defineConfig } from "@l10n/core";
 
+type Unit = {
+  readonly source: string;
+  readonly context: { readonly file: string; readonly line: number; readonly screenshot: string };
+};
+type Translation = {
+  readonly text: string;
+  readonly context: { readonly sourceLines: readonly number[] };
+};
+
 export let translationReadCount = 0;
 
-const config = defineConfig({
+const config = defineConfig<Unit, Translation>({
   source: {
     read: () => ({
       scopes: [{
@@ -116,6 +126,9 @@ const config = defineConfig({
   },
   translations: {
     languages: ["fr", "ja", "de"],
+    contentOf(translation) {
+      return translation.text;
+    },
     read(language, sourceUnits) {
       translationReadCount += 1;
       if (language === "de") throw new Error("German catalogue unavailable");
@@ -192,13 +205,17 @@ type Translation = {
   text: string;
   context: { sourceLine: number };
 };
+type Unit = {
+  source: string;
+  context: { file: string; line: number };
+};
 
 const sourceRecords = [
   { source: "Save", context: { file: "src/messages.ts", line: 18 } },
   { source: "Submit", context: { file: "src/messages.ts", line: 19 } },
 ];
 
-export default defineConfig({
+export default defineConfig<Unit, Translation>({
   source: {
     read: () => ({
       scopes: [{
@@ -213,6 +230,7 @@ export default defineConfig({
   },
   translations: {
     languages: ["fr", "de"],
+    contentOf: (translation) => translation.text,
     read(language, sourceUnits) {
       const values = JSON.parse(readFileSync(new URL("./completion-resources/" + language + ".json", import.meta.url), "utf8")) as Translation[];
       return {
@@ -262,6 +280,7 @@ export default defineConfig<Unit, Translation>({
   keyOf: (unit) => unit.id,
   translations: {
     languages: ["fr"],
+    contentOf: (translation) => translation.text,
     async read(_language, sourceUnits) {
       const translations = JSON.parse(await readFile(new URL("./update-plan-resources/fr.json", import.meta.url), "utf8")) as Translation[];
       return {
@@ -288,7 +307,6 @@ export default defineConfig<Unit, Translation>({
         }
       : { action: "none", reason: "该项未由此计划处理。" },
   translationWriteback: {
-    targetContent: (translation) => translation.text,
     locateExistingTarget: ({ translation }) => ({
       status: "located",
       locator: { id: translation.translation.id },
@@ -369,6 +387,7 @@ export default defineConfig<Unit, Translation>({
   keyOf: (unit) => unit.context.identity,
   translations: {
     languages: ["fr"],
+    contentOf: (translation) => translation.text,
     read(_language, sourceUnits) {
       const catalogue = readCatalogue();
       return {
@@ -383,7 +402,6 @@ export default defineConfig<Unit, Translation>({
     matches: (unit, translation) => translation.context.sourceLines.includes(unit.context.line),
   },
   translationWriteback: {
-    targetContent: (translation) => translation.text,
     locateExistingTarget({ translation }) {
       if (translation.translation.context.readOnly)
         return { status: "notWritable", reason: "该译文资源只读。" };
@@ -436,7 +454,7 @@ export default defineConfig<Unit, Translation>({
 });
 `;
   const qaConfigSource = `import { readFile } from "node:fs/promises";
-import { defineConfig } from "@l10n/core";
+import { defineConfig, type FrameworkFacts } from "@l10n/core";
 import { createMessagePlaceholderChecker, createRelationshipChecker } from "@l10n/checks";
 
 type Unit = {
@@ -459,14 +477,14 @@ async function readMessageResource() {
 const qualityChecks = [
   createMessagePlaceholderChecker<Unit, Translation>({
     sourceText: (unit) => unit.source,
-    translationText: (translation) => translation.text,
+    translationText: (content) => content,
     sourceLocation: (unit, _subject, range) => ({
       ...range,
       key: String(unit.context.line),
     }),
-    translationLocation: (translation, _subject, range) => ({
+    translationLocation: (translation, subject, range) => ({
       ...range,
-      key: translation.nativeKey,
+      key: translation?.nativeKey ?? subject.key,
     }),
     configuration: { grammar: "simple-placeholders-v1" },
   }),
@@ -476,25 +494,30 @@ const qualityChecks = [
     id: "same-target-text",
     relationshipKind: "same-target-text",
     configuration: { constraint: "target text is equal" },
-    translationLocation: (translation, _subject, range) => ({
+    translationLocation: (translation, subject, range) => ({
       ...range,
-      key: translation.nativeKey,
+      key: translation?.nativeKey ?? subject.key,
     }),
     evaluate: ({ members }) =>
-      new Set(members.map(({ translation }) => translation.text))
+      new Set(members.map(({ content }) => content))
         .size > 1
         ? { severity: "error", message: "关系成员应使用相同译文。" }
         : undefined,
   }),
 ];
 
-function createQualityRequest() {
+function createQualityRequest(facts: FrameworkFacts<Unit, Translation>) {
+  const association = facts.associations.find(
+    ({ sourceKey, language, status }) =>
+      sourceKey === "sha256:save" && language === "fr" && status === "matched",
+  );
+  const record = association === undefined
+    ? undefined
+    : facts.translations.records[association.translationIndexes[0] as number];
   return {
-    subjects: [{ key: "sha256:save", language: "fr" }],
-    evidenceScope: [
-      { kind: "translation-unit", key: "sha256:save", language: "fr" },
-      { kind: "translation-unit", key: "sha256:submit", language: "fr" },
-    ],
+    candidates: record === undefined
+      ? []
+      : [{ sourceKey: "sha256:save", language: "fr", content: record.content }],
     relationships: [
       {
         kind: "same-target-text",
@@ -547,6 +570,7 @@ export default defineConfig<Unit, Translation>({
   keyOf: (unit) => "sha256:" + unit.nativeId,
   translations: {
     languages: ["fr"],
+    contentOf: (translation) => translation.text,
     async read(_language, sourceUnits) {
       const resource = await readMessageResource();
       return {
@@ -595,7 +619,7 @@ void qaConfig.qualityChecks;
 void qaConfig.createQualityRequest;
 void createMessagePlaceholderChecker({
   sourceText: (unit: { source: string }) => unit.source,
-  translationText: (translation: { text: string }) => translation.text,
+  translationText: (content) => content,
 });
 void readCompletion(completionConfig);
 void readFacts(completionConfig).then((facts) =>
@@ -655,6 +679,7 @@ export default defineConfig<Unit, Translation>({
   keyOf: (unit) => unit.id,
   translations: {
     languages: ["fr"],
+    contentOf: (translation) => translation.text,
     async read(_language, sourceUnits) {
       const records = await Promise.all(sourceUnits.map(async ({ unit }) => {
         const path = targetPath(unit.id);
@@ -678,7 +703,6 @@ export default defineConfig<Unit, Translation>({
       : { action: "candidate", candidate: { sourceKey, language, content: "更新译文 " + sourceKey } }
     : { action: "none" },
   translationWriteback: {
-    targetContent: (translation) => translation.text,
     locateExistingTarget: ({ translation }) => ({
       status: "located",
       locator: { path: translation.translation.path },
@@ -947,13 +971,39 @@ const originalResource = Buffer.from(JSON.stringify({
     { sourceId: "submit", nativeKey: "submit_button", text: "Enregistrer" },
   ],
 }));
+await writeFile(qaResource, JSON.stringify({ messages: [] }));
+const skippedQa = spawnSync(executable, ["qa", "qa.config.ts"], { encoding: "utf8", shell: process.platform === "win32" });
+assert.equal(skippedQa.status, 0, skippedQa.stderr + skippedQa.stdout);
+const skippedResult = JSON.parse(skippedQa.stdout).data;
+assert.equal(skippedResult.status, "not-run");
+assert.deepEqual(skippedResult.candidates, []);
+assert.deepEqual(
+  skippedResult.factCoverage.associations.map(({ status, candidateSelected }) => [status, candidateSelected]),
+  [["missing", false], ["missing", false]],
+);
+const readableSkippedQa = spawnSync(executable, ["qa", "qa.config.ts", "--output-format", "text"], { encoding: "utf8", shell: process.platform === "win32" });
+assert.equal(readableSkippedQa.status, 0, readableSkippedQa.stderr);
+assert.ok(readableSkippedQa.stdout.includes("质量检查：未执行"));
+assert.ok(readableSkippedQa.stdout.includes("关联 sha256:save → fr：missing"));
 await writeFile(qaResource, originalResource);
 const initialQa = spawnSync(executable, ["qa", "qa.config.ts"], { encoding: "utf8", shell: process.platform === "win32" });
 assert.equal(initialQa.status, 0, initialQa.stderr + initialQa.stdout);
 const initialResult = JSON.parse(initialQa.stdout).data;
 assert.equal(initialResult.status, "complete");
-assert.equal(initialResult.subjects[0].key, "sha256:save");
-assert.equal(initialResult.subjects[0].language, "fr");
+assert.deepEqual(initialResult.candidates, [
+  { sourceKey: "sha256:save", language: "fr", content: "Bonjour" },
+]);
+assert.deepEqual(
+  initialResult.factCoverage.associations.map(({ sourceKey, status, candidateSelected }) => [
+    sourceKey,
+    status,
+    candidateSelected,
+  ]),
+  [
+    ["sha256:save", "matched", true],
+    ["sha256:submit", "matched", false],
+  ],
+);
 assert.equal(initialResult.diagnostics.length, 3);
 assert.equal(initialResult.diagnostics[0].ruleId, "message-placeholders");
 assert.equal(initialResult.diagnostics[0].evidence.length, 2);
@@ -1087,6 +1137,7 @@ const config = defineConfig({
   keyOf: (unit) => unit.id,
   translations: {
     languages: ["fr"],
+    contentOf: (translation) => translation.text,
     read: (_language, units) => ({
       scopes: targetScopes.map(({ range, translations }) => ({
         range,
@@ -1652,6 +1703,17 @@ export async function verifyIndependentConsumer(): Promise<void> {
         "pnpm",
         ["--filter", packageName, "pack", "--pack-destination", artifactRoot],
         repositoryRoot,
+      );
+    }
+
+    for (const packageName of packageNames) {
+      const shortName = packageName.slice("@l10n/".length);
+      const tarball = path.join(artifactRoot, `l10n-${shortName}-0.0.0.tgz`);
+      const digest = createHash("sha256")
+        .update(await readFile(tarball))
+        .digest("hex");
+      process.stdout.write(
+        `制品 SHA-256 ${path.basename(tarball)} ${digest}\n`,
       );
     }
 

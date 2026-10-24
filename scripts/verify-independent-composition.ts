@@ -265,9 +265,8 @@ function unitText(unit: Unit): string {
   return (unit as GuideUnit).source.body;
 }
 
-function translationText(translation: Translation): string {
-  if (translation.domain === "catalog") return translation.text;
-  return translation.content.message;
+function translationText(content: unknown): string | undefined {
+  return typeof content === "string" ? content : undefined;
 }
 
 function createDomainChecker(
@@ -282,13 +281,23 @@ function createDomainChecker(
     id: module.domain + "-format",
     configuration: module.checkConfiguration,
     check(input: QualityCheckInput<Unit, Translation>) {
-      const subjects = input.subjects.filter((subject) =>
-        input.facts.source.units.some(
-          ({ key, unit }) =>
-            key === subject.key && unit.context.domain === module.domain,
-        ),
-      );
-      return checker.check({ ...input, subjects });
+      if (
+        input.sourceUnit !== null &&
+        input.sourceUnit.unit.context.domain !== module.domain
+      )
+        return {
+          status: "not-applicable",
+          diagnostics: [],
+          issues: [],
+          coverage: {
+            selected: 0,
+            evaluated: 0,
+            notApplicable: 0,
+            incomplete: 0,
+            failed: 0,
+          },
+        };
+      return checker.check(input);
     },
   };
 }
@@ -301,14 +310,12 @@ const crossDomainChecker = createRelationshipChecker<
   id: "cross-domain-same-text",
   relationshipKind: "same-text",
   configuration: { relation: "equal target message" },
-  translationLocation: (translation, _subject, location) => ({
-    ...location,
-    key: translation.nativeKey,
-  }),
+  translationLocation: (translation, subject, location) =>
+    translation === undefined
+      ? { ...location, key: subject.key }
+      : { ...location, key: translation.nativeKey },
   evaluate: ({ members }) => {
-    const texts = members.map(({ translation }) =>
-      translationText(translation),
-    );
+    const texts = members.map(({ content }) => translationText(content));
     return new Set(texts).size === 1
       ? undefined
       : { severity: "error", message: "跨输入关系成员的译文不同。" };
@@ -319,21 +326,27 @@ function requestForDomain(
   facts: FrameworkFacts<Unit, Translation>,
   domain: Domain,
 ): QualityCheckRequest {
-  const keys = new Set(
-    facts.source.units
-      .filter(({ unit }) => unit.context.domain === domain)
-      .map(({ key }) => key),
-  );
-  const subjects = facts.associations
-    .filter(({ sourceKey }) => keys.has(sourceKey))
-    .map(({ sourceKey, language }) => ({ key: sourceKey, language }));
+  const candidates = facts.associations.flatMap((association) => {
+    if (
+      !association.sourceKey.startsWith(domain + ":") ||
+      association.status !== "matched"
+    )
+      return [];
+    const record = facts.translations.records[
+      association.translationIndexes[0] as number
+    ];
+    return record === undefined
+      ? []
+      : [
+          {
+            sourceKey: association.sourceKey,
+            language: association.language,
+            content: record.content,
+          },
+        ];
+  });
   return {
-    subjects,
-    evidenceScope: subjects.map(({ key, language }) => ({
-      kind: "translation-unit",
-      key,
-      language,
-    })),
+    candidates,
     relationships: [],
     exceptions: domain === "catalog" ? [catalogException] : [],
     dependencies: { domain },
@@ -344,8 +357,7 @@ function mergeQualityRequests(
   requests: readonly QualityCheckRequest[],
 ): QualityCheckRequest {
   return {
-    subjects: requests.flatMap(({ subjects }) => subjects),
-    evidenceScope: requests.flatMap(({ evidenceScope }) => evidenceScope),
+    candidates: requests.flatMap(({ candidates }) => candidates),
     relationships: requests.flatMap(({ relationships }) =>
       relationships ?? [],
     ),
@@ -379,6 +391,10 @@ function createInputConfig(
     keyOf: (unit) => unit.context.domain + ":" + unit.context.nativeKey,
     translations: {
       languages: ["fr"],
+      contentOf: (translation) =>
+        translation.domain === "catalog"
+          ? translation.text
+          : translation.content.message,
       read: (language, sourceUnits) => ({
         scopes: modules.flatMap((module) => {
           const selected = sourceUnits.filter(
@@ -616,9 +632,9 @@ async function prepare() {
   assert.equal(aggregateQa.status, "complete");
   assert.equal(catalogQa.status, "complete");
   assert.equal(guideQa.status, "complete");
-  assert.equal(aggregateQa.subjects.length, 2);
+  assert.equal(aggregateQa.candidates.length, 2);
   assert.deepEqual(
-    aggregateQa.evidenceScope.map(({ key }) => key),
+    aggregateQa.candidates.map(({ sourceKey }) => sourceKey),
     ["catalog:save", "guide:save"],
   );
   assert.equal(
@@ -640,12 +656,11 @@ async function prepare() {
 
   const selectedRequest = {
     ...aggregateRequest,
-    subjects: catalogRequest.subjects,
-    evidenceScope: catalogRequest.evidenceScope,
+    candidates: catalogRequest.candidates,
   };
   const selectedQa = await runQualityChecks(facts, selectedRequest, aggregateChecks);
   const completion = await evaluateCompletion(facts, aggregateConfig.completion);
-  assert.equal(selectedQa.subjects.length, 1);
+  assert.equal(selectedQa.candidates.length, 1);
   assert.equal(completion.scope.obligationCount, 2);
   const catalogCompletion = await evaluateCompletion(
     catalogFacts,
@@ -702,11 +717,9 @@ async function prepare() {
 
   const crossRequest = {
     ...aggregateRequest,
-    subjects: [{ key: "catalog:save", language: "fr" }],
-    evidenceScope: [
-      { kind: "translation-unit", key: "catalog:save", language: "fr" },
-      { kind: "translation-unit", key: "guide:save", language: "fr" },
-    ],
+    candidates: aggregateRequest.candidates.filter(
+      ({ sourceKey }) => sourceKey === "catalog:save",
+    ),
     relationships: [
       {
         kind: "same-text",
@@ -729,19 +742,19 @@ async function prepare() {
   });
   assert.equal(crossDiagnostic.location.range, "composition/guide-fr.json");
   assert.equal(crossDiagnostic.evidence.length, 2);
-
-  const restrictedQa = await runQualityChecks(
-    facts,
-    { ...crossRequest, evidenceScope: [crossRequest.evidenceScope[0]] },
-    aggregateChecks,
-  );
-  assert.equal(
-    restrictedQa.checks.find(({ id }) => id === "cross-domain-same-text")?.status,
-    "incomplete",
-  );
-  assert.equal(
-    restrictedQa.diagnostics.some(({ ruleId }) => ruleId === "cross-domain-same-text"),
-    false,
+  assert.deepEqual(
+    crossQa.factCoverage.associations.find(
+      ({ sourceKey }) => sourceKey === "guide:save",
+    ),
+    {
+      sourceKey: "guide:save",
+      language: "fr",
+      status: "matched",
+      coverageStatus: "complete",
+      scopeIndexes: [1],
+      translationIndexes: [1],
+      candidateSelected: false,
+    },
   );
 
   const baselineResult = await advanceProcessingBaseline(
@@ -838,7 +851,7 @@ async function prepare() {
   assert.deepEqual(await planStore.load(), plan);
 
   process.stdout.write(
-    JSON.stringify({ status: "prepared", version: facts.version, subjects: aggregateQa.subjects.length }) + "\\n",
+    JSON.stringify({ status: "prepared", version: facts.version, candidateCount: aggregateQa.candidates.length }) + "\\n",
   );
 }
 
@@ -862,11 +875,9 @@ async function observe() {
     facts,
     {
       ...currentRequest,
-      subjects: [{ key: "catalog:save", language: "fr" }],
-      evidenceScope: [
-        { kind: "translation-unit", key: "catalog:save", language: "fr" },
-        { kind: "translation-unit", key: "guide:save", language: "fr" },
-      ],
+      candidates: currentRequest.candidates.filter(
+        ({ sourceKey }) => sourceKey === "catalog:save",
+      ),
       relationships: [
         {
           kind: "same-text",
@@ -991,10 +1002,10 @@ export async function verifyCompositionConsumer(
   const prepared = JSON.parse(host.stdout) as {
     readonly status: string;
     readonly version: string;
-    readonly subjects: number;
+    readonly candidateCount: number;
   };
   assert.equal(prepared.status, "prepared");
-  assert.equal(prepared.subjects, 2);
+  assert.equal(prepared.candidateCount, 2);
 
   const executable = path.join(
     consumerRoot,
@@ -1010,7 +1021,7 @@ export async function verifyCompositionConsumer(
   const initialResult = JSON.parse(initialQa.stdout).data as {
     readonly status: string;
     readonly version: string;
-    readonly subjects: readonly unknown[];
+    readonly candidates: readonly unknown[];
     readonly diagnostics: readonly {
       readonly ruleId: string;
       readonly handling: { readonly status: string };
@@ -1018,7 +1029,7 @@ export async function verifyCompositionConsumer(
   };
   assert.equal(initialResult.status, "complete");
   assert.equal(initialResult.version, prepared.version);
-  assert.equal(initialResult.subjects.length, 2);
+  assert.equal(initialResult.candidates.length, 2);
   assert.equal(
     initialResult.diagnostics.find(({ ruleId }) => ruleId === "catalog-format")
       ?.handling.status,

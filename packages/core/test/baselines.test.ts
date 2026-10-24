@@ -92,6 +92,7 @@ function makeScopedFacts(
           };
         },
         matches: (unit, translation) => unit.id === translation.id,
+        contentOf: () => null,
       },
     }),
   );
@@ -213,6 +214,7 @@ void describe("processing baselines", () => {
         languages: ["fr"],
         read: () => ({ scopes: [] }),
         matches: (unit, translation) => unit.id === translation.id,
+        contentOf: () => null,
       },
     });
     const planItem = plan.items.find(({ sourceKey }) => sourceKey === "A");
@@ -619,6 +621,7 @@ void describe("processing baselines", () => {
           languages: ["fr"],
           read: () => ({ scopes: [] }),
           matches: (unit, translation) => unit.id === translation.id,
+          contentOf: () => null,
         },
       },
     );

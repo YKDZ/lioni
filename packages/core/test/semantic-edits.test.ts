@@ -72,12 +72,12 @@ void describe("semantic edits", () => {
         matches: (unit, actualTranslation) =>
           unit.context.key === "toolbar.save" &&
           actualTranslation.text === "Enregistrer",
-      },
-      translationWriteback: {
-        targetContent: (actualTranslation) => ({
+        contentOf: (actualTranslation) => ({
           text: actualTranslation.text,
           state: actualTranslation.state,
         }),
+      },
+      translationWriteback: {
         locateExistingTarget: ({ sourceUnit }) => ({
           status: "located",
           locator: {
@@ -174,9 +174,9 @@ void describe("semantic edits", () => {
         },
         matches: (unit, translation) =>
           unit.context.line === translation.context.sourceLine,
+        contentOf: (translation) => translation.text,
       },
       translationWriteback: {
-        targetContent: (translation) => translation.text,
         locateExistingTarget({ translation }) {
           return {
             status: "located",
@@ -282,9 +282,9 @@ void describe("semantic edits", () => {
               unit.id === "source:A" && actualTranslation.id === "target:A"
             );
           },
+          contentOf: (actualTranslation) => actualTranslation.text,
         },
         translationWriteback: {
-          targetContent: (actualTranslation) => actualTranslation.text,
           locateExistingTarget({ sourceUnit, translation: actualTranslation }) {
             assert.strictEqual(sourceUnit.unit, source);
             assert.strictEqual(actualTranslation.translation, translation);
@@ -409,9 +409,9 @@ void describe("semantic edits", () => {
         },
         matches: (unit, translation) =>
           unit.context.line === translation.context.sourceLine,
+        contentOf: (translation) => translation.text,
       },
       translationWriteback: {
-        targetContent: (translation) => translation.text,
         locateExistingTarget: ({ translation }) => ({
           status: "located",
           locator: {
@@ -526,9 +526,9 @@ void describe("semantic edits", () => {
         },
         matches: (unit, translation) =>
           unit.context.line === translation.context.sourceLine,
+        contentOf: (translation) => translation.text,
       },
       translationWriteback: {
-        targetContent: (translation) => translation.text,
         locateExistingTarget: ({ translation }) => ({
           status: "located",
           locator: {
@@ -628,9 +628,9 @@ void describe("semantic edits", () => {
           };
         },
         matches: () => true,
+        contentOf: (translation) => translation.text,
       },
       translationWriteback: {
-        targetContent: (translation) => translation.text,
         locateExistingTarget: ({ translation }) => ({
           status: "located",
           locator: {

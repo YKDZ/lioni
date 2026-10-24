@@ -8,6 +8,7 @@ import type {
   QualityLocation,
   QualityObject,
   QualitySubject,
+  JsonValue,
 } from "@l10n/core";
 
 export type MessagePlaceholderCheckerOptions<
@@ -15,14 +16,14 @@ export type MessagePlaceholderCheckerOptions<
   TTranslation,
 > = {
   readonly sourceText: (unit: TUnit) => unknown;
-  readonly translationText: (translation: TTranslation) => unknown;
+  readonly translationText: (content: JsonValue) => unknown;
   readonly sourceLocation?: (
     unit: TUnit,
     subject: QualitySubject,
     defaultLocation: QualityLocation,
   ) => QualityLocation;
   readonly translationLocation?: (
-    translation: TTranslation,
+    translation: TTranslation | undefined,
     subject: QualitySubject,
     defaultLocation: QualityLocation,
   ) => QualityLocation;
@@ -50,18 +51,13 @@ export function createMessagePlaceholderChecker<
     id: "message-placeholders",
     configuration: options.configuration ?? {},
     check(input) {
-      const results = input.subjects.map((subject) =>
-        checkSubject(input, subject, options),
-      );
+      const result = checkCandidate(input, options);
       const counts = {
-        selected: input.subjects.length,
-        evaluated: results.filter(({ status }) => status === "complete").length,
-        notApplicable: results.filter(
-          ({ status }) => status === "not-applicable",
-        ).length,
-        incomplete: results.filter(({ status }) => status === "incomplete")
-          .length,
-        failed: results.filter(({ status }) => status === "failed").length,
+        selected: 1,
+        evaluated: result.status === "complete" ? 1 : 0,
+        notApplicable: result.status === "not-applicable" ? 1 : 0,
+        incomplete: result.status === "incomplete" ? 1 : 0,
+        failed: result.status === "failed" ? 1 : 0,
       };
       const status =
         counts.failed > 0
@@ -74,22 +70,23 @@ export function createMessagePlaceholderChecker<
 
       return {
         status,
-        diagnostics: results.flatMap(({ findings }) => findings),
-        issues: results.flatMap(({ issues }) => issues),
+        diagnostics: result.findings,
+        issues: result.issues,
         coverage: counts,
       };
     },
   };
 }
 
-function checkSubject<TUnit extends TranslationUnitInput, TTranslation>(
+function checkCandidate<TUnit extends TranslationUnitInput, TTranslation>(
   input: QualityCheckInput<TUnit, TTranslation>,
-  subject: QualitySubject,
   options: MessagePlaceholderCheckerOptions<TUnit, TTranslation>,
 ): SubjectResult {
-  const sourceUnit = input.facts.source.units.find(
-    ({ key }) => key === subject.key,
-  );
+  const subject: QualitySubject = {
+    key: input.candidate.sourceKey,
+    language: input.candidate.language,
+  };
+  const sourceUnit = input.sourceUnit ?? undefined;
   if (sourceUnit === undefined)
     return incomplete(
       "sourceUnavailable",
@@ -102,75 +99,22 @@ function checkSubject<TUnit extends TranslationUnitInput, TTranslation>(
     kind: "translation-unit",
     key: subject.key,
   };
-  if (!allowsEvidence(input, subject))
-    return incomplete(
-      "evidenceOutOfScope",
-      "检查所需的译文不在本次允许的证据范围内。",
-      subject,
-    );
-
-  const languageRead = input.facts.translations.reads.find(
-    ({ language }) => language === subject.language,
-  );
-  if (languageRead === undefined)
-    return notApplicable("languageNotRead", "该语言没有读取事实。", subject);
-
   const association = input.facts.associations.find(
     ({ sourceKey, language }) =>
       sourceKey === subject.key && language === subject.language,
   );
-  if (association === undefined)
-    return incomplete(
-      "associationUnavailable",
-      "没有该对象的源译关联事实。",
-      subject,
-    );
-  if (association.status === "missing")
-    return notApplicable(
-      "translationMissing",
-      "没有可检查的实际译文。",
-      subject,
-    );
-  if (association.status === "unknown")
-    return incomplete(
-      "associationUnknown",
-      "读取证据不足，无法确定实际译文。",
-      subject,
-    );
-  if (association.status === "conflict")
-    return incomplete(
-      "translationConflict",
-      "多个实际译文匹配该检查对象。",
-      subject,
-    );
-  if (association.status === "unavailable")
-    return incomplete(
-      "translationUnavailable",
-      "实际译文正文不可用。",
-      subject,
-    );
-
-  const translationIndex = association.translationIndexes[0];
-  const record = input.facts.translations.records.find(
-    ({ index }) => index === translationIndex,
-  );
-  if (record === undefined)
-    return failed(
-      "translationFactMissing",
-      "关联事实指向不存在的译文记录。",
-      subject,
-    );
-  if (record.bodyAvailability !== "available")
-    return incomplete(
-      "translationUnavailable",
-      "实际译文正文不可用。",
-      subject,
-    );
+  const record =
+    association?.status === "matched" &&
+    association.translationIndexes.length === 1
+      ? input.facts.translations.records.find(
+          ({ index }) => index === association.translationIndexes[0],
+        )
+      : undefined;
   if (sourceUnit.bodyAvailability !== "available")
     return incomplete("sourceUnavailable", "原文正文不可用。", subject);
 
   const sourceValue = options.sourceText(sourceUnit.unit);
-  const targetValue = options.translationText(record.translation);
+  const targetValue = options.translationText(input.candidate.content);
   if (typeof sourceValue !== "string")
     return incomplete(
       "sourceMessageUnavailable",
@@ -190,14 +134,15 @@ function checkSubject<TUnit extends TranslationUnitInput, TTranslation>(
   };
   const defaultTargetLocation: QualityLocation = {
     language: subject.language,
-    range: record.range,
+    range: record?.range ?? null,
+    key: subject.key,
   };
   const sourceLocation =
     options.sourceLocation?.(sourceUnit.unit, subject, defaultSourceLocation) ??
     defaultSourceLocation;
   const targetLocation =
     options.translationLocation?.(
-      record.translation,
+      record?.translation,
       subject,
       defaultTargetLocation,
     ) ?? defaultTargetLocation;
@@ -211,7 +156,7 @@ function checkSubject<TUnit extends TranslationUnitInput, TTranslation>(
     role: "target",
     object: targetObject,
     location: targetLocation,
-    value: targetValue,
+    value: input.candidate.content,
   };
 
   const parsedSource = parseMessage(sourceValue);
@@ -354,18 +299,6 @@ function placeholderCounts(branches: readonly string[]): Map<string, number[]> {
   );
 }
 
-function allowsEvidence<TUnit extends TranslationUnitInput, TTranslation>(
-  input: QualityCheckInput<TUnit, TTranslation>,
-  subject: QualitySubject,
-): boolean {
-  return input.evidenceScope.some(
-    ({ kind, key, language }) =>
-      kind === "translation-unit" &&
-      key === subject.key &&
-      (language === undefined || language === subject.language),
-  );
-}
-
 function translationObject(subject: QualitySubject): QualityObject {
   return {
     kind: "translation-unit",
@@ -381,30 +314,6 @@ function incomplete(
 ): SubjectResult {
   return {
     status: "incomplete",
-    findings: [],
-    issues: [issue(code, message, subject)],
-  };
-}
-
-function notApplicable(
-  code: string,
-  message: string,
-  subject: QualitySubject,
-): SubjectResult {
-  return {
-    status: "not-applicable",
-    findings: [],
-    issues: [issue(code, message, subject)],
-  };
-}
-
-function failed(
-  code: string,
-  message: string,
-  subject: QualitySubject,
-): SubjectResult {
-  return {
-    status: "failed",
     findings: [],
     issues: [issue(code, message, subject)],
   };

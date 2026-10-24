@@ -1,5 +1,6 @@
 import type {
   Awaitable,
+  JsonValue,
   QualityCheckDefinition,
   QualityCheckInput,
   QualityEvidence,
@@ -17,7 +18,8 @@ export type RelationshipMemberEvidence<
 > = {
   readonly subject: QualitySubject;
   readonly sourceUnit: SourceUnitFact<TUnit>;
-  readonly translation: TTranslation;
+  readonly content: JsonValue;
+  readonly translation?: TTranslation;
   readonly sourceLocation: QualityLocation;
   readonly translationLocation: QualityLocation;
 };
@@ -48,7 +50,7 @@ export type RelationshipCheckerOptions<
   readonly relationshipKind: string;
   readonly configuration: TConfiguration;
   readonly translationLocation?: (
-    translation: TTranslation,
+    translation: TTranslation | undefined,
     subject: QualitySubject,
     defaultLocation: QualityLocation,
   ) => QualityLocation;
@@ -85,12 +87,15 @@ export function createRelationshipChecker<
     id: options.id,
     configuration: options.configuration,
     async check(input) {
-      const subjects = input.subjects;
+      const candidateSubject = {
+        key: input.candidate.sourceKey,
+        language: input.candidate.language,
+      };
       const relationships = (input.relationships ?? []).filter(
         (relationship) =>
           relationship.kind === options.relationshipKind &&
           relationship.members.some((member) =>
-            subjects.some((subject) => sameSubject(member, subject)),
+            sameSubject(member, candidateSubject),
           ),
       );
       const results: RelationshipResult[] = [];
@@ -181,7 +186,7 @@ async function resolveMembers<TUnit extends TranslationUnitInput, TTranslation>(
   input: QualityCheckInput<TUnit, TTranslation>,
   relationship: QualityRelationship,
   translationLocation?: (
-    translation: TTranslation,
+    translation: TTranslation | undefined,
     subject: QualitySubject,
     defaultLocation: QualityLocation,
   ) => QualityLocation,
@@ -197,17 +202,6 @@ async function resolveMembers<TUnit extends TranslationUnitInput, TTranslation>(
   const object = relationshipObject(relationship);
   const members: RelationshipMemberEvidence<TUnit, TTranslation>[] = [];
   for (const subject of relationship.members) {
-    if (!allowsEvidence(input, subject))
-      return {
-        status: "incomplete",
-        findings: [],
-        issue: {
-          code: "relationshipEvidenceOutOfScope",
-          message: "证据范围未包含关系的全部成员。",
-          object,
-        },
-      };
-
     const sourceUnit = input.facts.source.units.find(
       ({ key }) => key === subject.key,
     );
@@ -243,6 +237,35 @@ async function resolveMembers<TUnit extends TranslationUnitInput, TTranslation>(
           object,
         },
       };
+
+    const isCandidate =
+      subject.key === input.candidate.sourceKey &&
+      subject.language === input.candidate.language;
+    if (isCandidate) {
+      const record = matchedRecord(input, subject);
+      const defaultLocation: QualityLocation = {
+        language: subject.language,
+        range: record?.range ?? null,
+        key: subject.key,
+      };
+      members.push({
+        subject,
+        sourceUnit,
+        content: input.candidate.content,
+        ...(record === undefined ? {} : { translation: record.translation }),
+        sourceLocation: {
+          language: null,
+          range: input.facts.source.read.scopes[sourceUnit.scopeIndex]?.range,
+        },
+        translationLocation:
+          translationLocation?.(
+            record?.translation,
+            subject,
+            defaultLocation,
+          ) ?? defaultLocation,
+      });
+      continue;
+    }
 
     const languageRead = input.facts.translations.reads.find(
       ({ language }) => language === subject.language,
@@ -345,6 +368,7 @@ async function resolveMembers<TUnit extends TranslationUnitInput, TTranslation>(
     members.push({
       subject,
       sourceUnit,
+      content: translation.content,
       translation: translation.translation,
       sourceLocation: {
         language: null,
@@ -361,15 +385,21 @@ async function resolveMembers<TUnit extends TranslationUnitInput, TTranslation>(
   return { members };
 }
 
-function allowsEvidence<TUnit extends TranslationUnitInput, TTranslation>(
+function matchedRecord<TUnit extends TranslationUnitInput, TTranslation>(
   input: QualityCheckInput<TUnit, TTranslation>,
   subject: QualitySubject,
-): boolean {
-  return input.evidenceScope.some(
-    ({ kind, key, language }) =>
-      kind === "translation-unit" &&
-      key === subject.key &&
-      (language === undefined || language === subject.language),
+): (typeof input.facts.translations.records)[number] | undefined {
+  const association = input.facts.associations.find(
+    ({ sourceKey, language }) =>
+      sourceKey === subject.key && language === subject.language,
+  );
+  if (
+    association?.status !== "matched" ||
+    association.translationIndexes.length !== 1
+  )
+    return undefined;
+  return input.facts.translations.records.find(
+    ({ index }) => index === association.translationIndexes[0],
   );
 }
 
@@ -398,6 +428,6 @@ function targetEvidence<TUnit extends TranslationUnitInput, TTranslation>(
       language: member.subject.language,
     },
     location: member.translationLocation,
-    value: member.translation,
+    value: member.content,
   };
 }

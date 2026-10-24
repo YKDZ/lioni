@@ -21,7 +21,7 @@ type Unit = TranslationUnitInput & {
 type Translation = { readonly id: string; readonly text: string };
 
 void describe("relationship quality checks", () => {
-  void it("checks selected members with allowed evidence and refreshes unselected evidence", async () => {
+  void it("checks one candidate against full adapter context and refreshes it after reads", async () => {
     let translations: readonly {
       readonly value: Translation;
       readonly bodyAvailability: "available" | "unavailable";
@@ -71,6 +71,7 @@ void describe("relationship quality checks", () => {
           ],
         }),
         matches: (unit, translation) => unit.id === translation.id,
+        contentOf: ({ text }) => ({ text }),
       },
     });
     const relationship = {
@@ -91,13 +92,12 @@ void describe("relationship quality checks", () => {
       id: "same-target-text",
       relationshipKind: "same-target-text",
       configuration: { constraint: "target text is equal" },
-      translationLocation: (translation, _subject, range) => ({
-        ...range,
-        key: translation.id,
-      }),
+      translationLocation: (translation, _subject, range) =>
+        translation === undefined ? range : { ...range, key: translation.id },
       evaluate: ({ members }) => {
-        return new Set(members.map(({ translation }) => translation.text))
-          .size > 1
+        return new Set(
+          members.map(({ content }) => (content as { text: string }).text),
+        ).size > 1
           ? {
               severity: "error",
               message: "关系成员应使用相同译文。",
@@ -106,10 +106,12 @@ void describe("relationship quality checks", () => {
       },
     });
     const request: QualityCheckRequest = {
-      subjects: [{ key: "sha256:A", language: "fr" }],
-      evidenceScope: [
-        { kind: "translation-unit", key: "sha256:A", language: "fr" },
-        { kind: "translation-unit", key: "sha256:B", language: "fr" },
+      candidates: [
+        {
+          sourceKey: "sha256:A",
+          language: "fr",
+          content: { text: "Save" },
+        },
       ],
       relationships: [relationship],
       dependencies: {},
@@ -160,7 +162,7 @@ void describe("relationship quality checks", () => {
                 range: "locales/fr.json",
                 key: "B",
               },
-              value: { id: "B", text: "Enregistrer" },
+              value: { text: "Enregistrer" },
             },
             {
               role: "related",
@@ -174,38 +176,14 @@ void describe("relationship quality checks", () => {
                 range: "locales/fr.json",
                 key: "A",
               },
-              value: { id: "A", text: "Save" },
+              value: { text: "Save" },
             },
           ],
         },
       ],
     );
-    assert.deepEqual(first.subjects, [{ key: "sha256:A", language: "fr" }]);
+    assert.deepEqual(first.candidates, request.candidates);
     assert.deepEqual(first.relationships, [relationship]);
-
-    const restricted = await runQualityChecks(
-      firstFacts,
-      {
-        ...request,
-        evidenceScope: [
-          { kind: "translation-unit", key: "sha256:A", language: "fr" },
-        ],
-      },
-      [checker],
-    );
-    assert.equal(restricted.status, "incomplete");
-    assert.deepEqual(restricted.diagnostics, []);
-    assert.equal(
-      restricted.checks[0]?.issues[0]?.code,
-      "relationshipEvidenceOutOfScope",
-    );
-    assert.deepEqual(restricted.checks[0]?.coverage, {
-      selected: 1,
-      evaluated: 0,
-      notApplicable: 0,
-      incomplete: 1,
-      failed: 0,
-    });
 
     translations = [
       { value: { id: "A", text: "Save" }, bodyAvailability: "available" },
@@ -248,7 +226,19 @@ void describe("relationship quality checks", () => {
       },
     ];
     const updatedFacts = await readFacts(config);
-    const updated = await runQualityChecks(updatedFacts, request, [checker]);
+    const updated = await runQualityChecks(
+      updatedFacts,
+      {
+        ...request,
+        candidates: [
+          {
+            ...request.candidates[0]!,
+            content: { text: "Enregistrer" },
+          },
+        ],
+      },
+      [checker],
+    );
 
     assert.notEqual(updated.version, first.version);
     assert.equal(updated.status, "complete");
@@ -298,17 +288,13 @@ void describe("relationship quality checks", () => {
           ],
         }),
         matches: (unit, translation) => unit.id === translation.id,
+        contentOf: ({ text }) => text,
       },
     });
     const facts = await readFacts(config);
     const originalFacts = structuredClone(facts);
     const request: QualityCheckRequest = {
-      subjects: [{ key: "A", language: "fr" }],
-      evidenceScope: ["A", "B", "C"].map((key) => ({
-        kind: "translation-unit",
-        key,
-        language: "fr",
-      })),
+      candidates: [{ sourceKey: "A", language: "fr", content: "Bonjour" }],
       relationships: [
         {
           kind: "same-target-text",
@@ -345,7 +331,7 @@ void describe("relationship quality checks", () => {
     };
     const messageChecker = createMessagePlaceholderChecker<Unit, Translation>({
       sourceText: (unit) => unit.source,
-      translationText: (translation) => translation.text,
+      translationText: (content) => content,
     });
     const relationshipChecker = createRelationshipChecker<
       Unit,
@@ -355,12 +341,10 @@ void describe("relationship quality checks", () => {
       id: "same-target-text",
       relationshipKind: "same-target-text",
       configuration: { constraint: "target text is equal" },
-      translationLocation: (translation, _subject, range) => ({
-        ...range,
-        key: translation.id,
-      }),
+      translationLocation: (translation, _subject, range) =>
+        translation === undefined ? range : { ...range, key: translation.id },
       evaluate: ({ members }) =>
-        new Set(members.map(({ translation }) => translation.text)).size > 1
+        new Set(members.map(({ content }) => content)).size > 1
           ? { severity: "error", message: "关系成员应使用相同译文。" }
           : undefined,
     });
@@ -472,6 +456,7 @@ void describe("relationship quality checks", () => {
           ],
         }),
         matches: (unit, translation) => unit.id === translation.sourceId,
+        contentOf: ({ text }) => text,
       },
     });
     const checker = createRelationshipChecker<
@@ -488,11 +473,14 @@ void describe("relationship quality checks", () => {
         constraint: "target text is equal",
         observedTarget: targets[0] as LocatedTranslation,
       },
-      translationLocation: (translation, _subject, defaultLocation) => ({
-        ...defaultLocation,
-        key: hostMetadata.get(translation) ?? "unlocated",
-        position: translation.position,
-      }),
+      translationLocation: (translation, _subject, defaultLocation) =>
+        translation === undefined
+          ? defaultLocation
+          : {
+              ...defaultLocation,
+              key: hostMetadata.get(translation) ?? "unlocated",
+              position: translation.position,
+            },
       evaluate: ({ members, configuration }) => {
         const first = members[0]?.translation;
         const second = members[1]?.translation;
@@ -513,12 +501,7 @@ void describe("relationship quality checks", () => {
       },
     });
     const request: QualityCheckRequest = {
-      subjects: [{ key: "A", language: "fr" }],
-      evidenceScope: ["A", "B"].map((key) => ({
-        kind: "translation-unit",
-        key,
-        language: "fr",
-      })),
+      candidates: [{ sourceKey: "A", language: "fr", content: "Old A" }],
       relationships: [
         {
           kind: "same-target-text",
@@ -547,13 +530,7 @@ void describe("relationship quality checks", () => {
         position: { line: 18 },
       },
     });
-    assert.deepEqual(oldRun.diagnostics[0]?.evidence[0]?.value, {
-      id: "a",
-      sourceId: "A",
-      nativeKey: "save_label",
-      text: "Old A",
-      position: { line: 18 },
-    });
+    assert.equal(oldRun.diagnostics[0]?.evidence[0]?.value, "Old A");
     assert.deepEqual(oldRun.diagnostics[0]?.location, {
       language: "fr",
       range: "locales/fr.json",
@@ -592,13 +569,7 @@ void describe("relationship quality checks", () => {
             position: { line: 18 },
           },
         },
-        value: {
-          id: "a",
-          sourceId: "A",
-          nativeKey: "save_label",
-          text: "Old A",
-          position: { line: 18 },
-        },
+        value: "Old A",
         location: {
           language: "fr",
           range: "locales/fr.json",
@@ -609,7 +580,14 @@ void describe("relationship quality checks", () => {
     );
 
     const newFacts = await readFacts(config);
-    const newRun = await runQualityChecks(newFacts, request, [checker]);
+    const newRun = await runQualityChecks(
+      newFacts,
+      {
+        ...request,
+        candidates: [{ ...request.candidates[0]!, content: "New A" }],
+      },
+      [checker],
+    );
 
     assert.notEqual(newRun.version, oldRun.version);
     assert.equal(
@@ -634,7 +612,7 @@ void describe("relationship quality checks", () => {
     assert.ok(updatedDiagnostic);
     const updatedEvidence = updatedDiagnostic.evidence[0];
     assert.ok(updatedEvidence);
-    assert.equal((updatedEvidence.value as LocatedTranslation).text, "New A");
+    assert.equal(updatedEvidence.value, "New A");
     assert.equal(
       (newRun.diagnostics[0]?.location.position as { line: number } | undefined)
         ?.line,
