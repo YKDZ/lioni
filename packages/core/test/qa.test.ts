@@ -7,6 +7,10 @@ import {
   runQualityChecks,
   type QualityCheckRequest,
 } from "../src/index.ts";
+import {
+  emptySourceSchema,
+  sourceSchemaFromExamples,
+} from "./source-schema.ts";
 
 void describe("quality checks", () => {
   void it("runs selected checks against one facts snapshot and retains findings", async () => {
@@ -15,6 +19,7 @@ void describe("quality checks", () => {
     const facts = await readFacts(
       defineConfig({
         source: {
+          schema: sourceSchemaFromExamples(unit),
           read: () => ({
             scopes: [
               {
@@ -179,6 +184,7 @@ void describe("quality checks", () => {
     const facts = await readFacts(
       defineConfig({
         source: {
+          schema: emptySourceSchema,
           read: () => ({ scopes: [] }),
         },
         keyOf: () => "unused",
@@ -251,7 +257,7 @@ void describe("quality checks", () => {
   void it("calls each configured checker once for each candidate", async () => {
     const facts = await readFacts(
       defineConfig({
-        source: { read: () => ({ scopes: [] }) },
+        source: { schema: emptySourceSchema, read: () => ({ scopes: [] }) },
         keyOf: () => "unused",
       }),
     );
@@ -301,7 +307,7 @@ void describe("quality checks", () => {
   void it("marks a thrown checker failed without losing the run binding", async () => {
     const facts = await readFacts(
       defineConfig({
-        source: { read: () => ({ scopes: [] }) },
+        source: { schema: emptySourceSchema, read: () => ({ scopes: [] }) },
         keyOf: () => "unused",
       }),
     );
@@ -335,6 +341,7 @@ void describe("quality checks", () => {
     const facts = await readFacts(
       defineConfig({
         source: {
+          schema: sourceSchemaFromExamples({ source: "A" }),
           read: () => ({
             scopes: [
               {

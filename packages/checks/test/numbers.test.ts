@@ -6,12 +6,25 @@ import {
   defineConfig,
   type BodyAvailability,
   type JsonValue,
+  type StandardSchemaV1,
 } from "@lioni/core";
 
 import { createNumberChecker } from "../src/index.ts";
 
 type Unit = { readonly source: JsonValue; readonly identity: string };
 type Translation = { readonly text: JsonValue; readonly nativeKey: string };
+
+const sourceSchema: StandardSchemaV1<Unit, Unit> = {
+  "~standard": {
+    version: 1,
+    vendor: "lioni-number-check-test",
+    validate(value) {
+      return isUnit(value)
+        ? { value }
+        : { issues: [{ message: "原文单元结构不匹配。" }] };
+    },
+  },
+};
 
 function configFor(
   source: JsonValue | undefined,
@@ -20,6 +33,7 @@ function configFor(
 ) {
   return defineConfig<Unit, Translation>({
     source: {
+      schema: sourceSchema,
       read: () => ({
         scopes: [
           {
@@ -73,6 +87,33 @@ function configFor(
       }),
     ],
   });
+}
+
+function isJsonValue(
+  value: unknown,
+  active = new Set<object>(),
+): value is JsonValue {
+  if (value === null || typeof value === "string" || typeof value === "boolean")
+    return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value !== "object" || active.has(value)) return false;
+  active.add(value);
+  const valid = Array.isArray(value)
+    ? value.every((entry) => isJsonValue(entry, active))
+    : Object.values(value).every((entry) => isJsonValue(entry, active));
+  active.delete(value);
+  return valid;
+}
+
+function isUnit(value: unknown): value is Unit {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return false;
+  const unit = value as Record<string, unknown>;
+  return (
+    Object.hasOwn(unit, "source") &&
+    typeof unit.identity === "string" &&
+    isJsonValue(unit.source)
+  );
 }
 
 async function check(source: string, target: string) {

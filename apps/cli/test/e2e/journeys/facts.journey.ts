@@ -12,6 +12,15 @@ const journey: CliJourney = {
       path.join(workDir, "lioni.config.ts"),
       `export default {
   source: {
+    schema: { "~standard": { version: 1, vendor: "facts-journey", validate(value) {
+      const context = value?.context;
+      return typeof value === "object" && value !== null && !Array.isArray(value) &&
+        typeof value.source === "string" && typeof context === "object" && context !== null &&
+        typeof context.file === "string" && typeof context.line === "number" &&
+        typeof context.screenshot === "string"
+        ? { value }
+        : { issues: [{ message: "原文单元结构不匹配。" }] };
+    } } },
     read: () => ({ scopes: [{
       range: "src/messages.ts",
       enumeration: "complete",
@@ -54,6 +63,14 @@ const journey: CliJourney = {
       path.join(workDir, "duplicate.config.ts"),
       `export default {
   source: {
+    schema: { "~standard": { version: 1, vendor: "facts-journey", validate(value) {
+      const context = value?.context;
+      return typeof value === "object" && value !== null && !Array.isArray(value) &&
+        typeof value.source === "string" && typeof context === "object" && context !== null &&
+        typeof context.file === "string" && typeof context.line === "number"
+        ? { value }
+        : { issues: [{ message: "原文单元结构不匹配。" }] };
+    } } },
     read: () => ({ scopes: [{
       range: "src/messages.ts",
       enumeration: "complete",

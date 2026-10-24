@@ -8,6 +8,7 @@ import {
   prepareQualityConditionedSemanticEdit,
   type QualityCheckInput,
 } from "../src/index.ts";
+import { sourceSchemaFromExamples } from "./source-schema.ts";
 
 type Unit = {
   readonly id: string;
@@ -24,6 +25,7 @@ function diagnosedEditScenario() {
   let requestVersion = "v1";
   const config = defineConfig<Unit, Translation>({
     source: {
+      schema: sourceSchemaFromExamples<Unit>({ id: "save", source: "Save" }),
       read: () => ({
         scopes: [
           {
@@ -127,6 +129,10 @@ void describe("configured analysis workflow", () => {
     const observed: unknown[] = [];
     const config = defineConfig<Unit, Translation>({
       source: {
+        schema: sourceSchemaFromExamples<Unit>(
+          { id: "save", source: "Save" },
+          { id: "cancel", source: "Cancel" },
+        ),
         read: () => ({
           scopes: [
             {
@@ -247,6 +253,12 @@ void describe("configured analysis workflow", () => {
     let unavailableContentRead = false;
     const config = defineConfig<Unit, Translation>({
       source: {
+        schema: sourceSchemaFromExamples<Unit>(
+          { id: "missing", source: "missing" },
+          { id: "unavailable", source: "unavailable" },
+          { id: "conflict", source: "conflict" },
+          { id: "unknown", source: "unknown" },
+        ),
         read: () => ({
           scopes: [
             {
@@ -408,6 +420,7 @@ void describe("configured analysis workflow", () => {
     let observed: QualityCheckInput<Unit, Translation> | undefined;
     const config = defineConfig<Unit, Translation>({
       source: {
+        schema: sourceSchemaFromExamples<Unit>({ id: "save", source: "Save" }),
         read: () => ({
           scopes: [
             {
@@ -489,6 +502,10 @@ void describe("configured analysis workflow", () => {
     }[] = [];
     const config = defineConfig<Unit, Translation>({
       source: {
+        schema: sourceSchemaFromExamples<Unit>({
+          id: "unused",
+          source: "unused",
+        }),
         read: () => ({ scopes: [] }),
       },
       keyOf: ({ id }) => id,
@@ -513,7 +530,13 @@ void describe("configured analysis workflow", () => {
     assert.equal(result.status, "not-run");
 
     const invalidConfig = defineConfig<Unit, Translation>({
-      source: { read: () => ({ scopes: [] }) },
+      source: {
+        schema: sourceSchemaFromExamples<Unit>({
+          id: "unused",
+          source: "unused",
+        }),
+        read: () => ({ scopes: [] }),
+      },
       keyOf: ({ id }) => id,
       qualityChecks: "invalid" as unknown as readonly [],
     });
@@ -523,7 +546,13 @@ void describe("configured analysis workflow", () => {
     });
 
     const invalidSourceConfig = defineConfig<Unit, Translation>({
-      source: { read: "invalid" as never },
+      source: {
+        schema: sourceSchemaFromExamples<Unit>({
+          id: "unused",
+          source: "unused",
+        }),
+        read: "invalid" as never,
+      },
       keyOf: ({ id }) => id,
     });
     await assert.rejects(analyzeQuality(invalidSourceConfig), {
@@ -532,7 +561,13 @@ void describe("configured analysis workflow", () => {
     });
 
     const invalidRequestConfig = defineConfig<Unit, Translation>({
-      source: { read: () => ({ scopes: [] }) },
+      source: {
+        schema: sourceSchemaFromExamples<Unit>({
+          id: "unused",
+          source: "unused",
+        }),
+        read: () => ({ scopes: [] }),
+      },
       keyOf: ({ id }) => id,
       createQualityRequest: "invalid" as never,
     });
