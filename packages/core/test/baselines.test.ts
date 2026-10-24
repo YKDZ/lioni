@@ -208,7 +208,7 @@ void describe("processing baselines", () => {
     assert.equal(advanceAttempt.selections[0]?.outcome, "unknown");
     assert.strictEqual(store.baseline, baselineBefore);
 
-    const plan = createUpdatePlan(targetUnavailable, store.baseline, {
+    const plan = await createUpdatePlan(targetUnavailable, store.baseline, {
       translations: {
         languages: ["fr"],
         read: () => ({ scopes: [] }),
@@ -219,8 +219,9 @@ void describe("processing baselines", () => {
     assert.equal(planItem?.change, "source-removed");
     assert.equal(planItem?.expectedInput?.association.status, "unknown");
     assert.equal(planItem?.expectedInput?.association.coverageStatus, "failed");
-    assert.equal(planItem?.recommendation.action, "retain");
-    assert.equal(planItem?.executable, false);
+    assert.equal(planItem?.decision.action, "retain");
+    assert.equal(planItem?.status, "blocked");
+    assert.equal(planItem?.blocker?.code, "translationCoverageIncomplete");
   });
 
   void it("keeps an unselected item old and distinguishes it from a later addition", async () => {
@@ -610,7 +611,7 @@ void describe("processing baselines", () => {
       "incomplete",
     );
 
-    const partialTargetPlan = createUpdatePlan(
+    const partialTargetPlan = await createUpdatePlan(
       oldTargetPartial,
       store.baseline,
       {
@@ -625,7 +626,11 @@ void describe("processing baselines", () => {
       ({ sourceKey }) => sourceKey === "A",
     );
     assert.equal(partialTargetItem?.change, "source-removed");
-    assert.equal(partialTargetItem?.executable, false);
+    assert.equal(partialTargetItem?.status, "blocked");
+    assert.equal(
+      partialTargetItem?.blocker?.code,
+      "translationCoverageIncomplete",
+    );
 
     const partialHistory = await makeScopedFacts(
       [

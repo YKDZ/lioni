@@ -56,7 +56,7 @@ import {
   type QualityCheckRequest,
   type QualityException,
   type UpdatePolicyInput,
-  type UpdateRecommendation,
+  type UpdateDecision,
 } from "@l10n/core";
 import {
   createMessagePlaceholderChecker,
@@ -115,7 +115,7 @@ type EntryModule = {
   ) => CompletionResolution;
   readonly updatePolicy: (
     input: UpdatePolicyInput<Unit, Translation>,
-  ) => UpdateRecommendation;
+  ) => UpdateDecision;
 };
 
 function readJson(file: string): unknown {
@@ -507,11 +507,12 @@ function planItemProjection(item) {
     ...(item.expectedInput === undefined
       ? {}
       : { expectedInput: item.expectedInput }),
-    recommendation: item.recommendation,
-    executable: item.executable,
-    ...(item.blockedReason === undefined
+    decision: item.decision,
+    status: item.status,
+    ...(item.blocker === undefined
       ? {}
-      : { blockedReason: item.blockedReason }),
+      : { blocker: item.blocker }),
+    ...(item.edit === undefined ? {} : { edit: item.edit }),
   };
 }
 
@@ -761,13 +762,15 @@ async function prepare() {
   await runQualityChecks(facts, { ...aggregateRequest, exceptions: [] }, aggregateChecks);
   assert.deepEqual(await baselineStore.load(), baselineBeforeQa);
 
-  const plan = createUpdatePlan(facts, baseline, aggregateConfig);
+  const plan = await createUpdatePlan(facts, baseline, aggregateConfig);
   const catalogItem = planItem(plan, "catalog:save");
   const guideItem = planItem(plan, "guide:save");
   assert.equal(catalogItem.processed, true);
-  assert.equal(catalogItem.recommendation.action, "none");
+  assert.equal(catalogItem.decision.action, "none");
+  assert.equal(catalogItem.status, "notProcessed");
   assert.equal(guideItem.processed, false);
-  assert.equal(guideItem.recommendation.action, "review");
+  assert.equal(guideItem.decision.action, "review");
+  assert.equal(guideItem.status, "review");
 
   const localBaselineResult = await advanceProcessingBaseline(
     localBaselineStore,
@@ -782,7 +785,11 @@ async function prepare() {
     baselineEntryProjection(localBaseline.entries[0]),
     baselineEntryProjection(catalogBaseline),
   );
-  const localPlan = createUpdatePlan(catalogFacts, localBaseline, catalogConfig);
+  const localPlan = await createUpdatePlan(
+    catalogFacts,
+    localBaseline,
+    catalogConfig,
+  );
   assert.deepEqual(
     planItemProjection(localPlan.items[0]),
     planItemProjection(catalogItem),
@@ -813,12 +820,12 @@ async function prepare() {
     baselineEntryProjection(localGuideBaseline.entries[0]),
     baselineEntryProjection(aggregateGuideBaselineEntry),
   );
-  const aggregateGuidePlan = createUpdatePlan(
+  const aggregateGuidePlan = await createUpdatePlan(
     facts,
     guideAggregateBaseline,
     aggregateConfig,
   );
-  const localGuidePlan = createUpdatePlan(
+  const localGuidePlan = await createUpdatePlan(
     guideFacts,
     localGuideBaseline,
     guideConfig,
@@ -843,11 +850,12 @@ async function observe() {
   const facts = await readFacts(aggregateConfig);
   const baseline = await baselineStore.load();
   assert.ok(baseline);
-  const currentPlan = createUpdatePlan(facts, baseline, aggregateConfig);
+  const currentPlan = await createUpdatePlan(facts, baseline, aggregateConfig);
   const currentGuide = planItem(currentPlan, "guide:save");
   assert.equal(currentGuide.change, "changed");
   assert.equal(currentGuide.processed, false);
-  assert.equal(currentGuide.recommendation.action, "review");
+  assert.equal(currentGuide.decision.action, "review");
+  assert.equal(currentGuide.status, "review");
   assert.equal(currentGuide.expectedInput?.association.translations[0]?.translation.content.message, "Sauver");
   const currentRequest = await aggregateConfig.createQualityRequest(facts);
   const currentRelationshipQa = await runQualityChecks(

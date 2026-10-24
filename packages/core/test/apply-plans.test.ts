@@ -1,39 +1,47 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, it } from "node:test";
 
 import {
   advanceProcessingBaseline,
   applyUpdatePlan,
-  compareProcessingBaseline,
   createUpdatePlan,
   defineConfig,
   readFacts,
   type FrameworkConfig,
   type ProcessingBaseline,
   type ProcessingBaselineStore,
+  type UpdatePolicy,
 } from "../src/index.ts";
+import { createFileUpdatePlanStore } from "../src/node.ts";
 
-type Unit = {
-  readonly id: string;
-  readonly source: string;
-  readonly context?: { readonly screenshot?: string; readonly note?: string };
-};
-type Translation = {
-  readonly id: string;
-  text: string;
-  readonly members?: readonly string[];
-  readonly context?: { readonly label?: string };
-};
+type Unit = { readonly id: string; readonly source: string };
+type Translation = { readonly id: string; text: string };
+
+class MemoryBaselineStore implements ProcessingBaselineStore {
+  baseline: ProcessingBaseline | undefined;
+  failSaves = false;
+
+  async load(): Promise<ProcessingBaseline | undefined> {
+    return structuredClone(this.baseline);
+  }
+
+  async save(baseline: ProcessingBaseline): Promise<void> {
+    if (this.failSaves) throw new Error("基线存储暂不可用。");
+    this.baseline = structuredClone(baseline);
+  }
+}
 
 function makeConfig(
   units: readonly Unit[],
   translations: readonly Translation[],
   options: {
-    readonly updatePolicy?: FrameworkConfig<Unit, Translation>["updatePolicy"];
-    readonly translationWriteback?: FrameworkConfig<
-      Unit,
-      Translation
-    >["translationWriteback"];
+    readonly updatePolicy?: UpdatePolicy<Unit, Translation>;
+    readonly failWriteFor?: string;
+    readonly ignoreWriteFor?: string;
+    readonly withWriteback?: boolean;
   } = {},
 ): FrameworkConfig<Unit, Translation> {
   return defineConfig({
@@ -72,75 +80,244 @@ function makeConfig(
     ...(options.updatePolicy === undefined
       ? {}
       : { updatePolicy: options.updatePolicy }),
-    ...(options.translationWriteback === undefined
-      ? {}
-      : { translationWriteback: options.translationWriteback }),
+    ...(options.withWriteback
+      ? {
+          translationWriteback: {
+            targetContent: (translation) => translation.text,
+            locateExistingTarget: ({ translation }) => ({
+              status: "located" as const,
+              locator: { id: translation.translation.id },
+            }),
+            locateNewTarget: ({ sourceUnit }) => ({
+              status: "located" as const,
+              locator: { id: sourceUnit.key },
+            }),
+            write({ edit, currentTranslation }) {
+              if (
+                currentTranslation === undefined ||
+                typeof edit.content !== "string"
+              )
+                throw new TypeError("需要现有译文和字符串候选。");
+              if (edit.sourceKey === options.failWriteFor)
+                throw new Error("目标资源不可写。");
+              if (edit.sourceKey === options.ignoreWriteFor) return;
+              currentTranslation.translation.text = edit.content;
+            },
+          },
+        }
+      : {}),
   });
 }
 
-function makeEditableConfig(
-  unit: Unit,
-  translation: Translation,
-  options: {
-    readonly candidate: string | ((sourceUnit: Unit | undefined) => string);
-    readonly screenshotDependency?: boolean;
-  },
-): FrameworkConfig<Unit, Translation> {
-  return makeConfig([unit], [translation], {
-    updatePolicy: ({ sourceUnit }) => ({
-      action: "candidate",
-      candidate:
-        typeof options.candidate === "string"
-          ? options.candidate
-          : options.candidate(sourceUnit as Unit | undefined),
-    }),
-    translationWriteback: {
-      targetContent: (actualTranslation) => actualTranslation.text,
-      locateExistingTarget: ({ translation: actualTranslation }) => ({
-        status: "located",
-        locator: { id: actualTranslation.translation.id },
-      }),
-      locateNewTarget: ({ sourceUnit }) => ({
-        status: "located",
-        locator: { id: sourceUnit.key },
-      }),
-      ...(options.screenshotDependency
-        ? {
-            dependencies: ({ sourceUnit }) => ({
-              screenshot: sourceUnit.unit.context?.screenshot ?? null,
-            }),
-          }
-        : {}),
-      write({ edit, currentTranslation }) {
-        if (
-          currentTranslation === undefined ||
-          typeof edit.content !== "string"
-        )
-          throw new TypeError("测试候选必须更新已有译文文本。");
-        currentTranslation.translation.text = edit.content;
-      },
+function candidatePolicy(
+  contentFor: (sourceKey: string, unit: Unit | undefined) => string,
+): UpdatePolicy<Unit, Translation> {
+  return ({ sourceKey, language, sourceUnit }) => ({
+    action: "candidate",
+    candidate: {
+      sourceKey,
+      language,
+      content: contentFor(sourceKey, sourceUnit),
     },
   });
 }
 
-class MemoryBaselineStore implements ProcessingBaselineStore {
-  baseline: ProcessingBaseline | undefined;
-  failSaves = false;
-
-  async load(): Promise<ProcessingBaseline | undefined> {
-    return structuredClone(this.baseline);
-  }
-
-  async save(baseline: ProcessingBaseline): Promise<void> {
-    if (this.failSaves) throw new Error("基线存储暂不可用。");
-    this.baseline = structuredClone(baseline);
-  }
+async function establishBaseline(
+  config: FrameworkConfig<Unit, Translation>,
+  sourceKeys: readonly string[],
+): Promise<MemoryBaselineStore> {
+  const store = new MemoryBaselineStore();
+  const facts = await readFacts(config);
+  const matches = config.translations?.matches;
+  assert.ok(matches);
+  const result = await advanceProcessingBaseline(
+    store,
+    facts,
+    sourceKeys.map((sourceKey) => ({ sourceKey, language: "fr" })),
+    { matches },
+  );
+  assert.equal(result.outcome, "saved");
+  return store;
 }
 
 void describe("apply update plans", () => {
-  void it("retains a selected item and leaves other source-language history unchanged", async () => {
-    const baselineStore = new MemoryBaselineStore();
-    const baselineConfig = makeConfig(
+  void it("applies a saved candidate without new choices or another policy call", async () => {
+    const original = makeConfig(
+      [{ id: "A", source: "Save" }],
+      [{ id: "A", text: "Enregistrer" }],
+    );
+    const baselineStore = await establishBaseline(original, ["A"]);
+    const translation = { id: "A", text: "Enregistrer" };
+    let policyCalls = 0;
+    const config = makeConfig(
+      [{ id: "A", source: "Save now" }],
+      [translation],
+      {
+        withWriteback: true,
+        updatePolicy: (input) => {
+          policyCalls += 1;
+          return {
+            action: "candidate",
+            candidate: {
+              sourceKey: input.sourceKey,
+              language: input.language,
+              content: "Sauvegarder",
+            },
+          };
+        },
+      },
+    );
+    const plan = await createUpdatePlan(
+      await readFacts(config),
+      baselineStore.baseline,
+      config,
+    );
+    assert.equal(plan.items[0]?.status, "candidate");
+    assert.equal(plan.items[0]?.edit?.content, "Sauvegarder");
+
+    const directory = await mkdtemp(path.join(os.tmpdir(), "l10n-saved-plan-"));
+    const planStore = createFileUpdatePlanStore(
+      path.join(directory, "update-plan.json"),
+    );
+    try {
+      await planStore.save(plan);
+      const savedPlan = await planStore.load();
+      assert.deepStrictEqual(savedPlan, plan);
+      const result = await applyUpdatePlan(
+        savedPlan as NonNullable<typeof savedPlan>,
+        config,
+        baselineStore,
+      );
+
+      assert.equal(result.contentResults[0]?.status, "written");
+      assert.equal(result.baselineResults[0]?.status, "advanced");
+      assert.equal(policyCalls, 1);
+      assert.equal(translation.text, "Sauvegarder");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  void it("advances a valid retain decision without changing translation content", async () => {
+    const original = makeConfig(
+      [{ id: "A", source: "Save" }],
+      [{ id: "A", text: "Enregistrer" }],
+    );
+    const baselineStore = await establishBaseline(original, ["A"]);
+    const translation = { id: "A", text: "Enregistrer" };
+    const config = makeConfig([{ id: "A", source: "Save now" }], [translation]);
+    const plan = await createUpdatePlan(
+      await readFacts(config),
+      baselineStore.baseline,
+      config,
+    );
+
+    const result = await applyUpdatePlan(plan, config, baselineStore);
+    const savedUnit = baselineStore.baseline?.entries[0]?.source.unit as
+      | Unit
+      | undefined;
+
+    assert.equal(plan.items[0]?.status, "retain");
+    assert.equal(result.contentResults[0]?.status, "retained");
+    assert.equal(result.baselineResults[0]?.status, "advanced");
+    assert.equal(translation.text, "Enregistrer");
+    assert.equal(savedUnit?.source, "Save now");
+  });
+
+  void it("keeps a planned addition valid when another key in its range advances", async () => {
+    const original = makeConfig(
+      [{ id: "A", source: "Save" }],
+      [{ id: "A", text: "Enregistrer" }],
+    );
+    const baselineStore = await establishBaseline(original, ["A"]);
+    const translations = [
+      { id: "A", text: "Enregistrer" },
+      { id: "B", text: "Annuler" },
+      { id: "C", text: "Ouvrir" },
+    ];
+    const units = [
+      { id: "A", source: "Save" },
+      { id: "B", source: "Cancel" },
+      { id: "C", source: "Open" },
+    ];
+    const config = makeConfig(units, translations, {
+      withWriteback: true,
+      updatePolicy: ({ sourceKey, language }) =>
+        sourceKey === "B"
+          ? {
+              action: "candidate",
+              candidate: { sourceKey, language, content: "Annuler maintenant" },
+            }
+          : { action: "none" },
+    });
+    const plan = await createUpdatePlan(
+      await readFacts(config),
+      baselineStore.baseline,
+      config,
+    );
+
+    const matches = config.translations?.matches;
+    assert.ok(matches);
+    const otherKeyAdvance = await advanceProcessingBaseline(
+      baselineStore,
+      await readFacts(config),
+      [{ sourceKey: "C", language: "fr" }],
+      { matches },
+    );
+    assert.equal(otherKeyAdvance.outcome, "saved");
+    assert.equal(
+      baselineStore.baseline?.entries.some(
+        ({ sourceKey }) => sourceKey === "B",
+      ),
+      false,
+    );
+
+    const result = await applyUpdatePlan(plan, config, baselineStore);
+
+    assert.equal(
+      result.contentResults.find(({ sourceKey }) => sourceKey === "B")?.status,
+      "written",
+    );
+    assert.equal(
+      result.baselineResults.find(({ sourceKey }) => sourceKey === "B")?.status,
+      "advanced",
+    );
+    assert.equal(translations[1]?.text, "Annuler maintenant");
+  });
+
+  void it("rejects a stale saved candidate and does not advance its baseline", async () => {
+    const original = makeConfig(
+      [{ id: "A", source: "Save" }],
+      [{ id: "A", text: "Enregistrer" }],
+    );
+    const baselineStore = await establishBaseline(original, ["A"]);
+    const translation = { id: "A", text: "Enregistrer" };
+    const config = makeConfig(
+      [{ id: "A", source: "Save now" }],
+      [translation],
+      {
+        withWriteback: true,
+        updatePolicy: candidatePolicy(() => "Sauvegarder"),
+      },
+    );
+    const plan = await createUpdatePlan(
+      await readFacts(config),
+      baselineStore.baseline,
+      config,
+    );
+    translation.text = "Sauver";
+    const baselineBefore = structuredClone(baselineStore.baseline);
+
+    const result = await applyUpdatePlan(plan, config, baselineStore);
+
+    assert.equal(result.contentResults[0]?.status, "conflict");
+    assert.equal(result.baselineResults[0]?.status, "notAttempted");
+    assert.equal(translation.text, "Sauver");
+    assert.deepStrictEqual(baselineStore.baseline, baselineBefore);
+  });
+
+  void it("advances only confirmed items after a partial write failure", async () => {
+    const initial = makeConfig(
       [
         { id: "A", source: "Save" },
         { id: "B", source: "Cancel" },
@@ -150,469 +327,156 @@ void describe("apply update plans", () => {
         { id: "B", text: "Annuler" },
       ],
     );
-    const baselineFacts = await readFacts(baselineConfig);
-    const matches = baselineConfig.translations?.matches;
-    assert.ok(matches);
-    await advanceProcessingBaseline(
-      baselineStore,
-      baselineFacts,
-      [
-        { sourceKey: "A", language: "fr" },
-        { sourceKey: "B", language: "fr" },
-      ],
-      { matches },
-    );
-
-    const currentConfig = makeConfig(
+    const baselineStore = await establishBaseline(initial, ["A", "B"]);
+    const translations = [
+      { id: "A", text: "Enregistrer" },
+      { id: "B", text: "Annuler" },
+    ];
+    const config = makeConfig(
       [
         { id: "A", source: "Save now" },
-        { id: "B", source: "Cancel" },
+        { id: "B", source: "Cancel now" },
       ],
-      [
-        { id: "A", text: "Enregistrer" },
-        { id: "B", text: "Annuler" },
-      ],
+      translations,
+      {
+        withWriteback: true,
+        failWriteFor: "A",
+        updatePolicy: candidatePolicy((sourceKey) => `Updated ${sourceKey}`),
+      },
     );
-    const currentFacts = await readFacts(currentConfig);
-    const plan = createUpdatePlan(
-      currentFacts,
+    const plan = await createUpdatePlan(
+      await readFacts(config),
       baselineStore.baseline,
-      currentConfig,
+      config,
     );
 
-    const result = await applyUpdatePlan(
-      plan,
-      [{ sourceKey: "A", language: "fr", choice: "retain" }],
-      currentConfig,
-      baselineStore,
-    );
+    const result = await applyUpdatePlan(plan, config, baselineStore);
 
     assert.equal(
       result.contentResults.find(({ sourceKey }) => sourceKey === "A")?.status,
-      "retained",
+      "writeFailed",
     );
     assert.equal(
       result.contentResults.find(({ sourceKey }) => sourceKey === "B")?.status,
-      "notSelected",
+      "written",
     );
     assert.equal(
       result.baselineResults.find(({ sourceKey }) => sourceKey === "A")?.status,
-      "advanced",
+      "notAttempted",
     );
     assert.equal(
       result.baselineResults.find(({ sourceKey }) => sourceKey === "B")?.status,
-      "notSelected",
+      "advanced",
     );
-    const advancedA = baselineStore.baseline?.entries.find(
-      ({ sourceKey }) => sourceKey === "A",
-    );
-    assert.equal(
-      (advancedA?.source.unit as Unit | undefined)?.source,
-      "Save now",
-    );
-    assert.equal(
-      (
-        baselineStore.baseline?.entries.find(
-          ({ sourceKey }) => sourceKey === "B",
-        )?.source.unit as Unit | undefined
-      )?.source,
-      "Cancel",
-    );
+    assert.equal(translations[0]?.text, "Enregistrer");
+    assert.equal(translations[1]?.text, "Updated B");
   });
 
-  void it("rejects a retain decision when the saved target input has changed", async () => {
-    const baselineStore = new MemoryBaselineStore();
-    const baselineConfig = makeConfig(
+  void it("does not advance when the writer returns without changing the target", async () => {
+    const original = makeConfig(
       [{ id: "A", source: "Save" }],
       [{ id: "A", text: "Enregistrer" }],
     );
-    const matches = baselineConfig.translations?.matches;
-    assert.ok(matches);
-    await advanceProcessingBaseline(
-      baselineStore,
-      await readFacts(baselineConfig),
-      [{ sourceKey: "A", language: "fr" }],
-      { matches },
+    const baselineStore = await establishBaseline(original, ["A"]);
+    const translation = { id: "A", text: "Enregistrer" };
+    const config = makeConfig(
+      [{ id: "A", source: "Save now" }],
+      [translation],
+      {
+        withWriteback: true,
+        ignoreWriteFor: "A",
+        updatePolicy: candidatePolicy(() => "Sauvegarder"),
+      },
     );
-
-    const liveUnit = { id: "A", source: "Save now" };
-    const liveTranslation = { id: "A", text: "Enregistrer" };
-    const currentConfig = makeConfig([liveUnit], [liveTranslation]);
-    const plan = createUpdatePlan(
-      await readFacts(currentConfig),
+    const plan = await createUpdatePlan(
+      await readFacts(config),
       baselineStore.baseline,
-      currentConfig,
+      config,
     );
     const baselineBefore = structuredClone(baselineStore.baseline);
-    liveTranslation.text = "Sauvegarder";
 
-    const result = await applyUpdatePlan(
-      plan,
-      [{ sourceKey: "A", language: "fr", choice: "retain" }],
-      currentConfig,
-      baselineStore,
-    );
+    const result = await applyUpdatePlan(plan, config, baselineStore);
 
-    assert.equal(result.contentResults[0]?.status, "conflict");
+    assert.equal(result.contentResults[0]?.status, "writeUnconfirmed");
     assert.equal(result.baselineResults[0]?.status, "notAttempted");
+    assert.equal(translation.text, "Enregistrer");
     assert.deepStrictEqual(baselineStore.baseline, baselineBefore);
   });
 
-  void it("rejects a removed-source plan if the source has reappeared", async () => {
-    const baselineStore = new MemoryBaselineStore();
-    const initialConfig = makeConfig(
+  void it("reports confirmed content when its baseline cannot be saved", async () => {
+    const original = makeConfig(
       [{ id: "A", source: "Save" }],
       [{ id: "A", text: "Enregistrer" }],
     );
-    const matches = initialConfig.translations?.matches;
-    assert.ok(matches);
-    await advanceProcessingBaseline(
-      baselineStore,
-      await readFacts(initialConfig),
-      [{ sourceKey: "A", language: "fr" }],
-      { matches },
+    const baselineStore = await establishBaseline(original, ["A"]);
+    const translation = { id: "A", text: "Enregistrer" };
+    const config = makeConfig(
+      [{ id: "A", source: "Save now" }],
+      [translation],
+      {
+        withWriteback: true,
+        updatePolicy: candidatePolicy(() => "Sauvegarder"),
+      },
     );
-
-    const removedConfig = makeConfig([], [{ id: "A", text: "Enregistrer" }]);
-    const plan = createUpdatePlan(
-      await readFacts(removedConfig),
+    const plan = await createUpdatePlan(
+      await readFacts(config),
       baselineStore.baseline,
-      removedConfig,
-    );
-    assert.equal(plan.items[0]?.expectedInput?.source.presence, "removed");
-    const baselineBefore = structuredClone(baselineStore.baseline);
-    const reappearedConfig = makeConfig(
-      [{ id: "A", source: "Save" }],
-      [{ id: "A", text: "Enregistrer" }],
-    );
-
-    const result = await applyUpdatePlan(
-      plan,
-      [{ sourceKey: "A", language: "fr", choice: "retain" }],
-      reappearedConfig,
-      baselineStore,
-    );
-
-    assert.equal(result.contentResults[0]?.status, "conflict");
-    assert.deepStrictEqual(baselineStore.baseline, baselineBefore);
-  });
-
-  void it("writes a selected candidate through semantic edits and advances from the confirmed read", async () => {
-    const baselineStore = new MemoryBaselineStore();
-    const initialConfig = makeEditableConfig(
-      { id: "A", source: "Save" },
-      { id: "A", text: "Enregistrer" },
-      { candidate: "Sauvegarder" },
-    );
-    const matches = initialConfig.translations?.matches;
-    assert.ok(matches);
-    await advanceProcessingBaseline(
-      baselineStore,
-      await readFacts(initialConfig),
-      [{ sourceKey: "A", language: "fr" }],
-      { matches },
-    );
-
-    const currentConfig = makeEditableConfig(
-      { id: "A", source: "Save now" },
-      { id: "A", text: "Enregistrer" },
-      { candidate: "Sauvegarder" },
-    );
-    const plan = createUpdatePlan(
-      await readFacts(currentConfig),
-      baselineStore.baseline,
-      currentConfig,
-    );
-
-    const result = await applyUpdatePlan(
-      plan,
-      [{ sourceKey: "A", language: "fr", choice: "candidate" }],
-      currentConfig,
-      baselineStore,
-    );
-
-    assert.equal(result.contentResults[0]?.status, "written");
-    assert.equal(result.baselineResults[0]?.status, "advanced");
-    const savedTranslation = baselineStore.baseline?.entries[0]?.association
-      .translations[0]?.translation as Translation | undefined;
-    assert.equal(savedTranslation?.text, "Sauvegarder");
-  });
-
-  void it("compares declared edit dependencies with the saved plan context", async () => {
-    const baselineStore = new MemoryBaselineStore();
-    const initialConfig = makeEditableConfig(
-      { id: "A", source: "Save", context: { screenshot: "shots/old.png" } },
-      { id: "A", text: "Enregistrer" },
-      { candidate: "Sauvegarder", screenshotDependency: true },
-    );
-    const matches = initialConfig.translations?.matches;
-    assert.ok(matches);
-    await advanceProcessingBaseline(
-      baselineStore,
-      await readFacts(initialConfig),
-      [{ sourceKey: "A", language: "fr" }],
-      { matches },
-    );
-
-    const liveUnit = {
-      id: "A",
-      source: "Save now",
-      context: { screenshot: "shots/plan.png" },
-    };
-    const liveTranslation = { id: "A", text: "Enregistrer" };
-    const currentConfig = makeEditableConfig(liveUnit, liveTranslation, {
-      candidate: (sourceUnit) =>
-        `Generated from ${sourceUnit?.context?.screenshot}`,
-      screenshotDependency: true,
-    });
-    const plan = createUpdatePlan(
-      await readFacts(currentConfig),
-      baselineStore.baseline,
-      currentConfig,
-    );
-    liveUnit.context.screenshot = "shots/after-plan.png";
-
-    const result = await applyUpdatePlan(
-      plan,
-      [{ sourceKey: "A", language: "fr", choice: "candidate" }],
-      currentConfig,
-      baselineStore,
-    );
-
-    assert.equal(result.contentResults[0]?.status, "conflict");
-    assert.equal(liveTranslation.text, "Enregistrer");
-    assert.equal(result.baselineResults[0]?.status, "notAttempted");
-  });
-
-  void it("allows candidate application after undeclared metadata changes", async () => {
-    const baselineStore = new MemoryBaselineStore();
-    const initialConfig = makeEditableConfig(
-      { id: "A", source: "Save" },
-      { id: "A", text: "Enregistrer" },
-      { candidate: "Sauvegarder" },
-    );
-    const matches = initialConfig.translations?.matches;
-    assert.ok(matches);
-    await advanceProcessingBaseline(
-      baselineStore,
-      await readFacts(initialConfig),
-      [{ sourceKey: "A", language: "fr" }],
-      { matches },
-    );
-
-    const liveUnit = {
-      id: "A",
-      source: "Save now",
-      context: { screenshot: "shots/plan.png", note: "before" },
-    };
-    const liveTranslation = {
-      id: "A",
-      text: "Enregistrer",
-      context: { label: "before" },
-    };
-    const currentConfig = makeEditableConfig(liveUnit, liveTranslation, {
-      candidate: "Sauvegarder",
-    });
-    const plan = createUpdatePlan(
-      await readFacts(currentConfig),
-      baselineStore.baseline,
-      currentConfig,
-    );
-    liveUnit.context.note = "after";
-    liveTranslation.context.label = "after";
-
-    const result = await applyUpdatePlan(
-      plan,
-      [{ sourceKey: "A", language: "fr", choice: "candidate" }],
-      currentConfig,
-      baselineStore,
-    );
-
-    assert.equal(result.contentResults[0]?.status, "written");
-    assert.equal(result.baselineResults[0]?.status, "advanced");
-    assert.equal(liveTranslation.text, "Sauvegarder");
-  });
-
-  void it("reports confirmed content separately when saving its baseline fails", async () => {
-    const baselineStore = new MemoryBaselineStore();
-    const initialConfig = makeEditableConfig(
-      { id: "A", source: "Save" },
-      { id: "A", text: "Enregistrer" },
-      { candidate: "Sauvegarder" },
-    );
-    const matches = initialConfig.translations?.matches;
-    assert.ok(matches);
-    await advanceProcessingBaseline(
-      baselineStore,
-      await readFacts(initialConfig),
-      [{ sourceKey: "A", language: "fr" }],
-      { matches },
-    );
-
-    const liveTranslation = { id: "A", text: "Enregistrer" };
-    const currentConfig = makeEditableConfig(
-      { id: "A", source: "Save now" },
-      liveTranslation,
-      { candidate: "Sauvegarder" },
-    );
-    const plan = createUpdatePlan(
-      await readFacts(currentConfig),
-      baselineStore.baseline,
-      currentConfig,
+      config,
     );
     const baselineBefore = structuredClone(baselineStore.baseline);
     baselineStore.failSaves = true;
 
-    const result = await applyUpdatePlan(
-      plan,
-      [{ sourceKey: "A", language: "fr", choice: "candidate" }],
-      currentConfig,
-      baselineStore,
-    );
+    const result = await applyUpdatePlan(plan, config, baselineStore);
 
     assert.equal(result.contentResults[0]?.status, "written");
     assert.equal(result.baselineResults[0]?.status, "failed");
-    assert.equal(liveTranslation.text, "Sauvegarder");
+    assert.equal(translation.text, "Sauvegarder");
     assert.deepStrictEqual(baselineStore.baseline, baselineBefore);
   });
 
-  void it("advances only the selected member of a shared target", async () => {
-    const baselineStore = new MemoryBaselineStore();
-    const sharedTranslation: Translation = {
-      id: "shared",
-      text: "Original",
-      members: ["A", "B"],
-    };
-    const createSharedConfig = (
-      units: readonly Unit[],
-    ): FrameworkConfig<Unit, Translation> =>
-      defineConfig({
-        source: {
-          read: () => ({
-            scopes: [
-              {
-                range: "source/shared.json",
-                enumeration: "complete",
-                records: units.map((value) => ({
-                  value,
-                  bodyAvailability: "available" as const,
-                })),
-              },
-            ],
-          }),
-        },
-        keyOf: (unit) => unit.id,
-        translations: {
-          languages: ["fr"],
-          read: (_language, sourceUnits) => ({
-            scopes: [
-              {
-                range: "locales/shared.json",
-                covers: sourceUnits.map(({ key }) => key),
-                enumeration: "complete",
-                records: [
-                  { value: sharedTranslation, bodyAvailability: "available" },
-                ],
-              },
-            ],
-          }),
-          matches: (unit, translation) =>
-            translation.members?.includes(unit.id) ?? false,
-        },
-        updatePolicy: ({ sourceKey }) => ({
-          action: "candidate",
-          candidate: `Proposition ${sourceKey}`,
-        }),
-        translationWriteback: {
-          targetContent: (translation) => translation.text,
-          locateExistingTarget: () => ({
-            status: "located",
-            locator: { id: "shared" },
-          }),
-          locateNewTarget: () => ({
-            status: "notWritable",
-            reason: "共享目标已经存在。",
-          }),
-          write({ edit, currentTranslation }) {
-            if (
-              currentTranslation === undefined ||
-              typeof edit.content !== "string"
-            )
-              throw new TypeError("测试候选必须更新已有译文文本。");
-            currentTranslation.translation.text = edit.content;
-          },
-        },
-      });
-
-    const initialConfig = createSharedConfig([
-      { id: "A", source: "Save" },
-      { id: "B", source: "Save" },
-    ]);
-    const matches = initialConfig.translations?.matches;
-    assert.ok(matches);
-    await advanceProcessingBaseline(
-      baselineStore,
-      await readFacts(initialConfig),
+  void it("does not advance review, not processed, or blocked plan items", async () => {
+    const config = makeConfig(
       [
-        { sourceKey: "A", language: "fr" },
-        { sourceKey: "B", language: "fr" },
+        { id: "review", source: "Review" },
+        { id: "none", source: "Skip" },
+        { id: "blocked", source: "Blocked" },
       ],
-      { matches },
+      [
+        { id: "review", text: "Relire" },
+        { id: "none", text: "Ignorer" },
+        { id: "blocked", text: "Bloqué" },
+      ],
+      {
+        updatePolicy: ({ sourceKey, language }) =>
+          sourceKey === "review"
+            ? { action: "review", reason: "À vérifier." }
+            : sourceKey === "none"
+              ? { action: "none" }
+              : {
+                  action: "candidate",
+                  candidate: { sourceKey, language, content: "Candidat" },
+                },
+      },
+    );
+    const baselineStore = new MemoryBaselineStore();
+    const plan = await createUpdatePlan(
+      await readFacts(config),
+      undefined,
+      config,
     );
 
-    const currentConfig = createSharedConfig([
-      { id: "A", source: "Save now" },
-      { id: "B", source: "Save button" },
-    ]);
-    const plan = createUpdatePlan(
-      await readFacts(currentConfig),
-      baselineStore.baseline,
-      currentConfig,
-    );
-    const result = await applyUpdatePlan(
-      plan,
-      [{ sourceKey: "A", language: "fr", choice: "candidate" }],
-      currentConfig,
-      baselineStore,
-    );
-    const currentFacts = await readFacts(currentConfig);
-    const comparison = compareProcessingBaseline(
-      currentFacts,
-      baselineStore.baseline,
-      { matches },
-    );
+    const result = await applyUpdatePlan(plan, config, baselineStore);
 
-    assert.equal(
-      result.contentResults.find(({ sourceKey }) => sourceKey === "A")?.status,
-      "written",
+    assert.deepStrictEqual(
+      plan.items.map(({ status }) => status),
+      ["review", "notProcessed", "blocked"],
     );
-    assert.equal(
-      result.contentResults.find(({ sourceKey }) => sourceKey === "B")?.status,
-      "notSelected",
+    assert.ok(
+      result.contentResults.every(({ status }) => status === "notAttempted"),
     );
-    assert.equal(
-      result.baselineResults.find(({ sourceKey }) => sourceKey === "A")?.status,
-      "advanced",
+    assert.ok(
+      result.baselineResults.every(({ status }) => status === "notAttempted"),
     );
-    assert.equal(
-      result.baselineResults.find(({ sourceKey }) => sourceKey === "B")?.status,
-      "notSelected",
-    );
-    assert.equal(sharedTranslation.text, "Proposition A");
-    assert.equal(
-      comparison.changes.find(({ sourceKey }) => sourceKey === "B")?.status,
-      "changed",
-    );
-    const baselineB = baselineStore.baseline?.entries.find(
-      ({ sourceKey }) => sourceKey === "B",
-    );
-    assert.equal(
-      (
-        baselineB?.association.translations[0]?.translation as
-          | Translation
-          | undefined
-      )?.text,
-      "Original",
-    );
+    assert.equal(baselineStore.baseline, undefined);
   });
 });

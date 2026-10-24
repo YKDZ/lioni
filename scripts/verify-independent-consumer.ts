@@ -159,7 +159,7 @@ const config = defineConfig({
     },
     matches(unit, translation) {
       return translation.context.sourceLines.includes(unit.context.line);
-    }
+    },
   },
 });
 
@@ -275,14 +275,18 @@ export default defineConfig<Unit, Translation>({
     },
     matches: (unit, translation) => unit.id === translation.id,
   },
-  updatePolicy: ({ change, sourceUnit }) =>
+  updatePolicy: ({ sourceKey, language, change, sourceUnit }) =>
     change === "changed"
       ? {
           action: "candidate",
-          candidate: sourceUnit?.source,
+          candidate: {
+            sourceKey,
+            language,
+            content: sourceUnit?.source ?? "",
+          },
           reason: "读取计划时生成的候选。",
         }
-      : { action: "retain", reason: "保留当前内容。" },
+      : { action: "none", reason: "该项未由此计划处理。" },
   translationWriteback: {
     targetContent: (translation) => translation.text,
     locateExistingTarget: ({ translation }) => ({
@@ -602,13 +606,8 @@ void advanceProcessingBaseline;
 void createFileProcessingBaselineStore(".l10n/processing-baseline.json");
 void readFacts(planConfig).then(async (facts) => {
   const baselineStore = createFileProcessingBaselineStore(".l10n/plan-baseline.json");
-  const plan = createUpdatePlan(facts, await baselineStore.load(), planConfig);
-  return applyUpdatePlan(
-    plan,
-    [{ sourceKey: "save-button", language: "fr", choice: "retain" }],
-    planConfig,
-    baselineStore,
-  );
+  const plan = await createUpdatePlan(facts, await baselineStore.load(), planConfig);
+  return applyUpdatePlan(plan, planConfig, baselineStore);
 });
 void createFileUpdatePlanStore(".l10n/update-plan.json");
 void readFacts(editConfig).then(async (facts) => {
@@ -673,9 +672,11 @@ export default defineConfig<Unit, Translation>({
     },
     matches: (unit, translation) => unit.id === translation.sourceId,
   },
-  updatePolicy: ({ sourceKey, change }) => change === "changed"
-    ? { action: "candidate", candidate: "更新译文 " + sourceKey }
-    : { action: "retain" },
+  updatePolicy: ({ sourceKey, language, change }) => change === "changed"
+    ? process.argv[2] === "replan-retain" && sourceKey === "C"
+      ? { action: "retain", reason: "保留当前译文并处理本次变化。" }
+      : { action: "candidate", candidate: { sourceKey, language, content: "更新译文 " + sourceKey } }
+    : { action: "none" },
   translationWriteback: {
     targetContent: (translation) => translation.text,
     locateExistingTarget: ({ translation }) => ({
@@ -694,7 +695,7 @@ export default defineConfig<Unit, Translation>({
 });
 `;
   const resumeHostSource = `import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import {
   advanceProcessingBaseline,
   applyUpdatePlan,
@@ -709,7 +710,7 @@ import {
 import config from "./resume.config.ts";
 
 const ids = ["A", "B", "C"];
-const selections = ids.map((sourceKey) => ({ sourceKey, language: "fr" }));
+const baselineSelections = ids.map((sourceKey) => ({ sourceKey, language: "fr" }));
 const baselinePath = ".l10n/resume-baseline.json";
 const baselineStore = createFileProcessingBaselineStore(baselinePath);
 const planStore = createFileUpdatePlanStore(".l10n/resume-plan.json");
@@ -720,7 +721,7 @@ const scenario = process.argv[2];
 
 if (scenario === "initialize") {
   const facts = await readFacts(config);
-  const result = await advanceProcessingBaseline(baselineStore, facts, selections, {
+  const result = await advanceProcessingBaseline(baselineStore, facts, baselineSelections, {
     matches: config.translations.matches,
   });
   assert.equal(result.outcome, "saved");
@@ -729,85 +730,70 @@ if (scenario === "initialize") {
 } else if (scenario === "save-plan") {
   const facts = await readFacts(config);
   const baseline = await baselineStore.load();
-  const plan = createUpdatePlan(facts, baseline, config);
+  const plan = await createUpdatePlan(facts, baseline, config);
   for (const id of ids) {
     const item = plan.items.find(({ sourceKey }) => sourceKey === id);
     assert.equal(item?.change, "changed");
-    assert.equal(item?.executable, true);
-    assert.equal(item?.recommendation.action, "candidate");
+    assert.equal(item?.status, "candidate");
+    assert.equal(item?.decision.action, "candidate");
+    assert.equal(item?.edit?.content, "更新译文 " + id);
   }
   await planStore.save(plan);
 } else if (scenario === "partial") {
   const plan = await planStore.load();
   assert.ok(plan);
-  const result = await applyUpdatePlan(
-    plan,
-    [
-      { sourceKey: "A", language: "fr", choice: "candidate" },
-      { sourceKey: "B", language: "fr", choice: "candidate" },
-    ],
-    config,
-    baselineStore,
-  );
+  const result = await applyUpdatePlan(plan, config, baselineStore);
   assert.equal(findResult(result.contentResults, "A")?.status, "written");
   const failedWrite = findResult(result.contentResults, "B");
   assert.equal(failedWrite?.status, "writeFailed");
   assert.match(failedWrite?.reason ?? "", /EACCES|permission denied/iu);
-  assert.equal(findResult(result.contentResults, "C")?.status, "notSelected");
+  assert.equal(findResult(result.contentResults, "C")?.status, "written");
   assert.equal(findResult(result.baselineResults, "A")?.status, "advanced");
   assert.equal(findResult(result.baselineResults, "B")?.status, "notAttempted");
-  assert.equal(findResult(result.baselineResults, "C")?.status, "notSelected");
+  assert.equal(findResult(result.baselineResults, "C")?.status, "advanced");
   const baseline = await baselineStore.load();
   assert.equal(entry(baseline, "A")?.source.unit.source, "原文 A 新版");
   assert.equal(entry(baseline, "B")?.source.unit.source, "原文 B 旧版");
-  assert.equal(entry(baseline, "C")?.source.unit.source, "原文 C 旧版");
+  assert.equal(entry(baseline, "C")?.source.unit.source, "原文 C 新版");
   assert.equal(entry(baseline, "A")?.association.translations[0]?.translation.text, "更新译文 A");
   assert.equal(entry(baseline, "B")?.association.translations[0]?.translation.text, "译文 B");
-  assert.equal(entry(baseline, "C")?.association.translations[0]?.translation.text, "译文 C");
+  assert.equal(entry(baseline, "C")?.association.translations[0]?.translation.text, "更新译文 C");
   assert.equal((await readTarget("A")).text, "更新译文 A");
   assert.equal((await readTarget("B")).text, "译文 B");
-  assert.equal((await readTarget("C")).text, "译文 C");
+  assert.equal((await readTarget("C")).text, "更新译文 C");
 } else if (scenario === "resume-write") {
   const plan = await planStore.load();
   assert.ok(plan);
-  const result = await applyUpdatePlan(
-    plan,
-    [{ sourceKey: "B", language: "fr", choice: "candidate" }],
-    config,
-    baselineStore,
-  );
+  const result = await applyUpdatePlan(plan, config, baselineStore);
+  assert.equal(findResult(result.contentResults, "A")?.status, "conflict");
   assert.equal(findResult(result.contentResults, "B")?.status, "written");
+  assert.equal(findResult(result.contentResults, "C")?.status, "conflict");
   assert.equal(findResult(result.baselineResults, "B")?.status, "advanced");
   assert.equal((await readTarget("B")).text, "更新译文 B");
   assert.equal(entry(await baselineStore.load(), "B")?.association.translations[0]?.translation.text, "更新译文 B");
 } else if (scenario === "baseline-failure") {
-  const plan = await planStore.load();
-  assert.ok(plan);
+  const source = JSON.parse(await readFile("resume-resources/source.json", "utf8"));
+  source.find(({ id }) => id === "C").source = "原文 C 再更新";
+  await writeFile("resume-resources/source.json", JSON.stringify(source), "utf8");
+  const facts = await readFacts(config);
+  const plan = await createUpdatePlan(facts, await baselineStore.load(), config);
+  assert.equal(findResult(plan.items, "C")?.status, "candidate");
+  assert.equal(findResult(plan.items, "A")?.status, "notProcessed");
   const baselineBefore = await readFile(baselinePath, "utf8");
-  const result = await applyUpdatePlan(
-    plan,
-    [{ sourceKey: "C", language: "fr", choice: "candidate" }],
-    config,
-    baselineStore,
-  );
+  const result = await applyUpdatePlan(plan, config, baselineStore);
   assert.equal(findResult(result.contentResults, "C")?.status, "written");
   const failedSave = findResult(result.baselineResults, "C");
   assert.equal(failedSave?.status, "failed");
   assert.match(failedSave?.reason ?? "", /EACCES|permission denied/iu);
   assert.equal((await readTarget("C")).text, "更新译文 C");
   assert.equal(await readFile(baselinePath, "utf8"), baselineBefore);
-  assert.equal(entry(await baselineStore.load(), "C")?.source.unit.source, "原文 C 旧版");
-  assert.equal(entry(await baselineStore.load(), "C")?.association.translations[0]?.translation.text, "译文 C");
+  assert.equal(entry(await baselineStore.load(), "C")?.source.unit.source, "原文 C 新版");
+  assert.equal(entry(await baselineStore.load(), "C")?.association.translations[0]?.translation.text, "更新译文 C");
 } else if (scenario === "stale-old-plan") {
   const plan = await planStore.load();
   assert.ok(plan);
   const baselineBefore = await readFile(baselinePath, "utf8");
-  const result = await applyUpdatePlan(
-    plan,
-    [{ sourceKey: "C", language: "fr", choice: "candidate" }],
-    config,
-    baselineStore,
-  );
+  const result = await applyUpdatePlan(plan, config, baselineStore);
   assert.equal(findResult(result.contentResults, "C")?.status, "conflict");
   assert.equal(findResult(result.baselineResults, "C")?.status, "notAttempted");
   assert.equal(await readFile(baselinePath, "utf8"), baselineBefore);
@@ -815,18 +801,14 @@ if (scenario === "initialize") {
 } else if (scenario === "replan-retain") {
   const facts = await readFacts(config);
   const baseline = await baselineStore.load();
-  const refreshedPlan = createUpdatePlan(facts, baseline, config);
+  const refreshedPlan = await createUpdatePlan(facts, baseline, config);
   const refreshedC = refreshedPlan.items.find(({ sourceKey }) => sourceKey === "C");
   assert.equal(refreshedC?.change, "changed");
   assert.equal(refreshedC?.expectedInput?.association.translations[0]?.translation.text, "更新译文 C");
-  assert.equal(refreshedC?.recommendation.action, "candidate");
+  assert.equal(refreshedC?.decision.action, "retain");
+  assert.equal(refreshedC?.status, "retain");
   await planStore.save(refreshedPlan);
-  const result = await applyUpdatePlan(
-    refreshedPlan,
-    [{ sourceKey: "C", language: "fr", choice: "retain" }],
-    config,
-    baselineStore,
-  );
+  const result = await applyUpdatePlan(refreshedPlan, config, baselineStore);
   assert.equal(findResult(result.contentResults, "C")?.status, "retained");
   assert.equal(findResult(result.baselineResults, "C")?.status, "advanced");
   assert.equal((await readTarget("C")).text, "更新译文 C");
@@ -836,7 +818,10 @@ if (scenario === "initialize") {
   assert.ok(baseline);
   for (const id of ids) {
     assert.equal(entry(baseline, id)?.processed, true);
-    assert.equal(entry(baseline, id)?.source.unit.source, "原文 " + id + " 新版");
+    assert.equal(
+      entry(baseline, id)?.source.unit.source,
+      id === "C" ? "原文 C 再更新" : "原文 " + id + " 新版",
+    );
     assert.equal(entry(baseline, id)?.association.translations[0]?.translation.text, "更新译文 " + id);
   }
   assert.ok(compareProcessingBaseline(facts, baseline, {
@@ -1193,16 +1178,16 @@ if (scenario === "establish") {
   const targetBefore = await readFile(targetPath);
   const facts = await readFacts(config);
   const baseline = await baselineStore.load();
-  const plan = createUpdatePlan(facts, baseline, config);
+  const plan = await createUpdatePlan(facts, baseline, config);
   const item = plan.items.find(({ sourceKey }) => sourceKey === "save-button");
   assert.equal(item?.change, "changed");
-  assert.equal(item?.recommendation.action, "candidate");
-  assert.equal(item?.executable, true);
+  assert.equal(item?.decision.action, "candidate");
+  assert.equal(item?.status, "candidate");
   assert.equal(item?.previous?.source.unit.context.screenshot, "shots/save.png");
   assert.equal(item?.current?.source.unit.context.screenshot, "shots/save-updated.png");
   assert.equal(item?.expectedInput?.source.value, "Save");
   assert.equal(item?.expectedInput?.association.translations[0]?.translation.text, "Enregistrer");
-  assert.equal(item?.recommendation.action === "candidate" ? item.recommendation.candidate : undefined, "Save");
+  assert.equal(item?.edit?.content, "Save");
   await planStore.save(plan);
   assert.deepEqual(await readFile(sourcePath), sourceBefore);
   assert.deepEqual(await readFile(targetPath), targetBefore);
@@ -1211,12 +1196,13 @@ if (scenario === "establish") {
   const plan = await planStore.load();
   assert.ok(plan);
   const item = plan.items.find(({ sourceKey }) => sourceKey === "save-button");
-  assert.equal(item?.recommendation.action, "candidate");
+  assert.equal(item?.decision.action, "candidate");
+  assert.equal(item?.status, "candidate");
   assert.equal(item?.previous?.source.unit.context.screenshot, "shots/save.png");
   assert.equal(item?.current?.source.unit.context.screenshot, "shots/save-updated.png");
   assert.equal(item?.expectedInput?.source.value, "Save");
   assert.equal(item?.expectedInput?.association.translations[0]?.translation.text, "Enregistrer");
-  assert.equal(item?.recommendation.action === "candidate" ? item.recommendation.candidate : undefined, "Save");
+  assert.equal(item?.edit?.content, "Save");
   const liveSource = JSON.parse(await readFile(sourcePath, "utf8"));
   const liveTarget = JSON.parse(await readFile(targetPath, "utf8"));
   assert.equal(liveSource[0].context.screenshot, "shots/after-plan.png");
@@ -1226,12 +1212,7 @@ if (scenario === "establish") {
   const targetBefore = await readFile(targetPath, "utf8");
   const plan = await planStore.load();
   assert.ok(plan);
-  const result = await applyUpdatePlan(
-    plan,
-    [{ sourceKey: "save-button", language: "fr", choice: "candidate" }],
-    config,
-    baselineStore,
-  );
+  const result = await applyUpdatePlan(plan, config, baselineStore);
   assert.equal(result.contentResults.find(({ sourceKey }) => sourceKey === "save-button")?.status, "conflict");
   assert.equal(result.baselineResults.find(({ sourceKey }) => sourceKey === "save-button")?.status, "notAttempted");
   assert.deepEqual(await readFile(targetPath, "utf8"), targetBefore);
@@ -1239,20 +1220,16 @@ if (scenario === "establish") {
 } else if (scenario === "refresh") {
   const facts = await readFacts(config);
   const baseline = await baselineStore.load();
-  const plan = createUpdatePlan(facts, baseline, config);
+  const plan = await createUpdatePlan(facts, baseline, config);
   const item = plan.items.find(({ sourceKey }) => sourceKey === "save-button");
   assert.equal(item?.expectedInput?.source.value, "Save");
-  assert.equal(item?.recommendation.action === "candidate" ? item.recommendation.candidate : undefined, "Save");
+  assert.equal(item?.status, "candidate");
+  assert.equal(item?.edit?.content, "Save");
   await planStore.save(plan);
 } else if (scenario === "apply") {
   const plan = await planStore.load();
   assert.ok(plan);
-  const result = await applyUpdatePlan(
-    plan,
-    [{ sourceKey: "save-button", language: "fr", choice: "candidate" }],
-    config,
-    baselineStore,
-  );
+  const result = await applyUpdatePlan(plan, config, baselineStore);
   assert.equal(result.contentResults.find(({ sourceKey }) => sourceKey === "save-button")?.status, "written");
   assert.equal(result.baselineResults.find(({ sourceKey }) => sourceKey === "save-button")?.status, "advanced");
 } else if (scenario === "verify") {
@@ -1681,7 +1658,8 @@ export async function verifyIndependentConsumer(): Promise<void> {
     await writeConsumerFiles(consumerRoot, artifactRoot);
     await writeCompositionConsumerFiles(consumerRoot);
     process.stdout.write("从独立目录安装三个本地 npm 制品…\n");
-    runChecked("pnpm", ["install"], consumerRoot);
+    runChecked("pnpm", ["install", "--lockfile-only"], consumerRoot);
+    runChecked("pnpm", ["install", "--frozen-lockfile"], consumerRoot);
 
     const typecheck = path.join(repositoryRoot, "node_modules", ".bin", "tsc");
     process.stdout.write("检查宿主通过已安装声明文件的类型…\n");
@@ -1840,7 +1818,7 @@ export async function verifyIndependentConsumer(): Promise<void> {
       await chmod(failedTargetPath, 0o644);
     }
     process.stdout.write(
-      "新进程A成功推进；B收到真实EACCES并保留旧内容；C未选择且保留旧依据。\n",
+      "新进程A/C成功写入并推进；B收到真实EACCES，内容与旧基线保持不变。\n",
     );
 
     runChecked(
@@ -1890,7 +1868,11 @@ export async function verifyIndependentConsumer(): Promise<void> {
     );
     process.stdout.write(editRuntime.stdout);
   } finally {
-    await rm(temporaryRoot, { recursive: true, force: true });
+    if (process.env.L10N_KEEP_CONSUMER === "1") {
+      process.stdout.write(`保留独立制品与资源现场：${temporaryRoot}\n`);
+    } else {
+      await rm(temporaryRoot, { recursive: true, force: true });
+    }
   }
 }
 
