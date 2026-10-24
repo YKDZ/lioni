@@ -6,6 +6,11 @@ import {
   defineConfig,
   prepareSemanticEdit,
   readFacts,
+  resolveSemanticEditInput,
+  type FrameworkConfig,
+  type FrameworkFacts,
+  type SemanticEditCandidate,
+  type TranslationUnitInput,
 } from "../src/index.ts";
 
 function textContent(content: unknown): string {
@@ -14,7 +19,107 @@ function textContent(content: unknown): string {
   return content;
 }
 
+async function resolveAndPrepareSemanticEdit<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+>(
+  facts: FrameworkFacts<TUnit, TTranslation>,
+  candidate: SemanticEditCandidate,
+  config: FrameworkConfig<TUnit, TTranslation>,
+) {
+  const resolved = await resolveSemanticEditInput(
+    facts,
+    { sourceKey: candidate.sourceKey, language: candidate.language },
+    config,
+  );
+  if (resolved.status !== "resolved") return resolved;
+  return prepareSemanticEdit(resolved.input, candidate);
+}
+
 void describe("semantic edits", () => {
+  void it("prepares a structured edit without a writer, QA, or baseline", async () => {
+    const source = { source: "Save", context: { key: "toolbar.save" } };
+    const translation = { text: "Enregistrer", state: "reviewed" };
+    const config = defineConfig({
+      source: {
+        read: () => ({
+          scopes: [
+            {
+              range: "messages.json",
+              enumeration: "complete",
+              records: [{ value: source, bodyAvailability: "available" }],
+            },
+          ],
+        }),
+      },
+      keyOf: ({ context }) => context.key,
+      translations: {
+        languages: ["fr"],
+        read(_language, sourceUnits) {
+          return {
+            scopes: [
+              {
+                range: "locales/fr.json",
+                covers: sourceUnits.map(({ key }) => key),
+                enumeration: "complete",
+                records: [
+                  { value: translation, bodyAvailability: "available" },
+                ],
+              },
+            ],
+          };
+        },
+        matches: (unit, actualTranslation) =>
+          unit.context.key === "toolbar.save" &&
+          actualTranslation.text === "Enregistrer",
+      },
+      translationWriteback: {
+        targetContent: (actualTranslation) => ({
+          text: actualTranslation.text,
+          state: actualTranslation.state,
+        }),
+        locateExistingTarget: ({ sourceUnit }) => ({
+          status: "located",
+          locator: {
+            file: "locales/fr.json",
+            key: sourceUnit.unit.context.key,
+          },
+        }),
+        locateNewTarget: () => ({
+          status: "notWritable",
+          reason: "本场景修改已有译文。",
+        }),
+      },
+    });
+    const facts = await readFacts(config);
+    const candidate = {
+      sourceKey: "toolbar.save",
+      language: "fr",
+      content: { text: "Sauvegarder", state: "draft" },
+    } as const;
+
+    const resolved = await resolveSemanticEditInput(
+      facts,
+      { sourceKey: candidate.sourceKey, language: candidate.language },
+      config,
+    );
+
+    assert.equal(resolved.status, "resolved");
+    if (resolved.status !== "resolved") return;
+    const prepared = prepareSemanticEdit(resolved.input, candidate);
+
+    assert.equal(prepared.status, "prepared");
+    if (prepared.status !== "prepared") return;
+    assert.deepStrictEqual(prepared.edit.content, {
+      text: "Sauvegarder",
+      state: "draft",
+    });
+    assert.deepStrictEqual(translation, {
+      text: "Enregistrer",
+      state: "reviewed",
+    });
+  });
+
   void it("stores the host's actual target location and selected expectations", async () => {
     const config = defineConfig({
       source: {
@@ -98,7 +203,7 @@ void describe("semantic edits", () => {
     });
     const facts = await readFacts(config);
 
-    const prepared = await prepareSemanticEdit(
+    const prepared = await resolveAndPrepareSemanticEdit(
       facts,
       {
         sourceKey: "src/messages.ts:18",
@@ -200,7 +305,7 @@ void describe("semantic edits", () => {
         },
       });
       const facts = await readFacts(config);
-      const prepared = await prepareSemanticEdit(
+      const prepared = await resolveAndPrepareSemanticEdit(
         facts,
         { sourceKey: "source:A", language: "fr", content: "New translation" },
         config,
@@ -327,7 +432,7 @@ void describe("semantic edits", () => {
       },
     });
     const facts = await readFacts(config);
-    const prepared = await prepareSemanticEdit(
+    const prepared = await resolveAndPrepareSemanticEdit(
       facts,
       {
         sourceKey: "src/messages.ts:18",
@@ -355,6 +460,12 @@ void describe("semantic edits", () => {
       result.results[0]?.after?.translations[0]?.translation.text,
       "Sauvegarder",
     );
+
+    state.translationText = "Modification externe";
+    const staleResult = await applySemanticEdits([savedEdit], config);
+
+    assert.equal(staleResult.results[0]?.status, "conflict");
+    assert.equal(state.translationText, "Modification externe");
   });
 
   void it("creates a missing translation at the host location resolved from the raw source", async () => {
@@ -438,7 +549,7 @@ void describe("semantic edits", () => {
       },
     });
     const facts = await readFacts(config);
-    const prepared = await prepareSemanticEdit(
+    const prepared = await resolveAndPrepareSemanticEdit(
       facts,
       {
         sourceKey: "src/messages.ts:18",
@@ -537,12 +648,12 @@ void describe("semantic edits", () => {
       },
     });
     const facts = await readFacts(config);
-    const first = await prepareSemanticEdit(
+    const first = await resolveAndPrepareSemanticEdit(
       facts,
       { sourceKey: "message:18", language: "fr", content: "First proposal" },
       config,
     );
-    const second = await prepareSemanticEdit(
+    const second = await resolveAndPrepareSemanticEdit(
       facts,
       { sourceKey: "message:19", language: "fr", content: "Second proposal" },
       config,
