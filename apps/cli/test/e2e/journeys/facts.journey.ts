@@ -93,7 +93,7 @@ const check: QualityCheckDefinition<TranslationUnitInput, unknown> = {
 export default {
   ...baseConfig,
   qualityChecks: [check],
-  qualityRequest(facts) {
+  createQualityRequest(facts) {
     const subjects = facts.associations.map(({ sourceKey, language }) => ({
       key: sourceKey,
       language,

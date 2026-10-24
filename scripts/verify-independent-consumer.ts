@@ -283,7 +283,7 @@ export default defineConfig<Unit, Translation>({
           reason: "读取计划时生成的候选。",
         }
       : { action: "retain", reason: "保留当前内容。" },
-  edits: {
+  translationWriteback: {
     targetContent: (translation) => translation.text,
     locateExistingTarget: ({ translation }) => ({
       status: "located",
@@ -378,7 +378,7 @@ export default defineConfig<Unit, Translation>({
     },
     matches: (unit, translation) => translation.context.sourceLines.includes(unit.context.line),
   },
-  edits: {
+  translationWriteback: {
     targetContent: (translation) => translation.text,
     locateExistingTarget({ translation }) {
       if (translation.translation.context.readOnly)
@@ -484,7 +484,7 @@ const qualityChecks = [
   }),
 ];
 
-function qualityRequest() {
+function createQualityRequest() {
   return {
     subjects: [{ key: "sha256:save", language: "fr" }],
     evidenceScope: [
@@ -557,7 +557,7 @@ export default defineConfig<Unit, Translation>({
     matches: (unit, translation) => unit.nativeId === translation.sourceId,
   },
   qualityChecks,
-  qualityRequest,
+  createQualityRequest,
 });
 `;
   const typecheckSource = `import { createMessagePlaceholderChecker } from "@l10n/checks";
@@ -587,7 +587,7 @@ void readSourceFacts(config);
 void readFacts(config);
 void readFacts(qaConfig);
 void qaConfig.qualityChecks;
-void qaConfig.qualityRequest;
+void qaConfig.createQualityRequest;
 void createMessagePlaceholderChecker({
   sourceText: (unit: { source: string }) => unit.source,
   translationText: (translation: { text: string }) => translation.text,
@@ -668,7 +668,7 @@ export default defineConfig<Unit, Translation>({
   updatePolicy: ({ sourceKey, change }) => change === "changed"
     ? { action: "candidate", candidate: "更新译文 " + sourceKey }
     : { action: "retain" },
-  edits: {
+  translationWriteback: {
     targetContent: (translation) => translation.text,
     locateExistingTarget: ({ translation }) => ({
       status: "located",

@@ -279,14 +279,14 @@ function configuredQualityChecks(
   return checks;
 }
 
-async function configuredQualityRequest(
+async function createConfiguredQualityRequest(
   config: FrameworkConfig<TranslationUnitInput>,
   facts: FrameworkFacts<TranslationUnitInput, unknown>,
 ): Promise<QualityCheckRequest> {
-  const request = config.qualityRequest;
+  const request = config.createQualityRequest;
   if (request === undefined) return defaultQualityRequest(facts);
   if (typeof request !== "function")
-    throw new TypeError("defineConfig 的 qualityRequest 必须是函数。");
+    throw new TypeError("defineConfig 的 createQualityRequest 必须是函数。");
   return await request(facts);
 }
 
@@ -604,7 +604,7 @@ function createCliContract(identity: CliCommandIdentity) {
             const config = frameworkConfig(configModule);
             const facts = await readFacts(config);
             const checks = configuredQualityChecks(config);
-            const request = await configuredQualityRequest(config, facts);
+            const request = await createConfiguredQualityRequest(config, facts);
             const result = await runQualityChecks(facts, request, checks);
             return outcome.data.checked(result);
           } catch (error) {

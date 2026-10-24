@@ -9,13 +9,6 @@ import {
   type ProcessingBaselineSelection,
   type ProcessingBaselineStore,
 } from "./baselines.ts";
-import {
-  applySemanticEdits,
-  prepareSemanticEdit,
-  type JsonValue,
-  type SemanticEdit,
-  type SemanticEditResult,
-} from "./edits.ts";
 import { readFacts } from "./index.ts";
 import type {
   ActualTranslationFact,
@@ -30,6 +23,13 @@ import {
   type UpdatePlanItem,
   type UpdatePlanObservation,
 } from "./plans.ts";
+import {
+  applySemanticEdits,
+  prepareSemanticEdit,
+  type JsonValue,
+  type SemanticEdit,
+  type SemanticEditResult,
+} from "./semantic-edits.ts";
 
 export type UpdatePlanSelection = ProcessingBaselineSelection & {
   readonly choice: "retain" | "candidate";
@@ -479,11 +479,11 @@ function matchesExpectedInput<TUnit extends TranslationUnitInput, TTranslation>(
         !isDeepStrictEqual(translation.range, currentTranslation.range)
       )
         return false;
-      const expectedContent = config.edits?.targetContent
-        ? config.edits.targetContent(translation.translation)
+      const expectedContent = config.translationWriteback?.targetContent
+        ? config.translationWriteback.targetContent(translation.translation)
         : translation.translation;
-      const currentContent = config.edits?.targetContent
-        ? config.edits.targetContent(
+      const currentContent = config.translationWriteback?.targetContent
+        ? config.translationWriteback.targetContent(
             currentTranslation.translation as TTranslation,
           )
         : currentTranslation.translation;
@@ -521,7 +521,7 @@ async function oldPlanDependenciesMatch<
   facts: FrameworkFacts<TUnit, TTranslation>,
   config: FrameworkConfig<TUnit, TTranslation>,
 ): Promise<string | undefined> {
-  const adapter = config.edits;
+  const adapter = config.translationWriteback;
   if (adapter?.dependencies === undefined) return undefined;
   const expected = item.expectedInput;
   const current = item.current;

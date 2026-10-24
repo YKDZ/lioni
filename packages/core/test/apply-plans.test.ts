@@ -30,7 +30,10 @@ function makeConfig(
   translations: readonly Translation[],
   options: {
     readonly updatePolicy?: FrameworkConfig<Unit, Translation>["updatePolicy"];
-    readonly edits?: FrameworkConfig<Unit, Translation>["edits"];
+    readonly translationWriteback?: FrameworkConfig<
+      Unit,
+      Translation
+    >["translationWriteback"];
   } = {},
 ): FrameworkConfig<Unit, Translation> {
   return defineConfig({
@@ -69,7 +72,9 @@ function makeConfig(
     ...(options.updatePolicy === undefined
       ? {}
       : { updatePolicy: options.updatePolicy }),
-    ...(options.edits === undefined ? {} : { edits: options.edits }),
+    ...(options.translationWriteback === undefined
+      ? {}
+      : { translationWriteback: options.translationWriteback }),
   });
 }
 
@@ -89,7 +94,7 @@ function makeEditableConfig(
           ? options.candidate
           : options.candidate(sourceUnit as Unit | undefined),
     }),
-    edits: {
+    translationWriteback: {
       targetContent: (actualTranslation) => actualTranslation.text,
       locateExistingTarget: ({ translation: actualTranslation }) => ({
         status: "located",
@@ -518,7 +523,7 @@ void describe("apply update plans", () => {
           action: "candidate",
           candidate: `Proposition ${sourceKey}`,
         }),
-        edits: {
+        translationWriteback: {
           targetContent: (translation) => translation.text,
           locateExistingTarget: () => ({
             status: "located",

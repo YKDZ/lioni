@@ -415,7 +415,7 @@ function createInputConfig(
       },
     },
     qualityChecks,
-    qualityRequest: (facts) =>
+    createQualityRequest: (facts) =>
       mergeQualityRequests(
         modules.map(({ domain }) => requestForDomain(facts, domain)),
       ),
@@ -573,17 +573,17 @@ async function prepare() {
   assert.deepEqual(targetProjection(guideFacts, "guide"), targetProjection(facts, "guide"));
   assert.deepEqual(associationProjection(guideFacts, "guide"), associationProjection(facts, "guide"));
 
-  const aggregateRequest = await aggregateConfig.qualityRequest(facts);
+  const aggregateRequest = await aggregateConfig.createQualityRequest(facts);
   assert.deepEqual(aggregateRequest.relationships, []);
   const aggregateChecks = aggregateConfig.qualityChecks ?? [];
   const aggregateQa = await runQualityChecks(facts, aggregateRequest, aggregateChecks);
-  const catalogRequest = await catalogConfig.qualityRequest(catalogFacts);
+  const catalogRequest = await catalogConfig.createQualityRequest(catalogFacts);
   const catalogQa = await runQualityChecks(
     catalogFacts,
     catalogRequest,
     catalogConfig.qualityChecks ?? [],
   );
-  const guideRequest = await guideConfig.qualityRequest(guideFacts);
+  const guideRequest = await guideConfig.createQualityRequest(guideFacts);
   const guideQa = await runQualityChecks(
     guideFacts,
     guideRequest,
@@ -849,7 +849,7 @@ async function observe() {
   assert.equal(currentGuide.processed, false);
   assert.equal(currentGuide.recommendation.action, "review");
   assert.equal(currentGuide.expectedInput?.association.translations[0]?.translation.content.message, "Sauver");
-  const currentRequest = await aggregateConfig.qualityRequest(facts);
+  const currentRequest = await aggregateConfig.createQualityRequest(facts);
   const currentRelationshipQa = await runQualityChecks(
     facts,
     {

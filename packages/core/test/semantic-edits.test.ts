@@ -70,7 +70,7 @@ void describe("semantic edits", () => {
         matches: (unit, translation) =>
           unit.context.line === translation.context.sourceLine,
       },
-      edits: {
+      translationWriteback: {
         targetContent: (translation) => translation.text,
         locateExistingTarget({ translation }) {
           return {
@@ -178,7 +178,7 @@ void describe("semantic edits", () => {
             );
           },
         },
-        edits: {
+        translationWriteback: {
           targetContent: (actualTranslation) => actualTranslation.text,
           locateExistingTarget({ sourceUnit, translation: actualTranslation }) {
             assert.strictEqual(sourceUnit.unit, source);
@@ -305,7 +305,7 @@ void describe("semantic edits", () => {
         matches: (unit, translation) =>
           unit.context.line === translation.context.sourceLine,
       },
-      edits: {
+      translationWriteback: {
         targetContent: (translation) => translation.text,
         locateExistingTarget: ({ translation }) => ({
           status: "located",
@@ -416,7 +416,7 @@ void describe("semantic edits", () => {
         matches: (unit, translation) =>
           unit.context.line === translation.context.sourceLine,
       },
-      edits: {
+      translationWriteback: {
         targetContent: (translation) => translation.text,
         locateExistingTarget: ({ translation }) => ({
           status: "located",
@@ -518,7 +518,7 @@ void describe("semantic edits", () => {
         },
         matches: () => true,
       },
-      edits: {
+      translationWriteback: {
         targetContent: (translation) => translation.text,
         locateExistingTarget: ({ translation }) => ({
           status: "located",

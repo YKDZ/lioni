@@ -5,12 +5,12 @@ import {
   evaluateCompletion,
 } from "./completion.ts";
 import type { CompletionFacts, CompletionPolicy } from "./completion.ts";
-import type { SemanticEditAdapter } from "./edits.ts";
 import type { UpdatePolicy } from "./plans.ts";
 import type { QualityCheckDefinition, QualityCheckRequest } from "./qa.ts";
+import type { TranslationWritebackAdapter } from "./semantic-edits.ts";
 
 export * from "./completion.ts";
-export * from "./edits.ts";
+export * from "./semantic-edits.ts";
 export * from "./apply-plans.ts";
 export * from "./plans.ts";
 export * from "./qa.ts";
@@ -91,13 +91,16 @@ export type FrameworkConfig<
   readonly keyOf: (unit: TUnit) => string;
   readonly translations?: TranslationAdapter<TUnit, TTranslation>;
   readonly completion?: CompletionPolicy<TUnit, TTranslation>;
-  readonly edits?: SemanticEditAdapter<TUnit, TTranslation>;
+  readonly translationWriteback?: TranslationWritebackAdapter<
+    TUnit,
+    TTranslation
+  >;
   readonly updatePolicy?: UpdatePolicy<TUnit, TTranslation>;
   readonly qualityChecks?: readonly QualityCheckDefinition<
     TUnit,
     TTranslation
   >[];
-  readonly qualityRequest?: (
+  readonly createQualityRequest?: (
     facts: FrameworkFacts<TUnit, TTranslation>,
   ) => Awaitable<QualityCheckRequest>;
 };

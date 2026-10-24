@@ -52,7 +52,7 @@ export type EditTargetResolution =
   | { readonly status: "located"; readonly locator: JsonValue }
   | { readonly status: "notWritable"; readonly reason: string };
 
-export type SemanticEditAdapter<
+export type TranslationWritebackAdapter<
   TUnit extends TranslationUnitInput,
   TTranslation,
 > = {
@@ -128,11 +128,11 @@ export async function prepareSemanticEdit<
   candidate: SemanticEditCandidate,
   config: FrameworkConfig<TUnit, TTranslation>,
 ): Promise<SemanticEditPreparation> {
-  const adapter = config.edits;
+  const adapter = config.translationWriteback;
   if (adapter === undefined || adapter.write === undefined)
     return {
       status: "notWritable",
-      reason: "宿主没有提供语义编辑写入能力。",
+      reason: "宿主没有提供译文写回能力。",
     };
 
   const sourceUnit = facts.source.units.find(
@@ -269,7 +269,7 @@ export async function applySemanticEdits<
   const results: SemanticEditResult<TUnit, TTranslation>[] = [];
   for (const edit of edits) {
     const base = { sourceKey: edit.sourceKey, language: edit.language };
-    const adapter = config.edits;
+    const adapter = config.translationWriteback;
     if (adapter === undefined || adapter.write === undefined) {
       results.push({
         ...base,
@@ -396,9 +396,9 @@ async function validateSemanticEdit<
   if (edit.formatVersion !== "l10n.semantic-edit/v1")
     return { status: "unprocessed", reason: "不支持的语义编辑版本。" };
 
-  const adapter = config.edits;
+  const adapter = config.translationWriteback;
   if (adapter === undefined)
-    return { status: "notWritable", reason: "宿主没有提供语义编辑适配器。" };
+    return { status: "notWritable", reason: "宿主没有提供译文写回适配器。" };
 
   const sourceUnit = observation.sourceUnit;
   if (sourceUnit === null) {
@@ -576,7 +576,7 @@ function snapshotEditObservation<
 function confirmsEditContent<TUnit extends TranslationUnitInput, TTranslation>(
   edit: SemanticEdit,
   observation: SemanticEditObservation<TUnit, TTranslation>,
-  adapter: SemanticEditAdapter<TUnit, TTranslation>,
+  adapter: TranslationWritebackAdapter<TUnit, TTranslation>,
 ): boolean {
   if (
     observation.association?.status !== "matched" ||
