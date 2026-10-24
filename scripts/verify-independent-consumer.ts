@@ -1792,7 +1792,9 @@ if (scenario === "corrupt-history") {
     assert.equal(advanced.baseline.entries.find(({ sourceKey }) => sourceKey === "A").source.presence, "removed");
     assert.deepEqual(advanced.baseline.entries.find(({ sourceKey }) => sourceKey === "A").source.unit, { id: "A", source: "Save" });
   } else if (scenario === "all-gone") {
-    assert.equal(forA.status, "source-removed");
+    assert.equal(forA.status, "unchanged");
+    assert.equal(forA.previous.source.presence, "removed");
+    assert.equal(forA.processed, true);
     assert.equal(facts.translations.records.length, 0);
   }
 }
