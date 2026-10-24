@@ -48,6 +48,13 @@ export type SemanticEdit = {
   };
 };
 
+export type SemanticEditInput = Omit<SemanticEdit, "formatVersion" | "content">;
+
+export type SemanticEditSubject = Pick<
+  SemanticEditCandidate,
+  "sourceKey" | "language"
+>;
+
 export type EditTargetResolution =
   | { readonly status: "located"; readonly locator: JsonValue }
   | { readonly status: "notWritable"; readonly reason: string };
@@ -81,6 +88,10 @@ export type TranslationWritebackAdapter<
 
 export type SemanticEditPreparation =
   | { readonly status: "prepared"; readonly edit: SemanticEdit }
+  | { readonly status: "notWritable"; readonly reason: string };
+
+export type SemanticEditInputResolution =
+  | { readonly status: "resolved"; readonly input: SemanticEditInput }
   | { readonly status: "notWritable"; readonly reason: string };
 
 export type SemanticEditObservation<
@@ -120,23 +131,23 @@ export type SemanticEditBatchResult<
   readonly results: readonly SemanticEditResult<TUnit, TTranslation>[];
 };
 
-export async function prepareSemanticEdit<
+export async function resolveSemanticEditInput<
   TUnit extends TranslationUnitInput,
   TTranslation,
 >(
   facts: FrameworkFacts<TUnit, TTranslation>,
-  candidate: SemanticEditCandidate,
+  subject: SemanticEditSubject,
   config: FrameworkConfig<TUnit, TTranslation>,
-): Promise<SemanticEditPreparation> {
+): Promise<SemanticEditInputResolution> {
   const adapter = config.translationWriteback;
-  if (adapter === undefined || adapter.write === undefined)
+  if (adapter === undefined)
     return {
       status: "notWritable",
-      reason: "宿主没有提供译文写回能力。",
+      reason: "宿主没有提供译文目标解析能力。",
     };
 
   const sourceUnit = facts.source.units.find(
-    ({ key }) => key === candidate.sourceKey,
+    ({ key }) => key === subject.sourceKey,
   );
   if (sourceUnit === undefined)
     return { status: "notWritable", reason: "找不到候选对应的原文单元。" };
@@ -148,12 +159,12 @@ export async function prepareSemanticEdit<
 
   const association = facts.associations.find(
     ({ sourceKey, language }) =>
-      sourceKey === candidate.sourceKey && language === candidate.language,
+      sourceKey === subject.sourceKey && language === subject.language,
   );
   if (association === undefined)
     return {
       status: "notWritable",
-      reason: `目标语言 ${candidate.language} 不在当前源译事实中。`,
+      reason: `目标语言 ${subject.language} 不在当前源译事实中。`,
     };
   if (association.status === "unknown")
     return {
@@ -207,7 +218,7 @@ export async function prepareSemanticEdit<
       currentTranslation === undefined
         ? await adapter.locateNewTarget({
             sourceUnit,
-            language: candidate.language,
+            language: subject.language,
           })
         : await adapter.locateExistingTarget({
             sourceUnit,
@@ -231,24 +242,54 @@ export async function prepareSemanticEdit<
           };
     const dependencies = await adapter.dependencies?.({
       sourceUnit,
-      language: candidate.language,
+      language: subject.language,
       association,
       translations,
     });
     return {
-      status: "prepared",
-      edit: {
-        formatVersion: "l10n.semantic-edit/v1",
+      status: "resolved",
+      input: {
         createdFromFactsVersion: facts.version,
-        sourceKey: candidate.sourceKey,
-        language: candidate.language,
+        sourceKey: subject.sourceKey,
+        language: subject.language,
         target,
-        content: snapshotJson(candidate.content, "候选内容"),
         expected: {
           source: snapshotJson(sourceUnit.unit.source, "原文正文"),
           target: expectedTarget,
           dependencies: snapshotJson(dependencies ?? null, "编辑依赖"),
         },
+      },
+    };
+  } catch (error) {
+    return {
+      status: "notWritable",
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/** 根据已经解析的输入和候选纯计算可保存的语义编辑。 */
+export function prepareSemanticEdit(
+  input: SemanticEditInput,
+  candidate: SemanticEditCandidate,
+): SemanticEditPreparation {
+  if (
+    input.sourceKey !== candidate.sourceKey ||
+    input.language !== candidate.language
+  )
+    return {
+      status: "notWritable",
+      reason: "候选与已解析的编辑输入不匹配。",
+    };
+
+  try {
+    const snapshot = snapshotJson(input, "已解析编辑输入") as SemanticEditInput;
+    return {
+      status: "prepared",
+      edit: {
+        ...snapshot,
+        formatVersion: "l10n.semantic-edit/v1",
+        content: snapshotJson(candidate.content, "候选内容"),
       },
     };
   } catch (error) {

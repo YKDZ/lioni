@@ -26,6 +26,7 @@ import {
 import {
   applySemanticEdits,
   prepareSemanticEdit,
+  resolveSemanticEditInput,
   type JsonValue,
   type SemanticEdit,
   type SemanticEditResult,
@@ -237,15 +238,33 @@ export async function applyUpdatePlan<
       continue;
     }
 
-    const prepared = await prepareSemanticEdit(
+    const resolved = await resolveSemanticEditInput(
       facts,
       {
         sourceKey: selection.sourceKey,
         language: selection.language,
-        content: item.recommendation.candidate as JsonValue,
       },
       config,
     );
+    if (resolved.status !== "resolved") {
+      contentResults.set(id, {
+        ...selectionPair(selection),
+        status: "notWritable",
+        reason: resolved.reason,
+      });
+      baselineResults.set(id, {
+        ...selectionPair(selection),
+        status: "notAttempted",
+        reason: resolved.reason,
+      });
+      continue;
+    }
+
+    const prepared = prepareSemanticEdit(resolved.input, {
+      sourceKey: selection.sourceKey,
+      language: selection.language,
+      content: item.recommendation.candidate as JsonValue,
+    });
     if (prepared.status !== "prepared") {
       contentResults.set(id, {
         ...selectionPair(selection),
