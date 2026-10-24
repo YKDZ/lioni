@@ -10,6 +10,7 @@ import type {
   TranslationAssociationStatus,
   TranslationUnitInput,
 } from "./index.ts";
+import type { JsonValue } from "./semantic-edits.ts";
 
 export type CompletionResolution =
   | boolean
@@ -18,6 +19,8 @@ export type CompletionResolution =
 export type CompletionResolverInput<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody = JsonValue,
+  TUnavailable = never,
 > = {
   readonly factsVersion: string;
   readonly obligation: {
@@ -26,22 +29,35 @@ export type CompletionResolverInput<
   };
   readonly sourceUnit: SourceUnitFact<TUnit>;
   readonly association: TranslationAssociationFact;
-  readonly translations: readonly ActualTranslationFact<TTranslation>[];
+  readonly translations: readonly ActualTranslationFact<
+    TTranslation,
+    TBody,
+    TUnavailable
+  >[];
 };
 
 export type ResolveCompletion<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody = JsonValue,
+  TUnavailable = never,
 > = (
-  input: CompletionResolverInput<TUnit, TTranslation>,
+  input: CompletionResolverInput<TUnit, TTranslation, TBody, TUnavailable>,
 ) => Awaitable<CompletionResolution>;
 
 export type CompletionPolicy<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody = JsonValue,
+  TUnavailable = never,
 > = {
   readonly criterion: string;
-  readonly resolveCompletion: ResolveCompletion<TUnit, TTranslation>;
+  readonly resolveCompletion: ResolveCompletion<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable
+  >;
 };
 
 export type CompletionStatus = "complete" | "incomplete" | "unknown";
@@ -80,7 +96,9 @@ export type CompletionReport = {
 export type CompletionFacts<
   TUnit extends TranslationUnitInput,
   TTranslation,
-> = FrameworkFacts<TUnit, TTranslation> & {
+  TBody = JsonValue,
+  TUnavailable = never,
+> = FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable> & {
   readonly completion: CompletionReport;
 };
 
@@ -105,9 +123,11 @@ export class CompletionConfigurationError extends Error {
 export async function evaluateCompletion<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
+  TUnavailable,
 >(
-  facts: FrameworkFacts<TUnit, TTranslation>,
-  policy: CompletionPolicy<TUnit, TTranslation>,
+  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
+  policy: CompletionPolicy<TUnit, TTranslation, TBody, TUnavailable>,
 ): Promise<CompletionReport> {
   const sourceUnits = new Map(
     facts.source.units.map((sourceUnit) => [sourceUnit.key, sourceUnit]),
@@ -119,7 +139,11 @@ export async function evaluateCompletion<
     if (sourceUnit === undefined)
       throw new TypeError(`完成关联引用不存在的原文：${association.sourceKey}`);
 
-    const translations: ActualTranslationFact<TTranslation>[] = [];
+    const translations: ActualTranslationFact<
+      TTranslation,
+      TBody,
+      TUnavailable
+    >[] = [];
     let missingTranslationReference = false;
     for (const index of association.translationIndexes) {
       const translation = facts.translations.records[index];
