@@ -7,6 +7,7 @@ import {
   type BodyAvailability,
   type JsonValue,
   type QualityCheckInput,
+  type SemanticEditCandidate,
   type SourceUnitFact,
   type StandardSchemaV1,
 } from "@lioni/core";
@@ -533,10 +534,12 @@ void describe("阿拉伯数字对应检查", () => {
     });
 
     const result = await analyzeQuality(config);
+    const typedCandidates: readonly SemanticEditCandidate<MixedBody>[] =
+      result.candidates;
 
     assert.equal(result.status, "complete");
     assert.deepEqual(
-      result.candidates.map(({ content }) => content),
+      typedCandidates.map(({ content }) => content),
       ["Total 21", ["Version 2024"]],
     );
     assert.deepEqual(result.checks[0]?.coverage, {

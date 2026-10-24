@@ -195,7 +195,7 @@ export type FrameworkConfig<
   >[];
   readonly createQualityRequest?: (
     facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
-  ) => Awaitable<QualityCheckRequest>;
+  ) => Awaitable<QualityCheckRequest<TBody>>;
 };
 
 type DefineConfigInput<
@@ -719,8 +719,10 @@ export async function analyzeQuality<
   TUnavailable,
 >(
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
-  options: { readonly candidates?: readonly SemanticEditCandidate[] } = {},
-): Promise<QualityRunResult> {
+  options: {
+    readonly candidates?: readonly SemanticEditCandidate<TBody>[];
+  } = {},
+): Promise<QualityRunResult<QualityObject, TBody>> {
   const facts = await readFacts(config);
   const checks = configuredQualityChecks(config);
   const configuredRequest = await createConfiguredQualityRequest(config, facts);
@@ -728,17 +730,20 @@ export async function analyzeQuality<
     options.candidates === undefined
       ? configuredRequest
       : { ...configuredRequest, candidates: options.candidates };
-  return runQualityChecks(facts, request, checks);
+  const candidates: SemanticEditCandidate<TBody>[] = [];
+  for (const candidate of request.candidates)
+    candidates.push(await validateSemanticEditCandidate(candidate, config));
+  return runQualityChecks(facts, { ...request, candidates }, checks);
 }
 
-export type QualityWriteCondition = (
-  quality: QualityRunResult,
+export type QualityWriteCondition<TBody = JsonValue> = (
+  quality: QualityRunResult<QualityObject, TBody>,
 ) => Awaitable<boolean>;
 
 export type PrepareQualityConditionedSemanticEditOptions<TBody = JsonValue> = {
   readonly candidate: SemanticEditCandidate<TBody>;
-  readonly condition?: QualityWriteCondition;
-  readonly quality?: QualityRunResult;
+  readonly condition?: QualityWriteCondition<TBody>;
+  readonly quality?: QualityRunResult<QualityObject, TBody>;
 };
 
 export type QualityConditionedSemanticEditResult<TBody = JsonValue> =
@@ -748,12 +753,12 @@ export type QualityConditionedSemanticEditResult<TBody = JsonValue> =
     }
   | {
       readonly status: "passed";
-      readonly quality: QualityRunResult;
+      readonly quality: QualityRunResult<QualityObject, TBody>;
       readonly preparation: SemanticEditPreparation<TBody>;
     }
   | {
       readonly status: "rejected";
-      readonly quality: QualityRunResult;
+      readonly quality: QualityRunResult<QualityObject, TBody>;
     }
   | {
       readonly status: "input-mismatch";
@@ -781,7 +786,10 @@ export async function prepareQualityConditionedSemanticEdit<
   const providedQuality =
     condition === undefined || options.quality === undefined
       ? undefined
-      : (snapshotJson(options.quality, "QA 结果") as QualityRunResult);
+      : (snapshotJson(options.quality, "QA 结果") as QualityRunResult<
+          QualityObject,
+          TBody
+        >);
   const facts = await readFacts(config);
   if (condition === undefined)
     return {
@@ -791,10 +799,7 @@ export async function prepareQualityConditionedSemanticEdit<
 
   const checks = configuredQualityChecks(config);
   const configuredRequest = await createConfiguredQualityRequest(config, facts);
-  const qualityCandidate = snapshotJson(
-    candidate,
-    "译文候选",
-  ) as SemanticEditCandidate;
+  const qualityCandidate = candidate;
   const request = { ...configuredRequest, candidates: [qualityCandidate] };
   const quality =
     providedQuality ?? (await runQualityChecks(facts, request, checks));
@@ -848,8 +853,8 @@ async function qualityRunMatchesInputs<
   TUnavailable,
 >(
   facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
-  candidate: SemanticEditCandidate,
-  request: QualityCheckRequest,
+  candidate: SemanticEditCandidate<TBody>,
+  request: QualityCheckRequest<TBody>,
   checks: readonly QualityCheckDefinition<
     TUnit,
     TTranslation,
@@ -857,7 +862,7 @@ async function qualityRunMatchesInputs<
     TBody,
     TUnavailable
   >[],
-  quality: QualityRunResult,
+  quality: QualityRunResult<QualityObject, TBody>,
 ): Promise<boolean> {
   const configurationRun = await runQualityChecks(
     facts,
@@ -874,7 +879,7 @@ async function qualityRunMatchesInputs<
     },
     "QA 输入",
   ) as Pick<
-    QualityRunResult,
+    QualityRunResult<QualityObject, TBody>,
     "candidates" | "dependencies" | "relationships" | "exceptions"
   >;
   if (
@@ -918,7 +923,7 @@ function defaultQualityRequest<
   TUnavailable,
 >(
   facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
-): QualityCheckRequest {
+): QualityCheckRequest<TBody> {
   return {
     candidates: facts.associations.flatMap((association) => {
       if (association.status !== "matched") return [];
@@ -930,7 +935,7 @@ function defaultQualityRequest<
             {
               sourceKey: association.sourceKey,
               language: association.language,
-              content: snapshotJson(record.content, "译文业务内容"),
+              content: record.content,
             },
           ];
     }),
@@ -967,7 +972,7 @@ async function createConfiguredQualityRequest<
 >(
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
   facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
-): Promise<QualityCheckRequest> {
+): Promise<QualityCheckRequest<TBody>> {
   const request = config.createQualityRequest;
   if (request === undefined) return defaultQualityRequest(facts);
   if (typeof request !== "function")
