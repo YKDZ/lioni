@@ -12,10 +12,15 @@ import {
   type FrameworkConfig,
   type ProcessingBaseline,
   type ProcessingBaselineStore,
+  type StandardSchemaV1,
   type UpdatePolicy,
 } from "../src/index.ts";
 import { createFileUpdatePlanStore } from "../src/node.ts";
-import { sourceSchemaFromExamples } from "./source-schema.ts";
+import {
+  jsonValueSchema,
+  schemaFromExamples,
+  sourceSchemaFromExamples,
+} from "./source-schema.ts";
 
 type Unit = {
   readonly id: string;
@@ -37,8 +42,14 @@ function makeConfig(
     readonly updatePolicy?: UpdatePolicy<Unit, Translation>;
     readonly withWriteback?: boolean;
   } = {},
-): FrameworkConfig<Unit, Translation> {
-  return defineConfig({
+) {
+  return defineConfig<
+    Unit,
+    StandardSchemaV1<Unit, Unit>,
+    StandardSchemaV1<Translation, Translation>,
+    never,
+    typeof jsonValueSchema
+  >({
     source: {
       schema: sourceSchemaFromExamples<Unit>(
         { id: "example", source: "example", context: { line: 0 } },
@@ -60,6 +71,11 @@ function makeConfig(
     keyOf: (unit) => unit.id,
     translations: {
       languages: ["fr"],
+      schema: schemaFromExamples<Translation>({
+        id: "example",
+        text: "example",
+      }),
+      contentSchema: jsonValueSchema,
       read: (_language, sourceUnits) => ({
         scopes: [
           {

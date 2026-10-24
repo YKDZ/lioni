@@ -6,6 +6,8 @@ import {
   defineConfig,
   type BodyAvailability,
   type JsonValue,
+  type QualityCheckInput,
+  type SourceUnitFact,
   type StandardSchemaV1,
 } from "@lioni/core";
 
@@ -13,6 +15,23 @@ import { createNumberChecker } from "../src/index.ts";
 
 type Unit = { readonly source: JsonValue; readonly identity: string };
 type Translation = { readonly text: JsonValue; readonly nativeKey: string };
+
+type TextUnit = {
+  readonly kind: "text";
+  readonly source: string;
+  readonly identity: string;
+};
+type ListUnit = {
+  readonly kind: "list";
+  readonly source: readonly string[];
+  readonly identity: string;
+};
+type MixedUnit = TextUnit | ListUnit;
+type MixedBody = string | readonly string[];
+type MixedTranslation = {
+  readonly text: MixedBody;
+  readonly nativeKey: string;
+};
 
 const sourceSchema: StandardSchemaV1<Unit, Unit> = {
   "~standard": {
@@ -26,12 +45,188 @@ const sourceSchema: StandardSchemaV1<Unit, Unit> = {
   },
 };
 
+const translationSchema: StandardSchemaV1<Translation, Translation> = {
+  "~standard": {
+    version: 1,
+    vendor: "lioni-number-check-test",
+    validate(value) {
+      if (
+        typeof value !== "object" ||
+        value === null ||
+        Array.isArray(value) ||
+        !("text" in value) ||
+        !isJsonValue(value.text) ||
+        !("nativeKey" in value) ||
+        typeof value.nativeKey !== "string"
+      )
+        return { issues: [{ message: "译文记录结构不匹配。" }] };
+      return {
+        value: { text: value.text, nativeKey: value.nativeKey },
+      };
+    },
+  },
+};
+
+const jsonValueSchema: StandardSchemaV1<JsonValue, JsonValue> = {
+  "~standard": {
+    version: 1,
+    vendor: "lioni-number-check-test",
+    validate(value) {
+      return isJsonValue(value)
+        ? { value }
+        : { issues: [{ message: "正文必须是 JSON 数据。" }] };
+    },
+  },
+};
+
+function selectNumberSubject(
+  input: QualityCheckInput<Unit, Translation, unknown, JsonValue>,
+) {
+  const sourceUnit = input.sourceUnit;
+  if (sourceUnit === null)
+    return {
+      status: "incomplete" as const,
+      issue: { code: "sourceUnavailable", message: "找不到对应原文。" },
+    };
+  return {
+    status: "selected" as const,
+    subject: {
+      sourceUnit,
+      sourceKey: input.candidate.sourceKey,
+      language: input.candidate.language,
+      content: input.candidate.content,
+    },
+  };
+}
+
+function isMixedUnit(value: unknown): value is MixedUnit {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return false;
+  if (
+    !("kind" in value) ||
+    !("source" in value) ||
+    !("identity" in value) ||
+    typeof value.identity !== "string"
+  )
+    return false;
+  if (value.kind === "text") return typeof value.source === "string";
+  return (
+    value.kind === "list" &&
+    Array.isArray(value.source) &&
+    value.source.every((entry: unknown) => typeof entry === "string")
+  );
+}
+
+function isMixedBody(value: unknown): value is MixedBody {
+  return (
+    typeof value === "string" ||
+    (Array.isArray(value) &&
+      value.every((entry: unknown) => typeof entry === "string"))
+  );
+}
+
+const mixedUnitSchema: StandardSchemaV1<MixedUnit, MixedUnit> = {
+  "~standard": {
+    version: 1,
+    vendor: "lioni-number-check-test",
+    validate(value) {
+      return isMixedUnit(value)
+        ? { value }
+        : { issues: [{ message: "混合原文单元结构不匹配。" }] };
+    },
+  },
+};
+
+const mixedTranslationSchema: StandardSchemaV1<
+  MixedTranslation,
+  MixedTranslation
+> = {
+  "~standard": {
+    version: 1,
+    vendor: "lioni-number-check-test",
+    validate(value) {
+      if (
+        typeof value !== "object" ||
+        value === null ||
+        Array.isArray(value) ||
+        !("text" in value) ||
+        !isMixedBody(value.text) ||
+        !("nativeKey" in value) ||
+        typeof value.nativeKey !== "string"
+      )
+        return { issues: [{ message: "混合译文记录结构不匹配。" }] };
+      return { value: { text: value.text, nativeKey: value.nativeKey } };
+    },
+  },
+};
+
+const mixedBodySchema: StandardSchemaV1<MixedBody, MixedBody> = {
+  "~standard": {
+    version: 1,
+    vendor: "lioni-number-check-test",
+    validate(value) {
+      return isMixedBody(value)
+        ? { value }
+        : { issues: [{ message: "混合正文必须是字符串或字符串列表。" }] };
+    },
+  },
+};
+
+function selectMixedText(
+  input: QualityCheckInput<
+    MixedUnit,
+    MixedTranslation,
+    unknown,
+    MixedBody,
+    never
+  >,
+) {
+  const sourceUnit = input.sourceUnit;
+  if (sourceUnit === null)
+    return {
+      status: "incomplete" as const,
+      issue: { code: "sourceUnavailable", message: "找不到对应原文。" },
+    };
+
+  const content = input.candidate.content;
+  if (sourceUnit.unit.kind === "list") {
+    if (
+      Array.isArray(content) &&
+      content.every((entry: unknown) => typeof entry === "string")
+    )
+      return { status: "not-applicable" as const };
+    return {
+      status: "incomplete" as const,
+      issue: { code: "candidateShape", message: "列表候选结构不匹配。" },
+    };
+  }
+
+  if (typeof content !== "string")
+    return {
+      status: "incomplete" as const,
+      issue: { code: "candidateShape", message: "文本候选必须是字符串。" },
+    };
+  const textSourceUnit: SourceUnitFact<TextUnit> = {
+    ...sourceUnit,
+    unit: sourceUnit.unit,
+  };
+  return {
+    status: "selected" as const,
+    subject: {
+      sourceUnit: textSourceUnit,
+      sourceKey: input.candidate.sourceKey,
+      language: input.candidate.language,
+      content,
+    },
+  };
+}
+
 function configFor(
   source: JsonValue | undefined,
   target: JsonValue | undefined,
   availability: BodyAvailability = "available",
 ) {
-  return defineConfig<Unit, Translation>({
+  return defineConfig({
     source: {
       schema: sourceSchema,
       read: () => ({
@@ -55,6 +250,8 @@ function configFor(
     keyOf: ({ identity }) => `hash:${identity}`,
     translations: {
       languages: ["fr"],
+      schema: translationSchema,
+      contentSchema: jsonValueSchema,
       contentOf: ({ text }) => text,
       matches: (unit, translation) => unit.identity === translation.nativeKey,
       read: (_language, units) => ({
@@ -77,7 +274,8 @@ function configFor(
       }),
     },
     qualityChecks: [
-      createNumberChecker<Unit, Translation>({
+      createNumberChecker({
+        select: selectNumberSubject,
         sourceText: (unit) => unit.source,
         translationText: (content) => content,
         translationLocation: (translation, _subject, location) =>
@@ -223,7 +421,8 @@ void describe("阿拉伯数字对应检查", () => {
     const config = {
       ...configFor("12 seconds", "12 secondes"),
       qualityChecks: [
-        createNumberChecker<Unit, Translation>({
+        createNumberChecker({
+          select: selectNumberSubject,
           sourceText: (unit) => unit.source,
           translationText: (content) => {
             if (
@@ -276,5 +475,81 @@ void describe("阿拉伯数字对应检查", () => {
       assert.equal(result.checks[0]?.coverage.incomplete, 1);
       assert.equal(result.checks[0]?.issues.length, 1);
     }
+  });
+
+  void it("在字符串与列表混合项目中仅检查文本候选并保留列表事实", async () => {
+    const units: readonly MixedUnit[] = [
+      { kind: "text", identity: "message", source: "Total 12" },
+      { kind: "list", identity: "rows", source: ["Version 2024"] },
+    ];
+    const translations: readonly MixedTranslation[] = [
+      { nativeKey: "message", text: "Total 21" },
+      { nativeKey: "rows", text: ["Version 2024"] },
+    ];
+    const checker = createNumberChecker({
+      select: selectMixedText,
+      sourceText: (unit) => unit.source,
+      translationText: (content) =>
+        typeof content === "string" ? content : undefined,
+    });
+    const config = defineConfig({
+      source: {
+        schema: mixedUnitSchema,
+        read: () => ({
+          scopes: [
+            {
+              range: "source.json",
+              enumeration: "complete",
+              records: units.map((value) => ({
+                value,
+                bodyAvailability: "available" as const,
+              })),
+            },
+          ],
+        }),
+      },
+      keyOf: ({ identity }) => `hash:${identity}`,
+      translations: {
+        languages: ["fr"],
+        schema: mixedTranslationSchema,
+        contentSchema: mixedBodySchema,
+        contentOf: ({ text }) => text,
+        read: (_language, sourceUnits) => ({
+          scopes: [
+            {
+              range: "fr.json",
+              covers: sourceUnits.map(({ key }) => key),
+              enumeration: "complete" as const,
+              records: translations.map((value) => ({
+                value,
+                bodyAvailability: "available" as const,
+              })),
+            },
+          ],
+        }),
+        matches: (unit, translation) => unit.identity === translation.nativeKey,
+      },
+      qualityChecks: [checker],
+    });
+
+    const result = await analyzeQuality(config);
+
+    assert.equal(result.status, "complete");
+    assert.deepEqual(
+      result.candidates.map(({ content }) => content),
+      ["Total 21", ["Version 2024"]],
+    );
+    assert.deepEqual(result.checks[0]?.coverage, {
+      selected: 2,
+      evaluated: 1,
+      notApplicable: 1,
+      incomplete: 0,
+      failed: 0,
+    });
+    assert.equal(result.diagnostics.length, 1);
+    assert.equal(
+      result.diagnostics[0]?.message,
+      "译文缺少数字：12。译文多出数字：21。",
+    );
   });
 });

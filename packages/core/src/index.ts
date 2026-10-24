@@ -12,10 +12,12 @@ import {
   type QualityCheckDefinition,
   type QualityCheckRequest,
   type QualityRunResult,
+  type QualityObject,
 } from "./qa.ts";
 import {
   prepareSemanticEdit,
   resolveSemanticEditInput,
+  validateSemanticEditCandidate,
   type SemanticEditPreparation,
 } from "./semantic-edits.ts";
 import type {
@@ -25,11 +27,13 @@ import type {
 } from "./semantic-edits.ts";
 import {
   assertJsonValue,
+  StandardSchemaContractError,
   validateWithStandardSchema,
 } from "./standard-schema.ts";
 import type {
   PreservingStandardSchema,
   StandardSchemaV1,
+  StandardSchemaTypes,
 } from "./standard-schema.ts";
 
 export * from "./completion.ts";
@@ -73,15 +77,14 @@ export type TranslationUnitInput = {
 export type BodyAvailability = "available" | "unavailable";
 export type EnumerationCompleteness = "complete" | "partial" | "failed";
 
-export type ReadRecord<TValue> = {
-  readonly value: TValue;
-  readonly bodyAvailability: BodyAvailability;
-};
+export type ReadRecord<TValue, TUnavailable = TValue> =
+  | { readonly value: TValue; readonly bodyAvailability: "available" }
+  | { readonly value: TUnavailable; readonly bodyAvailability: "unavailable" };
 
-export type ReadScope<TValue> = {
+export type ReadScope<TValue, TUnavailable = TValue> = {
   readonly range: unknown;
   readonly enumeration: EnumerationCompleteness;
-  readonly records: readonly ReadRecord<TValue>[];
+  readonly records: readonly ReadRecord<TValue, TUnavailable>[];
   readonly error?: string;
 };
 
@@ -94,61 +97,176 @@ export type SourceAdapter<TUnit extends TranslationUnitInput> = {
   read(): Awaitable<SourceRead<TUnit>>;
 };
 
-export type TranslationReadScope<TTranslation> = ReadScope<TTranslation> & {
+export type TranslationReadScope<
+  TTranslation,
+  TUnavailable = never,
+> = ReadScope<TTranslation, TUnavailable> & {
   readonly covers: readonly string[];
 };
 
-export type TranslationRead<TTranslation> = {
-  readonly scopes: readonly TranslationReadScope<TTranslation>[];
+export type TranslationRead<TTranslation, TUnavailable = never> = {
+  readonly scopes: readonly TranslationReadScope<TTranslation, TUnavailable>[];
 };
 
 export type TranslationAdapter<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody = JsonValue,
+  TUnavailable = never,
+  TTranslationSchema = StandardSchemaV1<TTranslation, TTranslation>,
+  TUnavailableSchema = StandardSchemaV1<TUnavailable, TUnavailable>,
+  TContentSchema = StandardSchemaV1<TBody, TBody>,
 > = {
   readonly languages: readonly string[];
-  readonly contentOf: (translation: TTranslation) => JsonValue;
+  readonly schema: TTranslationSchema &
+    StandardSchemaV1<TTranslation, TTranslation> &
+    PreservingStandardSchema<TTranslation, TTranslationSchema>;
+  readonly unavailableSchema?: TUnavailableSchema &
+    StandardSchemaV1<TUnavailable, TUnavailable> &
+    PreservingStandardSchema<TUnavailable, TUnavailableSchema>;
+  readonly contentSchema: TContentSchema &
+    StandardSchemaV1<TBody, TBody> &
+    PreservingStandardSchema<TBody, TContentSchema>;
+  readonly contentOf: (translation: NoInfer<TTranslation>) => NoInfer<TBody>;
   read(
     language: string,
     sourceUnits: readonly SourceUnitFact<TUnit>[],
-  ): Awaitable<TranslationRead<TTranslation>>;
-  matches: (unit: TUnit, translation: TTranslation) => boolean;
+  ): Awaitable<TranslationRead<TTranslation, TUnavailable>>;
+  matches: (
+    unit: NoInfer<TUnit>,
+    translation: NoInfer<TTranslation | TUnavailable>,
+  ) => boolean;
 };
 
 export type FrameworkConfig<
   TUnit extends TranslationUnitInput,
   TTranslation = unknown,
+  TBody = JsonValue,
+  TUnavailable = never,
 > = {
   readonly source: SourceAdapter<TUnit>;
   readonly keyOf: (unit: TUnit) => string;
-  readonly translations?: TranslationAdapter<TUnit, TTranslation>;
-  readonly completion?: CompletionPolicy<TUnit, TTranslation>;
+  readonly translations?: TranslationAdapter<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable
+  >;
+  readonly completion?: CompletionPolicy<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable
+  >;
   readonly translationWriteback?: TranslationWritebackAdapter<
     TUnit,
-    TTranslation
+    TTranslation,
+    TBody,
+    TUnavailable
   >;
-  readonly updatePolicy?: UpdatePolicy<TUnit, TTranslation>;
+  readonly updatePolicy?: UpdatePolicy<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable
+  >;
   readonly qualityChecks?: readonly QualityCheckDefinition<
     TUnit,
-    TTranslation
+    TTranslation,
+    QualityObject,
+    TBody,
+    TUnavailable
   >[];
   readonly createQualityRequest?: (
-    facts: FrameworkFacts<TUnit, TTranslation>,
+    facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
   ) => Awaitable<QualityCheckRequest>;
 };
 
 type DefineConfigInput<
   TUnit extends TranslationUnitInput,
-  TTranslation,
   TSchema,
-> = Omit<FrameworkConfig<NoInfer<TUnit>, TTranslation>, "source"> & {
+  TTranslationSchema,
+  TUnavailableSchema,
+  TContentSchema,
+> = Omit<
+  FrameworkConfig<
+    NoInfer<TUnit>,
+    NoInfer<SchemaOutput<TTranslationSchema>>,
+    NoInfer<SchemaOutput<TContentSchema>>,
+    NoInfer<SchemaOutput<TUnavailableSchema>>
+  >,
+  "source" | "translations"
+> & {
   readonly source: {
     readonly schema: TSchema &
       StandardSchemaV1<TUnit, TUnit> &
       PreservingStandardSchema<TUnit, TSchema>;
-    read(): Awaitable<SourceRead<TUnit>>;
+    read(): Awaitable<SourceRead<NoInfer<TUnit>>>;
   };
+  readonly translations?: TranslationAdapterInput<
+    NoInfer<TUnit>,
+    TTranslationSchema,
+    TUnavailableSchema,
+    TContentSchema
+  >;
 };
+
+type TranslationAdapterInput<
+  TUnit extends TranslationUnitInput,
+  TTranslationSchema,
+  TUnavailableSchema,
+  TContentSchema,
+> = {
+  readonly languages: readonly string[];
+  readonly schema: TTranslationSchema &
+    StandardSchemaV1<
+      SchemaOutput<TTranslationSchema>,
+      SchemaOutput<TTranslationSchema>
+    > &
+    PreservingStandardSchema<
+      SchemaOutput<TTranslationSchema>,
+      TTranslationSchema
+    >;
+  readonly unavailableSchema?: TUnavailableSchema &
+    StandardSchemaV1<
+      SchemaOutput<TUnavailableSchema>,
+      SchemaOutput<TUnavailableSchema>
+    > &
+    PreservingStandardSchema<
+      SchemaOutput<TUnavailableSchema>,
+      TUnavailableSchema
+    >;
+  readonly contentSchema: TContentSchema &
+    StandardSchemaV1<
+      SchemaOutput<TContentSchema>,
+      SchemaOutput<TContentSchema>
+    > &
+    PreservingStandardSchema<SchemaOutput<TContentSchema>, TContentSchema>;
+  readonly contentOf: (
+    translation: NoInfer<SchemaOutput<TTranslationSchema>>,
+  ) => NoInfer<SchemaOutput<TContentSchema>>;
+  read(
+    language: string,
+    sourceUnits: readonly SourceUnitFact<NoInfer<TUnit>>[],
+  ): Awaitable<
+    TranslationRead<
+      NoInfer<SchemaOutput<TTranslationSchema>>,
+      NoInfer<SchemaOutput<TUnavailableSchema>>
+    >
+  >;
+  matches: (
+    unit: NoInfer<TUnit>,
+    translation: NoInfer<
+      SchemaOutput<TTranslationSchema> | SchemaOutput<TUnavailableSchema>
+    >,
+  ) => boolean;
+};
+
+type SchemaOutput<TSchema> = TSchema extends never
+  ? never
+  : StandardSchemaTypes<TSchema> extends { readonly output: infer TOutput }
+    ? TOutput
+    : never;
 
 export type SourceUnitFact<TUnit extends TranslationUnitInput> = {
   readonly key: string;
@@ -199,15 +317,28 @@ export type TranslationReadFact = {
   readonly error?: string;
 };
 
-export type ActualTranslationFact<TTranslation> = {
+type ActualTranslationFactBase = {
   readonly index: number;
   readonly language: string;
   readonly scopeIndex: number;
   readonly range: unknown;
-  readonly translation: TTranslation;
-  readonly content: JsonValue;
-  readonly bodyAvailability: BodyAvailability;
 };
+
+export type ActualTranslationFact<
+  TTranslation,
+  TBody = JsonValue,
+  TUnavailable = never,
+> =
+  | (ActualTranslationFactBase & {
+      readonly translation: TTranslation;
+      readonly content: TBody;
+      readonly bodyAvailability: "available";
+    })
+  | (ActualTranslationFactBase & {
+      readonly translation: TUnavailable;
+      readonly content?: never;
+      readonly bodyAvailability: "unavailable";
+    });
 
 export type TranslationAssociationFact = {
   readonly sourceKey: string;
@@ -218,12 +349,21 @@ export type TranslationAssociationFact = {
   readonly translationIndexes: readonly number[];
 };
 
-export type FrameworkFacts<TUnit extends TranslationUnitInput, TTranslation> = {
+export type FrameworkFacts<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody = JsonValue,
+  TUnavailable = never,
+> = {
   readonly version: string;
   readonly source: SourceFacts<TUnit>;
   readonly translations: {
     readonly reads: readonly TranslationReadFact[];
-    readonly records: readonly ActualTranslationFact<TTranslation>[];
+    readonly records: readonly ActualTranslationFact<
+      TTranslation,
+      TBody,
+      TUnavailable
+    >[];
   };
   readonly associations: readonly TranslationAssociationFact[];
 };
@@ -246,11 +386,24 @@ export class DuplicateTranslationUnitKeyError extends Error {
 
 export function defineConfig<
   TUnit extends TranslationUnitInput,
-  TTranslation = unknown,
   TSchema = StandardSchemaV1<TUnit, TUnit>,
+  TTranslationSchema = StandardSchemaV1<unknown, unknown>,
+  TUnavailableSchema = never,
+  TContentSchema = StandardSchemaV1<JsonValue, JsonValue>,
 >(
-  config: DefineConfigInput<TUnit, TTranslation, TSchema>,
-): FrameworkConfig<TUnit, TTranslation> {
+  config: DefineConfigInput<
+    TUnit,
+    TSchema,
+    TTranslationSchema,
+    TUnavailableSchema,
+    TContentSchema
+  >,
+): FrameworkConfig<
+  TUnit,
+  SchemaOutput<TTranslationSchema>,
+  SchemaOutput<TContentSchema>,
+  SchemaOutput<TUnavailableSchema>
+> {
   return config;
 }
 
@@ -274,17 +427,25 @@ export function validateFrameworkConfig(value: unknown): void {
     translations.languages.some((language) => typeof language !== "string") ||
     typeof translations.read !== "function" ||
     typeof translations.matches !== "function" ||
-    typeof translations.contentOf !== "function"
+    typeof translations.contentOf !== "function" ||
+    !isStandardSchema(translations.schema) ||
+    !isStandardSchema(translations.contentSchema) ||
+    (translations.unavailableSchema !== undefined &&
+      !isStandardSchema(translations.unavailableSchema))
   )
     throw new TypeError(
-      "defineConfig 的 translations 必须提供语言列表、read、matches 与 contentOf 函数。",
+      "defineConfig 的 translations 必须提供语言列表、记录与正文 schema、read、matches 与 contentOf 函数。",
     );
 }
 
 export async function readSourceFacts<
   TUnit extends TranslationUnitInput,
   TTranslation,
->(config: FrameworkConfig<TUnit, TTranslation>): Promise<SourceFacts<TUnit>> {
+  TBody,
+  TUnavailable,
+>(
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+): Promise<SourceFacts<TUnit>> {
   validateFrameworkConfig(config);
   let read: SourceRead<TUnit> | undefined;
   let errorMessage: string | undefined;
@@ -347,20 +508,22 @@ export async function readSourceFacts<
 export async function readFacts<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
+  TUnavailable,
 >(
-  config: FrameworkConfig<TUnit, TTranslation>,
-): Promise<FrameworkFacts<TUnit, TTranslation>> {
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+): Promise<FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>> {
   validateFrameworkConfig(config);
   const source = await readSourceFacts(config);
   const translationAdapter = config.translations;
   const translations = {
     reads: [] as TranslationReadFact[],
-    records: [] as ActualTranslationFact<TTranslation>[],
+    records: [] as ActualTranslationFact<TTranslation, TBody, TUnavailable>[],
   };
 
   if (translationAdapter !== undefined) {
     for (const language of translationAdapter.languages) {
-      let read: TranslationRead<TTranslation> | undefined;
+      let read: TranslationRead<TTranslation, TUnavailable> | undefined;
       let errorMessage: string | undefined;
       try {
         read = await translationAdapter.read(language, source.units);
@@ -368,27 +531,65 @@ export async function readFacts<
         errorMessage = error instanceof Error ? error.message : String(error);
       }
 
+      if (errorMessage === undefined) validateTranslationRead(read);
+
       const scopes: TranslationReadScopeFact[] = [];
       for (const [scopeIndex, scope] of (read?.scopes ?? []).entries()) {
         const translationIndexes: number[] = [];
         for (const record of scope.records) {
           const index = translations.records.length;
           translationIndexes.push(index);
-          translations.records.push({
+          const fact = {
             index,
             language,
             scopeIndex,
             range: scope.range,
-            translation: record.value,
-            content:
-              record.bodyAvailability === "available"
-                ? snapshotJson(
-                    translationAdapter.contentOf(record.value),
-                    "译文业务内容",
-                  )
-                : null,
-            bodyAvailability: record.bodyAvailability,
-          });
+          };
+          if (record.bodyAvailability === "available") {
+            const translation = await validateWithStandardSchema(
+              translationAdapter.schema,
+              record.value,
+              `译文记录 ${index + 1}`,
+              { preserveValue: true, requireJson: true },
+            );
+            const content = await validateWithStandardSchema(
+              translationAdapter.contentSchema,
+              translationAdapter.contentOf(translation),
+              `译文正文 ${index + 1}`,
+              { preserveValue: true, requireJson: true },
+            );
+            translations.records.push({
+              ...fact,
+              translation,
+              content,
+              bodyAvailability: "available",
+            });
+          } else if (record.bodyAvailability === "unavailable") {
+            const schema = translationAdapter.unavailableSchema;
+            if (schema === undefined)
+              throw new StandardSchemaContractError(
+                `译文记录 ${index + 1}`,
+                "schema-mismatch",
+                "发现不可用译文记录，但 translations.unavailableSchema 未声明该分支。",
+              );
+            const translation = await validateWithStandardSchema(
+              schema,
+              record.value,
+              `不可用译文记录 ${index + 1}`,
+              { preserveValue: true, requireJson: true },
+            );
+            translations.records.push({
+              ...fact,
+              translation,
+              bodyAvailability: "unavailable",
+            });
+          } else {
+            throw new StandardSchemaContractError(
+              `译文记录 ${index + 1}`,
+              "invalid-schema-result",
+              "译文记录的 bodyAvailability 必须为 available 或 unavailable。",
+            );
+          }
         }
         scopes.push({
           range: scope.range,
@@ -462,9 +663,11 @@ export async function readFacts<
 export async function readCompletion<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
+  TUnavailable,
 >(
-  config: FrameworkConfig<TUnit, TTranslation>,
-): Promise<CompletionFacts<TUnit, TTranslation>> {
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+): Promise<CompletionFacts<TUnit, TTranslation, TBody, TUnavailable>> {
   validateFrameworkConfig(config);
   const policy = config.completion;
   if (policy === undefined)
@@ -488,8 +691,10 @@ export async function readCompletion<
 export async function analyzeQuality<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
+  TUnavailable,
 >(
-  config: FrameworkConfig<TUnit, TTranslation>,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
   options: { readonly candidates?: readonly SemanticEditCandidate[] } = {},
 ): Promise<QualityRunResult> {
   const facts = await readFacts(config);
@@ -506,21 +711,21 @@ export type QualityWriteCondition = (
   quality: QualityRunResult,
 ) => Awaitable<boolean>;
 
-export type PrepareQualityConditionedSemanticEditOptions = {
-  readonly candidate: SemanticEditCandidate;
+export type PrepareQualityConditionedSemanticEditOptions<TBody = JsonValue> = {
+  readonly candidate: SemanticEditCandidate<TBody>;
   readonly condition?: QualityWriteCondition;
   readonly quality?: QualityRunResult;
 };
 
-export type QualityConditionedSemanticEditResult =
+export type QualityConditionedSemanticEditResult<TBody = JsonValue> =
   | {
       readonly status: "not-required";
-      readonly preparation: SemanticEditPreparation;
+      readonly preparation: SemanticEditPreparation<TBody>;
     }
   | {
       readonly status: "passed";
       readonly quality: QualityRunResult;
-      readonly preparation: SemanticEditPreparation;
+      readonly preparation: SemanticEditPreparation<TBody>;
     }
   | {
       readonly status: "rejected";
@@ -538,14 +743,16 @@ export type QualityConditionedSemanticEditResult =
 export async function prepareQualityConditionedSemanticEdit<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
+  TUnavailable,
 >(
-  config: FrameworkConfig<TUnit, TTranslation>,
-  options: PrepareQualityConditionedSemanticEditOptions,
-): Promise<QualityConditionedSemanticEditResult> {
-  const candidate = snapshotJson(
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+  options: PrepareQualityConditionedSemanticEditOptions<TBody>,
+): Promise<QualityConditionedSemanticEditResult<TBody>> {
+  const candidate = await validateSemanticEditCandidate(
     options.candidate,
-    "译文候选",
-  ) as SemanticEditCandidate;
+    config,
+  );
   const { condition } = options;
   const providedQuality =
     condition === undefined || options.quality === undefined
@@ -560,14 +767,18 @@ export async function prepareQualityConditionedSemanticEdit<
 
   const checks = configuredQualityChecks(config);
   const configuredRequest = await createConfiguredQualityRequest(config, facts);
-  const request = { ...configuredRequest, candidates: [candidate] };
+  const qualityCandidate = snapshotJson(
+    candidate,
+    "译文候选",
+  ) as SemanticEditCandidate;
+  const request = { ...configuredRequest, candidates: [qualityCandidate] };
   const quality =
     providedQuality ?? (await runQualityChecks(facts, request, checks));
   if (
     providedQuality !== undefined &&
     !(await qualityRunMatchesInputs(
       facts,
-      candidate,
+      qualityCandidate,
       configuredRequest,
       checks,
       quality,
@@ -589,29 +800,39 @@ export async function prepareQualityConditionedSemanticEdit<
 async function prepareCandidateEdit<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
+  TUnavailable,
 >(
-  facts: FrameworkFacts<TUnit, TTranslation>,
-  candidate: SemanticEditCandidate,
-  config: FrameworkConfig<TUnit, TTranslation>,
-): Promise<SemanticEditPreparation> {
+  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
+  candidate: SemanticEditCandidate<TBody>,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+): Promise<SemanticEditPreparation<TBody>> {
   const resolved = await resolveSemanticEditInput(
     facts,
     { sourceKey: candidate.sourceKey, language: candidate.language },
     config,
   );
   return resolved.status === "resolved"
-    ? prepareSemanticEdit(resolved.input, candidate)
+    ? prepareSemanticEdit(resolved.input, candidate, config)
     : resolved;
 }
 
 async function qualityRunMatchesInputs<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
+  TUnavailable,
 >(
-  facts: FrameworkFacts<TUnit, TTranslation>,
+  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
   candidate: SemanticEditCandidate,
   request: QualityCheckRequest,
-  checks: readonly QualityCheckDefinition<TUnit, TTranslation>[],
+  checks: readonly QualityCheckDefinition<
+    TUnit,
+    TTranslation,
+    QualityObject,
+    TBody,
+    TUnavailable
+  >[],
   quality: QualityRunResult,
 ): Promise<boolean> {
   const configurationRun = await runQualityChecks(
@@ -669,19 +890,23 @@ async function qualityRunMatchesInputs<
 function defaultQualityRequest<
   TUnit extends TranslationUnitInput,
   TTranslation,
->(facts: FrameworkFacts<TUnit, TTranslation>): QualityCheckRequest {
+  TBody,
+  TUnavailable,
+>(
+  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
+): QualityCheckRequest {
   return {
     candidates: facts.associations.flatMap((association) => {
       if (association.status !== "matched") return [];
       const record =
         facts.translations.records[association.translationIndexes[0] as number];
-      return record === undefined
+      return record === undefined || record.bodyAvailability !== "available"
         ? []
         : [
             {
               sourceKey: association.sourceKey,
               language: association.language,
-              content: record.content,
+              content: snapshotJson(record.content, "译文业务内容"),
             },
           ];
     }),
@@ -692,9 +917,17 @@ function defaultQualityRequest<
 function configuredQualityChecks<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
+  TUnavailable,
 >(
-  config: FrameworkConfig<TUnit, TTranslation>,
-): readonly QualityCheckDefinition<TUnit, TTranslation>[] {
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+): readonly QualityCheckDefinition<
+  TUnit,
+  TTranslation,
+  QualityObject,
+  TBody,
+  TUnavailable
+>[] {
   const checks = config.qualityChecks;
   if (checks === undefined) return [];
   if (!Array.isArray(checks))
@@ -705,9 +938,11 @@ function configuredQualityChecks<
 async function createConfiguredQualityRequest<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
+  TUnavailable,
 >(
-  config: FrameworkConfig<TUnit, TTranslation>,
-  facts: FrameworkFacts<TUnit, TTranslation>,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
 ): Promise<QualityCheckRequest> {
   const request = config.createQualityRequest;
   if (request === undefined) return defaultQualityRequest(facts);
@@ -755,6 +990,40 @@ function validateSourceRead(value: unknown): void {
       )
         throw new TypeError(
           `source.read 的第 ${scopeIndex + 1} 个范围中，第 ${recordIndex + 1} 条原文记录结构无效。`,
+        );
+    }
+  }
+}
+
+function validateTranslationRead(value: unknown): void {
+  if (!isRecord(value) || !Array.isArray(value.scopes))
+    throw new TypeError(
+      "translations.read 必须返回包含 scopes 数组的读取结果。",
+    );
+
+  for (const [scopeIndex, scope] of value.scopes.entries()) {
+    if (
+      !isRecord(scope) ||
+      !Array.isArray(scope.records) ||
+      !Array.isArray(scope.covers) ||
+      scope.covers.some((key) => typeof key !== "string") ||
+      (scope.enumeration !== "complete" &&
+        scope.enumeration !== "partial" &&
+        scope.enumeration !== "failed") ||
+      (scope.error !== undefined && typeof scope.error !== "string")
+    )
+      throw new TypeError(
+        `translations.read 的第 ${scopeIndex + 1} 个范围结构无效。`,
+      );
+    assertJsonValue(scope.range, `译文范围 ${scopeIndex + 1}`);
+    for (const [recordIndex, record] of scope.records.entries()) {
+      if (
+        !isRecord(record) ||
+        (record.bodyAvailability !== "available" &&
+          record.bodyAvailability !== "unavailable")
+      )
+        throw new TypeError(
+          `translations.read 的第 ${scopeIndex + 1} 个范围中，第 ${recordIndex + 1} 条译文记录结构无效。`,
         );
     }
   }
@@ -808,11 +1077,20 @@ function sourceFactsVersion<TUnit extends TranslationUnitInput>(facts: {
   return `sha256:${createHash("sha256").update(serialized).digest("hex")}`;
 }
 
-function factsVersion<TUnit extends TranslationUnitInput, TTranslation>(facts: {
+function factsVersion<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(facts: {
   readonly source: SourceFacts<TUnit>;
   readonly translations: {
     readonly reads: readonly TranslationReadFact[];
-    readonly records: readonly ActualTranslationFact<TTranslation>[];
+    readonly records: readonly ActualTranslationFact<
+      TTranslation,
+      TBody,
+      TUnavailable
+    >[];
   };
   readonly associations: readonly TranslationAssociationFact[];
 }): string {

@@ -29,7 +29,11 @@ import {
   type SemanticEditCandidate,
 } from "./semantic-edits.ts";
 
-export type UpdatePlanObservation<TSource = unknown, TTranslation = unknown> = {
+export type UpdatePlanObservation<
+  TSource = unknown,
+  TTranslation = unknown,
+  TUnavailable = never,
+> = {
   readonly source: {
     readonly presence: "present" | "removed";
     readonly value?: TSource;
@@ -43,17 +47,17 @@ export type UpdatePlanObservation<TSource = unknown, TTranslation = unknown> = {
     readonly scopes: readonly ProcessingBaselineTranslationScope[];
     readonly translations: readonly {
       readonly range: unknown;
-      readonly translation: TTranslation;
+      readonly translation: TTranslation | TUnavailable;
       readonly bodyAvailability: BodyAvailability;
     }[];
   };
 };
 
-export type UpdateDecision =
+export type UpdateDecision<TBody = JsonValue> =
   | { readonly action: "retain"; readonly reason?: string }
   | {
       readonly action: "candidate";
-      readonly candidate: SemanticEditCandidate;
+      readonly candidate: SemanticEditCandidate<TBody>;
       readonly reason?: string;
     }
   | { readonly action: "delete"; readonly reason?: string }
@@ -99,42 +103,72 @@ export type UpdatePlanBlock = {
 export type UpdatePolicyInput<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TUnavailable = never,
 > = {
   readonly sourceKey: string;
   readonly language: string;
   readonly change: ProcessingChangeStatus;
   readonly processed: boolean;
-  readonly previous?: UpdatePlanObservation<TUnit["source"], TTranslation>;
-  readonly expectedInput?: UpdatePlanObservation<TUnit["source"], TTranslation>;
+  readonly previous?: UpdatePlanObservation<
+    TUnit["source"],
+    TTranslation,
+    TUnavailable
+  >;
+  readonly expectedInput?: UpdatePlanObservation<
+    TUnit["source"],
+    TTranslation,
+    TUnavailable
+  >;
   readonly sourceUnit?: TUnit;
-  readonly translations: readonly TTranslation[];
+  readonly translations: readonly (TTranslation | TUnavailable)[];
 };
 
-export type UpdatePolicy<TUnit extends TranslationUnitInput, TTranslation> = (
-  input: UpdatePolicyInput<TUnit, TTranslation>,
-) => UpdateDecision;
+export type UpdatePolicy<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody = JsonValue,
+  TUnavailable = never,
+> = (
+  input: UpdatePolicyInput<TUnit, TTranslation, TUnavailable>,
+) => UpdateDecision<TBody>;
 
-export type UpdatePlanItem<TSource = unknown, TTranslation = unknown> = {
+export type UpdatePlanItem<
+  TSource = unknown,
+  TTranslation = unknown,
+  TBody = JsonValue,
+  TUnavailable = never,
+> = {
   readonly sourceKey: string;
   readonly language: string;
   readonly change: ProcessingChangeStatus;
   readonly processed: boolean;
   readonly previous?: ProcessingBaselineEntry;
   readonly current?: ProcessingBaselineEntry;
-  readonly expectedInput?: UpdatePlanObservation<TSource, TTranslation>;
-  readonly decision: UpdateDecision;
+  readonly expectedInput?: UpdatePlanObservation<
+    TSource,
+    TTranslation,
+    TUnavailable
+  >;
+  readonly decision: UpdateDecision<TBody>;
   readonly status: UpdatePlanStatus;
   readonly blocker?: UpdatePlanBlock;
-  readonly edit?: SemanticEdit;
+  readonly edit?: SemanticEdit<TBody>;
 };
 
 export type UpdatePlan<
   TUnit extends TranslationUnitInput = TranslationUnitInput,
   TTranslation = unknown,
+  TBody = JsonValue,
+  TUnavailable = never,
 > = {
   readonly formatVersion: 3;
   readonly sourceScopeEvidence: readonly ProcessingBaselineSourceScope[];
-  readonly items: readonly UpdatePlanItem<TUnit["source"], TTranslation>[];
+  readonly items: readonly UpdatePlanItem<
+    TUnit["source"],
+    TTranslation,
+    TBody,
+    TUnavailable
+  >[];
 };
 
 export type UpdatePlanStore = {
@@ -145,7 +179,11 @@ export type UpdatePlanStore = {
 export function defaultUpdatePolicy<
   TUnit extends TranslationUnitInput,
   TTranslation,
->(input: UpdatePolicyInput<TUnit, TTranslation>): UpdateDecision {
+  TBody = JsonValue,
+  TUnavailable = never,
+>(
+  input: UpdatePolicyInput<TUnit, TTranslation, TUnavailable>,
+): UpdateDecision<TBody> {
   if (input.change === "history-insufficient")
     return { action: "review", reason: "缺少处理历史，无法确认本次变化。" };
   if (input.change === "unknown")
@@ -187,14 +225,16 @@ export function defaultUpdatePolicy<
 export async function createUpdatePlan<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
+  TUnavailable,
 >(
-  facts: FrameworkFacts<TUnit, TTranslation>,
+  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
   baseline: ProcessingBaseline | undefined,
   config: Pick<
-    FrameworkConfig<TUnit, TTranslation>,
+    FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
     "translations" | "translationWriteback" | "updatePolicy"
   > = {},
-): Promise<UpdatePlan<TUnit, TTranslation>> {
+): Promise<UpdatePlan<TUnit, TTranslation, TBody, TUnavailable>> {
   const matches = config.translations?.matches;
   const changes = compareProcessingBaseline(
     facts,
@@ -212,7 +252,12 @@ export async function createUpdatePlan<
     ),
   );
   const policy = config.updatePolicy ?? defaultUpdatePolicy;
-  const items: UpdatePlanItem<TUnit["source"], TTranslation>[] = [];
+  const items: UpdatePlanItem<
+    TUnit["source"],
+    TTranslation,
+    TBody,
+    TUnavailable
+  >[] = [];
 
   for (const change of changes.changes) {
     const previousEntry =
@@ -226,11 +271,11 @@ export async function createUpdatePlan<
     const previousObservation =
       change.previous === undefined
         ? undefined
-        : observe<TUnit, TTranslation>(change.previous);
+        : observe<TUnit, TTranslation, TUnavailable>(change.previous);
     const expectedInput =
       change.current === undefined
         ? undefined
-        : observe<TUnit, TTranslation>(change.current);
+        : observe<TUnit, TTranslation, TUnavailable>(change.current);
     const previousBasis =
       previousObservation === undefined
         ? undefined
@@ -313,7 +358,7 @@ export async function createUpdatePlan<
         historicalSource,
         expectedBasis.source.range,
         expectedBasis.association.scopes.map(({ range }) => range),
-        config as FrameworkConfig<TUnit, TTranslation>,
+        config as FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
       );
       if (resolved.status !== "resolved") {
         items.push({
@@ -368,7 +413,7 @@ export async function createUpdatePlan<
     const resolved = await resolveSemanticEditInput(
       facts,
       { sourceKey: change.sourceKey, language: change.language },
-      config as FrameworkConfig<TUnit, TTranslation>,
+      config as FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
     );
     if (resolved.status !== "resolved") {
       items.push({
@@ -381,7 +426,11 @@ export async function createUpdatePlan<
       });
       continue;
     }
-    const prepared = prepareSemanticEdit(resolved.input, candidate);
+    const prepared = await prepareSemanticEdit(
+      resolved.input,
+      candidate,
+      config as FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+    );
     if (prepared.status !== "prepared") {
       items.push({
         ...baseItem,
@@ -399,9 +448,14 @@ export async function createUpdatePlan<
   return { formatVersion: 3, sourceScopeEvidence, items };
 }
 
-export function validateUpdatePlan(
-  value: UpdatePlan,
-): asserts value is UpdatePlan {
+export function validateUpdatePlan<
+  TUnit extends TranslationUnitInput = TranslationUnitInput,
+  TTranslation = unknown,
+  TBody = JsonValue,
+  TUnavailable = never,
+>(
+  value: UpdatePlan<TUnit, TTranslation, TBody, TUnavailable>,
+): asserts value is UpdatePlan<TUnit, TTranslation, TBody, TUnavailable> {
   if (
     typeof value !== "object" ||
     value === null ||
@@ -450,7 +504,9 @@ export function validateUpdatePlan(
   }
 }
 
-function matchesDecisionState(item: UpdatePlanItem): boolean {
+function matchesDecisionState<TSource, TTranslation, TBody, TUnavailable>(
+  item: UpdatePlanItem<TSource, TTranslation, TBody, TUnavailable>,
+): boolean {
   if (item.status === "blocked")
     return item.blocker !== undefined && item.edit === undefined;
   if (item.blocker !== undefined) return false;
@@ -476,9 +532,13 @@ function matchesDecisionState(item: UpdatePlanItem): boolean {
   return item.decision.action === "none";
 }
 
-function observe<TUnit extends TranslationUnitInput, TTranslation>(
+function observe<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TUnavailable = never,
+>(
   entry: ProcessingBaselineEntry,
-): UpdatePlanObservation<TUnit["source"], TTranslation> {
+): UpdatePlanObservation<TUnit["source"], TTranslation, TUnavailable> {
   const unit = entry.source.unit as TUnit;
   return {
     source: {
@@ -496,24 +556,33 @@ function observe<TUnit extends TranslationUnitInput, TTranslation>(
       scopes: entry.association.scopes.map((scope) => ({ ...scope })),
       translations: entry.association.translations.map((translation) => ({
         ...translation,
-        translation: translation.translation as TTranslation,
+        translation: translation.translation as TTranslation | TUnavailable,
       })),
     },
   };
 }
 
-function currentSourceUnit<TUnit extends TranslationUnitInput, TTranslation>(
-  facts: FrameworkFacts<TUnit, TTranslation>,
+function currentSourceUnit<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
   change: ProcessingBaselineChange,
 ): TUnit | undefined {
   return facts.source.units.find(({ key }) => key === change.sourceKey)?.unit;
 }
 
-function processingBlocker<TSource, TTranslation>(
+function processingBlocker<TSource, TTranslation, TBody, TUnavailable>(
   change: ProcessingBaselineChange,
-  previous: UpdatePlanObservation<TSource, TTranslation> | undefined,
-  expectedInput: UpdatePlanObservation<TSource, TTranslation> | undefined,
-  decision: UpdateDecision,
+  previous:
+    | UpdatePlanObservation<TSource, TTranslation, TUnavailable>
+    | undefined,
+  expectedInput:
+    | UpdatePlanObservation<TSource, TTranslation, TUnavailable>
+    | undefined,
+  decision: UpdateDecision<TBody>,
   sourceScopeEvidence: readonly ProcessingBaselineSourceScope[],
 ): UpdatePlanBlock | undefined {
   if (change.status === "history-insufficient")
@@ -583,8 +652,8 @@ function processingBlocker<TSource, TTranslation>(
   return undefined;
 }
 
-function observationBlocker<TSource, TTranslation>(
-  observation: UpdatePlanObservation<TSource, TTranslation>,
+function observationBlocker<TSource, TTranslation, TUnavailable>(
+  observation: UpdatePlanObservation<TSource, TTranslation, TUnavailable>,
 ): UpdatePlanBlock | undefined {
   if (observation.source.enumeration !== "complete")
     return {

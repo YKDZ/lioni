@@ -36,6 +36,19 @@ const journey: CliJourney = {
   keyOf: (unit) => unit.context.file + ":" + unit.context.line,
   translations: {
     languages: ["fr"],
+    schema: { "~standard": { version: 1, vendor: "facts-journey-translation", validate(value) {
+      const context = value?.context;
+      return typeof value === "object" && value !== null && !Array.isArray(value) &&
+        typeof value.text === "string" && typeof context === "object" && context !== null &&
+        typeof context.file === "string" && typeof context.line === "number"
+        ? { value }
+        : { issues: [{ message: "译文记录结构不匹配。" }] };
+    } } },
+    contentSchema: { "~standard": { version: 1, vendor: "facts-journey-content", validate(value) {
+      return typeof value === "string"
+        ? { value }
+        : { issues: [{ message: "译文正文必须是字符串。" }] };
+    } } },
     read: (_language, sourceUnits) => ({ scopes: [{
       range: "locales/fr.json",
       covers: sourceUnits.map(({ key }) => key),
@@ -86,26 +99,29 @@ const journey: CliJourney = {
     );
     await writeFile(
       path.join(workDir, "qa.config.ts"),
-      `import type { QualityCheckDefinition, TranslationUnitInput } from "@lioni/core";
-import baseConfig from "./lioni.config.ts";
+      `import baseConfig from "./lioni.config.ts";
 
-const check: QualityCheckDefinition<TranslationUnitInput, unknown> = {
+const check = {
   id: "host-rule",
-  configuration: { enabled: true },
-  check() {
+  async prepare() {
     return {
-      status: "complete",
-      diagnostics: [],
-      issues: [],
-      coverage: {
-        selected: 1,
-        evaluated: 1,
-        notApplicable: 0,
-        incomplete: 0,
-        failed: 0
+      configuration: { enabled: true },
+      check() {
+        return {
+          status: "complete",
+          diagnostics: [],
+          issues: [],
+          coverage: {
+            selected: 1,
+            evaluated: 1,
+            notApplicable: 0,
+            incomplete: 0,
+            failed: 0
+          }
+        };
       }
     };
-  }
+  },
 };
 
 export default {
@@ -115,7 +131,7 @@ export default {
     const candidates = facts.associations.flatMap((association) => {
       if (association.status !== "matched") return [];
       const record = facts.translations.records[association.translationIndexes[0]];
-      return record === undefined ? [] : [{
+      return record?.bodyAvailability !== "available" ? [] : [{
         sourceKey: association.sourceKey,
         language: association.language,
         content: record.content

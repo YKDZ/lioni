@@ -1,2 +1,10 @@
-export { createNumberChecker } from "./numbers.ts";
-export type { NumberCheckerOptions } from "./numbers.ts";
+export {
+  compareNumberText,
+  createNumberChecker,
+  numberTextInputSchema,
+} from "./numbers.ts";
+export type {
+  NumberCheckerOptions,
+  NumberCheckerSubject,
+  NumberTextInput,
+} from "./numbers.ts";
