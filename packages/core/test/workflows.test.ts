@@ -7,9 +7,14 @@ import {
   defineConfig,
   prepareQualityConditionedSemanticEdit,
   type QualityCheckInput,
+  type JsonValue,
 } from "../src/index.ts";
 import { defineTestQualityCheck } from "./quality-check-fixture.ts";
-import { sourceSchemaFromExamples } from "./source-schema.ts";
+import {
+  jsonValueSchema,
+  schemaFromExamples,
+  sourceSchemaFromExamples,
+} from "./source-schema.ts";
 
 type Unit = {
   readonly id: string;
@@ -24,7 +29,7 @@ type Translation = {
 function diagnosedEditScenario() {
   const translation = { id: "save", text: "Enregistrer" };
   let requestVersion = "v1";
-  const config = defineConfig<Unit, Translation>({
+  const config = defineConfig({
     source: {
       schema: sourceSchemaFromExamples<Unit>({ id: "save", source: "Save" }),
       read: () => ({
@@ -45,6 +50,8 @@ function diagnosedEditScenario() {
     keyOf: ({ id }) => id,
     translations: {
       languages: ["fr"],
+      schema: schemaFromExamples<Translation>(translation),
+      contentSchema: jsonValueSchema,
       read: (_language, sourceUnits) => ({
         scopes: [
           {
@@ -128,7 +135,7 @@ function diagnosedEditScenario() {
 void describe("configured analysis workflow", () => {
   void it("checks an explicit candidate against the complete adapter context", async () => {
     const observed: unknown[] = [];
-    const config = defineConfig<Unit, Translation>({
+    const config = defineConfig({
       source: {
         schema: sourceSchemaFromExamples<Unit>(
           { id: "save", source: "Save" },
@@ -156,6 +163,8 @@ void describe("configured analysis workflow", () => {
       keyOf: ({ id }) => id,
       translations: {
         languages: ["fr"],
+        schema: schemaFromExamples({ id: "save", text: "Enregistrer" }),
+        contentSchema: jsonValueSchema,
         read: (_language, sourceUnits) => ({
           scopes: [
             {
@@ -252,7 +261,7 @@ void describe("configured analysis workflow", () => {
   void it("reports association facts without invoking checks when no candidates are selected", async () => {
     let invoked = false;
     let unavailableContentRead = false;
-    const config = defineConfig<Unit, Translation>({
+    const config = defineConfig({
       source: {
         schema: sourceSchemaFromExamples<Unit>(
           { id: "missing", source: "missing" },
@@ -278,6 +287,12 @@ void describe("configured analysis workflow", () => {
       keyOf: ({ id }) => id,
       translations: {
         languages: ["fr", "ja"],
+        schema: schemaFromExamples<Translation>({
+          id: "example",
+          text: "example",
+        }),
+        unavailableSchema: schemaFromExamples({ id: "unavailable" }),
+        contentSchema: jsonValueSchema,
         read: (language, sourceUnits) => ({
           scopes:
             language === "fr"
@@ -288,7 +303,7 @@ void describe("configured analysis workflow", () => {
                     enumeration: "complete" as const,
                     records: [
                       {
-                        value: { id: "unavailable" } as Translation,
+                        value: { id: "unavailable" },
                         bodyAvailability: "unavailable" as const,
                       },
                       {
@@ -318,7 +333,12 @@ void describe("configured analysis workflow", () => {
         },
       },
       qualityChecks: [
-        defineTestQualityCheck({
+        defineTestQualityCheck<
+          Unit,
+          Translation,
+          JsonValue,
+          { readonly id: string }
+        >({
           id: "must-not-run",
           configuration: {},
           check() {
@@ -419,7 +439,7 @@ void describe("configured analysis workflow", () => {
 
   void it("runs configured checks with the default request through the public API", async () => {
     let observed: QualityCheckInput<Unit, Translation> | undefined;
-    const config = defineConfig<Unit, Translation>({
+    const config = defineConfig({
       source: {
         schema: sourceSchemaFromExamples<Unit>({ id: "save", source: "Save" }),
         read: () => ({
@@ -440,6 +460,11 @@ void describe("configured analysis workflow", () => {
       keyOf: ({ id }) => id,
       translations: {
         languages: ["fr"],
+        schema: schemaFromExamples<Translation>({
+          id: "save",
+          text: "Enregistrer",
+        }),
+        contentSchema: jsonValueSchema,
         read: (_language, sourceUnits) => ({
           scopes: [
             {
@@ -501,7 +526,7 @@ void describe("configured analysis workflow", () => {
       language: string;
       content: string;
     }[] = [];
-    const config = defineConfig<Unit, Translation>({
+    const config = defineConfig({
       source: {
         schema: sourceSchemaFromExamples<Unit>({
           id: "unused",
@@ -530,7 +555,7 @@ void describe("configured analysis workflow", () => {
     assert.deepEqual(result.dependencies, { glossaryVersion: "v1" });
     assert.equal(result.status, "not-run");
 
-    const invalidConfig = defineConfig<Unit, Translation>({
+    const invalidConfig = defineConfig({
       source: {
         schema: sourceSchemaFromExamples<Unit>({
           id: "unused",
@@ -546,7 +571,7 @@ void describe("configured analysis workflow", () => {
       message: "defineConfig 的 qualityChecks 必须是检查器数组。",
     });
 
-    const invalidSourceConfig = defineConfig<Unit, Translation>({
+    const invalidSourceConfig = defineConfig({
       source: {
         schema: sourceSchemaFromExamples<Unit>({
           id: "unused",
@@ -561,7 +586,7 @@ void describe("configured analysis workflow", () => {
       message: "defineConfig 的 source.read 必须是函数。",
     });
 
-    const invalidRequestConfig = defineConfig<Unit, Translation>({
+    const invalidRequestConfig = defineConfig({
       source: {
         schema: sourceSchemaFromExamples<Unit>({
           id: "unused",

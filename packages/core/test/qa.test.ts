@@ -12,6 +12,8 @@ import {
 import { defineTestQualityCheck } from "./quality-check-fixture.ts";
 import {
   emptySourceSchema,
+  jsonValueSchema,
+  schemaFromExamples,
   sourceSchemaFromExamples,
 } from "./source-schema.ts";
 
@@ -110,6 +112,8 @@ void describe("quality checks", () => {
         keyOf: () => "message:save",
         translations: {
           languages: ["fr"],
+          schema: schemaFromExamples(translation),
+          contentSchema: jsonValueSchema,
           read: (_language, sourceUnits) => ({
             scopes: [
               {

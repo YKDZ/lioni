@@ -93,12 +93,39 @@ async function writeConsumerFiles(
     .split(path.sep)
     .join("/");
   const workspaceConfig = `overrides:\n  "@lioni/core@0.0.0": "file:${coreTarball}"\n`;
+  const schemaHelpersSource = `import type { StandardSchemaV1 } from "@lioni/core";
+
+export function standardSchema<T>(
+  isValue: (value: unknown) => value is T,
+): StandardSchemaV1<T, T> {
+  return {
+    "~standard": {
+      version: 1,
+      vendor: "lioni-independent-consumer",
+      validate(value) {
+        return isValue(value)
+          ? { value }
+          : { issues: [{ message: "Independent consumer schema mismatch." }] };
+      },
+    },
+  };
+}
+
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function isNumberArray(value: unknown): value is readonly number[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "number");
+}
+`;
   const configSource = `import {
   defineConfig,
   defineQualityCheck,
   type JsonValue,
   type StandardSchemaV1,
 } from "@lioni/core";
+import { isNumberArray, isRecord, standardSchema } from "./schemas.ts";
 
 type Unit = {
   readonly source: string;
@@ -108,6 +135,34 @@ type Translation = {
   readonly text: string;
   readonly context: { readonly sourceLines: readonly number[] };
 };
+type UnavailableTranslation = {
+  readonly context: { readonly sourceLines: readonly number[] };
+};
+
+const sourceSchema = standardSchema<Unit>((value): value is Unit =>
+  isRecord(value) &&
+  typeof value.source === "string" &&
+  isRecord(value.context) &&
+  typeof value.context.file === "string" &&
+  typeof value.context.line === "number" &&
+  typeof value.context.screenshot === "string",
+);
+const translationSchema = standardSchema<Translation>(
+  (value): value is Translation =>
+    isRecord(value) &&
+    typeof value.text === "string" &&
+    isRecord(value.context) &&
+    isNumberArray(value.context.sourceLines),
+);
+const unavailableTranslationSchema = standardSchema<UnavailableTranslation>(
+  (value): value is UnavailableTranslation =>
+    isRecord(value) &&
+    isRecord(value.context) &&
+    isNumberArray(value.context.sourceLines),
+);
+const contentSchema = standardSchema<string>(
+  (value): value is string => typeof value === "string",
+);
 
 const qaConfigurationSchema: StandardSchemaV1<JsonValue, JsonValue> = {
   "~standard": {
@@ -121,8 +176,9 @@ const qaConfigurationSchema: StandardSchemaV1<JsonValue, JsonValue> = {
 
 export let translationReadCount = 0;
 
-const config = defineConfig<Unit, Translation>({
+const config = defineConfig({
   source: {
+    schema: sourceSchema,
     read: () => ({
       scopes: [{
         range: "src/messages.ts",
@@ -141,6 +197,9 @@ const config = defineConfig<Unit, Translation>({
   },
   translations: {
     languages: ["fr", "ja", "de"],
+    schema: translationSchema,
+    unavailableSchema: unavailableTranslationSchema,
+    contentSchema,
     contentOf(translation) {
       return translation.text;
     },
@@ -178,7 +237,7 @@ const config = defineConfig<Unit, Translation>({
           enumeration: "complete",
           records: [
             { value: { text: "共有", context: { sourceLines: [18, 19] } }, bodyAvailability: "available" },
-            { value: { text: "取消", context: { sourceLines: [20] } }, bodyAvailability: "unavailable" },
+            { value: { context: { sourceLines: [20] } }, bodyAvailability: "unavailable" },
             { value: { text: "孤立", context: { sourceLines: [] } }, bodyAvailability: "available" },
             { value: { text: "ヘルプ", context: { sourceLines: [21] } }, bodyAvailability: "available" }
           ]
@@ -194,9 +253,19 @@ const config = defineConfig<Unit, Translation>({
 export default config;
 `;
   const duplicateConfigSource = `import { defineConfig } from "@lioni/core";
+import { isRecord, standardSchema } from "./schemas.ts";
+
+type Unit = { readonly source: string; readonly context: { readonly file: string } };
+const sourceSchema = standardSchema<Unit>((value): value is Unit =>
+  isRecord(value) &&
+  typeof value.source === "string" &&
+  isRecord(value.context) &&
+  typeof value.context.file === "string",
+);
 
 export default defineConfig({
   source: {
+    schema: sourceSchema,
     read: () => ({
       scopes: [{
         range: "src/messages.ts",
@@ -215,6 +284,7 @@ export default defineConfig({
 `;
   const completionConfigSource = `import { readFileSync } from "node:fs";
 import { defineConfig } from "@lioni/core";
+import { isRecord, standardSchema } from "./schemas.ts";
 
 type Translation = {
   text: string;
@@ -224,14 +294,32 @@ type Unit = {
   source: string;
   context: { file: string; line: number };
 };
+const sourceSchema = standardSchema<Unit>((value): value is Unit =>
+  isRecord(value) &&
+  typeof value.source === "string" &&
+  isRecord(value.context) &&
+  typeof value.context.file === "string" &&
+  typeof value.context.line === "number",
+);
+const translationSchema = standardSchema<Translation>(
+  (value): value is Translation =>
+    isRecord(value) &&
+    typeof value.text === "string" &&
+    isRecord(value.context) &&
+    typeof value.context.sourceLine === "number",
+);
+const contentSchema = standardSchema<string>(
+  (value): value is string => typeof value === "string",
+);
 
 const sourceRecords = [
   { source: "Save", context: { file: "src/messages.ts", line: 18 } },
   { source: "Submit", context: { file: "src/messages.ts", line: 19 } },
 ];
 
-export default defineConfig<Unit, Translation>({
+export default defineConfig({
   source: {
+    schema: sourceSchema,
     read: () => ({
       scopes: [{
         range: "src/messages.ts",
@@ -245,6 +333,8 @@ export default defineConfig<Unit, Translation>({
   },
   translations: {
     languages: ["fr", "de"],
+    schema: translationSchema,
+    contentSchema,
     contentOf: (translation) => translation.text,
     read(language, sourceUnits) {
       const values = JSON.parse(readFileSync(new URL("./completion-resources/" + language + ".json", import.meta.url), "utf8")) as Translation[];
@@ -271,6 +361,7 @@ export default defineConfig<Unit, Translation>({
 `;
   const planConfigSource = `import { readFile, writeFile } from "node:fs/promises";
 import { defineConfig } from "@lioni/core";
+import { isRecord, standardSchema } from "./schemas.ts";
 
 type Unit = {
   readonly id: string;
@@ -278,9 +369,28 @@ type Unit = {
   readonly context: { readonly file: string; readonly line: number; readonly screenshot: string };
 };
 type Translation = { readonly id: string; text: string };
+const sourceSchema = standardSchema<Unit>((value): value is Unit =>
+  isRecord(value) &&
+  typeof value.id === "string" &&
+  typeof value.source === "string" &&
+  isRecord(value.context) &&
+  typeof value.context.file === "string" &&
+  typeof value.context.line === "number" &&
+  typeof value.context.screenshot === "string",
+);
+const translationSchema = standardSchema<Translation>(
+  (value): value is Translation =>
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.text === "string",
+);
+const contentSchema = standardSchema<string>(
+  (value): value is string => typeof value === "string",
+);
 
-export default defineConfig<Unit, Translation>({
+export default defineConfig({
   source: {
+    schema: sourceSchema,
     async read() {
       const units = JSON.parse(await readFile(new URL("./update-plan-resources/source.json", import.meta.url), "utf8")) as Unit[];
       return {
@@ -295,6 +405,8 @@ export default defineConfig<Unit, Translation>({
   keyOf: (unit) => unit.id,
   translations: {
     languages: ["fr"],
+    schema: translationSchema,
+    contentSchema,
     contentOf: (translation) => translation.text,
     async read(_language, sourceUnits) {
       const translations = JSON.parse(await readFile(new URL("./update-plan-resources/fr.json", import.meta.url), "utf8")) as Translation[];
@@ -351,17 +463,40 @@ export default defineConfig<Unit, Translation>({
 `;
   const deletionConfigSource = `import { readFile, writeFile } from "node:fs/promises";
 import { defineConfig } from "@lioni/core";
+import { isRecord, standardSchema } from "./schemas.ts";
 
 type Unit = { id: string; source: string; context: { file: string } };
 type Translation = { id: string; text: string; context: { file: string; key: string; readonly?: boolean } };
 type Resource = { enumeration: "complete" | "partial" | "failed"; records: Translation[] };
+const sourceSchema = standardSchema<Unit>((value): value is Unit =>
+  isRecord(value) &&
+  typeof value.id === "string" &&
+  typeof value.source === "string" &&
+  isRecord(value.context) &&
+  typeof value.context.file === "string",
+);
+const translationSchema = standardSchema<Translation>(
+  (value): value is Translation =>
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.text === "string" &&
+    isRecord(value.context) &&
+    typeof value.context.file === "string" &&
+    typeof value.context.key === "string" &&
+    (value.context.readonly === undefined ||
+      typeof value.context.readonly === "boolean"),
+);
+const contentSchema = standardSchema<string>(
+  (value): value is string => typeof value === "string",
+);
 const sourcePath = new URL("./deletion-resources/source.json", import.meta.url);
 const targetPath = new URL("./deletion-resources/fr.json", import.meta.url);
 const otherTargetPath = new URL("./deletion-resources/other.json", import.meta.url);
 const dependencyPath = new URL("./deletion-resources/dependencies.json", import.meta.url);
 
-export default defineConfig<Unit, Translation>({
+export default defineConfig({
   source: {
+    schema: sourceSchema,
     async read() {
       const units = JSON.parse(await readFile(sourcePath, "utf8")) as Unit[];
       return {
@@ -376,6 +511,8 @@ export default defineConfig<Unit, Translation>({
   keyOf: (unit) => unit.id,
   translations: {
     languages: ["fr"],
+    schema: translationSchema,
+    contentSchema,
     contentOf: (translation) => translation.text,
     async read(_language, sourceUnits) {
       const [resource, otherResource] = await Promise.all([
@@ -543,7 +680,8 @@ if (scenario === "initialize") {
 console.log(JSON.stringify({ scenario, pid: process.pid }));
 `;
   const editsConfigSource = `import { readFileSync, writeFileSync } from "node:fs";
-import { defineConfig } from "@lioni/core";
+import { defineConfig, defineQualityCheck } from "@lioni/core";
+import { isNumberArray, isRecord, standardSchema } from "./schemas.ts";
 
 type Unit = {
   source: string;
@@ -567,6 +705,42 @@ type Translation = {
     writeIgnore?: boolean;
   };
 };
+const sourceSchema = standardSchema<Unit>((value): value is Unit =>
+  isRecord(value) &&
+  typeof value.source === "string" &&
+  isRecord(value.context) &&
+  typeof value.context.identity === "string" &&
+  typeof value.context.line === "number" &&
+  typeof value.context.targetKey === "string" &&
+  typeof value.context.screenshot === "string" &&
+  (value.context.unrelated === undefined ||
+    typeof value.context.unrelated === "string"),
+);
+const translationSchema = standardSchema<Translation>(
+  (value): value is Translation =>
+    isRecord(value) &&
+    typeof value.text === "string" &&
+    isRecord(value.context) &&
+    typeof value.context.file === "string" &&
+    typeof value.context.resourceKey === "string" &&
+    isNumberArray(value.context.sourceLines) &&
+    (value.context.annotation === undefined ||
+      typeof value.context.annotation === "string") &&
+    (value.context.readOnly === undefined ||
+      typeof value.context.readOnly === "boolean") &&
+    (value.context.writeFailure === undefined ||
+      typeof value.context.writeFailure === "boolean") &&
+    (value.context.writeIgnore === undefined ||
+      typeof value.context.writeIgnore === "boolean"),
+);
+const contentSchema = standardSchema<string>(
+  (value): value is string => typeof value === "string",
+);
+const qaConfigurationSchema = standardSchema<{ readonly review?: string }>(
+  (value): value is { readonly review?: string } =>
+    isRecord(value) &&
+    (value.review === undefined || typeof value.review === "string"),
+);
 
 function readSources(): Unit[] {
   return JSON.parse(readFileSync("edit-sources.json", "utf8")) as Unit[];
@@ -580,8 +754,9 @@ function readCatalogue(): { enumeration: "complete" | "partial"; records: Transl
   };
 }
 
-export default defineConfig<Unit, Translation>({
+export default defineConfig({
   source: {
+    schema: sourceSchema,
     read() {
       return {
         scopes: [{
@@ -595,6 +770,8 @@ export default defineConfig<Unit, Translation>({
   keyOf: (unit) => unit.context.identity,
   translations: {
     languages: ["fr"],
+    schema: translationSchema,
+    contentSchema,
     contentOf: (translation) => translation.text,
     read(_language, sourceUnits) {
       const catalogue = readCatalogue();
@@ -714,6 +891,7 @@ export default defineConfig<Unit, Translation>({
   const qaConfigSource = `import { readFile } from "node:fs/promises";
 import { defineConfig, type FrameworkFacts } from "@lioni/core";
 import { createNumberChecker } from "@lioni/checks";
+import { isRecord, standardSchema } from "./schemas.ts";
 
 type Unit = {
   readonly source: string;
@@ -725,6 +903,24 @@ type Translation = {
   readonly nativeKey: string;
   readonly text: string;
 };
+const sourceSchema = standardSchema<Unit>((value): value is Unit =>
+  isRecord(value) &&
+  typeof value.source === "string" &&
+  typeof value.nativeId === "string" &&
+  isRecord(value.context) &&
+  typeof value.context.file === "string" &&
+  typeof value.context.line === "number",
+);
+const translationSchema = standardSchema<Translation>(
+  (value): value is Translation =>
+    isRecord(value) &&
+    typeof value.sourceId === "string" &&
+    typeof value.nativeKey === "string" &&
+    typeof value.text === "string",
+);
+const contentSchema = standardSchema<string>(
+  (value): value is string => typeof value === "string",
+);
 
 async function readMessageResource() {
   return JSON.parse(await readFile("qa-messages.json", "utf8")) as {
@@ -747,7 +943,9 @@ const qualityChecks = [
   }),
 ];
 
-function createQualityRequest(facts: FrameworkFacts<Unit, Translation>) {
+function createQualityRequest(
+  facts: FrameworkFacts<Unit, Translation, string>,
+) {
   const association = facts.associations.find(
     ({ sourceKey, language, status }) =>
       sourceKey === "sha256:save" && language === "fr" && status === "matched",
@@ -756,7 +954,7 @@ function createQualityRequest(facts: FrameworkFacts<Unit, Translation>) {
     ? undefined
     : facts.translations.records[association.translationIndexes[0] as number];
   return {
-    candidates: record === undefined
+    candidates: record?.bodyAvailability !== "available"
       ? []
       : [{ sourceKey: "sha256:save", language: "fr", content: record.content }],
     exceptions: [{
@@ -769,8 +967,9 @@ function createQualityRequest(facts: FrameworkFacts<Unit, Translation>) {
   };
 }
 
-export default defineConfig<Unit, Translation>({
+export default defineConfig({
   source: {
+    schema: sourceSchema,
     read: () => ({
       scopes: [{
         range: "src/messages.ts",
@@ -785,6 +984,8 @@ export default defineConfig<Unit, Translation>({
   keyOf: (unit) => "sha256:" + unit.nativeId,
   translations: {
     languages: ["fr"],
+    schema: translationSchema,
+    contentSchema,
     contentOf: (translation) => translation.text,
     async read(_language, sourceUnits) {
       const resource = await readMessageResource();
@@ -884,15 +1085,32 @@ void analyzeQuality(editConfig, {
   const resumeConfigSource = `import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "@lioni/core";
+import { isRecord, standardSchema } from "./schemas.ts";
 
 type Unit = { id: string; source: string };
 type Translation = { sourceId: string; text: string; path: string };
+const sourceSchema = standardSchema<Unit>((value): value is Unit =>
+  isRecord(value) &&
+  typeof value.id === "string" &&
+  typeof value.source === "string",
+);
+const translationSchema = standardSchema<Translation>(
+  (value): value is Translation =>
+    isRecord(value) &&
+    typeof value.sourceId === "string" &&
+    typeof value.text === "string" &&
+    typeof value.path === "string",
+);
+const contentSchema = standardSchema<string>(
+  (value): value is string => typeof value === "string",
+);
 
 const sourcePath = fileURLToPath(new URL("./resume-resources/source.json", import.meta.url));
 const targetPath = (id: string) => fileURLToPath(new URL("./resume-resources/fr/" + id + ".json", import.meta.url));
 
-export default defineConfig<Unit, Translation>({
+export default defineConfig({
   source: {
+    schema: sourceSchema,
     async read() {
       const records = JSON.parse(await readFile(sourcePath, "utf8")) as Unit[];
       return {
@@ -907,6 +1125,8 @@ export default defineConfig<Unit, Translation>({
   keyOf: (unit) => unit.id,
   translations: {
     languages: ["fr"],
+    schema: translationSchema,
+    contentSchema,
     contentOf: (translation) => translation.text,
     async read(_language, sourceUnits) {
       const records = await Promise.all(sourceUnits.map(async ({ unit }) => {
@@ -1157,7 +1377,31 @@ assert.deepEqual(facts.translations.records[3].translation.context.sourceLines, 
 assert.deepEqual(facts.translations.records[6].translation.context.sourceLines, []);
 
 await assert.rejects(readSourceFacts({
-  source: { read: () => ({
+  source: {
+    schema: {
+      "~standard": {
+        version: 1,
+        vendor: "independent-consumer-duplicate-case",
+        validate(value) {
+          if (
+            typeof value === "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "source" in value &&
+            typeof value.source === "string" &&
+            "context" in value &&
+            typeof value.context === "object" &&
+            value.context !== null &&
+            !Array.isArray(value.context) &&
+            "file" in value.context &&
+            typeof value.context.file === "string"
+          )
+            return { value };
+          return { issues: [{ message: "Expected source text and file context." }] };
+        },
+      },
+    },
+    read: () => ({
     scopes: [{
       range: "src/messages.ts",
       enumeration: "complete",
@@ -1166,7 +1410,8 @@ await assert.rejects(readSourceFacts({
         { value: { source: "Submit", context: { file: "src/messages.ts" } }, bodyAvailability: "available" },
       ],
     }],
-  }) },
+  }),
+  },
   keyOf: (unit) => unit.context.file,
 }), DuplicateTranslationUnitKeyError);
 
@@ -1329,6 +1574,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { advanceProcessingBaseline, compareProcessingBaseline, defineConfig, readFacts } from "@lioni/core";
 import { createFileProcessingBaselineStore } from "@lioni/core/node";
+import { isRecord, standardSchema } from "./schemas.ts";
 
 const scenario = process.argv[2];
 const baselinePath = path.join(process.cwd(), "processing-baseline.json");
@@ -1355,8 +1601,20 @@ const sourceScopes = sourceByScenario[scenario];
 const targetScopes = targetsByScenario[scenario];
 assert.ok(sourceScopes);
 assert.ok(targetScopes);
+const sourceSchema = standardSchema((value) =>
+  isRecord(value) &&
+  typeof value.id === "string" &&
+  typeof value.source === "string",
+);
+const translationSchema = standardSchema((value) =>
+  isRecord(value) &&
+  typeof value.id === "string" &&
+  typeof value.text === "string",
+);
+const contentSchema = standardSchema((value) => typeof value === "string");
 const config = defineConfig({
   source: {
+    schema: sourceSchema,
     read: () => ({
       scopes: sourceScopes.map(({ range, units }) => ({
         range,
@@ -1368,6 +1626,8 @@ const config = defineConfig({
   keyOf: (unit) => unit.id,
   translations: {
     languages: ["fr"],
+    schema: translationSchema,
+    contentSchema,
     contentOf: (translation) => translation.text,
     read: (_language, units) => ({
       scopes: targetScopes.map(({ range, translations }) => ({
@@ -1937,6 +2197,7 @@ process.stdout.write("独立打包宿主：诊断候选默认写入，显式拒�
       JSON.stringify(packageJson, null, 2),
     ),
     writeFile(path.join(consumerRoot, "pnpm-workspace.yaml"), workspaceConfig),
+    writeFile(path.join(consumerRoot, "schemas.ts"), schemaHelpersSource),
     writeFile(path.join(consumerRoot, "lioni.config.ts"), configSource),
     writeFile(
       path.join(consumerRoot, "duplicate.config.ts"),

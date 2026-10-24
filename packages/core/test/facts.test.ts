@@ -8,7 +8,7 @@ import {
   readSourceFacts,
   StandardSchemaContractError,
 } from "../src/index.ts";
-import type { StandardSchemaV1 } from "../src/index.ts";
+import type { FrameworkConfig, StandardSchemaV1 } from "../src/index.ts";
 import {
   emptySourceSchema,
   jsonValueSchema,
@@ -1016,5 +1016,84 @@ void describe("framework facts", () => {
         error instanceof StandardSchemaContractError &&
         error.kind === "invalid-json",
     );
+  });
+
+  void it("rejects changed translation schema output and undeclared unavailable records", async () => {
+    type Translation = { readonly id: string; readonly text: string };
+    const unit = { source: "Save", context: { line: 18 } };
+    const translation: Translation = { id: "save", text: "Enregistrer" };
+    const changedContentSchema: StandardSchemaV1<string, string> = {
+      "~standard": {
+        version: 1,
+        vendor: "lioni-test-content",
+        validate(value) {
+          return typeof value === "string"
+            ? { value: `${value}!` }
+            : { issues: [{ message: "正文必须是字符串。" }] };
+        },
+      },
+    };
+    const changedConfig = defineConfig({
+      source: {
+        schema: sourceSchemaFromExamples(unit),
+        read: () => completeSource(unit),
+      },
+      keyOf: (value) => `message:${value.context.line}`,
+      translations: {
+        languages: ["fr"],
+        schema: schemaFromExamples<Translation>(translation),
+        contentSchema: changedContentSchema,
+        read: () => ({
+          scopes: [
+            {
+              range: "messages.fr.json",
+              covers: ["message:18"],
+              enumeration: "complete",
+              records: [{ value: translation, bodyAvailability: "available" }],
+            },
+          ],
+        }),
+        matches: () => true,
+        contentOf: (value) => value.text,
+      },
+    });
+    await assert.rejects(readFacts(changedConfig), {
+      name: "StandardSchemaContractError",
+      kind: "output-changed",
+    });
+
+    const undeclaredUnavailableConfig = {
+      source: {
+        schema: sourceSchemaFromExamples(unit),
+        read: () => completeSource(unit),
+      },
+      keyOf: (value: typeof unit) => `message:${value.context.line}`,
+      translations: {
+        languages: ["fr"],
+        schema: schemaFromExamples<Translation>(translation),
+        contentSchema: schemaFromExamples<string>("Enregistrer"),
+        read: () => ({
+          scopes: [
+            {
+              range: "messages.fr.json",
+              covers: ["message:18"],
+              enumeration: "complete" as const,
+              records: [
+                {
+                  value: { id: "save" },
+                  bodyAvailability: "unavailable" as const,
+                },
+              ],
+            },
+          ],
+        }),
+        matches: () => true,
+        contentOf: (value: Translation) => value.text,
+      },
+    } as unknown as FrameworkConfig<typeof unit, Translation>;
+    await assert.rejects(readFacts(undeclaredUnavailableConfig), {
+      name: "StandardSchemaContractError",
+      kind: "schema-mismatch",
+    });
   });
 });
