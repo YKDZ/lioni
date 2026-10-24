@@ -10,7 +10,9 @@ const journey: CliJourney = {
   async setup({ workDir }) {
     await writeFile(
       path.join(workDir, "lioni.config.ts"),
-      `export default {
+      `import { defineConfig } from "@lioni/core";
+
+export default defineConfig({
   source: {
     schema: { "~standard": { version: 1, vendor: "completion-journey", validate(value) {
       const context = value?.context;
@@ -63,12 +65,14 @@ const journey: CliJourney = {
     criterion: "存在实际译文记录（允许同文）",
     resolveCompletion: ({ translations }) => translations.length > 0
   }
-};
+});
 `,
     );
     await writeFile(
       path.join(workDir, "partial.config.ts"),
-      `export default {
+      `import { defineConfig } from "@lioni/core";
+
+export default defineConfig({
   source: {
     schema: { "~standard": { version: 1, vendor: "completion-journey", validate(value) {
       const context = value?.context;
@@ -113,27 +117,31 @@ const journey: CliJourney = {
     criterion: "实际译文存在",
     resolveCompletion: ({ translations }) => translations.length > 0
   }
-};
+});
 `,
     );
     await writeFile(
       path.join(workDir, "facts-only.config.ts"),
-      `export default {
+      `import { defineConfig } from "@lioni/core";
+
+export default defineConfig({
   source: { schema: { "~standard": { version: 1, vendor: "completion-journey", validate(value) { return typeof value === "object" && value !== null && !Array.isArray(value) && typeof value.source === "string" ? { value } : { issues: [{ message: "原文单元结构不匹配。" }] }; } } }, read: () => ({ scopes: [] }) },
   keyOf: (unit) => String(unit.source)
-};
+});
 `,
     );
     await writeFile(
       path.join(workDir, "completion-no-language.config.ts"),
-      `export default {
+      `import { defineConfig } from "@lioni/core";
+
+export default defineConfig({
   source: { schema: { "~standard": { version: 1, vendor: "completion-journey", validate(value) { return typeof value === "object" && value !== null && !Array.isArray(value) && typeof value.source === "string" ? { value } : { issues: [{ message: "原文单元结构不匹配。" }] }; } } }, read: () => ({ scopes: [] }) },
   keyOf: (unit) => String(unit.source),
   completion: {
     criterion: "自定义完成判据",
     resolveCompletion: () => true
   }
-};
+});
 `,
     );
   },

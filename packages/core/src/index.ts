@@ -6,6 +6,7 @@ import {
   evaluateCompletion,
 } from "./completion.ts";
 import type { CompletionFacts, CompletionPolicy } from "./completion.ts";
+import { bindFrameworkConfig } from "./config-capability.ts";
 import type { UpdatePolicy } from "./plans.ts";
 import {
   runQualityChecks,
@@ -404,7 +405,7 @@ export function defineConfig<
   SchemaOutput<TContentSchema>,
   SchemaOutput<TUnavailableSchema>
 > {
-  return config;
+  return bindFrameworkConfig(config);
 }
 
 export function validateFrameworkConfig(value: unknown): void {

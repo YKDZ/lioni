@@ -8,6 +8,7 @@ import {
   type ProcessingBaseline,
   type ProcessingBaselineStore,
 } from "./baselines.ts";
+import { frameworkConfigRunner } from "./config-capability.ts";
 import {
   validateFrameworkConfig,
   type FrameworkConfig,
@@ -19,11 +20,23 @@ import {
   type UpdatePlanStore,
 } from "./plans.ts";
 
+type FrameworkConfigConsumer<TResult> = <
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+) => TResult;
+
+export type LoadedConfig = {
+  readonly use: <TResult>(
+    consumer: FrameworkConfigConsumer<TResult>,
+  ) => TResult;
+};
+
 /** 从 Node.js 配置模块加载并验证默认导出的宿主配置。 */
-export async function loadConfig<
-  TUnit extends TranslationUnitInput = TranslationUnitInput,
-  TTranslation = unknown,
->(configPath: string): Promise<FrameworkConfig<TUnit, TTranslation>> {
+export async function loadConfig(configPath: string): Promise<LoadedConfig> {
   const configUrl = pathToFileURL(path.resolve(process.cwd(), configPath));
   const configModule = (await import(configUrl.href)) as {
     readonly default?: unknown;
@@ -31,10 +44,10 @@ export async function loadConfig<
   if (configModule.default === undefined)
     throw new TypeError("宿主配置必须默认导出 defineConfig(...) 的结果。");
   validateFrameworkConfig(configModule.default);
-  return configModule.default as unknown as FrameworkConfig<
-    TUnit,
-    TTranslation
-  >;
+  const runner = frameworkConfigRunner(configModule.default);
+  if (runner === undefined)
+    throw new TypeError("宿主配置必须默认导出 defineConfig(...) 的结果。");
+  return { use: runner };
 }
 
 /** 为 Node.js 宿主创建文件处理基线存储。 */

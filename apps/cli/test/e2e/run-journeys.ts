@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -13,6 +13,7 @@ import type {
 
 const e2eRoot = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(e2eRoot, "..", "..");
+const coreDependency = path.join(packageRoot, "node_modules", "@lioni", "core");
 
 function assertNever(value: never): never {
   throw new Error(`unsupported journey mode: ${String(value)}`);
@@ -152,6 +153,13 @@ export async function runJourneys(options: {
     );
     const context = { mode: options.mode, packageRoot, workDir };
     try {
+      const packageLink = path.join(workDir, "node_modules", "@lioni", "core");
+      await mkdir(path.dirname(packageLink), { recursive: true });
+      await symlink(
+        coreDependency,
+        packageLink,
+        process.platform === "win32" ? "junction" : "dir",
+      );
       await journey.setup(context);
       const results: CliJourneyResult[] = [];
       for (const command of journey.commands(context)) {

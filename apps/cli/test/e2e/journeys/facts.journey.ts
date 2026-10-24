@@ -10,7 +10,9 @@ const journey: CliJourney = {
   async setup({ workDir }) {
     await writeFile(
       path.join(workDir, "lioni.config.ts"),
-      `export default {
+      `import { defineConfig } from "@lioni/core";
+
+export default defineConfig({
   source: {
     schema: { "~standard": { version: 1, vendor: "facts-journey", validate(value) {
       const context = value?.context;
@@ -69,12 +71,14 @@ const journey: CliJourney = {
       unit.context.line === translation.context.line,
     contentOf: (translation) => translation.text
   }
-};
+});
 `,
     );
     await writeFile(
       path.join(workDir, "duplicate.config.ts"),
-      `export default {
+      `import { defineConfig } from "@lioni/core";
+
+export default defineConfig({
   source: {
     schema: { "~standard": { version: 1, vendor: "facts-journey", validate(value) {
       const context = value?.context;
@@ -94,12 +98,13 @@ const journey: CliJourney = {
     }] })
   },
   keyOf: (unit) => unit.context.file + ":" + unit.context.line
-};
+});
 `,
     );
     await writeFile(
       path.join(workDir, "qa.config.ts"),
-      `import baseConfig from "./lioni.config.ts";
+      `import { defineConfig } from "@lioni/core";
+import baseConfig from "./lioni.config.ts";
 
 const check = {
   id: "host-rule",
@@ -124,7 +129,7 @@ const check = {
   },
 };
 
-export default {
+export default defineConfig({
   ...baseConfig,
   qualityChecks: [check],
   createQualityRequest(facts) {
@@ -142,7 +147,7 @@ export default {
       dependencies: { selectedBy: "defineConfig" },
     };
   },
-};
+});
 `,
     );
     await writeFile(
