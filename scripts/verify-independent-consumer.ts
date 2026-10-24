@@ -113,7 +113,6 @@ const qaConfigurationSchema: StandardSchemaV1<JsonValue, JsonValue> = {
   "~standard": {
     version: 1,
     vendor: "independent-consumer",
-    types: { input: {} as JsonValue, output: {} as JsonValue },
     validate(value) {
       return { value: value as JsonValue };
     },

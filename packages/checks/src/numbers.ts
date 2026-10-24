@@ -29,10 +29,6 @@ const numberCheckerConfigurationSchema: StandardSchemaV1<
   "~standard": {
     version: 1,
     vendor: "lioni-number-checker",
-    types: {
-      input: {} as NumberCheckerConfiguration,
-      output: {} as NumberCheckerConfiguration,
-    },
     validate(value) {
       if (
         typeof value !== "object" ||
@@ -44,7 +40,7 @@ const numberCheckerConfigurationSchema: StandardSchemaV1<
         value.comparison !== "exact-multiset"
       )
         return {
-          issues: [{ message: "unsupported number-checker configuration" }],
+          issues: [{ message: "数字检查器配置无效。" }],
         };
       return { value: numberCheckerConfiguration };
     },

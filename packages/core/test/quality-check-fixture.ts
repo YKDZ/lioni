@@ -13,7 +13,6 @@ const identityConfigurationSchema: StandardSchemaV1<JsonValue, JsonValue> = {
   "~standard": {
     version: 1,
     vendor: "core-test-quality-check",
-    types: { input: {} as JsonValue, output: {} as JsonValue },
     validate(value) {
       return { value: value as JsonValue };
     },

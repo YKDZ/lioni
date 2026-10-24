@@ -6,6 +6,8 @@ import {
   defineConfig,
   defineQualityCheck,
   prepareQualityConditionedSemanticEdit,
+  StandardSchemaContractError,
+  type QualityCheckDefinition,
   type QualityCheckOutcome,
   type StandardSchemaV1,
 } from "../src/index.ts";
@@ -19,7 +21,6 @@ const unitSchema: StandardSchemaV1<Unit, Unit> = {
   "~standard": {
     version: 1,
     vendor: "qa-configuration-test",
-    types: { input: {} as Unit, output: {} as Unit },
     validate(value) {
       if (
         typeof value !== "object" ||
@@ -42,10 +43,6 @@ const thresholdSchema: StandardSchemaV1<
   "~standard": {
     version: 1,
     vendor: "qa-configuration-test",
-    types: {
-      input: {} as ThresholdInput,
-      output: {} as ThresholdConfiguration,
-    },
     validate(value) {
       if (typeof value !== "object" || value === null || Array.isArray(value))
         return { issues: [{ message: "threshold must be a number" }] };
@@ -68,10 +65,6 @@ const asyncModeSchema: StandardSchemaV1<"include" | "skip", ModeConfiguration> =
     "~standard": {
       version: 1,
       vendor: "qa-configuration-test",
-      types: {
-        input: "include" as "include" | "skip",
-        output: {} as ModeConfiguration,
-      },
       async validate(value) {
         if (value !== "include" && value !== "skip")
           return { issues: [{ message: "expected include or skip" }] };
@@ -79,6 +72,32 @@ const asyncModeSchema: StandardSchemaV1<"include" | "skip", ModeConfiguration> =
       },
     },
   };
+
+type DefaultConfiguration = { readonly mode: "default" };
+const defaultConfigurationSchema: StandardSchemaV1<
+  undefined,
+  DefaultConfiguration
+> = {
+  "~standard": {
+    version: 1,
+    vendor: "qa-configuration-test",
+    validate(value) {
+      if (value !== undefined)
+        return { issues: [{ message: "expected omitted configuration" }] };
+      return { value: { mode: "default" } };
+    },
+  },
+};
+
+const nonJsonOutputSchema: StandardSchemaV1<undefined, Map<string, string>> = {
+  "~standard": {
+    version: 1,
+    vendor: "qa-configuration-test",
+    validate() {
+      return { value: new Map([["mode", "invalid"]]) };
+    },
+  },
+};
 
 function completeOutcome(
   diagnostics: QualityCheckOutcome["diagnostics"] = [],
@@ -98,7 +117,7 @@ function completeOutcome(
 }
 
 function qualityConfig(
-  qualityChecks: ReturnType<typeof createChecks>["checks"],
+  qualityChecks: readonly QualityCheckDefinition<Unit, unknown>[],
 ) {
   return defineConfig({
     source: {
@@ -263,6 +282,56 @@ void describe("quality checker configuration contracts", () => {
         candidates: [{ sourceKey: "save", language: "fr", content: "A" }],
       }),
       { name: "StandardSchemaContractError" },
+    );
+  });
+
+  void it("applies defaults to an omitted configuration through the public QA workflow", async () => {
+    const defaultChecker = defineQualityCheck<
+      Unit,
+      unknown,
+      typeof defaultConfigurationSchema
+    >({
+      id: "default-config",
+      configurationSchema: defaultConfigurationSchema,
+      configuration: undefined,
+      check: (input) => {
+        assert.equal(input.configuration.mode, "default");
+        return completeOutcome();
+      },
+    });
+    const result = await analyzeQuality(qualityConfig([defaultChecker]), {
+      candidates: [{ sourceKey: "save", language: "fr", content: "Saved" }],
+    });
+
+    assert.equal(result.status, "complete");
+    assert.deepEqual(result.checks[0]?.configuration, { mode: "default" });
+  });
+
+  void it("rejects a non-JSON final configuration after schema conversion", async () => {
+    const invalidOutputChecker = defineQualityCheck<
+      Unit,
+      unknown,
+      typeof nonJsonOutputSchema
+    >({
+      id: "non-json-config",
+      configurationSchema: nonJsonOutputSchema,
+      configuration: undefined,
+      check: () => completeOutcome(),
+    });
+
+    await assert.rejects(
+      analyzeQuality(qualityConfig([invalidOutputChecker]), {
+        candidates: [{ sourceKey: "save", language: "fr", content: "Saved" }],
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof StandardSchemaContractError);
+        assert.equal(error.kind, "invalid-json");
+        assert.equal(
+          error.valueDescription,
+          "QA 检查器 non-json-config 的最终配置",
+        );
+        return true;
+      },
     );
   });
 

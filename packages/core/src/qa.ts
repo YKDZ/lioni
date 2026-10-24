@@ -10,7 +10,10 @@ import type {
   TranslationUnitInput,
 } from "./index.ts";
 import type { SemanticEditCandidate } from "./semantic-edits.ts";
-import { validateWithStandardSchema } from "./standard-schema.ts";
+import {
+  assertJsonValue,
+  validateWithStandardSchema,
+} from "./standard-schema.ts";
 import type { StandardSchemaV1 } from "./standard-schema.ts";
 
 export type QualityCheckStatus =
@@ -228,12 +231,13 @@ export function defineQualityCheck<
     configurationSchema,
     check,
     prepare: async () => {
+      const configurationDescription = `QA 检查器 ${id} 的配置`;
       const parsedConfiguration = await validateWithStandardSchema(
         configurationSchema,
         configuration,
-        `QA 检查器 ${id} 的配置`,
-        { requireJson: true },
+        configurationDescription,
       );
+      assertJsonValue(parsedConfiguration, `QA 检查器 ${id} 的最终配置`);
       return {
         configuration: parsedConfiguration,
         check: (input) =>
