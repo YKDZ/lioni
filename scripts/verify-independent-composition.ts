@@ -47,16 +47,19 @@ function runChecked(
 const compositionConfigSource = `import { readFileSync } from "node:fs";
 import {
   defineConfig,
+  defineQualityCheck,
   type CompletionResolution,
   type CompletionResolverInput,
   type FrameworkConfig,
   type FrameworkFacts,
+  type JsonValue,
   type QualityCheckDefinition,
   type QualityCheckInput,
   type QualityCheckRequest,
   type QualityException,
   type UpdatePolicyInput,
   type UpdateDecision,
+  type StandardSchemaV1,
 } from "@lioni/core";
 import {
   createNumberChecker,
@@ -97,6 +100,16 @@ type GuideTranslation = {
 };
 type Translation = CatalogTranslation | GuideTranslation;
 type Domain = "catalog" | "guide";
+const qualityConfigurationSchema: StandardSchemaV1<JsonValue, JsonValue> = {
+  "~standard": {
+    version: 1,
+    vendor: "independent-composition",
+    types: { input: {} as JsonValue, output: {} as JsonValue },
+    validate(value) {
+      return { value: value as JsonValue };
+    },
+  },
+};
 type TargetResource = {
   readonly enumeration: "complete" | "partial" | "failed";
   readonly records: readonly Translation[];
@@ -108,7 +121,7 @@ type EntryModule = {
   readonly readUnits: () => readonly Unit[];
   readonly readTargets: (language: string) => TargetResource;
   readonly exception?: QualityException;
-  readonly checkConfiguration: unknown;
+  readonly checkConfiguration: JsonValue;
   readonly resolveCompletion: (
     input: CompletionResolverInput<Unit, Translation>,
   ) => CompletionResolution;
@@ -275,10 +288,18 @@ function createDomainChecker(
     sourceText: unitText,
     translationText,
   });
-  return {
+  return defineQualityCheck<
+    Unit,
+    Translation,
+    typeof qualityConfigurationSchema
+  >({
     id: module.domain + "-numbers",
-    configuration: { options: module.checkConfiguration, numbers: checker.configuration },
-    check(input: QualityCheckInput<Unit, Translation>) {
+    configurationSchema: qualityConfigurationSchema,
+    configuration: {
+      options: module.checkConfiguration,
+      numbers: checker.configuration,
+    },
+    check: (input: QualityCheckInput<Unit, Translation, JsonValue>) => {
       if (
         input.sourceUnit !== null &&
         input.sourceUnit.unit.context.domain !== module.domain
@@ -295,9 +316,12 @@ function createDomainChecker(
             failed: 0,
           },
         };
-      return checker.check(input);
+      return checker.check({
+        ...input,
+        configuration: checker.configuration,
+      });
     },
-  };
+  });
 }
 
 function requestForDomain(

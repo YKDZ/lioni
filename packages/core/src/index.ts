@@ -520,13 +520,13 @@ export async function prepareQualityConditionedSemanticEdit<
     providedQuality ?? (await runQualityChecks(facts, request, checks));
   if (
     providedQuality !== undefined &&
-    !qualityRunMatchesInputs(
+    !(await qualityRunMatchesInputs(
       facts,
       candidate,
       configuredRequest,
       checks,
       quality,
-    )
+    ))
   )
     return {
       status: "input-mismatch",
@@ -559,7 +559,7 @@ async function prepareCandidateEdit<
     : resolved;
 }
 
-function qualityRunMatchesInputs<
+async function qualityRunMatchesInputs<
   TUnit extends TranslationUnitInput,
   TTranslation,
 >(
@@ -568,7 +568,12 @@ function qualityRunMatchesInputs<
   request: QualityCheckRequest,
   checks: readonly QualityCheckDefinition<TUnit, TTranslation>[],
   quality: QualityRunResult,
-): boolean {
+): Promise<boolean> {
+  const configurationRun = await runQualityChecks(
+    facts,
+    { ...request, candidates: [] },
+    checks,
+  );
   if (quality.version !== facts.version) return false;
   const expectedRequest = snapshotJson(
     {
@@ -606,24 +611,14 @@ function qualityRunMatchesInputs<
   if (!isDeepStrictEqual(quality.factCoverage, expectedFactCoverage))
     return false;
 
-  const expectedChecks = checks.map(({ id, configuration }) => ({
-    id,
-    configuration: snapshotConfigurationOrNull(configuration),
-  }));
+  const expectedChecks = configurationRun.checks.map(
+    ({ id, configuration }) => ({ id, configuration }),
+  );
   const actualChecks = quality.checks.map(({ id, configuration }) => ({
     id,
     configuration,
   }));
   return isDeepStrictEqual(actualChecks, expectedChecks);
-}
-
-function snapshotConfigurationOrNull(value: unknown): unknown {
-  if (value === undefined) return undefined;
-  try {
-    return snapshotJson(value, "QA 检查配置");
-  } catch {
-    return null;
-  }
 }
 
 function defaultQualityRequest<

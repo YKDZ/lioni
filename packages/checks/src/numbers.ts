@@ -1,12 +1,66 @@
 import type {
+  Awaitable,
   JsonValue,
   QualityCheckDefinition,
+  QualityCheckInput,
   QualityCheckOutcome,
   QualityEvidence,
   QualityLocation,
   QualitySubject,
+  StandardSchemaV1,
   TranslationUnitInput,
 } from "@lioni/core";
+import { defineQualityCheck } from "@lioni/core";
+
+type NumberCheckerConfiguration = {
+  readonly format: "ascii-decimal-v1";
+  readonly comparison: "exact-multiset";
+};
+
+const numberCheckerConfiguration: NumberCheckerConfiguration = {
+  format: "ascii-decimal-v1",
+  comparison: "exact-multiset",
+};
+
+const numberCheckerConfigurationSchema: StandardSchemaV1<
+  NumberCheckerConfiguration,
+  NumberCheckerConfiguration
+> = {
+  "~standard": {
+    version: 1,
+    vendor: "lioni-number-checker",
+    types: {
+      input: {} as NumberCheckerConfiguration,
+      output: {} as NumberCheckerConfiguration,
+    },
+    validate(value) {
+      if (
+        typeof value !== "object" ||
+        value === null ||
+        Array.isArray(value) ||
+        !("format" in value) ||
+        value.format !== "ascii-decimal-v1" ||
+        !("comparison" in value) ||
+        value.comparison !== "exact-multiset"
+      )
+        return {
+          issues: [{ message: "unsupported number-checker configuration" }],
+        };
+      return { value: numberCheckerConfiguration };
+    },
+  },
+};
+
+type NumberCheckerDefinition<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+> = QualityCheckDefinition<TUnit, TTranslation> & {
+  readonly configuration: NumberCheckerConfiguration;
+  readonly configurationSchema: typeof numberCheckerConfigurationSchema;
+  readonly check: (
+    input: QualityCheckInput<TUnit, TTranslation, NumberCheckerConfiguration>,
+  ) => Awaitable<QualityCheckOutcome>;
+};
 
 export type NumberCheckerOptions<
   TUnit extends TranslationUnitInput,
@@ -32,11 +86,16 @@ export function createNumberChecker<
   TTranslation,
 >(
   options: NumberCheckerOptions<TUnit, TTranslation>,
-): QualityCheckDefinition<TUnit, TTranslation> {
-  return {
+): NumberCheckerDefinition<TUnit, TTranslation> {
+  return defineQualityCheck<
+    TUnit,
+    TTranslation,
+    typeof numberCheckerConfigurationSchema
+  >({
     id: "number-correspondence",
-    configuration: { format: "ascii-decimal-v1", comparison: "exact-multiset" },
-    check(input) {
+    configuration: numberCheckerConfiguration,
+    configurationSchema: numberCheckerConfigurationSchema,
+    check: (input) => {
       const sourceUnit = input.sourceUnit;
       if (sourceUnit === null || sourceUnit.bodyAvailability !== "available")
         return incomplete(
@@ -137,7 +196,7 @@ export function createNumberChecker<
         },
       };
     },
-  };
+  });
 }
 
 function incomplete(code: string, message: string): QualityCheckOutcome {

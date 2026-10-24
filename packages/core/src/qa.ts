@@ -10,6 +10,8 @@ import type {
   TranslationUnitInput,
 } from "./index.ts";
 import type { SemanticEditCandidate } from "./semantic-edits.ts";
+import { validateWithStandardSchema } from "./standard-schema.ts";
+import type { StandardSchemaV1 } from "./standard-schema.ts";
 
 export type QualityCheckStatus =
   | "not-run"
@@ -143,24 +145,103 @@ export type QualityCheckRequest = {
 export type QualityCheckInput<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TConfiguration = unknown,
 > = Omit<QualityCheckRequest, "candidates"> & {
   readonly facts: FrameworkFacts<TUnit, TTranslation>;
   readonly candidate: SemanticEditCandidate;
   readonly sourceUnit: SourceUnitFact<TUnit> | null;
-  readonly configuration: unknown;
+  readonly configuration: TConfiguration;
 };
+
+export type StandardSchemaInput<
+  TSchema extends StandardSchemaV1<unknown, unknown>,
+> = NonNullable<TSchema["~standard"]["types"]>["input"];
+
+export type StandardSchemaOutput<
+  TSchema extends StandardSchemaV1<unknown, unknown>,
+> = NonNullable<TSchema["~standard"]["types"]>["output"];
+
+type QualityCheckExecutionInput<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+> = Omit<QualityCheckInput<TUnit, TTranslation, unknown>, "configuration">;
+
+type PreparedQualityCheck<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TObject extends QualityObject,
+> = {
+  readonly configuration: unknown;
+  readonly check: (
+    input: QualityCheckExecutionInput<TUnit, TTranslation>,
+  ) => Awaitable<QualityCheckOutcome<TObject>>;
+};
+
+const qualityCheckDefinitionBrand: unique symbol = Symbol(
+  "qualityCheckDefinition",
+);
 
 export type QualityCheckDefinition<
   TUnit extends TranslationUnitInput,
   TTranslation,
   TObject extends QualityObject = QualityObject,
 > = {
+  readonly [qualityCheckDefinitionBrand]: true;
   readonly id: string;
-  readonly configuration: unknown;
-  check(
-    input: QualityCheckInput<TUnit, TTranslation>,
-  ): Awaitable<QualityCheckOutcome<TObject>>;
+  readonly prepare: () => Promise<
+    PreparedQualityCheck<TUnit, TTranslation, TObject>
+  >;
 };
+
+export function defineQualityCheck<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TSchema extends StandardSchemaV1<unknown, unknown>,
+  TObject extends QualityObject = QualityObject,
+>(definition: {
+  readonly id: string;
+  readonly configurationSchema: TSchema;
+  readonly configuration: StandardSchemaInput<TSchema>;
+  readonly check: (
+    input: QualityCheckInput<
+      TUnit,
+      TTranslation,
+      StandardSchemaOutput<TSchema>
+    >,
+  ) => Awaitable<QualityCheckOutcome<TObject>>;
+}): QualityCheckDefinition<TUnit, TTranslation, TObject> & {
+  readonly configuration: StandardSchemaInput<TSchema>;
+  readonly configurationSchema: TSchema;
+  readonly check: (
+    input: QualityCheckInput<
+      TUnit,
+      TTranslation,
+      StandardSchemaOutput<TSchema>
+    >,
+  ) => Awaitable<QualityCheckOutcome<TObject>>;
+} {
+  const { id, configuration, configurationSchema, check } = definition;
+  return {
+    [qualityCheckDefinitionBrand]: true,
+    id,
+    configuration,
+    configurationSchema,
+    check,
+    prepare: async () => {
+      const parsedConfiguration = await validateWithStandardSchema(
+        configurationSchema,
+        configuration,
+        `QA 检查器 ${id} 的配置`,
+        { requireJson: true },
+      );
+      return {
+        configuration: parsedConfiguration,
+        check: (input) =>
+          check({ ...input, configuration: parsedConfiguration }),
+      };
+    },
+  };
+}
 
 export type QualityCheckResult<TObject extends QualityObject = QualityObject> =
   {
@@ -206,19 +287,19 @@ export async function runQualityChecks<
     relationships: request.relationships ?? [],
     exceptions: request.exceptions ?? [],
   });
+  const preparedChecks: {
+    readonly id: string;
+    readonly prepared: PreparedQualityCheck<TUnit, TTranslation, QualityObject>;
+  }[] = [];
+  for (const definition of checks)
+    preparedChecks.push({
+      id: definition.id,
+      prepared: await definition.prepare(),
+    });
+
   const results: QualityCheckResult[] = [];
-  for (const definition of checks) {
-    let configuration: unknown = null;
-    let configurationFailure: unknown;
-    let configurationFailed = false;
-    if (boundRequest.candidates.length > 0) {
-      try {
-        configuration = snapshotQualityData(definition.configuration);
-      } catch (error) {
-        configurationFailure = error;
-        configurationFailed = true;
-      }
-    }
+  for (const { id, prepared } of preparedChecks) {
+    const configuration = snapshotQualityData(prepared.configuration);
     const diagnostics: QualityDiagnostic[] = [];
     const issues: QualityIssue[] = [];
     const coverage: MutableQualityCoverage = {
@@ -231,22 +312,8 @@ export async function runQualityChecks<
     const statuses: QualityCheckStatus[] = [];
 
     for (const candidate of boundRequest.candidates) {
-      if (configurationFailed) {
-        statuses.push("failed");
-        coverage.selected += 1;
-        coverage.failed += 1;
-        issues.push({
-          code: "checkFailed",
-          message:
-            configurationFailure instanceof Error
-              ? configurationFailure.message
-              : String(configurationFailure),
-          object: candidateObject(candidate),
-        });
-        continue;
-      }
       try {
-        const outcome = await definition.check({
+        const outcome = await prepared.check({
           facts,
           candidate,
           sourceUnit:
@@ -255,19 +322,14 @@ export async function runQualityChecks<
           dependencies: boundRequest.dependencies,
           relationships: boundRequest.relationships,
           exceptions: boundRequest.exceptions,
-          configuration: definition.configuration,
         });
         const findings = snapshotQualityData(outcome.diagnostics);
         const checkIssues = snapshotQualityData(outcome.issues);
         diagnostics.push(
           ...findings.map((diagnostic) => ({
             ...diagnostic,
-            ruleId: definition.id,
-            handling: handlingFor(
-              definition.id,
-              diagnostic,
-              boundRequest.exceptions,
-            ),
+            ruleId: id,
+            handling: handlingFor(id, diagnostic, boundRequest.exceptions),
           })),
         );
         issues.push(...checkIssues);
@@ -286,7 +348,7 @@ export async function runQualityChecks<
     }
 
     results.push({
-      id: definition.id,
+      id,
       configuration,
       status: aggregateStatus(statuses),
       diagnostics,

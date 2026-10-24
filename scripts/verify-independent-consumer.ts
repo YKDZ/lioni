@@ -93,7 +93,12 @@ async function writeConsumerFiles(
     .split(path.sep)
     .join("/");
   const workspaceConfig = `overrides:\n  "@lioni/core@0.0.0": "file:${coreTarball}"\n`;
-  const configSource = `import { defineConfig } from "@lioni/core";
+  const configSource = `import {
+  defineConfig,
+  defineQualityCheck,
+  type JsonValue,
+  type StandardSchemaV1,
+} from "@lioni/core";
 
 type Unit = {
   readonly source: string;
@@ -102,6 +107,17 @@ type Unit = {
 type Translation = {
   readonly text: string;
   readonly context: { readonly sourceLines: readonly number[] };
+};
+
+const qaConfigurationSchema: StandardSchemaV1<JsonValue, JsonValue> = {
+  "~standard": {
+    version: 1,
+    vendor: "independent-consumer",
+    types: { input: {} as JsonValue, output: {} as JsonValue },
+    validate(value) {
+      return { value: value as JsonValue };
+    },
+  },
 };
 
 export let translationReadCount = 0;
@@ -595,8 +611,9 @@ export default defineConfig<Unit, Translation>({
     matches: (unit, translation) => translation.context.sourceLines.includes(unit.context.line),
   },
   qualityChecks: [
-    {
+    defineQualityCheck<Unit, Translation, typeof qaConfigurationSchema>({
       id: "host-review",
+      configurationSchema: qaConfigurationSchema,
       configuration: { review: "manual" },
       check: ({ candidate }) => ({
         status: "complete",
@@ -624,10 +641,11 @@ export default defineConfig<Unit, Translation>({
           failed: 0,
         },
       }),
-    },
-    {
+    }),
+    defineQualityCheck<Unit, Translation, typeof qaConfigurationSchema>({
       id: "unconfigured-check",
-      configuration: undefined,
+      configurationSchema: qaConfigurationSchema,
+      configuration: {},
       check: () => ({
         status: "complete",
         diagnostics: [],
@@ -640,7 +658,7 @@ export default defineConfig<Unit, Translation>({
           failed: 0,
         },
       }),
-    },
+    }),
   ],
   translationWriteback: {
     locateExistingTarget({ translation }) {

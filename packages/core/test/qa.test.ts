@@ -7,6 +7,7 @@ import {
   runQualityChecks,
   type QualityCheckRequest,
 } from "../src/index.ts";
+import { defineTestQualityCheck } from "./quality-check-fixture.ts";
 
 void describe("quality checks", () => {
   void it("runs selected checks against one facts snapshot and retains findings", async () => {
@@ -59,7 +60,7 @@ void describe("quality checks", () => {
     let observedConfiguration: unknown;
 
     const result = await runQualityChecks(facts, { candidates, dependencies }, [
-      {
+      defineTestQualityCheck({
         id: "placeholders",
         configuration,
         check(input) {
@@ -121,7 +122,7 @@ void describe("quality checks", () => {
             },
           };
         },
-      },
+      }),
     ]);
 
     assert.equal(observedVersion, facts.version);
@@ -192,7 +193,7 @@ void describe("quality checks", () => {
     const notRun = await runQualityChecks(facts, request, []);
     let called = false;
     const noCandidateRun = await runQualityChecks(facts, request, [
-      {
+      defineTestQualityCheck({
         id: "placeholders",
         configuration: {},
         check: () => {
@@ -210,7 +211,7 @@ void describe("quality checks", () => {
             },
           };
         },
-      },
+      }),
     ]);
     const notApplicable = await runQualityChecks(
       facts,
@@ -221,7 +222,7 @@ void describe("quality checks", () => {
         ],
       },
       [
-        {
+        defineTestQualityCheck({
           id: "placeholders",
           configuration: {},
           check: () => ({
@@ -236,7 +237,7 @@ void describe("quality checks", () => {
               failed: 0,
             },
           }),
-        },
+        }),
       ],
     );
 
@@ -266,7 +267,7 @@ void describe("quality checks", () => {
         dependencies: {},
       },
       [
-        {
+        defineTestQualityCheck({
           id: "candidate-order",
           configuration: {},
           check({ candidate }) {
@@ -284,7 +285,7 @@ void describe("quality checks", () => {
               },
             };
           },
-        },
+        }),
       ],
     );
 
@@ -315,13 +316,13 @@ void describe("quality checks", () => {
         dependencies,
       },
       [
-        {
+        defineTestQualityCheck({
           id: "broken",
           configuration: { enabled: true },
           check: () => {
             throw new Error("checker crashed");
           },
-        },
+        }),
       ],
     );
 
@@ -406,16 +407,16 @@ void describe("quality checks", () => {
     };
 
     const result = await runQualityChecks(facts, request, [
-      {
+      defineTestQualityCheck({
         id: "example-rule",
         configuration: {},
         check: () => outcome,
-      },
-      {
+      }),
+      defineTestQualityCheck({
         id: "other-rule",
         configuration: {},
         check: () => ({ ...outcome, diagnostics: [makeFinding("A")] }),
-      },
+      }),
     ]);
 
     assert.equal(result.status, "complete");
