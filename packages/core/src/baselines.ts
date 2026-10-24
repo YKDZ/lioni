@@ -7,6 +7,7 @@ import type {
   TranslationAssociationStatus,
   TranslationUnitInput,
 } from "./index.ts";
+import type { JsonValue } from "./semantic-edits.ts";
 
 export type ProcessingBaselineTranslationScope = {
   readonly range: unknown;
@@ -104,20 +105,23 @@ export type ProcessingBaselineAdvanceResult = {
 export type ProcessingBaselineMatch<
   TUnit extends TranslationUnitInput,
   TTranslation,
-> = (unit: TUnit, translation: TTranslation) => boolean;
+  TUnavailable = never,
+> = (unit: TUnit, translation: TTranslation | TUnavailable) => boolean;
 
 export type ProcessingBaselineCompareOptions<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TUnavailable = never,
 > = {
-  readonly matches?: ProcessingBaselineMatch<TUnit, TTranslation>;
+  readonly matches?: ProcessingBaselineMatch<TUnit, TTranslation, TUnavailable>;
 };
 
 export type ProcessingBaselineAdvanceOptions<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TUnavailable = never,
 > = {
-  readonly matches?: ProcessingBaselineMatch<TUnit, TTranslation>;
+  readonly matches?: ProcessingBaselineMatch<TUnit, TTranslation, TUnavailable>;
 };
 
 type UnitWithKey<TUnit extends TranslationUnitInput> = {
@@ -135,10 +139,16 @@ const FORMAT_VERSION = 1;
 export function compareProcessingBaseline<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody = JsonValue,
+  TUnavailable = never,
 >(
-  facts: FrameworkFacts<TUnit, TTranslation>,
+  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
   baseline?: ProcessingBaseline,
-  options: ProcessingBaselineCompareOptions<TUnit, TTranslation> = {},
+  options: ProcessingBaselineCompareOptions<
+    TUnit,
+    TTranslation,
+    TUnavailable
+  > = {},
 ): ProcessingBaselineComparison {
   if (baseline === undefined) {
     return {
@@ -257,11 +267,17 @@ export function compareProcessingBaseline<
 export async function advanceProcessingBaseline<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody = JsonValue,
+  TUnavailable = never,
 >(
   store: ProcessingBaselineStore,
-  facts: FrameworkFacts<TUnit, TTranslation>,
+  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
   selections: readonly ProcessingBaselineSelection[],
-  options: ProcessingBaselineAdvanceOptions<TUnit, TTranslation> = {},
+  options: ProcessingBaselineAdvanceOptions<
+    TUnit,
+    TTranslation,
+    TUnavailable
+  > = {},
 ): Promise<ProcessingBaselineAdvanceResult> {
   let previous: ProcessingBaseline | undefined;
   try {
@@ -519,8 +535,13 @@ export function validateProcessingBaseline(
   }
 }
 
-function currentPairs<TUnit extends TranslationUnitInput, TTranslation>(
-  facts: FrameworkFacts<TUnit, TTranslation>,
+function currentPairs<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
 ): readonly {
   readonly sourceKey: string;
   readonly language: string;
@@ -558,8 +579,13 @@ function currentPairs<TUnit extends TranslationUnitInput, TTranslation>(
   return pairs;
 }
 
-function snapshotSourceScopes<TUnit extends TranslationUnitInput, TTranslation>(
-  facts: FrameworkFacts<TUnit, TTranslation>,
+function snapshotSourceScopes<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
 ): ProcessingBaselineSourceScope[] {
   const keysByScope = new Map<number, string[]>();
   for (const source of facts.source.units) {
@@ -586,15 +612,30 @@ function uniqueRanges(ranges: readonly unknown[]): unknown[] {
   return unique;
 }
 
-function currentEntry<TUnit extends TranslationUnitInput, TTranslation>(
-  facts: FrameworkFacts<TUnit, TTranslation>,
+function currentEntry<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
   source: UnitWithKey<TUnit>,
   language: string,
   languageRead:
-    | FrameworkFacts<TUnit, TTranslation>["translations"]["reads"][number]
+    | FrameworkFacts<
+        TUnit,
+        TTranslation,
+        TBody,
+        TUnavailable
+      >["translations"]["reads"][number]
     | undefined,
   association:
-    | FrameworkFacts<TUnit, TTranslation>["associations"][number]
+    | FrameworkFacts<
+        TUnit,
+        TTranslation,
+        TBody,
+        TUnavailable
+      >["associations"][number]
     | undefined,
 ): ProcessingBaselineEntry {
   const sourceScope = facts.source.read.scopes[source.scopeIndex];
@@ -642,8 +683,8 @@ function currentEntry<TUnit extends TranslationUnitInput, TTranslation>(
   };
 }
 
-function baselineTranslation<TTranslation>(
-  translation: ActualTranslationFact<TTranslation>,
+function baselineTranslation<TTranslation, TBody, TUnavailable>(
+  translation: ActualTranslationFact<TTranslation, TBody, TUnavailable>,
 ): ProcessingBaselineTranslation {
   return {
     range: translation.range,
@@ -683,12 +724,19 @@ function sameObservedState(
 function confirmedSourceRemovalScope<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
+  TUnavailable,
 >(
-  facts: FrameworkFacts<TUnit, TTranslation>,
+  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
   previous: ProcessingBaselineEntry,
   historicalScopes: readonly ProcessingBaselineSourceScope[],
 ):
-  | FrameworkFacts<TUnit, TTranslation>["source"]["read"]["scopes"][number]
+  | FrameworkFacts<
+      TUnit,
+      TTranslation,
+      TBody,
+      TUnavailable
+    >["source"]["read"]["scopes"][number]
   | undefined {
   if (
     previous.source.enumeration !== "complete" ||
@@ -711,11 +759,16 @@ function confirmedSourceRemovalScope<
   return currentSourceScopes[0];
 }
 
-function currentRemovedEntry<TUnit extends TranslationUnitInput, TTranslation>(
-  facts: FrameworkFacts<TUnit, TTranslation>,
+function currentRemovedEntry<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
   previous: ProcessingBaselineEntry,
   historicalScopes: readonly ProcessingBaselineSourceScope[],
-  matches?: ProcessingBaselineMatch<TUnit, TTranslation>,
+  matches?: ProcessingBaselineMatch<TUnit, TTranslation, TUnavailable>,
 ): ProcessingBaselineEntry | undefined {
   const sourceScope = confirmedSourceRemovalScope(
     facts,
