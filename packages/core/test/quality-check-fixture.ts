@@ -4,6 +4,7 @@ import {
   type JsonValue,
   type QualityCheckDefinition,
   type QualityCheckInput,
+  type QualityObject,
   type QualityCheckOutcome,
   type StandardSchemaV1,
   type TranslationUnitInput,
@@ -22,17 +23,34 @@ const identityConfigurationSchema: StandardSchemaV1<JsonValue, JsonValue> = {
 export function defineTestQualityCheck<
   TUnit extends TranslationUnitInput = TranslationUnitInput,
   TTranslation = unknown,
+  TBody = unknown,
+  TUnavailable = never,
 >(definition: {
   readonly id: string;
   readonly configuration: JsonValue;
   readonly check: (
-    input: QualityCheckInput<TUnit, TTranslation, JsonValue>,
+    input: QualityCheckInput<
+      TUnit,
+      TTranslation,
+      JsonValue,
+      TBody,
+      TUnavailable
+    >,
   ) => Awaitable<QualityCheckOutcome>;
-}): QualityCheckDefinition<TUnit, TTranslation> {
+}): QualityCheckDefinition<
+  TUnit,
+  TTranslation,
+  QualityObject,
+  TBody,
+  TUnavailable
+> {
   return defineQualityCheck<
     TUnit,
     TTranslation,
-    typeof identityConfigurationSchema
+    typeof identityConfigurationSchema,
+    QualityObject,
+    TBody,
+    TUnavailable
   >({
     ...definition,
     configurationSchema: identityConfigurationSchema,

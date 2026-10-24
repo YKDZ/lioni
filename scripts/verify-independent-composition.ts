@@ -64,6 +64,7 @@ import {
 import {
   createNumberChecker,
 } from "@lioni/checks";
+import { isRecord, standardSchema } from "./schemas.ts";
 
 type CatalogUnit = {
   readonly source: { readonly label: string };
@@ -99,7 +100,54 @@ type GuideTranslation = {
   readonly resourceKey: string;
 };
 type Translation = CatalogTranslation | GuideTranslation;
+type TranslationContent = string | GuideTranslation["content"];
 type Domain = "catalog" | "guide";
+const sourceSchema = standardSchema<Unit>((value): value is Unit => {
+  if (!isRecord(value) || !isRecord(value.context)) return false;
+  if (value.context.domain === "catalog")
+    return (
+      isRecord(value.source) &&
+      typeof value.source.label === "string" &&
+      typeof value.context.nativeKey === "string" &&
+      typeof value.context.file === "string" &&
+      typeof value.context.line === "number" &&
+      typeof value.context.screenshot === "string"
+    );
+  if (value.context.domain === "guide")
+    return (
+      isRecord(value.source) &&
+      typeof value.source.body === "string" &&
+      typeof value.context.nativeKey === "string" &&
+      typeof value.context.resource === "string" &&
+      typeof value.context.row === "number"
+    );
+  return false;
+});
+const translationSchema = standardSchema<Translation>((value): value is Translation => {
+  if (!isRecord(value)) return false;
+  if (value.domain === "catalog")
+    return (
+      typeof value.nativeKey === "string" &&
+      typeof value.text === "string" &&
+      typeof value.approved === "boolean" &&
+      typeof value.resourceKey === "string"
+    );
+  if (value.domain === "guide")
+    return (
+      typeof value.nativeKey === "string" &&
+      isRecord(value.content) &&
+      typeof value.content.message === "string" &&
+      typeof value.content.reviewed === "boolean" &&
+      typeof value.resourceKey === "string"
+    );
+  return false;
+});
+const contentSchema = standardSchema<TranslationContent>((value): value is TranslationContent =>
+  typeof value === "string" ||
+  (isRecord(value) &&
+    typeof value.message === "string" &&
+    typeof value.reviewed === "boolean"),
+);
 const qualityConfigurationSchema: StandardSchemaV1<JsonValue, JsonValue> = {
   "~standard": {
     version: 1,
@@ -371,12 +419,13 @@ function mergeQualityRequests(
 
 function createInputConfig(
   modules: readonly EntryModule[],
-): FrameworkConfig<Unit, Translation> {
+): FrameworkConfig<Unit, Translation, TranslationContent> {
   const qualityChecks = [
     ...modules.map(createDomainChecker),
   ];
-  return defineConfig<Unit, Translation>({
+  return defineConfig({
     source: {
+      schema: sourceSchema,
       read: () => ({
         scopes: modules.map((module) => ({
           range: module.sourceRange,
@@ -391,6 +440,8 @@ function createInputConfig(
     keyOf: (unit) => unit.context.domain + ":" + unit.context.nativeKey,
     translations: {
       languages: ["fr"],
+      schema: translationSchema,
+      contentSchema,
       contentOf: (translation) =>
         translation.domain === "catalog"
           ? translation.text

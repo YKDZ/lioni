@@ -14,10 +14,15 @@ import {
   type JsonValue,
   type ProcessingBaseline,
   type ProcessingBaselineStore,
+  type StandardSchemaV1,
   type UpdatePolicy,
 } from "../src/index.ts";
 import { createFileUpdatePlanStore } from "../src/node.ts";
-import { sourceSchemaFromExamples } from "./source-schema.ts";
+import {
+  jsonValueSchema,
+  schemaFromExamples,
+  sourceSchemaFromExamples,
+} from "./source-schema.ts";
 
 type Unit = { readonly id: string; readonly source: string };
 type Translation = { id: string; text: string; readonly slot?: string };
@@ -57,8 +62,14 @@ function makeConfig(
     readonly withWriteback?: boolean;
     readonly readState?: MutableReadState;
   } = {},
-): FrameworkConfig<Unit, Translation> {
-  return defineConfig({
+) {
+  return defineConfig<
+    Unit,
+    StandardSchemaV1<Unit, Unit>,
+    StandardSchemaV1<Translation, Translation>,
+    never,
+    typeof jsonValueSchema
+  >({
     source: {
       schema: sourceSchemaFromExamples<Unit>(
         { id: "example", source: "example" },
@@ -80,6 +91,11 @@ function makeConfig(
     keyOf: (unit) => unit.id,
     translations: {
       languages: ["fr"],
+      schema: schemaFromExamples<Translation>({
+        id: "example",
+        text: "example",
+      }),
+      contentSchema: jsonValueSchema,
       read: (_language, sourceUnits) => ({
         scopes: [
           {
@@ -259,7 +275,7 @@ void describe("apply update plans", () => {
       { id: "A", text: "Enregistrer", scope: "main", slot: "one" },
       { id: "other", text: "Annuler", scope: "other", slot: "other" },
     ];
-    const config = defineConfig<Unit, ScopedTranslation>({
+    const config = defineConfig({
       source: {
         schema: sourceSchemaFromExamples<Unit>(
           { id: "example", source: "example" },
@@ -281,6 +297,12 @@ void describe("apply update plans", () => {
       keyOf: (unit) => unit.id,
       translations: {
         languages: ["fr"],
+        schema: schemaFromExamples<ScopedTranslation>({
+          id: "example",
+          text: "example",
+          scope: "main",
+        }),
+        contentSchema: jsonValueSchema,
         contentOf: (translation) => translation.text,
         read: (_language, sourceUnits) => ({
           scopes: (["main", "other"] as const).map((scope) => ({

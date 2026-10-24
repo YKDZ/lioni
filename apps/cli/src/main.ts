@@ -83,15 +83,25 @@ const factsSchema = standardSchema(
         }),
       ),
       records: v.array(
-        v.object({
-          index: v.number(),
-          language: v.string(),
-          scopeIndex: v.number(),
-          range: v.unknown(),
-          translation: v.unknown(),
-          content: v.unknown(),
-          bodyAvailability: v.picklist(["available", "unavailable"]),
-        }),
+        v.variant("bodyAvailability", [
+          v.strictObject({
+            index: v.number(),
+            language: v.string(),
+            scopeIndex: v.number(),
+            range: v.unknown(),
+            translation: v.unknown(),
+            content: v.unknown(),
+            bodyAvailability: v.literal("available"),
+          }),
+          v.strictObject({
+            index: v.number(),
+            language: v.string(),
+            scopeIndex: v.number(),
+            range: v.unknown(),
+            translation: v.unknown(),
+            bodyAvailability: v.literal("unavailable"),
+          }),
+        ]),
       ),
     }),
     associations: v.array(

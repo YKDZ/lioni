@@ -10,7 +10,11 @@ import {
   type ProcessingBaseline,
   type ProcessingBaselineStore,
 } from "../src/index.ts";
-import { sourceSchemaFromExamples } from "./source-schema.ts";
+import {
+  jsonValueSchema,
+  schemaFromExamples,
+  sourceSchemaFromExamples,
+} from "./source-schema.ts";
 
 type Unit = {
   readonly source: string;
@@ -21,6 +25,11 @@ type Translation = {
   readonly text: string;
   readonly id: string;
 };
+
+const translationSchema = schemaFromExamples<Translation>({
+  text: "example",
+  id: "example",
+});
 
 function makeFacts(
   units: readonly Unit[],
@@ -74,6 +83,8 @@ function makeScopedFacts(
       keyOf: (unit) => unit.id,
       translations: {
         languages,
+        schema: translationSchema,
+        contentSchema: jsonValueSchema,
         read: () => {
           if (translationReadError !== undefined)
             throw new Error(translationReadError);
@@ -217,6 +228,8 @@ void describe("processing baselines", () => {
     const plan = await createUpdatePlan(targetUnavailable, store.baseline, {
       translations: {
         languages: ["fr"],
+        schema: translationSchema,
+        contentSchema: jsonValueSchema,
         read: () => ({ scopes: [] }),
         matches: (unit, translation) => unit.id === translation.id,
         contentOf: () => null,
@@ -624,6 +637,8 @@ void describe("processing baselines", () => {
       {
         translations: {
           languages: ["fr"],
+          schema: translationSchema,
+          contentSchema: jsonValueSchema,
           read: () => ({ scopes: [] }),
           matches: (unit, translation) => unit.id === translation.id,
           contentOf: () => null,
