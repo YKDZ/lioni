@@ -64,7 +64,7 @@ const config = defineConfig({
   keyOf(unit) {
     const strings: readonly string[] = unit.source;
     const line: number = unit.context.line;
-    // @ts-expect-error Array source units are not inferred as string records.
+    // @ts-expect-error 列表原文单元不能按字符串记录使用。
     unit.source.toUpperCase();
     return `${line}:${strings.length}`;
   },
@@ -119,7 +119,7 @@ const config = defineConfig({
       }
       if (translation?.bodyAvailability === "unavailable") {
         const id: string = translation.translation.id;
-        // @ts-expect-error Unavailable records have no content property.
+        // @ts-expect-error 正文不可用的记录不包含 content 字段。
         const body: string = translation.content;
         void id;
         void body;
@@ -179,7 +179,7 @@ defineConfig({
     contentSchema,
     read: () => ({ scopes: [] }),
     matches: () => true,
-    // @ts-expect-error The body callback must return the declared body type.
+    // @ts-expect-error 正文回调必须返回声明的正文类型。
     contentOf: () => 42,
   },
 });
@@ -199,7 +199,7 @@ defineConfig({
           enumeration: "complete",
           records: [
             {
-              // @ts-expect-error Without unavailableSchema, unavailable records are not supported.
+              // @ts-expect-error 未声明不可用记录 schema 时不接受此类记录。
               value: { id: "submit", sourceLine: 19 },
               bodyAvailability: "unavailable",
             },
@@ -226,7 +226,7 @@ defineConfig({
   translations: {
     languages: ["fr"],
     schema: availableSchema,
-    // @ts-expect-error The declared schema must preserve its input/output type.
+    // @ts-expect-error 声明的 schema 必须保留输入和输出类型。
     contentSchema: transformingContentSchema,
     read: () => ({ scopes: [] }),
     matches: () => true,

@@ -175,6 +175,7 @@ export async function applyUpdatePlan<
       validatedPlan,
       baseline,
       changesByPair.get(id),
+      config,
     );
     if (conflict !== undefined) {
       contentResults.set(id, {
@@ -343,18 +344,19 @@ function planInputConflict<
   change:
     | ProcessingBaselineChange<TUnit, TTranslation, TUnavailable>
     | undefined,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
 ): UpdatePlanBlock | undefined {
   if (item.expectedInput === undefined || change?.current === undefined)
     return {
       code: "missingCurrentInput",
       message: "当前缺少计划所需的可靠事实。",
     };
-  if (!planPreviousMatches(item, plan, baseline, change))
+  if (!planPreviousMatches(item, plan, baseline, change, config))
     return {
       code: "planBaselineChanged",
       message: "处理基线已变化，保存计划已过期。",
     };
-  if (!matchesExpectedInput(item.expectedInput, change.current))
+  if (!matchesExpectedInput(item.expectedInput, change.current, config))
     return {
       code: "planInputChanged",
       message: "原文、译文或相关范围已变化，保存计划已过期。",
@@ -385,6 +387,7 @@ function planPreviousMatches<
   change:
     | ProcessingBaselineChange<TUnit, TTranslation, TUnavailable>
     | undefined,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
 ): boolean {
   const current = change?.previous;
   if (item.previous !== undefined)
@@ -395,7 +398,7 @@ function planPreviousMatches<
       !current.processed &&
       item.expectedInput !== undefined &&
       entryIsReliable(current) &&
-      matchesExpectedInput(item.expectedInput, current)
+      matchesExpectedInput(item.expectedInput, current, config)
     );
   if (item.change !== "added") return true;
   if (baseline === undefined || item.current === undefined) return false;
@@ -438,10 +441,12 @@ function sourceScopeEvidenceStillProvesAddition(
 function matchesExpectedInput<
   TUnit extends TranslationUnitInput,
   TTranslation,
+  TBody,
   TUnavailable,
 >(
   expected: UpdatePlanObservation<TUnit["source"], TTranslation, TUnavailable>,
   current: ProcessingBaselineEntry<TUnit, TTranslation, TUnavailable>,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
 ): boolean {
   if (
     expected.source.presence !== current.source.presence ||
@@ -467,11 +472,26 @@ function matchesExpectedInput<
 
   return association.translations.every((translation, index) => {
     const currentTranslation = currentAssociation.translations[index];
-    return (
-      currentTranslation !== undefined &&
-      translation.bodyAvailability === currentTranslation.bodyAvailability &&
-      isDeepStrictEqual(translation.range, currentTranslation.range) &&
-      isDeepStrictEqual(translation.translation, currentTranslation.translation)
+    if (
+      currentTranslation === undefined ||
+      translation.bodyAvailability !== currentTranslation.bodyAvailability ||
+      !isDeepStrictEqual(translation.range, currentTranslation.range)
+    )
+      return false;
+    if (translation.bodyAvailability === "available") {
+      const adapter = config.translations;
+      return (
+        currentTranslation.bodyAvailability === "available" &&
+        adapter !== undefined &&
+        isDeepStrictEqual(
+          adapter.contentOf(translation.translation),
+          adapter.contentOf(currentTranslation.translation),
+        )
+      );
+    }
+    return isDeepStrictEqual(
+      translation.translation,
+      currentTranslation.translation,
     );
   });
 }
