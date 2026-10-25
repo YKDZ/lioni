@@ -35,7 +35,7 @@ import {
   termComparisonInputSchema,
   termRulesConfigurationSchema,
 } from "@lioni/terminology";
-import type { TermComparisonInput, TermTextInput } from "@lioni/terminology";
+import type { TermComparisonInput } from "@lioni/terminology";
 import {
   braceVariables,
   createTextAnalysis,
@@ -1122,7 +1122,9 @@ async function main(): Promise<void> {
   const originalTarget = await readFile(targetPath);
   const natural = await runNaturalCorpus();
   const noAnalysis = await verifyNoAnalysisForConfigurationAndSimpleCheck();
-  let controls: unknown;
+  let controls: Awaited<
+    ReturnType<typeof verifyControlledCandidateAndWriteback>
+  >;
   try {
     controls = await verifyControlledCandidateAndWriteback();
   } catch (error) {
@@ -1151,7 +1153,7 @@ async function main(): Promise<void> {
     },
     natural,
     noAnalysis,
-    ...((controls as object) ?? {}),
+    ...controls,
   };
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 }
