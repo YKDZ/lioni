@@ -381,6 +381,118 @@ void describe("术语识别与局部歧义", () => {
     );
   });
 
+  void it("自定义区间回映不能切开 UTF-16 代理对", async () => {
+    const terms = compileTerms(
+      createTermbase({
+        concepts: [
+          {
+            id: "emoji",
+            languages: [
+              { language: "ja", expressions: [expression("emoji", "😀")] },
+            ],
+          },
+        ],
+      }),
+      {
+        policy: {
+          id: "invalid-surrogate-range",
+          boundary: "literal",
+          normalize: (text) => ({
+            ...normalizeText(text),
+            mapRange: () => ({ start: 0, end: 1 }),
+          }),
+        },
+      },
+    );
+
+    await assert.rejects(
+      findTerms(terms, {
+        language: "ja",
+        fragments: [{ ref: "emoji", text: "😀" }],
+      }),
+      (error) =>
+        error instanceof TermContractError &&
+        error.issues.some((issue) => issue.code === "split-surrogate-range"),
+    );
+  });
+
+  void it("自定义词界政策必须返回布尔值", async () => {
+    const terms = compileTerms(createTermbase({ concepts: [workspace] }), {
+      policy: {
+        id: "invalid-boundary-result",
+        boundary: (() => "false") as unknown as () => boolean,
+      },
+    });
+
+    await assert.rejects(
+      findTerms(terms, {
+        language: "en",
+        fragments: [{ ref: "source", text: "workspace" }],
+      }),
+      (error) =>
+        error instanceof TermContractError &&
+        error.issues.some((issue) => issue.code === "invalid-boundary-result"),
+    );
+  });
+
+  void it("术语保护区间不能切开 UTF-16 代理对", () => {
+    const parsed = termComparisonInputSchema["~standard"].validate({
+      groups: [
+        {
+          source: {
+            language: "ja",
+            fragments: [
+              {
+                ref: "emoji",
+                text: "😀",
+                protectedRanges: [{ start: 1, end: 2 }],
+              },
+            ],
+          },
+          target: { language: "ja", fragments: [] },
+        },
+      ],
+    });
+
+    assert.ok("issues" in parsed);
+  });
+
+  void it("不完整的分词仍保留有已知有效边界的肯定命中", async () => {
+    const analysis = createTextAnalysis({
+      recognizers: [
+        () => ({
+          tokens: [{ start: 10, end: 14, kind: "placeholder", protect: true }],
+          complete: false,
+          issues: [
+            { code: "partial-recognition", message: "结构扫描有缺口。" },
+          ],
+        }),
+      ],
+      segmenter: () => ({
+        words: [{ start: 0, end: 9, text: "workspace" }],
+        boundaries: [0, 9],
+        complete: true,
+        issues: [],
+      }),
+    });
+    const terms = compileTerms(createTermbase({ concepts: [workspace] }), {
+      analysis,
+    });
+
+    const result = await findTerms(terms, {
+      language: "en",
+      fragments: [{ ref: "source", text: "workspace ${x}" }],
+    });
+
+    assert.equal(result.status, "incomplete");
+    assert.equal(result.certain.length, 1);
+    assert.equal(result.certain[0]!.text, "workspace");
+    assert.deepEqual(result.certain[0]!.range, { start: 0, end: 9 });
+    assert.ok(
+      result.issues.some((issue) => issue.code === "partial-recognition"),
+    );
+  });
+
   void it("独立片段和保护区间不制造跨段或跨区间命中", async () => {
     const terms = compileTerms(createTermbase({ concepts: [workspace] }));
     const result = await findTerms(terms, {
@@ -487,6 +599,12 @@ void describe("术语识别与局部歧义", () => {
       fragments: [{ ref: 0, text: "espace" }],
     });
     assert.equal(result.status, "incomplete");
+    const emptyRange = await findTerms(
+      compileTerms(createTermbase({ concepts: [] })),
+      { language: "en", fragments: [], complete: false },
+    );
+    assert.equal(emptyRange.status, "incomplete");
+    assert.equal(emptyRange.issues[0]!.code, "incomplete-scope");
     const failure = new Error("fixture failure");
     const failing = compileTerms(createTermbase({ concepts: [workspace] }), {
       policy: {
