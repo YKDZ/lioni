@@ -296,8 +296,13 @@ void describe("术语质量评估入口", () => {
             readonly metrics: Record<string, { readonly status: string }>;
             readonly evidence: {
               readonly scenario: {
+                readonly languagePair: {
+                  readonly sourceLanguage: string;
+                  readonly targetLanguage: string;
+                };
                 readonly paragraphSamples: {
                   readonly discovery: {
+                    readonly language: string;
                     readonly status: string;
                     readonly statistics: { readonly entries: number };
                     readonly selectedRefs: readonly string[];
@@ -337,10 +342,15 @@ void describe("术语质量评估入口", () => {
         firstReport.scenarios.controlled?.metrics.diagnosticAccuracy?.status,
         "not-evaluated",
       );
+      assert.deepEqual(
+        firstReport.scenarios.controlled?.evidence.scenario.languagePair,
+        { sourceLanguage: "en", targetLanguage: "zh-CN" },
+      );
       const paragraphDiscovery =
         firstReport.scenarios.controlled?.evidence.scenario.paragraphSamples
           .discovery;
       assert.equal(paragraphDiscovery?.status, "complete");
+      assert.equal(paragraphDiscovery?.language, "en");
       assert.equal(paragraphDiscovery?.statistics.entries, 2);
       assert.deepEqual(paragraphDiscovery?.selectedRefs, [
         "paragraph-long",

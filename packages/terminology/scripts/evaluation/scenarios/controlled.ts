@@ -424,6 +424,10 @@ export async function runControlledScenario(
     }),
     evidence: Object.freeze({
       source: "self-authored deterministic cases; no external data",
+      languagePair: Object.freeze({
+        sourceLanguage: "en",
+        targetLanguage: "zh-CN",
+      }),
       policies: Object.freeze({
         assessmentRules: Object.freeze([
           "require-allowed-translation",
@@ -458,6 +462,7 @@ export async function runControlledScenario(
         longExpressionRange: longMatch.range,
         ambiguityCount: ambiguity.length,
         discovery: Object.freeze({
+          language: paragraphDiscoveryCorpus.language,
           status: paragraphDiscovery.status,
           statistics: paragraphDiscovery.statistics,
           selectedRefs: paragraphDiscoveryCorpus.entries.map(({ ref }) => ref),
