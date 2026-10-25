@@ -15,10 +15,15 @@
     "boundaries": "turbo boundaries",
     "publication:pack": "turbo run build && changeset pack --out-dir .changeset/packed",
     "publication:publish": "changeset publish --from-pack-dir .changeset/packed",
-    "verify:independent-consumer": "node --conditions=source scripts/verify-independent-consumer.ts"
+    "verify:artifacts": "node --conditions=source scripts/run-artifact-tests.ts"
   },
   "devDependencies": {
     "@changesets/cli": "catalog:",
+    "@lioni/checks": "workspace:*",
+    "@lioni/core": "workspace:*",
+    "@lioni/memo": "workspace:*",
+    "@lioni/terminology": "workspace:*",
+    "@lioni/text-analysis": "workspace:*",
     "@lioni/tooling-config": "workspace:./packages/tooling-config",
     "@types/node": "catalog:",
     "oxfmt": "catalog:",

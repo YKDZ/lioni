@@ -2,7 +2,9 @@
   "extends": "./tsconfig.config.json",
   "compilerOptions": {
     "erasableSyntaxOnly": true,
+    "customConditions": [],
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.scripts.tsbuildinfo"
   },
-  "include": ["scripts/**/*.ts"]
+  "include": ["scripts/**/*.ts"],
+  "exclude": ["scripts/artifact-tests/fixtures/**/*.ts"]
 }
