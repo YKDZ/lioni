@@ -7,8 +7,10 @@ import {
   assessTermUse,
   type TermCandidate,
   type TermCorpusEntry,
+  type TermComparisonInput,
   type TermDiscovery,
   type TermDiscoveryCorpus,
+  type TermUseAnalysis,
 } from "@lioni/terminology";
 
 import type {
@@ -52,6 +54,10 @@ const sampleCandidatePolicy = Object.freeze({
   minOccurrences: 1,
   limit: 1_000,
   maxExamples: 1,
+});
+const cfpaLanguagePair = Object.freeze({
+  sourceLanguage: "en",
+  targetLanguage: "zh-CN",
 });
 
 function candidatesFacts(entries: readonly TermCorpusEntry[]): TextFacts {
@@ -231,6 +237,155 @@ function referenceOverlap(
   });
 }
 
+function summarizeIntervalRecognition(termUse: TermUseAnalysis) {
+  const intervalGroups = termUse.groups.map((group, groupIndex) => {
+    const inputGroup = termUse.input.groups[groupIndex];
+    return {
+      groupIndex,
+      ...(inputGroup?.ref === undefined ? {} : { ref: inputGroup.ref }),
+      sourceStatus: group.source.status,
+      sourceMatches: group.source.certain.map((match) => ({
+        conceptId: match.conceptId,
+        expressionId: match.expressionId,
+        fragmentIndex: match.fragmentIndex,
+        ref: match.ref,
+        range: match.range,
+        text: match.text,
+      })),
+      sourceAmbiguityCount: group.source.ambiguities.length,
+      targetStatus: group.target.status,
+      targetMatches: group.target.certain.map((match) => ({
+        conceptId: match.conceptId,
+        expressionId: match.expressionId,
+        fragmentIndex: match.fragmentIndex,
+        ref: match.ref,
+        range: match.range,
+        text: match.text,
+      })),
+      targetAmbiguityCount: group.target.ambiguities.length,
+    };
+  });
+  const sourceMatches = intervalGroups.flatMap(
+    ({ sourceMatches: matches }) => matches,
+  );
+  const targetMatches = intervalGroups.flatMap(
+    ({ targetMatches: matches }) => matches,
+  );
+  const sourceAmbiguities = intervalGroups.reduce(
+    (sum, group) => sum + group.sourceAmbiguityCount,
+    0,
+  );
+  const targetAmbiguities = intervalGroups.reduce(
+    (sum, group) => sum + group.targetAmbiguityCount,
+    0,
+  );
+  const noMatchExample = intervalGroups.find(
+    (group) =>
+      group.sourceMatches.length === 0 &&
+      group.targetMatches.length === 0 &&
+      group.sourceAmbiguityCount === 0 &&
+      group.targetAmbiguityCount === 0,
+  );
+  const observedExamples = intervalGroups
+    .filter(
+      (group) =>
+        group.sourceMatches.length > 0 ||
+        group.targetMatches.length > 0 ||
+        group.sourceAmbiguityCount > 0 ||
+        group.targetAmbiguityCount > 0,
+    )
+    .slice(0, noMatchExample === undefined ? 20 : 19);
+  return Object.freeze({
+    languagePair: cfpaLanguagePair,
+    status: termUse.groups.every(
+      ({ source, target }) =>
+        source.status === "complete" && target.status === "complete",
+    )
+      ? "complete"
+      : "incomplete",
+    comparisonGroups: termUse.groups.length,
+    sourceCertainMatchCount: sourceMatches.length,
+    targetCertainMatchCount: targetMatches.length,
+    sourceAmbiguityCount: sourceAmbiguities,
+    targetAmbiguityCount: targetAmbiguities,
+    sourceIssueCount: termUse.groups.reduce(
+      (sum, group) => sum + group.source.issues.length,
+      0,
+    ),
+    targetIssueCount: termUse.groups.reduce(
+      (sum, group) => sum + group.target.issues.length,
+      0,
+    ),
+    sample: Object.freeze([
+      ...(noMatchExample === undefined ? [] : [noMatchExample]),
+      ...observedExamples,
+    ]),
+  });
+}
+
+function summarizeTermAssessment(
+  comparison: TermComparisonInput,
+  assessment: ReturnType<typeof assessTermUse>,
+) {
+  const topProblems = assessment.problems.slice(0, 20).map((problem) => ({
+    code: problem.code,
+    groupIndex: problem.groupIndex,
+    groupRef: comparison.groups[problem.groupIndex]?.ref,
+    conceptId: problem.conceptId,
+    sourceMatches: problem.sourceMatches.map(
+      ({ text, range, expressionText }) => ({ text, range, expressionText }),
+    ),
+    targetMatches: problem.targetMatches.map(
+      ({ text, range, expressionText }) => ({ text, range, expressionText }),
+    ),
+  }));
+  return Object.freeze({
+    languagePair: cfpaLanguagePair,
+    status: assessment.status,
+    comparisonGroups: comparison.groups.length,
+    problemCount: assessment.problems.length,
+    problemCodes: countCodes(assessment.problems),
+    issueCount: assessment.issues.length,
+    issueCodes: countCodes(assessment.issues),
+    topProblems: Object.freeze(topProblems),
+    metrics: Object.freeze({
+      accuracy: "not-evaluated",
+      reason:
+        "每个表行映射为一个临时参考记录，原始翻译不作正确性标签；没有适用范围和人工复核。",
+    }),
+  });
+}
+
+async function analyzeCfpaContentType(
+  name: "ui" | "paragraph",
+  selectedKeys: readonly string[],
+  terms: ReturnType<typeof compileTerms>,
+  comparison: TermComparisonInput,
+  memo: ReturnType<typeof createMemoScope>,
+) {
+  const selectedKeySet = new Set(selectedKeys);
+  const groups = comparison.groups.filter(
+    ({ ref }) => typeof ref === "string" && selectedKeySet.has(ref),
+  );
+  const matchedKeys = new Set(groups.map(({ ref }) => ref as string));
+  const selectedComparison = Object.freeze({ groups: Object.freeze(groups) });
+  const termUse = await analyzeTermUse(terms, selectedComparison, { memo });
+  const assessment = assessTermUse(selectedComparison, termUse);
+  return Object.freeze({
+    selection: Object.freeze({
+      name,
+      selectedKeys,
+      requestedKeyCount: selectedKeys.length,
+      matchedComparisonGroups: groups.length,
+      missingKeys: Object.freeze(
+        selectedKeys.filter((key) => !matchedKeys.has(key)),
+      ),
+    }),
+    assessment: summarizeTermAssessment(selectedComparison, assessment),
+    intervalRecognition: summarizeIntervalRecognition(termUse),
+  });
+}
+
 export async function runCfpaScenario(
   input: CfpaPreparedInput,
   inputSha256: string,
@@ -291,83 +446,29 @@ export async function runCfpaScenario(
     const terms = compileTerms(createTermbase(input.referenceTermbase));
     const termUse = await analyzeTermUse(terms, input.comparison, { memo });
     const assessment = assessTermUse(input.comparison, termUse);
-    incomplete ||= assessment.status === "incomplete";
-    const intervalGroups = termUse.groups.map((group, groupIndex) => ({
-      groupIndex,
-      sourceStatus: group.source.status,
-      sourceMatches: group.source.certain.map((match) => ({
-        conceptId: match.conceptId,
-        expressionId: match.expressionId,
-        fragmentIndex: match.fragmentIndex,
-        ref: match.ref,
-        range: match.range,
-        text: match.text,
-      })),
-      sourceAmbiguityCount: group.source.ambiguities.length,
-      targetStatus: group.target.status,
-      targetMatches: group.target.certain.map((match) => ({
-        conceptId: match.conceptId,
-        expressionId: match.expressionId,
-        fragmentIndex: match.fragmentIndex,
-        ref: match.ref,
-        range: match.range,
-        text: match.text,
-      })),
-      targetAmbiguityCount: group.target.ambiguities.length,
-    }));
-    const sourceMatches = intervalGroups.flatMap(
-      ({ sourceMatches: matches }) => matches,
-    );
-    const targetMatches = intervalGroups.flatMap(
-      ({ targetMatches: matches }) => matches,
-    );
-    const sourceAmbiguities = intervalGroups.reduce(
-      (sum, group) => sum + group.sourceAmbiguityCount,
-      0,
-    );
-    const targetAmbiguities = intervalGroups.reduce(
-      (sum, group) => sum + group.targetAmbiguityCount,
-      0,
-    );
-    const noMatchExample = intervalGroups.find(
-      (group) =>
-        group.sourceMatches.length === 0 &&
-        group.targetMatches.length === 0 &&
-        group.sourceAmbiguityCount === 0 &&
-        group.targetAmbiguityCount === 0,
-    );
-    const observedExamples = intervalGroups
-      .filter(
-        (group) =>
-          group.sourceMatches.length > 0 ||
-          group.targetMatches.length > 0 ||
-          group.sourceAmbiguityCount > 0 ||
-          group.targetAmbiguityCount > 0,
-      )
-      .slice(0, noMatchExample === undefined ? 20 : 19);
-    const intervalSample = Object.freeze([
-      ...(noMatchExample === undefined ? [] : [noMatchExample]),
-      ...observedExamples,
-    ]);
-    const problemEvidence = assessment.problems.slice(0, 20).map((problem) => ({
-      code: problem.code,
-      groupIndex: problem.groupIndex,
-      conceptId: problem.conceptId,
-      sourceMatches: problem.sourceMatches.map(
-        ({ text, range, expressionText }) => ({
-          text,
-          range,
-          expressionText,
-        }),
+    const contentTypeAnalysis = Object.freeze({
+      languagePair: cfpaLanguagePair,
+      ui: await analyzeCfpaContentType(
+        "ui",
+        contentTypeSelection.cfpa.ui,
+        terms,
+        input.comparison,
+        memo,
       ),
-      targetMatches: problem.targetMatches.map(
-        ({ text, range, expressionText }) => ({
-          text,
-          range,
-          expressionText,
-        }),
+      paragraph: await analyzeCfpaContentType(
+        "paragraph",
+        contentTypeSelection.cfpa.paragraph,
+        terms,
+        input.comparison,
+        memo,
       ),
-    }));
+    });
+    incomplete ||=
+      assessment.status === "incomplete" ||
+      contentTypeAnalysis.ui.assessment.status === "incomplete" ||
+      contentTypeAnalysis.paragraph.assessment.status === "incomplete" ||
+      contentTypeAnalysis.ui.intervalRecognition.status === "incomplete" ||
+      contentTypeAnalysis.paragraph.intervalRecognition.status === "incomplete";
     return Object.freeze({
       execution: Object.freeze({ status: "passed" }),
       domain: Object.freeze({ status: incomplete ? "incomplete" : "complete" }),
@@ -408,6 +509,9 @@ export async function runCfpaScenario(
             "reject-forbidden-translation",
           ]),
           termMatching: "public default per-language matching policies",
+          termReferenceLanguagePair: cfpaLanguagePair,
+          termReferenceScope:
+            "English source compared with simplified Chinese; does not infer Japanese term quality",
         }),
         workload: Object.freeze({
           textByLanguage: input.facts.textByLanguage,
@@ -418,41 +522,9 @@ export async function runCfpaScenario(
           semanticConceptCount: "not-evaluated",
           missingChineseTargets: input.facts.missingChineseTargets,
         }),
-        termReferenceRun: Object.freeze({
-          status: assessment.status,
-          problemCount: assessment.problems.length,
-          problemCodes: countCodes(assessment.problems),
-          issueCount: assessment.issues.length,
-          issueCodes: countCodes(assessment.issues),
-          topProblems: Object.freeze(problemEvidence),
-          metrics: Object.freeze({
-            accuracy: "not-evaluated",
-            reason:
-              "每个表行映射为一个临时参考记录，原始翻译不作正确性标签；没有适用范围和人工复核。",
-          }),
-        }),
-        intervalRecognition: Object.freeze({
-          status: termUse.groups.every(
-            ({ source, target }) =>
-              source.status === "complete" && target.status === "complete",
-          )
-            ? "complete"
-            : "incomplete",
-          comparisonGroups: termUse.groups.length,
-          sourceCertainMatchCount: sourceMatches.length,
-          targetCertainMatchCount: targetMatches.length,
-          sourceAmbiguityCount: sourceAmbiguities,
-          targetAmbiguityCount: targetAmbiguities,
-          sourceIssueCount: termUse.groups.reduce(
-            (sum, group) => sum + group.source.issues.length,
-            0,
-          ),
-          targetIssueCount: termUse.groups.reduce(
-            (sum, group) => sum + group.target.issues.length,
-            0,
-          ),
-          sample: intervalSample,
-        }),
+        termReferenceRun: summarizeTermAssessment(input.comparison, assessment),
+        intervalRecognition: summarizeIntervalRecognition(termUse),
+        contentTypeAnalysis,
         languages: Object.freeze(languages),
       }),
     });
