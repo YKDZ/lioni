@@ -84,6 +84,11 @@
         "LIONI_KEEP_ARTIFACT_TESTS",
         "LIONI_KUMA_SOURCE"
       ]
+    },
+    "//#terminology:evaluation:performance": {
+      "cache": false,
+      "outputs": [],
+      "tags": ["work:on-demand"]
     }
   },
   "boundaries": {
