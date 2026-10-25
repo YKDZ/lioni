@@ -1,5 +1,14 @@
-import type { JsonValue } from "@lioni/core";
+import type { JsonValue, QualityLocation } from "@lioni/core";
 import type { TemplateSignature, TextRange } from "@lioni/text-analysis";
+
+export type MessageFamilyIssue = {
+  readonly code: string;
+  readonly message: string;
+  readonly language?: string;
+  readonly sourceKey?: string;
+  readonly ref?: JsonValue;
+  readonly range?: TextRange;
+};
 
 export type MessageFragment = {
   readonly ref: JsonValue;
@@ -10,6 +19,7 @@ export type MessageText = {
   readonly language: string;
   readonly fragments: readonly MessageFragment[];
   readonly complete?: boolean;
+  readonly issues?: readonly MessageFamilyIssue[];
 };
 export type MessageFamilyGroup = {
   readonly ref: JsonValue;
@@ -20,14 +30,9 @@ export type MessageFamilyGroup = {
 };
 export type MessageFamilyInput = {
   readonly groups: readonly MessageFamilyGroup[];
-};
-export type MessageFamilyEvidenceInput = {
-  readonly complete: boolean;
-  readonly records: readonly {
-    readonly translationIndex: number;
-    readonly sourceKey: string;
-    readonly groups: readonly MessageFamilyGroup[];
-  }[];
+  /** false 表示仍有未投影的消息组；已知 groups 继续参与检查。 */
+  readonly complete?: boolean;
+  readonly issues?: readonly MessageFamilyIssue[];
 };
 export type MessageFamilySignature = {
   readonly familyKey: string;
@@ -39,6 +44,7 @@ export type MessageFamilyReference = MessageFamilySignature & {
   readonly group: MessageFamilyGroup;
   readonly sourceSignatures: readonly TemplateSignature[];
   readonly targetSignatures: readonly TemplateSignature[];
+  readonly translationLocation?: QualityLocation;
 };
 export type MessageFamilyLimits = {
   readonly maxCategories: number;
