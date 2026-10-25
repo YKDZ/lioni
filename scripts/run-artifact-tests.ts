@@ -36,6 +36,8 @@ const defaultArtifactCacheDirectory = path.join(
   ".cache",
   "lioni-artifact-tests",
 );
+const ownedRunMarkerFilename = ".lioni-artifact-suite-run.json";
+const ownedRunMarkerVersion = 1;
 
 type CachedArtifact = Artifact & {
   readonly cachePath: string;
@@ -249,10 +251,39 @@ async function writeSuiteResult(
   );
 }
 
+async function cleanOwnedRun(runPath: string): Promise<void> {
+  const runRoot = path.resolve(runPath);
+  const markerPath = path.join(runRoot, ownedRunMarkerFilename);
+  const marker = JSON.parse(await readFile(markerPath, "utf8")) as {
+    readonly version: number;
+    readonly runRoot: string;
+  };
+  assert.equal(
+    marker.version,
+    ownedRunMarkerVersion,
+    "运行现场标记版本不受支持。",
+  );
+  assert.equal(marker.runRoot, runRoot, "运行现场标记与目录路径不匹配。");
+
+  const removed: string[] = [];
+  for (const entry of await readdir(runRoot, { withFileTypes: true })) {
+    const isConsumer =
+      entry.isDirectory() && entry.name.startsWith("consumer-");
+    if (!entry.isDirectory() || (entry.name !== "artifacts" && !isConsumer))
+      continue;
+    await rm(path.join(runRoot, entry.name), { recursive: true, force: true });
+    removed.push(entry.name);
+  }
+  process.stdout.write(
+    `${JSON.stringify({ status: "cleaned", runRoot, removed }, null, 2)}\n`,
+  );
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2).filter((argument) => argument !== "--");
   let listOnly = false;
   let prepareOnly = false;
+  let cleanRunPath: string | undefined;
   const requested: string[] = [];
   const packageSelection: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
@@ -260,7 +291,17 @@ async function main(): Promise<void> {
     if (argument === undefined) continue;
     if (argument === "--list") listOnly = true;
     else if (argument === "--prepare-only") prepareOnly = true;
-    else if (argument === "--package") {
+    else if (argument === "--scenario") {
+      const scenario = args[index + 1];
+      assert.ok(scenario, "--scenario 后必须指定场景名称。");
+      requested.push(scenario);
+      index += 1;
+    } else if (argument === "--clean-run") {
+      const runPath = args[index + 1];
+      assert.ok(runPath, "--clean-run 后必须指定运行现场路径。");
+      cleanRunPath = runPath;
+      index += 1;
+    } else if (argument === "--package") {
       const packageName = args[index + 1];
       assert.ok(packageName, "--package 后必须指定包名。");
       packageSelection.push(packageName);
@@ -269,6 +310,14 @@ async function main(): Promise<void> {
   }
   assert.ok(!(listOnly && prepareOnly), "--list 与 --prepare-only 不能并用。");
   assert.ok(
+    cleanRunPath === undefined ||
+      (!listOnly &&
+        !prepareOnly &&
+        requested.length === 0 &&
+        packageSelection.length === 0),
+    "--clean-run 只能单独使用。",
+  );
+  assert.ok(
     prepareOnly || packageSelection.length === 0,
     "--package 只可与 --prepare-only 并用。",
   );
@@ -276,6 +325,10 @@ async function main(): Promise<void> {
     !prepareOnly || requested.length === 0,
     "--prepare-only 不接收场景名称。",
   );
+  if (cleanRunPath !== undefined) {
+    await cleanOwnedRun(cleanRunPath);
+    return;
+  }
   const available = await discoverScenarios();
   const selected = prepareOnly ? [] : selectScenarios(available, requested);
   if (listOnly) {
@@ -288,6 +341,11 @@ async function main(): Promise<void> {
 
   const temporaryRoot = await mkdtemp(
     path.join(tmpdir(), "lioni-artifact-test-suite-"),
+  );
+  await writeFile(
+    path.join(temporaryRoot, ownedRunMarkerFilename),
+    JSON.stringify({ version: ownedRunMarkerVersion, runRoot: temporaryRoot }),
+    { flag: "wx" },
   );
   const artifactRoot = path.join(temporaryRoot, "artifacts");
   const resultsRoot = path.join(temporaryRoot, "results");
@@ -363,6 +421,8 @@ async function main(): Promise<void> {
         LIONI_ARTIFACT_MANIFEST: artifactManifestPath,
         LIONI_ARTIFACT_RESULTS: resultsRoot,
         LIONI_ARTIFACT_RUN_ROOT: temporaryRoot,
+        LIONI_ARTIFACT_SELECTED_SCENARIOS: JSON.stringify(selected),
+        LIONI_ARTIFACT_REQUESTED_SCENARIOS: JSON.stringify(requested),
         LIONI_REPOSITORY_ROOT: repositoryRoot,
         LIONI_TSC_EXECUTABLE: path.join(
           repositoryRoot,

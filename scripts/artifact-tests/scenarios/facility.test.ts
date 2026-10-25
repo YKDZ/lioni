@@ -114,12 +114,17 @@ async function prepareCoreArtifact(cacheRoot: string): Promise<{
   readonly cacheState: "stored" | "reused" | "repaired";
   readonly cachePath: string;
 }> {
+  const environment: NodeJS.ProcessEnv = {
+    ...process.env,
+    LIONI_ARTIFACT_CACHE: cacheRoot,
+  };
+  delete environment.LIONI_KEEP_ARTIFACT_TESTS;
   const result = await runSubprocess(
     "pnpm",
     ["verify:artifacts", "--", "--prepare-only", "--package", "@lioni/core"],
     {
       cwd: repositoryRoot,
-      env: { ...process.env, LIONI_ARTIFACT_CACHE: cacheRoot },
+      env: environment,
       timeoutMs: 60_000,
       shell: process.platform === "win32",
     },
@@ -145,6 +150,32 @@ async function prepareCoreArtifact(cacheRoot: string): Promise<{
   assert.ok(artifact);
   assert.equal(artifact.name, "@lioni/core");
   return artifact;
+}
+
+function retainedRunPath(output: string): string {
+  const marker = "保留制品测试现场：";
+  const line = output.split("\n").find((value) => value.startsWith(marker));
+  assert.ok(line, output);
+  return line.slice(marker.length);
+}
+
+async function cleanRun(runRoot: string): Promise<{
+  readonly status: string;
+  readonly removed: readonly string[];
+}> {
+  const result = await runSubprocess(
+    "pnpm",
+    ["verify:artifacts", "--", "--clean-run", runRoot],
+    { cwd: repositoryRoot, timeoutMs: 10_000 },
+  );
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const start = result.stdout.indexOf("{");
+  assert.notEqual(start, -1, result.stdout);
+  const end = findJsonObjectEnd(result.stdout, start);
+  return JSON.parse(result.stdout.slice(start, end)) as {
+    readonly status: string;
+    readonly removed: readonly string[];
+  };
 }
 
 function findJsonObjectEnd(output: string, start: number): number {
@@ -227,7 +258,15 @@ void test("超时会终止子进程树，中断后仍能运行新进程", async 
 void test("公开入口按请求选择场景", async () => {
   const selection = await runSubprocess(
     "pnpm",
-    ["verify:artifacts", "--", "--list", "facility", "composition"],
+    [
+      "verify:artifacts",
+      "--",
+      "--list",
+      "--scenario",
+      "facility",
+      "--scenario",
+      "composition",
+    ],
     {
       cwd: repositoryRoot,
       timeoutMs: 5_000,
@@ -282,6 +321,102 @@ void test("正式制品缓存校验、损坏修复和缺失重建", async () => 
       rebuilt.sha256,
     );
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+void test("保留运行现场可重复清理并保留失败报告和外部哨兵", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "lioni-artifact-cleanup-"));
+  const cacheRoot = path.join(root, "artifact-cache");
+  const externalSentinel = path.join(root, "external-sentinel.txt");
+  let retainedRoot: string | undefined;
+  try {
+    await writeFile(externalSentinel, "keep\n", "utf8");
+    const cachedArtifact = await prepareCoreArtifact(cacheRoot);
+    const failedRun = await runSubprocess(
+      "pnpm",
+      [
+        "verify:artifacts",
+        "--",
+        "--prepare-only",
+        "--package",
+        "@lioni/unknown",
+      ],
+      {
+        cwd: repositoryRoot,
+        timeoutMs: 60_000,
+        env: { ...process.env, LIONI_ARTIFACT_CACHE: cacheRoot },
+      },
+    );
+    assert.equal(failedRun.status, 1, failedRun.stdout + failedRun.stderr);
+    retainedRoot = retainedRunPath(failedRun.stdout);
+
+    const markerPath = path.join(
+      retainedRoot,
+      ".lioni-artifact-suite-run.json",
+    );
+    const reportPath = path.join(retainedRoot, "results", "suite.json");
+    const failedReport = await readFile(reportPath, "utf8");
+    assert.equal(
+      (JSON.parse(failedReport) as { readonly status: string }).status,
+      "failed",
+    );
+    const consumerPath = path.join(retainedRoot, "consumer-facility-sentinel");
+    const temporaryArtifactPath = path.join(
+      retainedRoot,
+      "artifacts",
+      "discarded.tgz",
+    );
+    const operatorSentinel = path.join(retainedRoot, "operator-sentinel.txt");
+    await mkdir(consumerPath, { recursive: true });
+    await Promise.all([
+      writeFile(path.join(consumerPath, "temporary.txt"), "remove\n", "utf8"),
+      writeFile(temporaryArtifactPath, "remove\n", "utf8"),
+      writeFile(operatorSentinel, "keep\n", "utf8"),
+    ]);
+
+    const firstCleanup = await cleanRun(retainedRoot);
+    assert.equal(firstCleanup.status, "cleaned");
+    assert.ok(firstCleanup.removed.includes("artifacts"));
+    assert.ok(firstCleanup.removed.includes("consumer-facility-sentinel"));
+    await assert.rejects(stat(consumerPath));
+    await assert.rejects(stat(path.join(retainedRoot, "artifacts")));
+    assert.equal(await readFile(reportPath, "utf8"), failedReport);
+    assert.ok((await stat(markerPath)).isFile());
+    assert.equal(await readFile(operatorSentinel, "utf8"), "keep\n");
+    assert.equal(await readFile(externalSentinel, "utf8"), "keep\n");
+    assert.equal(
+      createHash("sha256")
+        .update(await readFile(cachedArtifact.cachePath))
+        .digest("hex"),
+      cachedArtifact.sha256,
+    );
+
+    const secondCleanup = await cleanRun(retainedRoot);
+    assert.equal(secondCleanup.status, "cleaned");
+    assert.deepEqual(secondCleanup.removed, []);
+    assert.equal(await readFile(reportPath, "utf8"), failedReport);
+    assert.equal(await readFile(operatorSentinel, "utf8"), "keep\n");
+    assert.equal(await readFile(externalSentinel, "utf8"), "keep\n");
+
+    const unownedRoot = path.join(root, "unowned-run");
+    const unownedSentinel = path.join(unownedRoot, "operator-sentinel.txt");
+    await mkdir(unownedRoot, { recursive: true });
+    await writeFile(unownedSentinel, "keep\n", "utf8");
+    const rejectedCleanup = await runSubprocess(
+      "pnpm",
+      ["verify:artifacts", "--", "--clean-run", unownedRoot],
+      { cwd: repositoryRoot, timeoutMs: 10_000 },
+    );
+    assert.equal(rejectedCleanup.status, 1);
+    assert.equal(await readFile(unownedSentinel, "utf8"), "keep\n");
+
+    const rerunArtifact = await prepareCoreArtifact(cacheRoot);
+    assert.equal(rerunArtifact.cacheState, "reused");
+    assert.equal(rerunArtifact.sha256, cachedArtifact.sha256);
+  } finally {
+    if (retainedRoot !== undefined)
+      await rm(retainedRoot, { recursive: true, force: true });
     await rm(root, { recursive: true, force: true });
   }
 });
