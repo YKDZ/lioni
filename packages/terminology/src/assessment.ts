@@ -189,7 +189,9 @@ export function assessTermUse(
         message: "原文比较范围不完整，可能还有未识别的适用概念。",
         groupIndex,
       });
-    for (const issue of evidence.source.issues)
+    for (const issue of evidence.source.issues.filter(
+      ({ code }) => code !== "incomplete-scope",
+    ))
       addIssue({
         code: issue.code,
         message: issue.message,
@@ -220,7 +222,8 @@ export function assessTermUse(
         )?.expressions ?? [];
       const targetIssues = evidence.target.issues.filter(
         (issue) =>
-          issue.conceptId === undefined || issue.conceptId === concept.id,
+          issue.code !== "incomplete-scope" &&
+          (issue.conceptId === undefined || issue.conceptId === concept.id),
       );
       for (const rule of rules) {
         const context = { groupIndex, conceptId: concept.id, ruleId: rule.id };

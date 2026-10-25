@@ -33,6 +33,15 @@ export type TermComparisonInput = {
   readonly groups: readonly TermComparisonGroup[];
 };
 
+export function splitsSurrogatePair(text: string, boundary: number): boolean {
+  if (boundary <= 0 || boundary >= text.length) return false;
+  const before = text.charCodeAt(boundary - 1);
+  const after = text.charCodeAt(boundary);
+  return (
+    before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff
+  );
+}
+
 export function textInputIssues(
   value: unknown,
   path: readonly (string | number)[] = [],
@@ -80,7 +89,9 @@ export function textInputIssues(
           !Number.isInteger(range.end) ||
           range.start < 0 ||
           range.end <= range.start ||
-          range.end > (fragment.text as string).length
+          range.end > (fragment.text as string).length ||
+          splitsSurrogatePair(fragment.text as string, range.start) ||
+          splitsSurrogatePair(fragment.text as string, range.end)
         )
           add("invalid-range", "保护区间必须是正文内非空的 UTF-16 半开区间。", [
             ...fp,
