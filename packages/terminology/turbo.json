@@ -21,6 +21,18 @@
       "cache": false,
       "tags": ["quality:conditional"]
     },
+    "evaluation:performance": {
+      "inputs": [],
+      "outputs": [],
+      "cache": false,
+      "tags": ["work:on-demand"]
+    },
+    "evaluation:compare": {
+      "inputs": [],
+      "outputs": [],
+      "cache": false,
+      "tags": ["work:on-demand"]
+    },
     "format:check": {
       "inputs": [],
       "outputs": [],
