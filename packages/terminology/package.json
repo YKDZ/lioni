@@ -27,7 +27,9 @@
     "lint:fix": "oxlint --format=unix . --fix",
     "typecheck": "tsc -p tsconfig.node.json --noEmit --pretty false",
     "build": "rm -rf dist && tsc -p tsconfig.build.json --pretty false",
-    "test": "node --conditions=source --test --test-reporter=spec 'test/**/*.test.ts'"
+    "test": "node --conditions=source --test --test-reporter=spec 'test/**/*.test.ts'",
+    "evaluation:quality": "node --conditions=source scripts/evaluation/cli.ts quality",
+    "evaluation:clean": "node --conditions=source scripts/evaluation/cli.ts clean"
   },
   "dependencies": {
     "@lioni/memo": "workspace:*",
