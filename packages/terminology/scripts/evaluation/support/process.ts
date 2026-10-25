@@ -29,8 +29,10 @@ function boundedEvidence(value: string): string {
   return `${value.slice(0, evidenceLimit)}\n…（输出已截断）`;
 }
 
-function terminate(child: ReturnType<typeof spawn>): void {
-  if (child.pid === undefined) return;
+function terminate(
+  child: ReturnType<typeof spawn>,
+): ReturnType<typeof setTimeout> | undefined {
+  if (child.pid === undefined) return undefined;
   try {
     if (process.platform === "win32") child.kill("SIGTERM");
     else process.kill(-child.pid, "SIGTERM");
@@ -54,6 +56,7 @@ function terminate(child: ReturnType<typeof spawn>): void {
     }
   }, 100);
   forceTimer.unref();
+  return forceTimer;
 }
 
 /** 隔离运行一个进程，并把超时或中断记录为失败。 */
@@ -69,6 +72,7 @@ export function runProcess(options: ProcessOptions): Promise<ProcessResult> {
     let settled = false;
     let timedOut = false;
     let interrupted = false;
+    let forceTimer: ReturnType<typeof setTimeout> | undefined;
 
     const child = spawn(options.command, [...(options.args ?? [])], {
       cwd: options.cwd,
@@ -80,7 +84,7 @@ export function runProcess(options: ProcessOptions): Promise<ProcessResult> {
       if (settled) return;
       timedOut = true;
       reason = "timed-out";
-      terminate(child);
+      forceTimer ??= terminate(child);
     }, options.timeoutMs);
     timeout.unref();
 
@@ -88,7 +92,7 @@ export function runProcess(options: ProcessOptions): Promise<ProcessResult> {
       if (settled) return;
       interrupted = true;
       reason = "interrupted";
-      terminate(child);
+      forceTimer ??= terminate(child);
     };
     options.signal?.addEventListener("abort", onAbort, { once: true });
     if (options.signal?.aborted) onAbort();
@@ -106,6 +110,7 @@ export function runProcess(options: ProcessOptions): Promise<ProcessResult> {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      clearTimeout(forceTimer);
       options.signal?.removeEventListener("abort", onAbort);
       resolve(
         Object.freeze({
@@ -124,6 +129,7 @@ export function runProcess(options: ProcessOptions): Promise<ProcessResult> {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      clearTimeout(forceTimer);
       options.signal?.removeEventListener("abort", onAbort);
       const status: ProcessStatus =
         reason ?? (code === 0 ? "passed" : "failed");
