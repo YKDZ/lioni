@@ -1,0 +1,11 @@
+{
+  "enumeration": "complete",
+  "entries": [
+    {
+      "nativeKey": "save",
+      "text": "Sauver",
+      "approved": true,
+      "resourceKey": "catalog-save-label"
+    }
+  ]
+}

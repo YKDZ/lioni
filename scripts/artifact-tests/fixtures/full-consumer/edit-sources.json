@@ -1,0 +1,65 @@
+[
+  {
+    "source": "Save",
+    "context": {
+      "identity": "source:18",
+      "line": 18,
+      "targetKey": "toolbar.save",
+      "screenshot": "shots/save.png"
+    }
+  },
+  {
+    "source": "Submit",
+    "context": {
+      "identity": "source:19",
+      "line": 19,
+      "targetKey": "toolbar.submit",
+      "screenshot": "shots/submit.png"
+    }
+  },
+  {
+    "source": "Cancel",
+    "context": {
+      "identity": "source:20",
+      "line": 20,
+      "targetKey": "toolbar.cancel",
+      "screenshot": "shots/cancel.png"
+    }
+  },
+  {
+    "source": "Help",
+    "context": {
+      "identity": "source:21",
+      "line": 21,
+      "targetKey": "toolbar.help",
+      "screenshot": "shots/help.png"
+    }
+  },
+  {
+    "source": "About",
+    "context": {
+      "identity": "source:22",
+      "line": 22,
+      "targetKey": "toolbar.about",
+      "screenshot": "shots/about.png"
+    }
+  },
+  {
+    "source": "Other",
+    "context": {
+      "identity": "source:23",
+      "line": 23,
+      "targetKey": "",
+      "screenshot": "shots/other.png"
+    }
+  },
+  {
+    "source": "Tooltip",
+    "context": {
+      "identity": "source:24",
+      "line": 24,
+      "targetKey": "toolbar.tooltip",
+      "screenshot": "shots/tooltip.png"
+    }
+  }
+]

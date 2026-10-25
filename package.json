@@ -7,7 +7,7 @@
     "format:write": "oxfmt --write --no-error-on-unmatched-pattern *.json pnpm-workspace.yaml pnpm-lock.yaml *.config.ts .gitignore .dockerignore Dockerfile TODO.md rust-toolchain.toml .vscode .github .changeset/config.json .devcontainer resources scripts template",
     "lint": "oxlint --quiet --format=unix --no-error-on-unmatched-pattern *.config.ts scripts template",
     "lint:fix": "oxlint --format=unix --no-error-on-unmatched-pattern *.config.ts scripts template --fix",
-    "typecheck": "tsc --build --noEmit --pretty false",
+    "typecheck": "pnpm exec turbo run build && tsc --build --noEmit --pretty false",
     "check": "node --conditions=source scripts/task-gates.ts check",
     "check:heavy": "node --conditions=source scripts/task-gates.ts check:heavy",
     "check:full": "node --conditions=source scripts/task-gates.ts check:full",
@@ -15,10 +15,15 @@
     "boundaries": "turbo boundaries",
     "publication:pack": "turbo run build && changeset pack --out-dir .changeset/packed",
     "publication:publish": "changeset publish --from-pack-dir .changeset/packed",
-    "verify:independent-consumer": "node --conditions=source scripts/verify-independent-consumer.ts"
+    "verify:artifacts": "node --conditions=source scripts/run-artifact-tests.ts"
   },
   "devDependencies": {
     "@changesets/cli": "catalog:",
+    "@lioni/checks": "workspace:*",
+    "@lioni/core": "workspace:*",
+    "@lioni/memo": "workspace:*",
+    "@lioni/terminology": "workspace:*",
+    "@lioni/text-analysis": "workspace:*",
     "@lioni/tooling-config": "workspace:./packages/tooling-config",
     "@types/node": "catalog:",
     "oxfmt": "catalog:",
