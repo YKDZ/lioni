@@ -104,7 +104,10 @@ function requestGarbageCollection(): boolean {
 }
 
 function digest(value: unknown): string {
-  return sha256(canonicalJson(value));
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined)
+    throw new TypeError("性能结果必须是可序列化 JSON。");
+  return sha256(canonicalJson(JSON.parse(serialized) as unknown));
 }
 
 function matchFact(match: TermMatches["matches"][number]) {
@@ -236,7 +239,7 @@ function discoveryFact(result: Awaited<ReturnType<typeof discoverTerms>>) {
   }
   for (const candidate of result.candidates) {
     hash.update(
-      canonicalJson({
+      digest({
         text: candidate.text,
         language: candidate.language,
         occurrences: candidate.occurrences,
