@@ -9,6 +9,18 @@
       "cache": false,
       "tags": ["work:preparation"]
     },
+    "evaluation:clean": {
+      "inputs": [],
+      "outputs": [],
+      "cache": false,
+      "tags": ["work:lifecycle"]
+    },
+    "evaluation:quality": {
+      "inputs": [],
+      "outputs": [],
+      "cache": false,
+      "tags": ["quality:conditional"]
+    },
     "format:check": {
       "inputs": [],
       "outputs": [],

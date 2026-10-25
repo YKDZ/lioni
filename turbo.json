@@ -25,11 +25,25 @@
       "tags": ["work:repair"]
     },
     "//#lint": {
+      "dependsOn": [
+        "@lioni/checks#build",
+        "@lioni/core#build",
+        "@lioni/memo#build",
+        "@lioni/terminology#build",
+        "@lioni/text-analysis#build"
+      ],
       "outputs": [],
       "tags": ["quality:light"]
     },
     "//#lint:fix": {
       "cache": false,
+      "dependsOn": [
+        "@lioni/checks#build",
+        "@lioni/core#build",
+        "@lioni/memo#build",
+        "@lioni/terminology#build",
+        "@lioni/text-analysis#build"
+      ],
       "tags": ["work:repair"]
     },
     "//#typecheck": {
