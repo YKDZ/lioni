@@ -11,7 +11,9 @@ import type { TemplateOptions, TemplateSignature } from "./templates.ts";
 import { TextAnalysisContractError } from "./types.ts";
 import type {
   AnalysisRuntime,
+  RecognitionResult,
   StructureAnalysis,
+  TextAnalysisIssue,
   TextInput,
   TextRange,
   TextRecognizer,
@@ -20,6 +22,66 @@ import type {
   WordSegmenter,
 } from "./types.ts";
 import { segmentWords } from "./words.ts";
+
+function copyIssues(
+  text: string,
+  value: unknown,
+  code: string,
+): readonly TextAnalysisIssue[] {
+  if (!Array.isArray(value))
+    throw new TextAnalysisContractError(code, "分析问题必须是数组。");
+  return Object.freeze(
+    value.map((issue: unknown) => {
+      if (typeof issue !== "object" || issue === null || Array.isArray(issue))
+        throw new TextAnalysisContractError(code, "分析问题格式无效。");
+      const record = issue as Record<string, unknown>;
+      if (
+        typeof record.code !== "string" ||
+        record.code.length === 0 ||
+        typeof record.message !== "string"
+      )
+        throw new TextAnalysisContractError(code, "分析问题格式无效。");
+      let range: TextRange | undefined;
+      if (record.range !== undefined) {
+        if (
+          typeof record.range !== "object" ||
+          record.range === null ||
+          Array.isArray(record.range)
+        )
+          throw new TextAnalysisContractError(code, "分析问题区间无效。");
+        range = record.range as TextRange;
+        validateRange(text, range);
+      }
+      return Object.freeze({
+        code: record.code,
+        message: record.message,
+        ...(range === undefined
+          ? {}
+          : { range: Object.freeze({ start: range.start, end: range.end }) }),
+      });
+    }),
+  );
+}
+
+function recognitionResult(
+  value: readonly TextToken[] | RecognitionResult,
+): RecognitionResult {
+  if (Array.isArray(value))
+    return { tokens: value, complete: true, issues: [] };
+  const result = value as RecognitionResult;
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !Array.isArray(result.tokens) ||
+    typeof result.complete !== "boolean" ||
+    !Array.isArray(result.issues)
+  )
+    throw new TextAnalysisContractError(
+      "invalid-recognition",
+      "识别器必须返回 token 数组或带完整性与问题的分析结果。",
+    );
+  return result;
+}
 
 export type TextAnalysisOptions = {
   readonly recognizers?: readonly TextRecognizer[];
@@ -57,23 +119,29 @@ export function createTextAnalysis(
     validateInput({ text, language });
     const protectedRanges = mergeRanges(text, inputProtectedRanges);
     const tokens: TextToken[] = [];
+    const issues: TextAnalysisIssue[] = [];
+    let complete = true;
     for (const recognizer of recognizers) {
       const availableRanges = complementRanges(
         text,
         mergeRanges(text, [...protectedRanges, ...tokens]),
       );
-      const recognized = await recognizer({
-        text,
-        language,
-        protectedRanges,
-        availableRanges,
-      });
-      if (!Array.isArray(recognized))
-        throw new TextAnalysisContractError(
-          "invalid-tokens",
-          "识别器必须返回 token 数组。",
-        );
-      const sorted = [...recognized].sort(
+      const recognized = recognitionResult(
+        await recognizer({ text, language, protectedRanges, availableRanges }),
+      );
+      complete = complete && recognized.complete;
+      issues.push(
+        ...copyIssues(text, recognized.issues, "invalid-recognition"),
+      );
+      for (const token of recognized.tokens) {
+        if (typeof token !== "object" || token === null || Array.isArray(token))
+          throw new TextAnalysisContractError(
+            "invalid-token",
+            "识别结果中的 token 格式无效。",
+          );
+        validateRange(text, token);
+      }
+      const sorted = [...recognized.tokens].sort(
         (a, b) => a.start - b.start || a.end - b.end,
       );
       let previousEnd = -1;
@@ -111,8 +179,8 @@ export function createTextAnalysis(
       tokens: Object.freeze(tokens),
       protectedRanges: effectiveProtectedRanges,
       availableRanges: complementRanges(text, effectiveProtectedRanges),
-      complete: true,
-      issues: Object.freeze([]),
+      complete,
+      issues: Object.freeze(issues),
     });
   }
 
@@ -160,6 +228,11 @@ export function createTextAnalysis(
           "词界不能位于受保护区间内部。",
         );
     }
+    const issues = copyIssues(
+      analysis.text,
+      result.issues,
+      "invalid-segmentation",
+    );
     return Object.freeze({
       words: Object.freeze(
         result.words.map((word) => Object.freeze({ ...word })),
@@ -167,10 +240,8 @@ export function createTextAnalysis(
       boundaries: Object.freeze(
         [...new Set(result.boundaries)].sort((a, b) => a - b),
       ),
-      complete: result.complete,
-      issues: Object.freeze(
-        result.issues.map((issue) => Object.freeze({ ...issue })),
-      ),
+      complete: analysis.complete && result.complete,
+      issues: Object.freeze([...analysis.issues, ...issues]),
     });
   }
 

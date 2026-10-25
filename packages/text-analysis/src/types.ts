@@ -26,6 +26,16 @@ export type TextToken = TextRange & {
   readonly protect?: boolean;
 };
 
+/** Recognizer 的已知命中与能力完整性分别表达；返回 token 数组是完整结果的简写。 */
+export type RecognitionResult = {
+  /** 此识别器能确认的命中；不完整结果仍保留这些命中。 */
+  readonly tokens: readonly TextToken[];
+  /** false 表示本识别器的可用范围内仍可能有未报告命中。 */
+  readonly complete: boolean;
+  /** 与本识别器限制或分析结果相关的问题。 */
+  readonly issues: readonly TextAnalysisIssue[];
+};
+
 export type RecognitionInput = TextInput & {
   /** 尚未被保护或由更高优先级识别器占用的原文区间。 */
   readonly availableRanges: readonly TextRange[];
@@ -33,7 +43,10 @@ export type RecognitionInput = TextInput & {
 
 export type TextRecognizer = (
   input: RecognitionInput,
-) => readonly TextToken[] | Promise<readonly TextToken[]>;
+) =>
+  | readonly TextToken[]
+  | RecognitionResult
+  | Promise<readonly TextToken[] | RecognitionResult>;
 
 export type StructureAnalysis = {
   readonly text: string;
@@ -41,7 +54,9 @@ export type StructureAnalysis = {
   readonly tokens: readonly TextToken[];
   readonly protectedRanges: readonly TextRange[];
   readonly availableRanges: readonly TextRange[];
+  /** 所有配置的识别器均完整时为 true；已知命中可与问题同时存在。 */
   readonly complete: boolean;
+  /** 按识别器配置顺序累积的问题。 */
   readonly issues: readonly TextAnalysisIssue[];
 };
 
@@ -50,7 +65,9 @@ export type WordToken = TextRange & { readonly text: string };
 export type WordAnalysis = {
   readonly words: readonly WordToken[];
   readonly boundaries: readonly number[];
+  /** 结构和词界阶段均完整时为 true；两阶段的问题按顺序合并。 */
   readonly complete: boolean;
+  /** 结构问题先于词界问题，均保留原始范围和说明。 */
   readonly issues: readonly TextAnalysisIssue[];
 };
 

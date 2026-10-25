@@ -176,6 +176,69 @@ await test("内置不支持德语，宿主分词器可显式扩展且提供精�
   );
 });
 
+await test("部分结构与分词保留已知结果、问题和不完整状态", async () => {
+  let laterRecognizerRan = false;
+  const analysis = createTextAnalysis({
+    recognizers: [
+      () => ({
+        tokens: [{ kind: "number", start: 4, end: 6 }],
+        complete: false,
+        issues: [
+          {
+            code: "recognition-limit",
+            message: "部分数字格式尚未识别。",
+            range: { start: 4, end: 6 },
+          },
+        ],
+      }),
+      () => {
+        laterRecognizerRan = true;
+        return [{ kind: "label", start: 0, end: 3 }];
+      },
+    ],
+    segmenter: () => ({
+      words: [{ start: 7, end: 12, text: "ready" }],
+      boundaries: [7, 12],
+      complete: false,
+      issues: [
+        {
+          code: "segmentation-limit",
+          message: "当前词界能力未确认其他语言中的复合词。",
+          range: { start: 7, end: 12 },
+        },
+      ],
+    }),
+  });
+  const input = { text: "BUG-42 ready", language: "en" };
+
+  const structure = await analysis.structures(input);
+  assert.equal(structure.complete, false);
+  assert.deepEqual(
+    structure.tokens.map((token) => token.kind),
+    ["label", "number"],
+  );
+  assert.deepEqual(
+    structure.issues.map((issue) => issue.code),
+    ["recognition-limit"],
+  );
+  assert.equal(laterRecognizerRan, true);
+
+  const words = await analysis.words(input);
+  assert.equal(words.complete, false);
+  assert.deepEqual(words.words, [{ start: 7, end: 12, text: "ready" }]);
+  assert.deepEqual(
+    words.issues.map((issue) => issue.code),
+    ["recognition-limit", "segmentation-limit"],
+  );
+
+  await assert.rejects(
+    analysis.signature(input, {
+      abstract: () => ({ kind: "slot", identity: "value" }),
+    }),
+    { code: "incomplete-structure" },
+  );
+});
+
 await test("结构、分词和签名的并发消费者复用同一底层计算，输入改变会重算", async () => {
   let calls = 0;
   const numbers = asciiNumbers();
