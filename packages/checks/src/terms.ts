@@ -171,7 +171,18 @@ export function createTermChecker<
             ? "not-applicable"
             : "complete",
         diagnostics,
-        issues: report.issues.map((issue) => ({ ...issue, object })),
+        issues: report.issues.map((issue) => ({
+          code: issue.code,
+          message: issue.message,
+          object: {
+            ...object,
+            groupIndex: issue.groupIndex,
+            ...(issue.conceptId === undefined
+              ? {}
+              : { conceptId: issue.conceptId }),
+            ...(issue.ruleId === undefined ? {} : { ruleId: issue.ruleId }),
+          },
+        })),
         coverage: {
           selected: 1,
           evaluated: !incomplete && !empty ? 1 : 0,
