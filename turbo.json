@@ -25,15 +25,36 @@
       "tags": ["work:repair"]
     },
     "//#lint": {
+      "dependsOn": [
+        "@lioni/checks#build",
+        "@lioni/core#build",
+        "@lioni/memo#build",
+        "@lioni/terminology#build",
+        "@lioni/text-analysis#build"
+      ],
       "outputs": [],
       "tags": ["quality:light"]
     },
     "//#lint:fix": {
       "cache": false,
+      "dependsOn": [
+        "@lioni/checks#build",
+        "@lioni/core#build",
+        "@lioni/memo#build",
+        "@lioni/terminology#build",
+        "@lioni/text-analysis#build"
+      ],
       "tags": ["work:repair"]
     },
     "//#typecheck": {
       "outputs": [],
+      "dependsOn": [
+        "@lioni/checks#build",
+        "@lioni/core#build",
+        "@lioni/memo#build",
+        "@lioni/terminology#build",
+        "@lioni/text-analysis#build"
+      ],
       "tags": ["quality:light"]
     },
     "//#publication:pack": {
@@ -44,7 +65,7 @@
       "tags": ["work:release"],
       "cache": false
     },
-    "//#verify:independent-consumer": {
+    "//#verify:artifacts": {
       "cache": false,
       "dependsOn": [
         "@lioni/cli#test:e2e",
@@ -57,7 +78,12 @@
       ],
       "outputs": [],
       "tags": ["quality:heavy"],
-      "passThroughEnv": ["LIONI_KEEP_CONSUMER"]
+      "passThroughEnv": [
+        "LIONI_ARTIFACT_CACHE",
+        "LIONI_ENABLE_KUMA",
+        "LIONI_KEEP_ARTIFACT_TESTS",
+        "LIONI_KUMA_SOURCE"
+      ]
     }
   },
   "boundaries": {

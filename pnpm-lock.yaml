@@ -202,6 +202,21 @@ importers:
       '@changesets/cli':
         specifier: 'catalog:'
         version: 3.0.3
+      '@lioni/checks':
+        specifier: workspace:*
+        version: link:packages/checks
+      '@lioni/core':
+        specifier: workspace:*
+        version: link:packages/core
+      '@lioni/memo':
+        specifier: workspace:*
+        version: link:packages/memo
+      '@lioni/terminology':
+        specifier: workspace:*
+        version: link:packages/terminology
+      '@lioni/text-analysis':
+        specifier: workspace:*
+        version: link:packages/text-analysis
       '@lioni/tooling-config':
         specifier: workspace:./packages/tooling-config
         version: link:packages/tooling-config
