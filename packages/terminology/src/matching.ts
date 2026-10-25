@@ -197,6 +197,26 @@ export type FindTermsOptions = TermRuntime & {
   readonly conceptIds?: readonly string[];
 };
 
+function findTermsMemoKey(
+  terms: CompiledTerms,
+  input: TermTextInput,
+  options: FindTermsOptions,
+): readonly unknown[] {
+  const inputKey = JSON.stringify([
+    input.language,
+    input.complete === false,
+    input.fragments.map(({ ref, text, protectedRanges }) => [
+      ref,
+      text,
+      protectedRanges ?? null,
+    ]),
+    options.conceptIds === undefined
+      ? null
+      : [...new Set(options.conceptIds)].sort(),
+  ]);
+  return [terms, inputKey];
+}
+
 function validateNormalized(
   value: NormalizedText,
   original: string,
@@ -320,12 +340,11 @@ export function resolveTermMatches(
 }
 
 /** 分片查找；严格包含只在全部边界和保护政策通过后处理。 */
-export async function findTerms(
+async function findTermsUncached(
   terms: CompiledTerms,
   input: TermTextInput,
   options: FindTermsOptions = {},
 ): Promise<TermMatches> {
-  validateTextInput(input);
   const index = compiledIndexes.get(terms);
   if (!index)
     throw new TermContractError("input", [
@@ -517,4 +536,19 @@ export async function findTerms(
       left.expressionId.localeCompare(right.expressionId),
   );
   return resolveTermMatches(matches, issues);
+}
+
+/** 同一 memo 范围内，按完整识别依赖复用术语匹配与解释。 */
+export function findTerms(
+  terms: CompiledTerms,
+  input: TermTextInput,
+  options: FindTermsOptions = {},
+): Promise<TermMatches> {
+  validateTextInput(input);
+  if (!options.memo) return findTermsUncached(terms, input, options);
+  return options.memo.memo(findTermsUncached, { key: findTermsMemoKey })(
+    terms,
+    input,
+    options,
+  );
 }

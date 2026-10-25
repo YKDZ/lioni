@@ -701,6 +701,27 @@ void describe("纯术语评估", () => {
     );
   });
 
+  void it("不完整原文范围只报告一次范围缺口并保留已识别概念", async () => {
+    const terms = compileTerms(createTermbase({ concepts: [workspace] }));
+    const input = comparison("workspace", "工作区");
+    const incomplete: TermComparisonInput = {
+      groups: [
+        {
+          ...input.groups[0]!,
+          source: { ...input.groups[0]!.source, complete: false },
+        },
+      ],
+    };
+
+    const result = await evaluateTerms(terms, incomplete);
+
+    assert.equal(result.status, "incomplete");
+    assert.deepEqual(
+      result.issues.map((issue) => issue.code),
+      ["incomplete-source-scope"],
+    );
+  });
+
   void it("局部目标歧义不按禁用优先裁决，其他确定问题不丢失", async () => {
     const terms = compileTerms(
       createTermbase({
@@ -730,16 +751,43 @@ void describe("纯术语评估", () => {
     assert.ok(
       result.problems.every((problem) => problem.conceptId === "workspace"),
     );
+    assert.deepEqual(
+      result.problems.map((problem) => [problem.conceptId, problem.code]),
+      [
+        ["workspace", "missing-allowed-translation"],
+        ["workspace", "forbidden-translation"],
+      ],
+    );
     assert.ok(result.issues.some((issue) => issue.code === "ambiguous-target"));
     const allowedOnly = await evaluateTerms(
       terms,
       comparison("log record", "日志与记录"),
       { rules: [requireAllowedTranslation()] },
     );
-    assert.ok(
-      allowedOnly.issues.every(
-        (issue) => issue.ruleId !== "reject-forbidden-translation",
-      ),
+    assert.equal(allowedOnly.status, "incomplete");
+    assert.deepEqual(
+      allowedOnly.issues.map((issue) => [
+        issue.conceptId,
+        issue.ruleId,
+        issue.code,
+      ]),
+      [["record", "require-allowed-translation", "ambiguous-target"]],
+    );
+    const bothRules = await evaluateTerms(
+      terms,
+      comparison("log record", "日志与记录"),
+    );
+    assert.deepEqual(bothRules.problems, []);
+    assert.deepEqual(
+      bothRules.issues.map((issue) => [
+        issue.conceptId,
+        issue.ruleId,
+        issue.code,
+      ]),
+      [
+        ["log", "reject-forbidden-translation", "ambiguous-target"],
+        ["record", "require-allowed-translation", "ambiguous-target"],
+      ],
     );
   });
 
@@ -751,6 +799,37 @@ void describe("纯术语评估", () => {
     assert.deepEqual(
       result.problems.map((problem) => problem.groupIndex),
       [1],
+    );
+  });
+
+  void it("交叉重叠的允许表达仍不裁决目标概念归属", async () => {
+    const terms = compileTerms(
+      createTermbase({
+        concepts: [
+          concept(
+            "left",
+            [expression("left-en", "alpha")],
+            [expression("left-zh", "ab")],
+          ),
+          concept(
+            "right",
+            [expression("right-en", "beta")],
+            [expression("right-zh", "bc")],
+          ),
+        ],
+      }),
+    );
+
+    const result = await evaluateTerms(terms, comparison("alpha beta", "abc"));
+
+    assert.equal(result.status, "incomplete");
+    assert.deepEqual(result.problems, []);
+    assert.deepEqual(
+      result.issues.map((issue) => [issue.conceptId, issue.ruleId, issue.code]),
+      [
+        ["left", "require-allowed-translation", "ambiguous-target"],
+        ["right", "require-allowed-translation", "ambiguous-target"],
+      ],
     );
   });
 
