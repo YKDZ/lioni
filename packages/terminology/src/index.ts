@@ -63,6 +63,12 @@ export {
   type TermDiscoveryCorpus,
   type TermCandidateOccurrence,
   type TermCandidate,
+  type TermCandidateRanking,
+  type TermCandidateGenerationInput,
+  type TermCandidateGenerator,
+  type TermCandidateRankResult,
+  type TermCandidateRanker,
+  type TermDiscoveryIssue,
   type DiscoverTermsOptions,
   type TermDiscovery,
 } from "./discovery.ts";
