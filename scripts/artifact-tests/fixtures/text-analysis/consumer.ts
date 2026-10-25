@@ -6,10 +6,7 @@ import {
   createTextAnalysis,
   normalizeText,
 } from "@lioni/text-analysis";
-import type {
-  RecognitionResult,
-  TextRecognizer,
-} from "@lioni/text-analysis";
+import type { RecognitionResult, TextRecognizer } from "@lioni/text-analysis";
 
 let recognitions = 0;
 const numbers = asciiNumbers();

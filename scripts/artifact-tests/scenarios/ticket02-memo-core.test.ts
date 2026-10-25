@@ -2,7 +2,7 @@ import { testArtifactConsumer } from "../support/consumer.ts";
 
 testArtifactConsumer(
   {
-    name: "ticket02 memo standalone package",
+    name: "票 02：memo 独立制品消费",
     packages: ["@lioni/memo"],
     fixtures: new URL("../fixtures/ticket02-memo/", import.meta.url),
   },
@@ -14,7 +14,7 @@ testArtifactConsumer(
 
 testArtifactConsumer(
   {
-    name: "ticket02 core QA with its memo dependency",
+    name: "票 02：core QA 与独立 memo 依赖",
     packages: ["@lioni/core", "@lioni/memo"],
     fixtures: new URL("../fixtures/ticket02-core/", import.meta.url),
   },

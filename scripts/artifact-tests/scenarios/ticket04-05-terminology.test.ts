@@ -2,7 +2,7 @@ import { testArtifactConsumer } from "../support/consumer.ts";
 
 testArtifactConsumer(
   {
-    name: "ticket04 independent terminology packages",
+    name: "票 04：术语包独立制品消费",
     packages: ["@lioni/memo", "@lioni/text-analysis", "@lioni/terminology"],
     fixtures: new URL("../fixtures/ticket04-05-terminology/", import.meta.url),
   },
@@ -14,7 +14,7 @@ testArtifactConsumer(
 
 testArtifactConsumer(
   {
-    name: "ticket05 full terminology QA packages",
+    name: "票 05：完整术语 QA 制品消费",
     packages: [
       "@lioni/core",
       "@lioni/memo",

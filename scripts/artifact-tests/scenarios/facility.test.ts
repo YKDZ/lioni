@@ -129,7 +129,8 @@ async function prepareCoreArtifact(cacheRoot: string): Promise<{
   assert.equal(result.error, undefined);
   const reportStart = result.stdout.indexOf("{");
   assert.notEqual(reportStart, -1, result.stdout);
-  const report = JSON.parse(result.stdout.slice(reportStart)) as {
+  const reportEnd = findJsonObjectEnd(result.stdout, reportStart);
+  const report = JSON.parse(result.stdout.slice(reportStart, reportEnd)) as {
     readonly status: string;
     readonly artifacts: readonly {
       readonly name: string;
@@ -144,6 +145,29 @@ async function prepareCoreArtifact(cacheRoot: string): Promise<{
   assert.ok(artifact);
   assert.equal(artifact.name, "@lioni/core");
   return artifact;
+}
+
+function findJsonObjectEnd(output: string, start: number): number {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < output.length; index += 1) {
+    const character = output[index];
+    if (character === undefined) continue;
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') inString = false;
+      continue;
+    }
+    if (character === '"') inString = true;
+    else if (character === "{") depth += 1;
+    else if (character === "}") {
+      depth -= 1;
+      if (depth === 0) return index + 1;
+    }
+  }
+  throw new Error("缓存准备结果中没有完整 JSON 对象。");
 }
 
 void test("超时会终止子进程树，中断后仍能运行新进程", async () => {
