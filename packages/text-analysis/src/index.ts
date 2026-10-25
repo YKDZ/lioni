@@ -24,6 +24,7 @@ export type {
 export { TextAnalysisContractError } from "./types.ts";
 export type {
   AnalysisRuntime,
+  RecognitionResult,
   RecognitionInput,
   StructureAnalysis,
   TextAnalysisIssue,
