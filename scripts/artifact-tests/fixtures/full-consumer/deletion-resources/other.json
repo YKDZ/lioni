@@ -1,0 +1,14 @@
+{
+  "enumeration": "complete",
+  "records": [
+    {
+      "id": "unmatched-other",
+      "text": "Lecture seule",
+      "context": {
+        "file": "deletion-resources/other.json",
+        "key": "other.readonly",
+        "readonly": true
+      }
+    }
+  ]
+}

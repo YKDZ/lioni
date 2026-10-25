@@ -1,0 +1,20 @@
+[
+  {
+    "id": "save-button",
+    "source": "Save",
+    "context": {
+      "file": "src/messages.ts",
+      "line": 18,
+      "screenshot": "shots/save.png"
+    }
+  },
+  {
+    "id": "cancel-button",
+    "source": "Cancel",
+    "context": {
+      "file": "src/messages.ts",
+      "line": 19,
+      "screenshot": "shots/cancel.png"
+    }
+  }
+]

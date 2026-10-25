@@ -1,0 +1,11 @@
+{
+  "enumeration": "complete",
+  "messages": [
+    {
+      "id": "save",
+      "content": "Aide",
+      "reviewed": false,
+      "resourceKey": "guide-save-message"
+    }
+  ]
+}

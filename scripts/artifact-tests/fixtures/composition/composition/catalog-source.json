@@ -1,0 +1,11 @@
+{
+  "items": [
+    {
+      "nativeKey": "save",
+      "label": "Save 12",
+      "file": "catalog/messages.ts",
+      "line": 12,
+      "screenshot": "catalog/shots/save.png"
+    }
+  ]
+}
