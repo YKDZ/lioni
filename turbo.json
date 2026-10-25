@@ -1,19 +1,4 @@
 {
-  "boundaries": {
-    "tags": {
-      "app": {
-        "dependencies": {
-          "allow": ["app", "library"]
-        }
-      },
-      "library": {
-        "dependencies": {
-          "allow": ["library"]
-        }
-      }
-    }
-  },
-  "globalPassThroughEnv": ["CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN"],
   "tasks": {
     "//#boundaries": {
       "tags": ["quality:light"]
@@ -39,12 +24,6 @@
       "dependsOn": ["//#lint:fix"],
       "tags": ["work:repair"]
     },
-    "//#verify:independent-consumer": {
-      "cache": false,
-      "dependsOn": ["@lioni/cli#test"],
-      "outputs": [],
-      "tags": ["quality:heavy"]
-    },
     "//#lint": {
       "outputs": [],
       "tags": ["quality:light"]
@@ -56,6 +35,44 @@
     "//#typecheck": {
       "outputs": [],
       "tags": ["quality:light"]
+    },
+    "//#publication:pack": {
+      "tags": ["work:release"],
+      "cache": false
+    },
+    "//#publication:publish": {
+      "tags": ["work:release"],
+      "cache": false
+    },
+    "//#verify:independent-consumer": {
+      "cache": false,
+      "dependsOn": [
+        "@lioni/cli#test:e2e",
+        "@lioni/cli#build",
+        "@lioni/checks#build",
+        "@lioni/core#build"
+      ],
+      "outputs": [],
+      "tags": ["quality:heavy"],
+      "passThroughEnv": ["LIONI_KEEP_CONSUMER"]
     }
-  }
+  },
+  "boundaries": {
+    "tags": {
+      "app": {
+        "dependencies": {
+          "allow": ["app", "library"]
+        }
+      },
+      "library": {
+        "dependencies": {
+          "allow": ["library"]
+        }
+      }
+    }
+  },
+  "globalDependencies": [
+    "packages/tooling-config/oxfmt.config.ts",
+    "packages/tooling-config/oxlint.config.ts"
+  ]
 }

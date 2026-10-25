@@ -7,6 +7,7 @@ import {
   type QualityRunResult,
 } from "@lioni/core";
 import { loadConfig } from "@lioni/core/node";
+import { toStandardJsonSchema } from "@valibot/to-json-schema";
 import {
   CliWriteError,
   defineCli,
@@ -22,7 +23,6 @@ import { isNodeBrokenPipe } from "@ykdz/cli-contract/node";
 import * as v from "valibot";
 
 import type { CliCommandIdentity } from "./cli-command-identity.ts";
-import { standardSchema } from "./standard-schema.ts";
 
 export type CliRuntime = {
   readonly argv: readonly string[];
@@ -38,7 +38,7 @@ const readStatusSchema = v.picklist([
   "notRead",
 ]);
 
-const factsSchema = standardSchema(
+const factsSchema = toStandardJsonSchema(
   v.object({
     version: v.string(),
     source: v.object({
@@ -123,7 +123,7 @@ const factsSchema = standardSchema(
   }),
 );
 
-const completionSchema = standardSchema(
+const completionSchema = toStandardJsonSchema(
   v.object({
     factsVersion: v.string(),
     criterion: v.string(),
@@ -279,7 +279,7 @@ function createCliContract(identity: CliCommandIdentity) {
         fields: {
           config: { kind: "positional", description: "宿主配置文件路径" },
         },
-        input: standardSchema(v.object({ config: v.string() })),
+        input: toStandardJsonSchema(v.object({ config: v.string() })),
         success: {
           kind: "data",
           variants: {
@@ -342,7 +342,7 @@ function createCliContract(identity: CliCommandIdentity) {
           duplicateIdentity: {
             description: "原文身份重复",
             exitCode: 1,
-            schema: standardSchema(
+            schema: toStandardJsonSchema(
               v.object({
                 key: v.string(),
                 firstIndex: v.number(),
@@ -357,7 +357,7 @@ function createCliContract(identity: CliCommandIdentity) {
           readFailed: {
             description: "读取原文事实失败",
             exitCode: 1,
-            schema: standardSchema(v.object({ message: v.string() })),
+            schema: toStandardJsonSchema(v.object({ message: v.string() })),
             text: ({ message }) => text.line(`读取原文事实失败：${message}`),
           },
         },
@@ -419,7 +419,7 @@ function createCliContract(identity: CliCommandIdentity) {
         fields: {
           config: { kind: "positional", description: "宿主配置文件路径" },
         },
-        input: standardSchema(v.object({ config: v.string() })),
+        input: toStandardJsonSchema(v.object({ config: v.string() })),
         success: {
           kind: "data",
           variants: {
@@ -461,7 +461,7 @@ function createCliContract(identity: CliCommandIdentity) {
           duplicateIdentity: {
             description: "原文身份重复",
             exitCode: 1,
-            schema: standardSchema(
+            schema: toStandardJsonSchema(
               v.object({
                 key: v.string(),
                 firstIndex: v.number(),
@@ -476,7 +476,7 @@ function createCliContract(identity: CliCommandIdentity) {
           configurationRequired: {
             description: "完成统计配置不完整",
             exitCode: 1,
-            schema: standardSchema(
+            schema: toStandardJsonSchema(
               v.object({
                 reason: v.picklist(["missingPolicy", "missingTranslations"]),
                 message: v.string(),
@@ -487,7 +487,7 @@ function createCliContract(identity: CliCommandIdentity) {
           readFailed: {
             description: "读取完成事实失败",
             exitCode: 1,
-            schema: standardSchema(v.object({ message: v.string() })),
+            schema: toStandardJsonSchema(v.object({ message: v.string() })),
             text: ({ message }) => text.line(`读取完成事实失败：${message}`),
           },
         },
@@ -534,14 +534,14 @@ function createCliContract(identity: CliCommandIdentity) {
         fields: {
           config: { kind: "positional", description: "宿主配置文件路径" },
         },
-        input: standardSchema(v.object({ config: v.string() })),
+        input: toStandardJsonSchema(v.object({ config: v.string() })),
         success: {
           kind: "data",
           variants: {
             checked: {
               description: "质量检查结果",
               exitCode: 0,
-              schema: standardSchema(v.record(v.string(), v.unknown())),
+              schema: toStandardJsonSchema(v.record(v.string(), v.unknown())),
               text: qualityText,
             },
           },
@@ -550,7 +550,7 @@ function createCliContract(identity: CliCommandIdentity) {
           checkFailed: {
             description: "读取事实或执行质量检查失败",
             exitCode: 1,
-            schema: standardSchema(v.object({ message: v.string() })),
+            schema: toStandardJsonSchema(v.object({ message: v.string() })),
             text: ({ message }) => text.line(`质量检查失败：${message}`),
           },
         },

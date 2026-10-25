@@ -190,6 +190,7 @@ export default defineConfig({
       },
       { name: "help", args: ["--help"] },
       { name: "version", args: ["--version"] },
+      { name: "missing configuration argument", args: ["facts"] },
     ];
   },
   async assertions({ results }) {
@@ -206,6 +207,7 @@ export default defineConfig({
     );
     assert.equal(structured?.stderr, "");
     const result = JSON.parse(structured?.stdout ?? "") as {
+      schemaVersion: string;
       data: {
         version: string;
         source: {
@@ -255,6 +257,7 @@ export default defineConfig({
         }[];
       };
     };
+    assert.equal(result.schemaVersion, "2");
     assert.match(result.data.version, /^sha256:[a-f0-9]{64}$/u);
     assert.equal(result.data.source.read.status, "complete");
     assert.equal(result.data.source.totalUnitCount, 1);
@@ -334,6 +337,7 @@ export default defineConfig({
     assert.equal(duplicate?.exitCode, 1);
     assert.equal(duplicate?.stdout, "");
     assert.partialDeepStrictEqual(JSON.parse(duplicate?.stderr ?? ""), {
+      schemaVersion: "2",
       kind: "failure",
       variant: "duplicateIdentity",
       data: { key: "src/messages.ts:18" },
@@ -416,6 +420,13 @@ export default defineConfig({
     assert.match(results[6]?.stdout ?? "", /facts/u);
     assert.equal(results[7]?.exitCode, 0);
     assert.equal(results[7]?.stdout, "lioni 0.0.0\n");
+    assert.equal(results[8]?.exitCode, 2);
+    assert.equal(results[8]?.stdout, "");
+    assert.partialDeepStrictEqual(JSON.parse(results[8]?.stderr ?? ""), {
+      schemaVersion: "2",
+      kind: "usageFailure",
+      issues: [{ code: "missingRequiredField", field: "config" }],
+    });
   },
 };
 

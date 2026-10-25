@@ -3,9 +3,10 @@
   "tags": ["library"],
   "tasks": {
     "build": {
-      "dependsOn": ["^build"],
+      "dependsOn": [],
       "inputs": [],
-      "outputs": []
+      "outputs": [],
+      "tags": []
     },
     "format:check": {
       "inputs": [],
@@ -22,12 +23,20 @@
     "lint:fix": {
       "inputs": [],
       "outputs": [],
-      "cache": false
+      "cache": false,
+      "tags": ["work:repair"]
     },
     "typecheck": {
-      "dependsOn": ["^typecheck"],
+      "dependsOn": [],
       "inputs": [],
-      "outputs": []
+      "outputs": [],
+      "tags": ["quality:light"]
+    },
+    "lint": {
+      "dependsOn": [],
+      "inputs": [],
+      "outputs": [],
+      "tags": ["quality:light"]
     }
   }
 }

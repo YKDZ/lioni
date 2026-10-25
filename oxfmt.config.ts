@@ -1,3 +1,1 @@
-import { defineConfig } from "oxfmt";
-
-export default defineConfig({ printWidth: 80, sortImports: true });
+export { default } from "@lioni/tooling-config/oxfmt";

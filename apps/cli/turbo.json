@@ -6,7 +6,8 @@
       "dependsOn": ["^build"],
       "inputs": [],
       "outputs": ["dist/**"],
-      "tags": ["quality:light"]
+      "cache": false,
+      "tags": ["work:preparation"]
     },
     "format:check": {
       "inputs": [],
@@ -36,12 +37,13 @@
       "outputs": [],
       "tags": ["work:lifecycle"]
     },
-    "prepack": {
+    "test": {
+      "dependsOn": [],
       "inputs": [],
       "outputs": [],
-      "tags": ["work:lifecycle"]
+      "tags": ["quality:light"]
     },
-    "test": {
+    "test:e2e": {
       "dependsOn": ["build"],
       "inputs": [],
       "outputs": [],

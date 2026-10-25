@@ -6,7 +6,8 @@
       "dependsOn": ["^build"],
       "inputs": [],
       "outputs": ["dist/**"],
-      "tags": ["quality:light"]
+      "cache": false,
+      "tags": ["work:preparation"]
     },
     "format:check": {
       "inputs": [],
@@ -21,6 +22,7 @@
       "tags": ["work:repair"]
     },
     "lint": {
+      "dependsOn": [],
       "inputs": [],
       "outputs": [],
       "tags": ["quality:light"]
@@ -42,11 +44,6 @@
       "inputs": [],
       "outputs": [],
       "tags": ["quality:light"]
-    },
-    "prepack": {
-      "inputs": [],
-      "outputs": [],
-      "tags": ["work:lifecycle"]
     }
   }
 }

@@ -21,7 +21,11 @@ const repositoryRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
 );
-const packageNames = ["@lioni/core", "@lioni/checks", "@lioni/cli"] as const;
+type PackedArtifact = {
+  readonly name: string;
+  readonly version: string;
+  readonly filename: string;
+};
 
 type CommandResult = {
   readonly status: number;
@@ -66,16 +70,14 @@ function runChecked(
 
 async function writeConsumerFiles(
   consumerRoot: string,
-  artifactRoot: string,
+  artifacts: readonly PackedArtifact[],
 ): Promise<void> {
-  const packageFiles = packageNames.map((packageName) => {
-    const shortName = packageName.slice("@lioni/".length);
-    const tarball = path.join(artifactRoot, `lioni-${shortName}-0.0.0.tgz`);
+  const packageFiles = artifacts.map(({ name, filename }) => {
     const relativeTarball = path
-      .relative(consumerRoot, tarball)
+      .relative(consumerRoot, filename)
       .split(path.sep)
       .join("/");
-    return [packageName, `file:${relativeTarball}`];
+    return [name, `file:${relativeTarball}`];
   });
   const dependencies = Object.fromEntries(packageFiles);
   const packageJson = {
@@ -88,11 +90,7 @@ async function writeConsumerFiles(
       "@types/node": "24.19.2",
     },
   };
-  const coreTarball = path
-    .relative(consumerRoot, path.join(artifactRoot, "lioni-core-0.0.0.tgz"))
-    .split(path.sep)
-    .join("/");
-  const workspaceConfig = `overrides:\n  "@lioni/core@0.0.0": "file:${coreTarball}"\n`;
+  const workspaceConfig = JSON.stringify({ overrides: dependencies }, null, 2);
   const schemaHelpersSource = `import type { StandardSchemaV1 } from "@lioni/core";
 
 export function standardSchema<T>(
@@ -1509,6 +1507,7 @@ assert.ok(!cliPackage.startsWith(repositoryRoot + path.sep), cliPackage);
 const executable = path.join(process.cwd(), "node_modules", ".bin", process.platform === "win32" ? "lioni.cmd" : "lioni");
 const structured = spawnSync(executable, ["facts", "lioni.config.ts"], { encoding: "utf8", shell: process.platform === "win32" });
 assert.equal(structured.status, 0, structured.stderr);
+assert.equal(JSON.parse(structured.stdout).schemaVersion, "2");
 assert.deepEqual(JSON.parse(structured.stdout).data, facts);
 const readable = spawnSync(executable, ["facts", "lioni.config.ts", "--output-format", "text"], { encoding: "utf8", shell: process.platform === "win32" });
 assert.equal(readable.status, 0, readable.stderr);
@@ -1516,6 +1515,7 @@ for (const content of [facts.version, facts.source.units[0].key, "shots/save.png
   assert.ok(readable.stdout.includes(content));
 const duplicate = spawnSync(executable, ["facts", "duplicate.config.ts"], { encoding: "utf8", shell: process.platform === "win32" });
 assert.equal(duplicate.status, 1);
+assert.equal(JSON.parse(duplicate.stderr).schemaVersion, "2");
 assert.equal(JSON.parse(duplicate.stderr).variant, "duplicateIdentity");
 assert.equal(JSON.parse(duplicate.stderr).data.key, "src/messages.ts");
 
@@ -2492,29 +2492,58 @@ export async function verifyIndependentConsumer(): Promise<void> {
   ]);
 
   try {
-    for (const packageName of packageNames) {
-      process.stdout.write(`打包 ${packageName}…\n`);
+    const packages = JSON.parse(
       runChecked(
         "pnpm",
-        ["--filter", packageName, "pack", "--pack-destination", artifactRoot],
+        [
+          "--filter",
+          "@lioni/*",
+          "--filter",
+          "!@lioni/tooling-config",
+          "list",
+          "--recursive",
+          "--depth",
+          "-1",
+          "--json",
+        ],
         repositoryRoot,
-      );
-    }
-
-    for (const packageName of packageNames) {
-      const shortName = packageName.slice("@lioni/".length);
-      const tarball = path.join(artifactRoot, `lioni-${shortName}-0.0.0.tgz`);
+      ).stdout,
+    ) as readonly { readonly name: string }[];
+    const artifacts: PackedArtifact[] = [];
+    for (const { name } of packages) {
+      process.stdout.write(`打包 ${name}…\n`);
+      const artifact = JSON.parse(
+        runChecked(
+          "pnpm",
+          [
+            "--filter",
+            name,
+            "pack",
+            "--pack-destination",
+            artifactRoot,
+            "--json",
+          ],
+          repositoryRoot,
+        ).stdout,
+      ) as PackedArtifact;
+      artifacts.push(artifact);
       const digest = createHash("sha256")
-        .update(await readFile(tarball))
+        .update(await readFile(artifact.filename))
         .digest("hex");
       process.stdout.write(
-        `制品 SHA-256 ${path.basename(tarball)} ${digest}\n`,
+        `制品 SHA-256 ${path.basename(artifact.filename)} ${digest}\n`,
       );
     }
+    await writeFile(
+      path.join(artifactRoot, "artifacts.json"),
+      JSON.stringify(artifacts, null, 2),
+    );
 
-    await writeConsumerFiles(consumerRoot, artifactRoot);
+    await writeConsumerFiles(consumerRoot, artifacts);
     await writeCompositionConsumerFiles(consumerRoot);
-    process.stdout.write("从独立目录安装三个本地 npm 制品…\n");
+    process.stdout.write(
+      `从独立目录安装 ${artifacts.length} 个本地 npm 制品…\n`,
+    );
     runChecked("pnpm", ["install", "--lockfile-only"], consumerRoot);
     runChecked("pnpm", ["install", "--frozen-lockfile"], consumerRoot);
 

@@ -25,3 +25,5 @@ CLAUDE.md
 .scratch/
 docs/
 skills-lock.json
+
+.changeset/packed/
