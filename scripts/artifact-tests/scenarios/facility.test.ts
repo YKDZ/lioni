@@ -166,7 +166,11 @@ async function cleanRun(runRoot: string): Promise<{
   const result = await runSubprocess(
     "pnpm",
     ["verify:artifacts", "--", "--clean-run", runRoot],
-    { cwd: repositoryRoot, timeoutMs: 10_000 },
+    {
+      cwd: repositoryRoot,
+      timeoutMs: 10_000,
+      shell: process.platform === "win32",
+    },
   );
   assert.equal(result.status, 0, result.stdout + result.stderr);
   const start = result.stdout.indexOf("{");
@@ -346,6 +350,7 @@ void test("保留运行现场可重复清理并保留失败报告和外部哨兵
         cwd: repositoryRoot,
         timeoutMs: 60_000,
         env: { ...process.env, LIONI_ARTIFACT_CACHE: cacheRoot },
+        shell: process.platform === "win32",
       },
     );
     assert.equal(failedRun.status, 1, failedRun.stdout + failedRun.stderr);
@@ -406,7 +411,11 @@ void test("保留运行现场可重复清理并保留失败报告和外部哨兵
     const rejectedCleanup = await runSubprocess(
       "pnpm",
       ["verify:artifacts", "--", "--clean-run", unownedRoot],
-      { cwd: repositoryRoot, timeoutMs: 10_000 },
+      {
+        cwd: repositoryRoot,
+        timeoutMs: 10_000,
+        shell: process.platform === "win32",
+      },
     );
     assert.equal(rejectedCleanup.status, 1);
     assert.equal(await readFile(unownedSentinel, "utf8"), "keep\n");
