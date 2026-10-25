@@ -34,6 +34,9 @@
     "test": "node --conditions=source --test --test-reporter=spec --test-reporter=./scripts/node-test-count-reporter.ts --test-reporter-destination=stdout --test-reporter-destination=stderr 'test/**/*.test.ts'",
     "typecheck": "tsc -p tsconfig.node.json --noEmit --pretty false"
   },
+  "dependencies": {
+    "@lioni/memo": "workspace:*"
+  },
   "devDependencies": {
     "@lioni/tooling-config": "workspace:*",
     "@types/node": "catalog:",

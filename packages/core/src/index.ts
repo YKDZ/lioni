@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
+import type { MemoScope } from "@lioni/memo";
+
 import {
   CompletionConfigurationError,
   evaluateCompletion,
@@ -725,6 +727,7 @@ export async function analyzeQuality<
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
   options: {
     readonly candidates?: readonly SemanticEditCandidate<TBody>[];
+    readonly memo?: MemoScope;
   } = {},
 ): Promise<QualityRunResult<QualityObject, TBody>> {
   const facts = await readFacts(config);
@@ -737,7 +740,7 @@ export async function analyzeQuality<
   const candidates: SemanticEditCandidate<TBody>[] = [];
   for (const candidate of request.candidates)
     candidates.push(await validateSemanticEditCandidate(candidate, config));
-  return runQualityChecks(facts, { ...request, candidates }, checks);
+  return runQualityChecks(facts, { ...request, candidates }, checks, options);
 }
 
 export type QualityWriteCondition<TBody = JsonValue> = (
@@ -748,6 +751,7 @@ export type PrepareQualityConditionedSemanticEditOptions<TBody = JsonValue> = {
   readonly candidate: SemanticEditCandidate<TBody>;
   readonly condition?: QualityWriteCondition<TBody>;
   readonly quality?: QualityRunResult<QualityObject, TBody>;
+  readonly memo?: MemoScope;
 };
 
 export type QualityConditionedSemanticEditResult<TBody = JsonValue> =
@@ -806,7 +810,8 @@ export async function prepareQualityConditionedSemanticEdit<
   const qualityCandidate = candidate;
   const request = { ...configuredRequest, candidates: [qualityCandidate] };
   const quality =
-    providedQuality ?? (await runQualityChecks(facts, request, checks));
+    providedQuality ??
+    (await runQualityChecks(facts, request, checks, options));
   if (
     providedQuality !== undefined &&
     !(await qualityRunMatchesInputs(

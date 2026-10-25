@@ -1,5 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 
+import { createMemoScope, type MemoScope } from "@lioni/memo";
+
 import type {
   Awaitable,
   FrameworkFacts,
@@ -157,6 +159,8 @@ export type QualityCheckInput<
   readonly candidate: SemanticEditCandidate<TBody>;
   readonly sourceUnit: SourceUnitFact<TUnit> | null;
   readonly configuration: TConfiguration;
+  /** 仅在本次执行中借用；检查器不得关闭此范围。 */
+  readonly memo: MemoScope;
 };
 
 export type QualityCheckSelection<
@@ -574,6 +578,11 @@ export type QualityRunResult<
   readonly checks: readonly QualityCheckResult<TObject>[];
 };
 
+export type QualityExecutionOptions = {
+  /** 传入的范围由调用方管理；省略时由本次 QA 创建并关闭。 */
+  readonly memo?: MemoScope;
+};
+
 export async function runQualityChecks<
   TUnit extends TranslationUnitInput,
   TTranslation,
@@ -589,113 +598,126 @@ export async function runQualityChecks<
     TBody,
     TUnavailable
   >[],
+  options: QualityExecutionOptions = {},
 ): Promise<QualityRunResult<QualityObject, TBody>> {
-  const boundRequest = snapshotQualityData({
-    candidates: request.candidates,
-    dependencies: request.dependencies,
-    relationships: request.relationships ?? [],
-    exceptions: request.exceptions ?? [],
-  });
-  const preparedChecks: {
-    readonly id: string;
-    readonly prepared: PreparedQualityCheck<
-      TUnit,
-      TTranslation,
-      QualityObject,
-      TBody,
-      TUnavailable
-    >;
-  }[] = [];
-  for (const definition of checks)
-    preparedChecks.push({
-      id: definition.id,
-      prepared: await definition.prepare(),
+  const memo = options.memo ?? createMemoScope();
+  try {
+    const boundRequest = snapshotQualityData({
+      candidates: request.candidates,
+      dependencies: request.dependencies,
+      relationships: request.relationships ?? [],
+      exceptions: request.exceptions ?? [],
     });
+    const preparedChecks: {
+      readonly id: string;
+      readonly prepared: PreparedQualityCheck<
+        TUnit,
+        TTranslation,
+        QualityObject,
+        TBody,
+        TUnavailable
+      >;
+    }[] = [];
+    for (const definition of checks)
+      preparedChecks.push({
+        id: definition.id,
+        prepared: await definition.prepare(),
+      });
 
-  const results: QualityCheckResult[] = [];
-  for (const { id, prepared } of preparedChecks) {
-    const configuration = snapshotQualityData(prepared.configuration);
-    const diagnostics: QualityDiagnostic[] = [];
-    const issues: QualityIssue[] = [];
-    const coverage: MutableQualityCoverage = {
-      selected: 0,
-      evaluated: 0,
-      notApplicable: 0,
-      incomplete: 0,
-      failed: 0,
-    };
-    const statuses: QualityCheckStatus[] = [];
+    const results: QualityCheckResult[] = [];
+    const sourceUnits = new Map(
+      facts.source.units.map((unit) => [unit.key, unit]),
+    );
+    const selectedLanguages = new Map<string, Set<string>>();
+    for (const { sourceKey, language } of boundRequest.candidates) {
+      const languages = selectedLanguages.get(sourceKey) ?? new Set<string>();
+      languages.add(language);
+      selectedLanguages.set(sourceKey, languages);
+    }
+    for (const { id, prepared } of preparedChecks) {
+      const configuration = snapshotQualityData(prepared.configuration);
+      const diagnostics: QualityDiagnostic[] = [];
+      const issues: QualityIssue[] = [];
+      const coverage: MutableQualityCoverage = {
+        selected: 0,
+        evaluated: 0,
+        notApplicable: 0,
+        incomplete: 0,
+        failed: 0,
+      };
+      const statuses: QualityCheckStatus[] = [];
 
-    for (const candidate of boundRequest.candidates) {
-      try {
-        const outcome = await prepared.check({
-          facts,
-          candidate,
-          sourceUnit:
-            facts.source.units.find(({ key }) => key === candidate.sourceKey) ??
-            null,
-          dependencies: boundRequest.dependencies,
-          relationships: boundRequest.relationships,
-          exceptions: boundRequest.exceptions,
-        });
-        const findings = snapshotQualityData(outcome.diagnostics);
-        const checkIssues = snapshotQualityData(outcome.issues);
-        diagnostics.push(
-          ...findings.map((diagnostic) => ({
-            ...diagnostic,
-            ruleId: id,
-            handling: handlingFor(id, diagnostic, boundRequest.exceptions),
-          })),
-        );
-        issues.push(...checkIssues);
-        statuses.push(outcome.status);
-        addCoverage(coverage, outcome.coverage);
-      } catch (error) {
-        if (
-          error instanceof StandardSchemaContractError ||
-          error instanceof QualityCheckBindingError
-        )
-          throw error;
-        statuses.push("failed");
-        coverage.selected += 1;
-        coverage.failed += 1;
-        issues.push({
-          code: "checkFailed",
-          message: error instanceof Error ? error.message : String(error),
-          object: candidateObject(candidate),
-        });
+      for (const candidate of boundRequest.candidates) {
+        try {
+          const outcome = await prepared.check({
+            facts,
+            candidate,
+            sourceUnit: sourceUnits.get(candidate.sourceKey) ?? null,
+            memo,
+            dependencies: boundRequest.dependencies,
+            relationships: boundRequest.relationships,
+            exceptions: boundRequest.exceptions,
+          });
+          const findings = snapshotQualityData(outcome.diagnostics);
+          const checkIssues = snapshotQualityData(outcome.issues);
+          diagnostics.push(
+            ...findings.map((diagnostic) => ({
+              ...diagnostic,
+              ruleId: id,
+              handling: handlingFor(id, diagnostic, boundRequest.exceptions),
+            })),
+          );
+          issues.push(...checkIssues);
+          statuses.push(outcome.status);
+          addCoverage(coverage, outcome.coverage);
+        } catch (error) {
+          if (
+            error instanceof StandardSchemaContractError ||
+            error instanceof QualityCheckBindingError
+          )
+            throw error;
+          statuses.push("failed");
+          coverage.selected += 1;
+          coverage.failed += 1;
+          issues.push({
+            code: "checkFailed",
+            message: error instanceof Error ? error.message : String(error),
+            object: candidateObject(candidate),
+          });
+        }
       }
+
+      results.push({
+        id,
+        configuration,
+        status: aggregateStatus(statuses),
+        diagnostics,
+        issues,
+        coverage,
+      });
     }
 
-    results.push({
-      id,
-      configuration,
-      status: aggregateStatus(statuses),
-      diagnostics,
-      issues,
-      coverage,
-    });
+    return {
+      version: facts.version,
+      ...boundRequest,
+      factCoverage: snapshotQualityData({
+        source: facts.source.read,
+        translations: facts.translations.reads,
+        associations: facts.associations.map((association) => ({
+          ...association,
+          candidateSelected:
+            selectedLanguages
+              .get(association.sourceKey)
+              ?.has(association.language) ?? false,
+        })),
+      }),
+      status: aggregateStatus(results.map(({ status }) => status)),
+      diagnostics: results.flatMap(({ diagnostics }) => diagnostics),
+      checks: results,
+    };
+  } finally {
+    if (options.memo === undefined) memo.dispose();
   }
-
-  return {
-    version: facts.version,
-    ...boundRequest,
-    factCoverage: snapshotQualityData({
-      source: facts.source.read,
-      translations: facts.translations.reads,
-      associations: facts.associations.map((association) => ({
-        ...association,
-        candidateSelected: boundRequest.candidates.some(
-          ({ sourceKey, language }) =>
-            sourceKey === association.sourceKey &&
-            language === association.language,
-        ),
-      })),
-    }),
-    status: aggregateStatus(results.map(({ status }) => status)),
-    diagnostics: results.flatMap(({ diagnostics }) => diagnostics),
-    checks: results,
-  };
 }
 
 function addCoverage(

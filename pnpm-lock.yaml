@@ -263,6 +263,15 @@ importers:
       '@lioni/core':
         specifier: workspace:*
         version: link:../core
+      '@lioni/memo':
+        specifier: workspace:*
+        version: link:../memo
+      '@lioni/terminology':
+        specifier: workspace:*
+        version: link:../terminology
+      '@lioni/text-analysis':
+        specifier: workspace:*
+        version: link:../text-analysis
     devDependencies:
       '@lioni/tooling-config':
         specifier: workspace:*
@@ -284,6 +293,84 @@ importers:
         version: typescript@7.0.2
 
   packages/core:
+    dependencies:
+      '@lioni/memo':
+        specifier: workspace:*
+        version: link:../memo
+    devDependencies:
+      '@lioni/tooling-config':
+        specifier: workspace:*
+        version: link:../tooling-config
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.19.2
+      oxfmt:
+        specifier: 'catalog:'
+        version: 0.71.0
+      oxlint:
+        specifier: 'catalog:'
+        version: 1.89.0(oxlint-tsgolint@7.0.2004)
+      oxlint-tsgolint:
+        specifier: 'catalog:'
+        version: 7.0.2004
+      typescript-7:
+        specifier: 'catalog:'
+        version: typescript@7.0.2
+
+  packages/memo:
+    devDependencies:
+      '@lioni/tooling-config':
+        specifier: workspace:*
+        version: link:../tooling-config
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.19.2
+      oxfmt:
+        specifier: 'catalog:'
+        version: 0.71.0
+      oxlint:
+        specifier: 'catalog:'
+        version: 1.89.0(oxlint-tsgolint@7.0.2004)
+      oxlint-tsgolint:
+        specifier: 'catalog:'
+        version: 7.0.2004
+      typescript-7:
+        specifier: 'catalog:'
+        version: typescript@7.0.2
+
+  packages/terminology:
+    dependencies:
+      '@lioni/memo':
+        specifier: workspace:*
+        version: link:../memo
+      '@lioni/text-analysis':
+        specifier: workspace:*
+        version: link:../text-analysis
+    devDependencies:
+      '@lioni/tooling-config':
+        specifier: workspace:*
+        version: link:../tooling-config
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.19.2
+      oxfmt:
+        specifier: 'catalog:'
+        version: 0.71.0
+      oxlint:
+        specifier: 'catalog:'
+        version: 1.89.0(oxlint-tsgolint@7.0.2004)
+      oxlint-tsgolint:
+        specifier: 'catalog:'
+        version: 7.0.2004
+      typescript-7:
+        specifier: 'catalog:'
+        version: typescript@7.0.2
+
+  packages/text-analysis:
+    dependencies:
+      '@lioni/memo':
+        specifier: workspace:*
+        version: link:../memo
     devDependencies:
       '@lioni/tooling-config':
         specifier: workspace:*

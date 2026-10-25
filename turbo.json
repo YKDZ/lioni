@@ -50,7 +50,10 @@
         "@lioni/cli#test:e2e",
         "@lioni/cli#build",
         "@lioni/checks#build",
-        "@lioni/core#build"
+        "@lioni/core#build",
+        "@lioni/memo#build",
+        "@lioni/text-analysis#build",
+        "@lioni/terminology#build"
       ],
       "outputs": [],
       "tags": ["quality:heavy"],

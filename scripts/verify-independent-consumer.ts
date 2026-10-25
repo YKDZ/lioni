@@ -16,6 +16,7 @@ import {
   verifyCompositionConsumer,
   writeCompositionConsumerFiles,
 } from "./verify-independent-composition.ts";
+import { verifyIndependentTerminology } from "./verify-independent-terminology.ts";
 
 const repositoryRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -2548,6 +2549,11 @@ export async function verifyIndependentConsumer(): Promise<void> {
     runChecked("pnpm", ["install", "--frozen-lockfile"], consumerRoot);
 
     const typecheck = path.join(repositoryRoot, "node_modules", ".bin", "tsc");
+    await verifyIndependentTerminology(
+      path.join(temporaryRoot, "terminology-consumer"),
+      artifacts,
+      typecheck,
+    );
     process.stdout.write("检查宿主通过已安装声明文件的类型…\n");
     runChecked(typecheck, ["--project", "tsconfig.json"], consumerRoot);
 

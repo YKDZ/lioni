@@ -30,7 +30,10 @@
     "typecheck": "tsc -p tsconfig.node.json --noEmit --pretty false"
   },
   "dependencies": {
-    "@lioni/core": "workspace:*"
+    "@lioni/core": "workspace:*",
+    "@lioni/memo": "workspace:*",
+    "@lioni/terminology": "workspace:*",
+    "@lioni/text-analysis": "workspace:*"
   },
   "devDependencies": {
     "@lioni/tooling-config": "workspace:*",
