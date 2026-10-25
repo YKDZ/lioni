@@ -105,7 +105,7 @@ export type MessageFamilyCheckerOptions<
   ) => Awaitable<
     QualityCheckSelection<MessageFamilySubject<TSelectedUnit, TBody>>
   >;
-  /** 只映射宿主资料，不执行分析；candidate 与 saved reference 共用同一投影。 */
+  /** 只映射宿主资料，不执行分析；候选与已保存参照共用该映射。 */
   readonly project: (
     input: MessageFamilyProjection<
       TUnit,

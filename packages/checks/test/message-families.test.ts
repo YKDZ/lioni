@@ -269,7 +269,7 @@ function reference(
   };
 }
 
-void test("message family comparison deduplicates by physical record, not text", () => {
+void test("同一物理记录的重复映射只计数一次，不按文本去重", () => {
   const index = indexMessageFamilies([
     reference(4, "same-target", "alias-a"),
     reference(4, "same-target", "alias-b"),
@@ -289,7 +289,7 @@ void test("message family comparison deduplicates by physical record, not text",
   assert.equal(result.categories[0]?.references[0]?.translationIndex, 9);
 });
 
-void test("message family comparison caps displayed categories while counting all facts", () => {
+void test("展示类别与代表来源受限，但计数覆盖全部参照", () => {
   const index = indexMessageFamilies([
     reference(1, "variant-b"),
     reference(2, "variant-c"),
@@ -314,7 +314,7 @@ void test("message family comparison caps displayed categories while counting al
   assert.equal(result.omittedReferences, 3);
 });
 
-void test("message family QA excludes the replaced physical record and keeps other identical facts", async () => {
+void test("排除当前替代记录并保留其他内容相同的事实", async () => {
   const projected = { count: 0 };
   const checker = checkerFor({ referenceProjections: projected });
   const config = configFor(
@@ -377,7 +377,7 @@ void test("message family QA excludes the replaced physical record and keeps oth
   assert.equal(projected.count, 3);
 });
 
-void test("declared target equivalence allows wording while unlisted signatures retain a category", async () => {
+void test("声明的目标等价表达可合并，未声明签名仍独立计类", async () => {
   const targetEquivalence = (signature: TemplateSignature) =>
     JSON.stringify(
       signature.parts.map((part) =>
@@ -426,7 +426,7 @@ void test("declared target equivalence allows wording while unlisted signatures 
   );
 });
 
-void test("business scopes remain separate even when source signatures match", async () => {
+void test("业务范围不同的消息不会相互比较", async () => {
   const config = configFor(
     [
       { id: "editing", source: "Error Code 404" },
@@ -452,7 +452,7 @@ void test("business scopes remain separate even when source signatures match", a
   );
 });
 
-void test("message family candidates do not become references for one another", async () => {
+void test("待写回候选不会成为彼此的参照", async () => {
   const projected = { count: 0 };
   const config = configFor(
     [
@@ -475,7 +475,7 @@ void test("message family candidates do not become references for one another", 
   assert.equal(projected.count, 1);
 });
 
-void test("message family output caps categories and representatives after comparing every reference", async () => {
+void test("QA 输出限制类别与代表来源，但比较覆盖全部参照", async () => {
   const config = configFor(
     [
       { id: "editing", source: "Error Code 404" },
@@ -526,7 +526,7 @@ void test("message family output caps categories and representatives after compa
   );
 });
 
-void test("complete facts with no same-family reference are explicitly not applicable", async () => {
+void test("完整资料没有同族参照时明确返回不适用", async () => {
   const config = configFor(
     [{ id: "new", source: "Error Code 404" }],
     [],
@@ -545,7 +545,7 @@ void test("complete facts with no same-family reference are explicitly not appli
   );
 });
 
-void test("conflicted saved association keeps every known row and marks the comparison incomplete", async () => {
+void test("关联冲突时保留全部已知记录并标记不完整", async () => {
   const config = configFor(
     [
       { id: "editing", source: "Error Code 404" },
@@ -586,7 +586,7 @@ void test("conflicted saved association keeps every known row and marks the comp
   );
 });
 
-void test("empty candidates do not project saved references", async () => {
+void test("候选为空时不投影已保存参照", async () => {
   const projections = { count: 0 };
   const config = configFor(
     [{ id: "saved", source: "Error Code 404" }],
@@ -601,7 +601,7 @@ void test("empty candidates do not project saved references", async () => {
   assert.equal(projections.count, 0);
 });
 
-void test("invalid UTF-16 protected ranges fail as projection contract errors", async () => {
+void test("非法 UTF-16 保护范围作为投影契约错误拒绝", async () => {
   for (const protectedRange of [
     { start: 0, end: 1 },
     { start: 0, end: 3 },
@@ -623,7 +623,7 @@ void test("invalid UTF-16 protected ranges fail as projection contract errors", 
   }
 });
 
-void test("message family keeps known warning evidence when projection is incomplete and honors the host condition", async () => {
+void test("投影不完整时保留已知警告并让宿主条件阻止写入", async () => {
   const units = [
     { id: "editing", source: "Error Code 404" },
     { id: "different", source: "Error Code 504" },
@@ -662,7 +662,7 @@ void test("message family keeps known warning evidence when projection is incomp
     assert.equal(gated.quality.diagnostics[0]?.severity, "warning");
 });
 
-void test("partial target structure reports known reference disagreement and keeps completeness limited", async () => {
+void test("目标结构分析不完整时保留已知参照差异并标记不完整", async () => {
   const numbers = asciiNumbers();
   const analysis = createTextAnalysis({
     recognizers: [
@@ -713,7 +713,7 @@ void test("partial target structure reports known reference disagreement and kee
   );
 });
 
-void test("message family exception preserves the warning and its handling", async () => {
+void test("例外保留警告发现及处理状态", async () => {
   const exceptionConfig = configFor(
     [
       { id: "editing", source: "Error Code 404" },
