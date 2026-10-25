@@ -669,10 +669,7 @@ function resultDifferences(
       });
       continue;
     }
-    if (
-      before.domain.status !== "complete" ||
-      after.domain.status !== "complete"
-    )
+    if (before.domain.status !== after.domain.status)
       differences.push({
         scenario,
         phase: "domain-status",

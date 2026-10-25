@@ -477,6 +477,20 @@ void describe("术语性能报告契约", () => {
     );
     assert.equal(incompleteComparison.resultComparison.status, "incomplete");
     assert.equal(incompleteComparison.performance.status, "descriptive-only");
+
+    const sameIncomplete = report(
+      "same-incomplete",
+      scenario(["same"], [10], "incomplete"),
+    );
+    const sameIncompleteComparison = comparePerformanceReports(
+      sameIncomplete,
+      sameIncomplete,
+    );
+    assert.equal(
+      sameIncompleteComparison.resultComparison.status,
+      "incomplete",
+    );
+    assert.deepEqual(sameIncompleteComparison.resultComparison.differences, []);
   });
 
   void it("质量调整意图展示差异，但仍受输入与环境可比性约束", () => {
