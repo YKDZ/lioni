@@ -412,14 +412,17 @@ function performanceScenario(
   });
 }
 
-function emptyFailedScenario(
+function emptyScenario(
   name: PerformanceScenarioName,
   samplesPerMode: number,
+  status: "failed" | "not-executed",
   reason: string,
 ): PerformanceScenarioReport {
+  const outcome =
+    status === "not-executed" ? "场景未启动。" : "场景准备未完成。";
   return Object.freeze({
     id: name,
-    execution: Object.freeze({ status: "failed", reason }),
+    execution: Object.freeze({ status, reason }),
     domain: Object.freeze({ status: "not-run" }),
     measurementsEligible: false,
     preparation: Object.freeze({
@@ -436,24 +439,44 @@ function emptyFailedScenario(
       acrossModes: false,
       differences: Object.freeze([]),
     }),
-    eligibilityReasons: Object.freeze(["场景准备未完成。"]),
+    eligibilityReasons: Object.freeze([outcome]),
     attempts: Object.freeze([]),
     modes: emptyModes(samplesPerMode),
     qualityMetrics: Object.freeze({
       candidateQuality: Object.freeze({
         status: "not-evaluated",
-        basis: "场景准备未完成。",
+        basis: outcome,
       }),
       precision: Object.freeze({
         status: "not-evaluated",
-        basis: "场景准备未完成。",
+        basis: outcome,
       }),
       recall: Object.freeze({
         status: "not-evaluated",
-        basis: "场景准备未完成。",
+        basis: outcome,
       }),
     }),
   });
+}
+
+function emptyFailedScenario(
+  name: PerformanceScenarioName,
+  samplesPerMode: number,
+  reason: string,
+): PerformanceScenarioReport {
+  return emptyScenario(name, samplesPerMode, "failed", reason);
+}
+
+function unstartedScenario(
+  name: PerformanceScenarioName,
+  samplesPerMode: number,
+): PerformanceScenarioReport {
+  return emptyScenario(
+    name,
+    samplesPerMode,
+    "not-executed",
+    "前序场景收到中断信号，本场景未启动。",
+  );
 }
 
 function runStatus(
@@ -641,6 +664,17 @@ export async function runPerformanceEvaluation(
   await persist();
 
   for (const name of selected) {
+    if (options.signal?.aborted) {
+      interrupted = true;
+      for (const notStarted of selected.slice(selected.indexOf(name))) {
+        scenarios = {
+          ...scenarios,
+          [notStarted]: unstartedScenario(notStarted, samplesPerMode),
+        };
+      }
+      await persist();
+      break;
+    }
     let prepared: PreparedScenario;
     try {
       prepared = await prepareScenario(
@@ -692,6 +726,12 @@ export async function runPerformanceEvaluation(
           retryNumber <= retries + 1;
           retryNumber += 1
         ) {
+          if (options.signal?.aborted) {
+            interrupted = true;
+            scenarioFailed = true;
+            reason = "收到中断信号，本次计划样本尚未启动。";
+            break;
+          }
           const attemptStartedAt = new Date().toISOString();
           const resultPath = path.join(
             attemptsDirectory,
@@ -708,56 +748,40 @@ export async function runPerformanceEvaluation(
           });
           updateScenario();
           await persist();
-          if (options.signal?.aborted) {
-            interrupted = true;
-            processResult = Object.freeze({
-              status: "interrupted",
-              code: null,
-              signal: "SIGINT",
-              durationMs: 0,
-              stdout: "",
-              stderr: "",
-              error: "样本启动前收到中断信号。",
-            });
-            failure = processResult.error;
-          } else {
-            processResult = await runProcess({
-              command: process.execPath,
-              args: [
-                "--expose-gc",
-                workerPath,
-                inputPath,
-                resultPath,
-                memoMode,
-                String(sampleIndex),
-                prepared.inputSha256,
-              ],
-              cwd: packageRoot,
-              timeoutMs,
-              ...(options.signal === undefined
-                ? {}
-                : { signal: options.signal }),
-            });
-            if (processResult.status === "interrupted") interrupted = true;
-            if (processResult.status !== "passed")
-              failure =
-                processResult.error ??
-                processResult.stderr ??
-                `样本进程状态为 ${processResult.status}。`;
-            else {
-              try {
-                sample = JSON.parse(
-                  await readFile(resultPath, "utf8"),
-                ) as PerformanceWorkerResult;
-                if (
-                  sample.scenario !== name ||
-                  sample.memoMode !== memoMode ||
-                  sample.sampleIndex !== sampleIndex
-                )
-                  throw new Error("子进程样本身份与本次请求不符。");
-              } catch (error) {
-                failure = errorText(error);
-              }
+          processResult = await runProcess({
+            command: process.execPath,
+            args: [
+              "--expose-gc",
+              workerPath,
+              inputPath,
+              resultPath,
+              memoMode,
+              String(sampleIndex),
+              prepared.inputSha256,
+            ],
+            cwd: packageRoot,
+            timeoutMs,
+            ...(options.signal === undefined ? {} : { signal: options.signal }),
+          });
+          if (processResult.status === "interrupted") interrupted = true;
+          if (processResult.status !== "passed")
+            failure =
+              processResult.error ??
+              processResult.stderr ??
+              `样本进程状态为 ${processResult.status}。`;
+          else {
+            try {
+              sample = JSON.parse(
+                await readFile(resultPath, "utf8"),
+              ) as PerformanceWorkerResult;
+              if (
+                sample.scenario !== name ||
+                sample.memoMode !== memoMode ||
+                sample.sampleIndex !== sampleIndex
+              )
+                throw new Error("子进程样本身份与本次请求不符。");
+            } catch (error) {
+              failure = errorText(error);
             }
           }
           const status =
@@ -793,6 +817,16 @@ export async function runPerformanceEvaluation(
       scenarioFailed = true;
       updateScenario();
       await persist();
+      if (interrupted) {
+        for (const notStarted of selected.slice(selected.indexOf(name) + 1)) {
+          scenarios = {
+            ...scenarios,
+            [notStarted]: unstartedScenario(notStarted, samplesPerMode),
+          };
+        }
+        await persist();
+        break;
+      }
       continue;
     }
     updateScenario();

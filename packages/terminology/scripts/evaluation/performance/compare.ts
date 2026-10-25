@@ -20,6 +20,15 @@ import type { PerformanceMemoMode } from "./workload.ts";
 
 type ComparisonIntent = PerformanceComparisonReport["intent"];
 
+const performancePhases: readonly PerformancePhaseName[] = [
+  "termbaseCreate",
+  "compileTerms",
+  "analyzeTermUse",
+  "assessTermUse",
+  "discoverTerms",
+  "evaluateTerms",
+];
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -163,6 +172,133 @@ function positiveNumber(value: unknown): boolean {
 
 function nonEmptyRecord(value: unknown): boolean {
   return isRecord(value) && Object.keys(value).length > 0;
+}
+
+function hasStageOutputSummaries(
+  value: unknown,
+  expectedCount: unknown,
+): boolean {
+  if (
+    !Array.isArray(value) ||
+    typeof expectedCount !== "number" ||
+    !Number.isSafeInteger(expectedCount) ||
+    expectedCount < 1 ||
+    value.length !== expectedCount
+  )
+    return false;
+  const sampleIndexes = new Set<number>();
+  return value.every((item) => {
+    if (
+      !isRecord(item) ||
+      typeof item.sampleIndex !== "number" ||
+      !Number.isSafeInteger(item.sampleIndex) ||
+      item.sampleIndex < 1 ||
+      !isRecord(item.summary) ||
+      Object.keys(item.summary).length === 0 ||
+      sampleIndexes.has(item.sampleIndex)
+    )
+      return false;
+    sampleIndexes.add(item.sampleIndex);
+    return true;
+  });
+}
+
+function hasSampleOutputSummaries(
+  value: unknown,
+  expectedCount: unknown,
+): boolean {
+  if (
+    !Array.isArray(value) ||
+    typeof expectedCount !== "number" ||
+    !Number.isSafeInteger(expectedCount) ||
+    expectedCount < 1 ||
+    value.length !== expectedCount
+  )
+    return false;
+  const sampleIndexes = new Set<number>();
+  const countFields = [
+    "groupCount",
+    "conceptCount",
+    "expressionCount",
+    "sourceMatches",
+    "targetMatches",
+    "problems",
+    "assessmentIssues",
+    "candidateCount",
+    "discoveryIssues",
+  ] as const;
+  return value.every((item) => {
+    if (!isRecord(item)) return false;
+    const fingerprints = item["fingerprints"];
+    const counts = item["counts"];
+    if (
+      typeof item.sampleIndex !== "number" ||
+      !Number.isSafeInteger(item.sampleIndex) ||
+      item.sampleIndex < 1 ||
+      sampleIndexes.has(item.sampleIndex) ||
+      (item.status !== "complete" && item.status !== "incomplete") ||
+      !isRecord(counts) ||
+      !isRecord(fingerprints) ||
+      ["analysis", "assessment", "discovery", "fullEvaluation"].some(
+        (field) => typeof fingerprints[field] !== "string",
+      ) ||
+      countFields.some(
+        (field) =>
+          typeof counts[field] !== "number" ||
+          !Number.isSafeInteger(counts[field]),
+      )
+    )
+      return false;
+    sampleIndexes.add(item.sampleIndex);
+    return true;
+  });
+}
+
+function flattenSummary(
+  value: unknown,
+  prefix = "",
+  fields = new Map<string, unknown>(),
+): Map<string, unknown> {
+  if (isRecord(value)) {
+    const keys = Object.keys(value).toSorted();
+    if (keys.length === 0 && prefix !== "") fields.set(prefix, value);
+    for (const key of keys)
+      flattenSummary(
+        value[key],
+        prefix === "" ? key : `${prefix}.${key}`,
+        fields,
+      );
+  } else if (prefix !== "") fields.set(prefix, value);
+  return fields;
+}
+
+function appendSummaryDifferences(
+  target: PerformanceComparisonReport["resultComparison"]["differences"][number][],
+  context: Omit<
+    PerformanceComparisonReport["resultComparison"]["differences"][number],
+    "field" | "baseline" | "candidate"
+  >,
+  baseline: unknown,
+  candidate: unknown,
+): void {
+  const baselineFields = flattenSummary(baseline);
+  const candidateFields = flattenSummary(candidate);
+  const fields = [
+    ...new Set([...baselineFields.keys(), ...candidateFields.keys()]),
+  ].toSorted();
+  for (const field of fields) {
+    const before = baselineFields.get(field);
+    const after = candidateFields.get(field);
+    if (!equal(before, after))
+      target.push(
+        Object.freeze({
+          ...context,
+          field,
+          baseline: before ?? null,
+          candidate: after ?? null,
+        }),
+      );
+  }
 }
 
 function externalIdentity(
@@ -457,6 +593,52 @@ function comparisonBlockers(
       after.policy,
       nonEmptyRecord,
     );
+    for (const mode of ["no-memo", "empty-scope", "reused-scope"] as const) {
+      const baselineMode = before.modes[mode];
+      const candidateMode = after.modes[mode];
+      for (const [side, value, plannedSamples] of [
+        ["baseline", baselineMode.sampleOutputs, baselineMode.plannedSamples],
+        [
+          "candidate",
+          candidateMode.sampleOutputs,
+          candidateMode.plannedSamples,
+        ],
+      ] as const) {
+        if (!hasSampleOutputSummaries(value, plannedSamples))
+          blockers.push(
+            Object.freeze({
+              field: `missing-required-evidence.scenarios.${name}.modes.${mode}.sampleOutputs.${side}`,
+              baseline: side === "baseline" ? (value ?? null) : null,
+              candidate: side === "candidate" ? (value ?? null) : null,
+            }),
+          );
+      }
+      for (const phase of performancePhases) {
+        const field = `scenarios.${name}.modes.${mode}.phases.${phase}.outputs`;
+        const outputs = [
+          [
+            "baseline",
+            baselineMode.phases[phase].outputs,
+            baselineMode.plannedSamples,
+          ],
+          [
+            "candidate",
+            candidateMode.phases[phase].outputs,
+            candidateMode.plannedSamples,
+          ],
+        ] as const;
+        for (const [side, value, plannedSamples] of outputs) {
+          if (!hasStageOutputSummaries(value, plannedSamples))
+            blockers.push(
+              Object.freeze({
+                field: `missing-required-evidence.${field}.${side}`,
+                baseline: side === "baseline" ? (value ?? null) : null,
+                candidate: side === "candidate" ? (value ?? null) : null,
+              }),
+            );
+        }
+      }
+    }
   }
   return Object.freeze({
     blockers: Object.freeze(blockers),
@@ -468,13 +650,8 @@ function resultDifferences(
   baseline: PerformanceRunReport,
   candidate: PerformanceRunReport,
 ): PerformanceComparisonReport["resultComparison"]["differences"] {
-  const differences: {
-    scenario: string;
-    mode?: string;
-    phase?: string;
-    baseline: unknown;
-    candidate: unknown;
-  }[] = [];
+  const differences: PerformanceComparisonReport["resultComparison"]["differences"][number][] =
+    [];
   const names = [
     ...new Set([
       ...Object.keys(baseline.scenarios),
@@ -539,6 +716,56 @@ function resultDifferences(
           baseline: beforeFingerprint ?? null,
           candidate: afterFingerprint ?? null,
         });
+      const beforeBySample = new Map(
+        beforeOutputs.map((sample) => [sample.sampleIndex, sample]),
+      );
+      const afterBySample = new Map(
+        afterOutputs.map((sample) => [sample.sampleIndex, sample]),
+      );
+      for (const sampleIndex of [
+        ...new Set([...beforeBySample.keys(), ...afterBySample.keys()]),
+      ].toSorted((left, right) => left - right)) {
+        appendSummaryDifferences(
+          differences,
+          { scenario, mode, phase: "sample-output" },
+          beforeBySample.get(sampleIndex) ?? null,
+          afterBySample.get(sampleIndex) ?? null,
+        );
+      }
+      for (const phase of performancePhases) {
+        const beforeSummaries = before.modes[mode].phases[phase].outputs;
+        const afterSummaries = after.modes[mode].phases[phase].outputs;
+        const beforeBySample = new Map(
+          (Array.isArray(beforeSummaries) ? beforeSummaries : []).flatMap(
+            (item) =>
+              isRecord(item) && typeof item.sampleIndex === "number"
+                ? [[item.sampleIndex, item.summary] as const]
+                : [],
+          ),
+        );
+        const afterBySample = new Map(
+          (Array.isArray(afterSummaries) ? afterSummaries : []).flatMap(
+            (item) =>
+              isRecord(item) && typeof item.sampleIndex === "number"
+                ? [[item.sampleIndex, item.summary] as const]
+                : [],
+          ),
+        );
+        for (const sampleIndex of [
+          ...new Set([...beforeBySample.keys(), ...afterBySample.keys()]),
+        ].toSorted((left, right) => left - right)) {
+          appendSummaryDifferences(
+            differences,
+            {
+              scenario,
+              mode,
+              phase: `stage-output.sample-${sampleIndex}`,
+            },
+            beforeBySample.get(sampleIndex) ?? null,
+            afterBySample.get(sampleIndex) ?? null,
+          );
+        }
+      }
     }
   }
   return Object.freeze(
@@ -561,19 +788,11 @@ function performanceObservations(
     baselineMedianAbsoluteDeviationMs: number | null;
     candidateMedianAbsoluteDeviationMs: number | null;
   }[] = [];
-  const phases: readonly PerformancePhaseName[] = [
-    "termbaseCreate",
-    "compileTerms",
-    "analyzeTermUse",
-    "assessTermUse",
-    "discoverTerms",
-    "evaluateTerms",
-  ];
   for (const [scenario, before] of Object.entries(baseline.scenarios)) {
     const after = candidate.scenarios[scenario];
     if (!after) continue;
     for (const mode of ["no-memo", "empty-scope", "reused-scope"] as const) {
-      for (const phase of phases) {
+      for (const phase of performancePhases) {
         const beforeValues = before.modes[mode].phases[phase].durationsMs.raw;
         const afterValues = after.modes[mode].phases[phase].durationsMs.raw;
         const beforeMedian = median(beforeValues);
@@ -634,7 +853,9 @@ export function comparePerformanceReports(
               Object.values(mode.phases).every(
                 (phase) =>
                   phase.durationsMs.count === mode.plannedSamples &&
-                  phase.durationsMs.raw.length === mode.plannedSamples,
+                  phase.durationsMs.raw.length === mode.plannedSamples &&
+                  Array.isArray(phase.outputs) &&
+                  phase.outputs.length === mode.plannedSamples,
               ),
           ),
       ),
@@ -719,8 +940,8 @@ export function comparisonSummary(report: PerformanceComparisonReport): string {
           "## 结果差异",
           "",
           ...report.resultComparison.differences.map(
-            ({ scenario, mode, phase, baseline, candidate }) =>
-              `- ${scenario}${mode ? ` / ${mode}` : ""}${phase ? ` / ${phase}` : ""}: ${JSON.stringify(baseline)} → ${JSON.stringify(candidate)}`,
+            ({ scenario, mode, phase, field, baseline, candidate }) =>
+              `- ${scenario}${mode ? ` / ${mode}` : ""}${phase ? ` / ${phase}` : ""}${field ? ` / ${field}` : ""}: ${JSON.stringify(baseline)} → ${JSON.stringify(candidate)}`,
           ),
           "",
         ]

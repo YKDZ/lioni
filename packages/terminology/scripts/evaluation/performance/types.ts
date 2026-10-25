@@ -31,6 +31,10 @@ export type Distribution = {
 
 export type PhaseDistribution = {
   readonly durationsMs: Distribution;
+  readonly outputs: readonly {
+    readonly sampleIndex: number;
+    readonly summary: PerformanceWorkerResult["phases"][PerformancePhaseName]["output"];
+  }[];
   readonly stageMemory: readonly {
     readonly sampleIndex: number;
     readonly gcBeforeRequested: boolean;
@@ -59,7 +63,7 @@ export type ModeDistribution = {
 export type PerformanceScenarioReport = {
   readonly id: PerformancePreparedInput["id"];
   readonly execution: {
-    readonly status: "running" | "passed" | "failed";
+    readonly status: "running" | "passed" | "failed" | "not-executed";
     readonly reason?: string;
   };
   readonly domain: { readonly status: "complete" | "incomplete" | "not-run" };
@@ -184,6 +188,7 @@ export type PerformanceComparisonReport = {
       readonly scenario: string;
       readonly mode?: string;
       readonly phase?: string;
+      readonly field?: string;
       readonly baseline: unknown;
       readonly candidate: unknown;
     }[];

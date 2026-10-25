@@ -41,7 +41,7 @@ export type PerformancePreparedInput = {
   };
   readonly external?: {
     readonly id: "cfpa";
-    readonly source: CfpaPreparedInput["source"];
+    readonly source: Omit<CfpaPreparedInput["source"], "root">;
     readonly transformedInputSha256: string;
     readonly selections: CfpaPreparedInput["selections"];
   };
@@ -319,6 +319,7 @@ export function createCfpaPerformanceWorkload(
 ): PreparedPerformanceWorkload {
   const corpus = prepared.corpora.en;
   if (!corpus) throw new Error("CFPA 固定输入缺少英语候选发现语料。");
+  const { root: _sourceRoot, ...stableSource } = prepared.source;
   const hardShapes = Object.freeze({
     "source-has-protected-ranges": prepared.comparison.groups.filter(
       ({ source }) =>
@@ -346,12 +347,19 @@ export function createCfpaPerformanceWorkload(
     ),
     external: Object.freeze({
       id: "cfpa",
-      source: prepared.source,
+      source: Object.freeze(stableSource),
       transformedInputSha256,
       selections: prepared.selections,
     }),
   });
-  return Object.freeze({ input, inputSha256: sha256(canonicalJson(input)) });
+  const serialized = JSON.stringify(input);
+  if (serialized === undefined)
+    throw new TypeError("CFPA 性能输入必须是可序列化 JSON。");
+  const serializableInput = JSON.parse(serialized) as PerformancePreparedInput;
+  return Object.freeze({
+    input: serializableInput,
+    inputSha256: sha256(canonicalJson(serializableInput)),
+  });
 }
 
 export const performanceDiscoveryPolicy = discoveryPolicy;

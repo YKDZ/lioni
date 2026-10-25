@@ -50,6 +50,14 @@ export function aggregateModeSamples(
       durationsMs: distribution(
         samples.map(({ phases: values }) => values[phase].durationMs),
       ),
+      outputs: Object.freeze(
+        samples.map(({ sampleIndex, phases: values }) =>
+          Object.freeze({
+            sampleIndex,
+            summary: values[phase].output,
+          }),
+        ),
+      ),
       stageMemory: Object.freeze(
         samples.map(({ sampleIndex, phases: values }) => ({
           sampleIndex,

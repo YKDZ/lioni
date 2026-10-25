@@ -538,8 +538,7 @@ function isPerformancePreparedInput(
 }
 
 function maxRssBytes(): number {
-  const maxRss = process.resourceUsage().maxRSS;
-  return process.platform === "win32" ? maxRss : maxRss * 1024;
+  return process.resourceUsage().maxRSS * 1024;
 }
 
 async function main(): Promise<void> {

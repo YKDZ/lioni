@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, it } from "node:test";
 
 import {
+  comparisonSummary,
   comparePerformanceReports,
   readPerformanceReport,
 } from "../scripts/evaluation/performance/compare.ts";
@@ -31,7 +32,10 @@ const phases = [
   "evaluateTerms",
 ] as const;
 
-function phase(durationMs: number, fingerprint: string): PerformancePhase {
+function phase(
+  durationMs: number,
+  output: Readonly<Record<string, unknown>>,
+): PerformancePhase {
   const memory = Object.freeze({ ...process.memoryUsage() });
   return Object.freeze({
     durationMs,
@@ -40,7 +44,7 @@ function phase(durationMs: number, fingerprint: string): PerformancePhase {
       before: memory,
       after: memory,
     }),
-    output: Object.freeze({ fingerprint }),
+    output: Object.freeze(output),
     memo: Object.freeze({
       mode: "no-memo",
       prewarmDurationMs: null,
@@ -54,12 +58,60 @@ function sample(
   sampleIndex: number,
   outputFingerprint: string,
   analysisMs = 20,
+  problemCount = 0,
 ): PerformanceWorkerResult {
   const memory = Object.freeze({ ...process.memoryUsage() });
+  const issueCounts = Object.freeze(
+    problemCount === 0 ? {} : { "forbidden-translation": problemCount },
+  );
+  const assessmentSummary = Object.freeze({
+    status: "complete",
+    problems: problemCount,
+    issues: 0,
+    codeCounts: issueCounts,
+    fingerprint: outputFingerprint,
+  });
   const samplePhases = Object.fromEntries(
     phases.map((name) => [
       name,
-      phase(name === "analyzeTermUse" ? analysisMs : 10, outputFingerprint),
+      phase(
+        name === "analyzeTermUse" ? analysisMs : 10,
+        name === "termbaseCreate"
+          ? { concepts: 1_000, expressions: 4_000 }
+          : name === "compileTerms"
+            ? {
+                languages: ["en", "zh-CN"],
+                expressions: 4_000,
+                policies: { en: "en-word-v1", "zh-CN": "zh-CN-literal-v1" },
+              }
+            : name === "analyzeTermUse"
+              ? {
+                  status: "complete",
+                  groups: 10_000,
+                  sourceMatches: 10_000,
+                  targetMatches: 10_000,
+                  sourceCertain: 10_000,
+                  targetCertain: 10_000,
+                  sourceAmbiguities: 0,
+                  targetAmbiguities: 0,
+                  sourceIssues: 0,
+                  targetIssues: 0,
+                  fingerprint: outputFingerprint,
+                }
+              : name === "assessTermUse" || name === "evaluateTerms"
+                ? assessmentSummary
+                : {
+                    status: "complete",
+                    entries: 10_000,
+                    distinctCandidates: 20,
+                    eligibleCandidates: 20,
+                    omittedCandidates: 0,
+                    candidateCount: 20,
+                    issues: 0,
+                    issueCounts: Object.freeze({}),
+                    fingerprint: outputFingerprint,
+                  },
+      ),
     ]),
   ) as PerformanceWorkerResult["phases"];
   return Object.freeze({
@@ -109,7 +161,7 @@ function sample(
       expressionCount: 4_000,
       sourceMatches: 10_000,
       targetMatches: 10_000,
-      problems: 0,
+      problems: problemCount,
       assessmentIssues: 0,
       candidateCount: 20,
       discoveryIssues: 0,
@@ -135,6 +187,7 @@ function scenario(
   fingerprints: readonly string[],
   analysisTimes: readonly number[],
   domain: PerformanceScenarioReport["domain"]["status"] = "complete",
+  problemCount = 0,
 ): PerformanceScenarioReport {
   const attempts = modes.flatMap((memoMode) =>
     fingerprints.map((fingerprint, index) => ({
@@ -157,6 +210,7 @@ function scenario(
         index + 1,
         fingerprint,
         analysisTimes[index] ?? 20,
+        problemCount,
       ),
     })),
   );
@@ -384,10 +438,34 @@ void describe("术语性能报告契约", () => {
 
   void it("输出改变或领域不完整时不能接受等价优化", () => {
     const baseline = report("baseline", scenario(["same"], [20]));
-    const changed = report("changed", scenario(["different"], [10]));
+    const changed = report(
+      "changed",
+      scenario(["different"], [10], "complete", 2),
+    );
     const changedComparison = comparePerformanceReports(baseline, changed);
     assert.equal(changedComparison.resultComparison.status, "different");
     assert.equal(changedComparison.performance.status, "descriptive-only");
+    assert.ok(
+      changedComparison.resultComparison.differences.some(
+        ({ phase, field, candidate }) =>
+          phase?.startsWith("stage-output.sample-") &&
+          field === "codeCounts.forbidden-translation" &&
+          candidate === 2,
+      ),
+    );
+    assert.ok(
+      changedComparison.resultComparison.differences.some(
+        ({ phase, field, baseline, candidate }) =>
+          phase === "sample-output" &&
+          field === "counts.problems" &&
+          baseline === 0 &&
+          candidate === 2,
+      ),
+    );
+    assert.match(
+      comparisonSummary(changedComparison),
+      /codeCounts\.forbidden-translation/,
+    );
 
     const incomplete = report(
       "incomplete",
@@ -433,11 +511,25 @@ void describe("术语性能报告契约", () => {
       assert.ok(isRecord(controlled));
       const input = controlled["input"];
       assert.ok(isRecord(input));
+      const modes = controlled["modes"];
+      assert.ok(isRecord(modes));
+      const noMemo = modes["no-memo"];
+      assert.ok(isRecord(noMemo));
+      const phases = noMemo["phases"];
+      assert.ok(isRecord(phases));
+      const assessmentPhase = phases["assessTermUse"];
+      assert.ok(isRecord(assessmentPhase));
+      const sampleOutputs = noMemo["sampleOutputs"];
+      assert.ok(Array.isArray(sampleOutputs));
+      const firstSampleOutput = sampleOutputs[0];
+      assert.ok(isRecord(firstSampleOutput));
       delete environment["icu"];
       delete environment["cpuModel"];
       delete parameters["runtimeWarmupGroups"];
       delete input["sha256"];
       delete controlled["policy"];
+      delete assessmentPhase["outputs"];
+      delete firstSampleOutput["counts"];
 
       const baselinePath = path.join(directory, "baseline.json");
       const candidatePath = path.join(directory, "candidate.json");
@@ -455,6 +547,10 @@ void describe("术语性能报告契约", () => {
         "missing-required-evidence.parameters.runtimeWarmupGroups",
         "missing-required-evidence.scenarios.controlled-scale.input.sha256",
         "missing-required-evidence.scenarios.controlled-scale.policy",
+        "missing-required-evidence.scenarios.controlled-scale.modes.no-memo.phases.assessTermUse.outputs.baseline",
+        "missing-required-evidence.scenarios.controlled-scale.modes.no-memo.phases.assessTermUse.outputs.candidate",
+        "missing-required-evidence.scenarios.controlled-scale.modes.no-memo.sampleOutputs.baseline",
+        "missing-required-evidence.scenarios.controlled-scale.modes.no-memo.sampleOutputs.candidate",
       ])
         assert.ok(
           comparison.comparability.blockers.some(
