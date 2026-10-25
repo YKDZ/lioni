@@ -15,6 +15,8 @@ import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { externalInterruptSignal } from "./external-interrupt.ts";
+
 export type Artifact = {
   readonly name: string;
   readonly version: string;
@@ -51,6 +53,8 @@ export type ProcessResult = {
 export type ProcessOptions = {
   readonly cwd: string;
   readonly timeoutMs?: number;
+  readonly terminationGraceMs?: number;
+  readonly interruptSignal?: NodeJS.Signals;
   readonly env?: NodeJS.ProcessEnv;
   readonly signal?: AbortSignal;
   readonly shell?: boolean;
@@ -84,7 +88,8 @@ export type ConsumerScenario = (consumer: Consumer) => Promise<void> | void;
 
 const defaultProcessTimeoutMs = 10 * 60 * 1000;
 const defaultTestTimeoutMs = 15 * 60 * 1000;
-const terminationGraceMs = 500;
+const defaultTerminationGraceMs = 1_500;
+const consumerTerminationGraceMs = 500;
 const maxOutputBytes = 32 * 1024 * 1024;
 
 function requiredEnvironment(name: string): string {
@@ -123,6 +128,8 @@ export function runSubprocess(
   options: ProcessOptions,
 ): Promise<ProcessResult> {
   const timeoutMs = options.timeoutMs ?? defaultProcessTimeoutMs;
+  const terminationGraceMs =
+    options.terminationGraceMs ?? defaultTerminationGraceMs;
   assert.ok(
     Number.isFinite(timeoutMs) && timeoutMs > 0,
     "子进程超时必须为正数。",
@@ -156,8 +163,8 @@ export function runSubprocess(
       resolveResult({ ...result, durationMs: Date.now() - startedAt });
     };
 
-    const terminate = (): void => {
-      signalProcessTree(child, "SIGTERM");
+    const terminate = (signal: NodeJS.Signals): void => {
+      signalProcessTree(child, signal);
       if (!terminationScheduled) {
         terminationScheduled = true;
         forceKill = setTimeout(() => {
@@ -168,7 +175,7 @@ export function runSubprocess(
     };
     const abort = (): void => {
       interrupted = true;
-      terminate();
+      terminate(options.interruptSignal ?? "SIGTERM");
     };
 
     child.stdout.on("data", (chunk: Buffer) => {
@@ -209,14 +216,14 @@ export function runSubprocess(
     else options.signal?.addEventListener("abort", abort, { once: true });
     timeout = setTimeout(() => {
       timedOut = true;
-      terminate();
+      terminate("SIGTERM");
     }, timeoutMs);
   });
 }
 
 function commandFailure(label: string, result: ProcessResult): Error {
   const reason = result.interrupted
-    ? "执行被中断"
+    ? `执行被中断${result.signal === null ? "" : `，结束信号 ${result.signal}`}`
     : result.timedOut
       ? `超时（${result.durationMs}ms）`
       : result.error !== undefined
@@ -349,6 +356,7 @@ async function createConsumer(
   const install = await runSubprocess("pnpm", ["install", "--lockfile-only"], {
     cwd: root,
     signal,
+    terminationGraceMs: consumerTerminationGraceMs,
   });
   if (
     install.status !== 0 ||
@@ -360,7 +368,11 @@ async function createConsumer(
   const frozenInstall = await runSubprocess(
     "pnpm",
     ["install", "--frozen-lockfile"],
-    { cwd: root, signal },
+    {
+      cwd: root,
+      signal,
+      terminationGraceMs: consumerTerminationGraceMs,
+    },
   );
   if (
     frozenInstall.status !== 0 ||
@@ -382,6 +394,7 @@ export function testArtifactConsumer(
     { timeout: testTimeoutMs + 1_000 },
     async (context) => {
       const startedAt = new Date().toISOString();
+      const signal = AbortSignal.any([context.signal, externalInterruptSignal]);
       const runRoot = requiredEnvironment("LIONI_ARTIFACT_RUN_ROOT");
       await mkdir(runRoot, { recursive: true });
       const consumerRoot = await mkdtemp(path.join(runRoot, "consumer-"));
@@ -395,7 +408,7 @@ export function testArtifactConsumer(
           artifacts,
           options.packages,
           options.fixtures,
-          context.signal,
+          signal,
         );
         const runCommand: Consumer["runCommand"] = async (
           command,
@@ -405,8 +418,9 @@ export function testArtifactConsumer(
           const result = await runSubprocess(command, args, {
             cwd: consumerRoot,
             timeoutMs,
-            signal: context.signal,
+            signal,
             shell: process.platform === "win32",
+            terminationGraceMs: consumerTerminationGraceMs,
           });
           if (
             result.status !== 0 ||
