@@ -25,7 +25,7 @@ const repositoryRoot = path.resolve(
 );
 
 async function waitForFile(file: string): Promise<string | undefined> {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
+  for (let attempt = 0; attempt < 300; attempt += 1) {
     try {
       return await readFile(file, "utf8");
     } catch {
@@ -33,6 +33,118 @@ async function waitForFile(file: string): Promise<string | undefined> {
     }
   }
   return undefined;
+}
+
+async function waitForProcessExit(pid: number): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    try {
+      const contents = await readFile(`/proc/${pid}/stat`, "utf8");
+      const state = contents.slice(contents.lastIndexOf(")") + 2)[0];
+      if (state === "Z" || state === "X") return;
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT")
+        return;
+      throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 15));
+  }
+  assert.fail(`中断后的消费者进程仍存活：${pid}`);
+}
+
+async function runNestedAbortProbe(
+  mode: "cooperative" | "ignore",
+  suiteInterrupt = false,
+): Promise<ScenarioResult> {
+  const root = await mkdtemp(
+    path.join(tmpdir(), "lioni-artifact-nested-abort-"),
+  );
+  const runRoot = path.join(root, "runs");
+  const resultsRoot = path.join(root, "results");
+  const manifestPath = path.join(root, "artifacts.json");
+  const pidPath = path.join(root, "consumer.pid");
+  const fixture = path.join(
+    repositoryRoot,
+    "scripts",
+    "artifact-tests",
+    "support",
+    "nested-interrupt-evidence.ts",
+  );
+  const interruptModule = path.join(
+    repositoryRoot,
+    "scripts",
+    "artifact-tests",
+    "support",
+    "external-interrupt.ts",
+  );
+  await Promise.all([
+    mkdir(runRoot, { recursive: true }),
+    mkdir(resultsRoot, { recursive: true }),
+    writeFile(manifestPath, "[]\n", "utf8"),
+  ]);
+  const environment: NodeJS.ProcessEnv = {
+    ...process.env,
+    LIONI_ARTIFACT_MANIFEST: manifestPath,
+    LIONI_ARTIFACT_RESULTS: resultsRoot,
+    LIONI_ARTIFACT_RUN_ROOT: runRoot,
+    LIONI_ABORT_PROBE_MODE: mode,
+    LIONI_ABORT_PROBE_PID_FILE: pidPath,
+  };
+  delete environment.NODE_TEST_CONTEXT;
+  const controller = new AbortController();
+  const args = [
+    "--conditions=source",
+    ...(suiteInterrupt ? ["--import", interruptModule] : []),
+    "--test",
+    fixture,
+  ];
+  const task = runSubprocess(process.execPath, args, {
+    cwd: repositoryRoot,
+    env: environment,
+    signal: controller.signal,
+    ...(suiteInterrupt
+      ? { interruptSignal: "SIGTERM" as const, terminationGraceMs: 2_000 }
+      : {}),
+    timeoutMs: 15_000,
+  });
+
+  let pid: number | undefined;
+  try {
+    const processId = await waitForFile(pidPath);
+    assert.ok(processId, "嵌套消费者没有启动。");
+    pid = Number(processId);
+    assert.ok(Number.isSafeInteger(pid) && pid > 0);
+    controller.abort();
+    const interrupted = await task;
+    assert.equal(interrupted.interrupted, true);
+    await waitForProcessExit(pid);
+
+    const output = await waitForFile(
+      path.join(resultsRoot, scenarioResultsFilename),
+    );
+    assert.ok(output, "中断场景没有保存结果记录。");
+    const records = output
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as ScenarioResult);
+    assert.equal(records.length, 1);
+    const record = records[0];
+    assert.ok(record);
+    assert.equal(record.status, "failed");
+    assert.match(record.failure ?? "", /执行被中断/u);
+    if (mode === "ignore") assert.match(record.failure ?? "", /SIGKILL/u);
+    assert.ok(record.consumerRoot);
+    assert.ok((await stat(record.consumerRoot)).isDirectory());
+    assert.equal(
+      await readFile(path.join(record.consumerRoot, "sigterm"), "utf8"),
+      mode === "ignore" ? "ignored" : "stopped",
+    );
+    return record;
+  } finally {
+    if (!controller.signal.aborted) controller.abort();
+    await task;
+    if (pid !== undefined) await waitForProcessExit(pid);
+    await rm(root, { recursive: true, force: true });
+  }
 }
 
 async function runFailureFixture(
@@ -166,7 +278,11 @@ async function cleanRun(runRoot: string): Promise<{
   const result = await runSubprocess(
     "pnpm",
     ["verify:artifacts", "--", "--clean-run", runRoot],
-    { cwd: repositoryRoot, timeoutMs: 10_000 },
+    {
+      cwd: repositoryRoot,
+      timeoutMs: 10_000,
+      shell: process.platform === "win32",
+    },
   );
   assert.equal(result.status, 0, result.stdout + result.stderr);
   const start = result.stdout.indexOf("{");
@@ -253,6 +369,11 @@ void test("超时会终止子进程树，中断后仍能运行新进程", async 
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+void test("套件外层中断会回收嵌套消费者并保存失败记录", async () => {
+  await runNestedAbortProbe("cooperative");
+  await runNestedAbortProbe("ignore", true);
 });
 
 void test("公开入口按请求选择场景", async () => {
@@ -346,6 +467,7 @@ void test("保留运行现场可重复清理并保留失败报告和外部哨兵
         cwd: repositoryRoot,
         timeoutMs: 60_000,
         env: { ...process.env, LIONI_ARTIFACT_CACHE: cacheRoot },
+        shell: process.platform === "win32",
       },
     );
     assert.equal(failedRun.status, 1, failedRun.stdout + failedRun.stderr);
@@ -406,7 +528,11 @@ void test("保留运行现场可重复清理并保留失败报告和外部哨兵
     const rejectedCleanup = await runSubprocess(
       "pnpm",
       ["verify:artifacts", "--", "--clean-run", unownedRoot],
-      { cwd: repositoryRoot, timeoutMs: 10_000 },
+      {
+        cwd: repositoryRoot,
+        timeoutMs: 10_000,
+        shell: process.platform === "win32",
+      },
     );
     assert.equal(rejectedCleanup.status, 1);
     assert.equal(await readFile(unownedSentinel, "utf8"), "keep\n");

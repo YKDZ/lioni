@@ -438,6 +438,14 @@ async function main(): Promise<void> {
         process.execPath,
         [
           "--conditions=source",
+          "--import",
+          path.join(
+            repositoryRoot,
+            "scripts",
+            "artifact-tests",
+            "support",
+            "external-interrupt.ts",
+          ),
           "--test",
           "--test-reporter=spec",
           "--test-concurrency=1",
@@ -447,6 +455,8 @@ async function main(): Promise<void> {
           cwd: repositoryRoot,
           env: testEnvironment,
           signal: controller.signal,
+          interruptSignal: "SIGTERM",
+          terminationGraceMs: 2_000,
           timeoutMs: suiteTimeoutMs,
           onStdout: (chunk) => process.stdout.write(chunk),
           onStderr: (chunk) => process.stderr.write(chunk),
