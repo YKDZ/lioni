@@ -258,7 +258,15 @@ void test("超时会终止子进程树，中断后仍能运行新进程", async 
 void test("公开入口按请求选择场景", async () => {
   const selection = await runSubprocess(
     "pnpm",
-    ["verify:artifacts", "--", "--list", "facility", "composition"],
+    [
+      "verify:artifacts",
+      "--",
+      "--list",
+      "--scenario",
+      "facility",
+      "--scenario",
+      "composition",
+    ],
     {
       cwd: repositoryRoot,
       timeoutMs: 5_000,

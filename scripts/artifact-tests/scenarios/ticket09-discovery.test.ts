@@ -2,7 +2,7 @@ import { testArtifactConsumer } from "../support/consumer.ts";
 
 testArtifactConsumer(
   {
-    name: "ticket09 independent terminology discovery packages",
+    name: "票 09：术语候选发现独立制品消费",
     packages: ["@lioni/memo", "@lioni/text-analysis", "@lioni/terminology"],
     fixtures: new URL("../fixtures/ticket09-discovery/", import.meta.url),
   },

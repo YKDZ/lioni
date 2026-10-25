@@ -291,7 +291,12 @@ async function main(): Promise<void> {
     if (argument === undefined) continue;
     if (argument === "--list") listOnly = true;
     else if (argument === "--prepare-only") prepareOnly = true;
-    else if (argument === "--clean-run") {
+    else if (argument === "--scenario") {
+      const scenario = args[index + 1];
+      assert.ok(scenario, "--scenario 后必须指定场景名称。");
+      requested.push(scenario);
+      index += 1;
+    } else if (argument === "--clean-run") {
       const runPath = args[index + 1];
       assert.ok(runPath, "--clean-run 后必须指定运行现场路径。");
       cleanRunPath = runPath;
