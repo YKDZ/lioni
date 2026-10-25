@@ -18,6 +18,7 @@ import {
   type JsonValue,
 } from "./data.ts";
 import {
+  splitsSurrogatePair,
   validateTextInput,
   type TermRange,
   type TermTextInput,
@@ -196,6 +197,26 @@ export type FindTermsOptions = TermRuntime & {
   readonly conceptIds?: readonly string[];
 };
 
+function findTermsMemoKey(
+  terms: CompiledTerms,
+  input: TermTextInput,
+  options: FindTermsOptions,
+): readonly unknown[] {
+  const inputKey = JSON.stringify([
+    input.language,
+    input.complete === false,
+    input.fragments.map(({ ref, text, protectedRanges }) => [
+      ref,
+      text,
+      protectedRanges ?? null,
+    ]),
+    options.conceptIds === undefined
+      ? null
+      : [...new Set(options.conceptIds)].sort(),
+  ]);
+  return [terms, inputKey];
+}
+
 function validateNormalized(
   value: NormalizedText,
   original: string,
@@ -224,6 +245,38 @@ function contains(outer: TermRange, inner: TermRange): boolean {
     outer.end >= inner.end &&
     (outer.start < inner.start || outer.end > inner.end)
   );
+}
+
+function appendWordIssues(
+  target: TermAnalysisIssue[],
+  words: WordAnalysis,
+  fragmentIndex: number,
+): void {
+  for (const issue of words.issues) {
+    if (
+      !target.some(
+        (existing) =>
+          existing.fragmentIndex === fragmentIndex &&
+          existing.code === issue.code &&
+          existing.message === issue.message,
+      )
+    )
+      target.push({ ...issue, fragmentIndex });
+  }
+  if (
+    !words.complete &&
+    words.issues.length === 0 &&
+    !target.some(
+      (issue) =>
+        issue.fragmentIndex === fragmentIndex &&
+        issue.code === "incomplete-word-boundaries",
+    )
+  )
+    target.push({
+      code: "incomplete-word-boundaries",
+      message: "词界分析未完整处理片段。",
+      fragmentIndex,
+    });
 }
 
 export function resolveTermMatches(
@@ -287,12 +340,11 @@ export function resolveTermMatches(
 }
 
 /** 分片查找；严格包含只在全部边界和保护政策通过后处理。 */
-export async function findTerms(
+async function findTermsUncached(
   terms: CompiledTerms,
   input: TermTextInput,
   options: FindTermsOptions = {},
 ): Promise<TermMatches> {
-  validateTextInput(input);
   const index = compiledIndexes.get(terms);
   if (!index)
     throw new TermContractError("input", [
@@ -312,6 +364,11 @@ export async function findTerms(
   );
   const issues: TermAnalysisIssue[] = [];
   const matches: TermMatch[] = [];
+  if (input.complete === false)
+    issues.push({
+      code: "incomplete-scope",
+      message: "文本输入范围不完整，可能仍有未提供的片段。",
+    });
   if (
     !input.fragments.length ||
     applicable?.size === 0 ||
@@ -407,6 +464,16 @@ export async function findTerms(
             ),
           ]);
         if (
+          splitsSurrogatePair(fragment.text, range.start) ||
+          splitsSurrogatePair(fragment.text, range.end)
+        )
+          throw new TermContractError("input", [
+            contractIssue(
+              "split-surrogate-range",
+              "规范化策略不能将原文区间映射到代理对内部。",
+            ),
+          ]);
+        if (
           structure.protectedRanges.some((protectedRange) =>
             intersects(range, protectedRange),
           )
@@ -414,29 +481,25 @@ export async function findTerms(
           continue;
         if (policy.boundary === "word") {
           words ??= await terms.analysis.words(textInput, options);
-          if (!words.complete) {
-            if (
-              !issues.some(
-                (issue) =>
-                  issue.code === "unsupported-word-boundary" &&
-                  issue.fragmentIndex === fragmentIndex,
-              )
-            )
-              issues.push({
-                code: "unsupported-word-boundary",
-                message: `未提供 ${input.language} 的词界能力。`,
-                fragmentIndex,
-              });
-            continue;
-          }
+          appendWordIssues(issues, words, fragmentIndex);
           boundaries ??= new Set(words.boundaries);
           if (!boundaries.has(range.start) || !boundaries.has(range.end))
             continue;
-        } else if (
-          typeof policy.boundary === "function" &&
-          !(await policy.boundary({ text: fragment.text, range, entry }))
-        )
-          continue;
+        } else if (typeof policy.boundary === "function") {
+          const accepted = await policy.boundary({
+            text: fragment.text,
+            range,
+            entry,
+          });
+          if (typeof accepted !== "boolean")
+            throw new TermContractError("input", [
+              contractIssue(
+                "invalid-boundary-result",
+                "自定义词界政策必须返回布尔值。",
+              ),
+            ]);
+          if (!accepted) continue;
+        }
         const identity = JSON.stringify([
           entry.conceptId,
           entry.expressionId,
@@ -473,4 +536,19 @@ export async function findTerms(
       left.expressionId.localeCompare(right.expressionId),
   );
   return resolveTermMatches(matches, issues);
+}
+
+/** 同一 memo 范围内，按完整识别依赖复用术语匹配与解释。 */
+export function findTerms(
+  terms: CompiledTerms,
+  input: TermTextInput,
+  options: FindTermsOptions = {},
+): Promise<TermMatches> {
+  validateTextInput(input);
+  if (!options.memo) return findTermsUncached(terms, input, options);
+  return options.memo.memo(findTermsUncached, { key: findTermsMemoKey })(
+    terms,
+    input,
+    options,
+  );
 }

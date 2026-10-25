@@ -8,3 +8,5 @@ export type {
   NumberCheckerSubject,
   NumberTextInput,
 } from "./numbers.ts";
+export { createTermChecker } from "./terms.ts";
+export type { TermCheckerOptions } from "./terms.ts";
