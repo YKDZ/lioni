@@ -7,7 +7,14 @@ import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { loadExternalInputCache } from "../scripts/evaluation/corpora/cache.ts";
+import type { CfpaPreparedInput } from "../scripts/evaluation/corpora/convert.ts";
+import {
+  cfpaSelections,
+  cfpaSource,
+  contentTypeSelection,
+} from "../scripts/evaluation/corpora/manifest.ts";
 import { assertFileHash } from "../scripts/evaluation/corpora/source.ts";
+import { runCfpaScenario } from "../scripts/evaluation/scenarios/external.ts";
 import { canonicalJson, sha256 } from "../scripts/evaluation/support/json.ts";
 
 const packageRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -23,6 +30,176 @@ function runCli(command: string, args: readonly string[]) {
 
 function runQuality(args: readonly string[]) {
   return runCli("quality", args);
+}
+
+function cfpaScenarioInput(): CfpaPreparedInput {
+  const corpusEntry = (ref: string, text: string) => ({
+    ref,
+    fragments: [{ ref, text }],
+  });
+  const facts = {
+    entries: 3,
+    nonEmptyEntries: 3,
+    distinctNonEmptyValues: 3,
+    codepoints: 35,
+    utf16Units: 35,
+  };
+  return {
+    schemaVersion: 1,
+    id: "cfpa",
+    source: {
+      id: "cfpa",
+      root: "/fixture/cfpa",
+      repository: cfpaSource.repository,
+      commit: cfpaSource.commit,
+      converterVersion: cfpaSource.converterVersion,
+      files: cfpaSource.files,
+      license: cfpaSource.license,
+    },
+    corpora: {
+      en: {
+        language: "en",
+        entries: [
+          corpusEntry("gui.done", "Save"),
+          corpusEntry("mco.account.privacyinfo", "data retention policy"),
+          corpusEntry("outside-content-types", "workspace"),
+        ],
+      },
+      "zh-CN": {
+        language: "zh-CN",
+        entries: [
+          corpusEntry("gui.done", "保存"),
+          corpusEntry("mco.account.privacyinfo", "未知"),
+          corpusEntry("outside-content-types", "工作区工作空间"),
+        ],
+      },
+      ja: {
+        language: "ja",
+        entries: [
+          corpusEntry("gui.done", "保存"),
+          corpusEntry("mco.account.privacyinfo", "情報"),
+          corpusEntry("outside-content-types", "作業空間"),
+        ],
+      },
+    },
+    comparison: {
+      groups: [
+        {
+          ref: "gui.done",
+          source: {
+            language: "en",
+            fragments: [{ ref: "gui.done", text: "Save" }],
+          },
+          target: {
+            language: "zh-CN",
+            fragments: [{ ref: "gui.done", text: "保存" }],
+          },
+        },
+        {
+          ref: "mco.account.privacyinfo",
+          source: {
+            language: "en",
+            fragments: [
+              { ref: "mco.account.privacyinfo", text: "data retention policy" },
+            ],
+          },
+          target: {
+            language: "zh-CN",
+            fragments: [{ ref: "mco.account.privacyinfo", text: "未知" }],
+          },
+        },
+        {
+          ref: "outside-content-types",
+          source: {
+            language: "en",
+            fragments: [{ ref: "outside-content-types", text: "workspace" }],
+          },
+          target: {
+            language: "zh-CN",
+            fragments: [
+              { ref: "outside-content-types", text: "工作区工作空间" },
+            ],
+          },
+        },
+      ],
+    },
+    referenceTermbase: {
+      concepts: [
+        {
+          id: "save",
+          languages: [
+            {
+              language: "en",
+              expressions: [
+                { id: "save-en", text: "Save", usage: "preferred" },
+              ],
+            },
+            {
+              language: "zh-CN",
+              expressions: [{ id: "save-zh", text: "保存", usage: "allowed" }],
+            },
+          ],
+        },
+        {
+          id: "retention-policy",
+          languages: [
+            {
+              language: "en",
+              expressions: [
+                {
+                  id: "retention-policy-en",
+                  text: "data retention policy",
+                  usage: "preferred",
+                },
+              ],
+            },
+            {
+              language: "zh-CN",
+              expressions: [
+                {
+                  id: "retention-policy-zh",
+                  text: "数据保留政策",
+                  usage: "allowed",
+                },
+              ],
+            },
+          ],
+        },
+        {
+          id: "workspace",
+          languages: [
+            {
+              language: "en",
+              expressions: [
+                { id: "workspace-en", text: "workspace", usage: "preferred" },
+              ],
+            },
+            {
+              language: "zh-CN",
+              expressions: [
+                { id: "workspace-zh", text: "工作区", usage: "allowed" },
+                {
+                  id: "workspace-forbidden",
+                  text: "工作空间",
+                  usage: "forbidden",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+    facts: {
+      textByLanguage: { en: facts, "zh-CN": facts, ja: facts },
+      termTableRows: 3,
+      convertedExpressionRecords: 6,
+      semanticConceptCount: "not-evaluated",
+      nonEmptyEnglishChineseGroups: 3,
+      missingChineseTargets: 0,
+    },
+    selections: cfpaSelections,
+    contentTypes: contentTypeSelection.cfpa,
+  };
 }
 
 async function waitForReport(
@@ -117,6 +294,34 @@ void describe("术语质量评估入口", () => {
             readonly domain: { readonly status: string };
             readonly inputSha256?: string;
             readonly metrics: Record<string, { readonly status: string }>;
+            readonly evidence: {
+              readonly scenario: {
+                readonly languagePair: {
+                  readonly sourceLanguage: string;
+                  readonly targetLanguage: string;
+                };
+                readonly paragraphSamples: {
+                  readonly discovery: {
+                    readonly language: string;
+                    readonly status: string;
+                    readonly statistics: { readonly entries: number };
+                    readonly selectedRefs: readonly string[];
+                    readonly expectedCandidate: {
+                      readonly text: string;
+                      readonly occurrences: number;
+                      readonly range: {
+                        readonly start: number;
+                        readonly end: number;
+                      };
+                    };
+                    readonly excludedUiCandidate: {
+                      readonly text: string;
+                      readonly present: boolean;
+                    };
+                  };
+                };
+              };
+            };
           }
         >;
       };
@@ -137,6 +342,33 @@ void describe("术语质量评估入口", () => {
         firstReport.scenarios.controlled?.metrics.diagnosticAccuracy?.status,
         "not-evaluated",
       );
+      assert.deepEqual(
+        firstReport.scenarios.controlled?.evidence.scenario.languagePair,
+        { sourceLanguage: "en", targetLanguage: "zh-CN" },
+      );
+      const paragraphDiscovery =
+        firstReport.scenarios.controlled?.evidence.scenario.paragraphSamples
+          .discovery;
+      assert.equal(paragraphDiscovery?.status, "complete");
+      assert.equal(paragraphDiscovery?.language, "en");
+      assert.equal(paragraphDiscovery?.statistics.entries, 2);
+      assert.deepEqual(paragraphDiscovery?.selectedRefs, [
+        "paragraph-long",
+        "paragraph-ambiguous",
+      ]);
+      assert.equal(
+        paragraphDiscovery?.expectedCandidate.text,
+        "data retention policy",
+      );
+      assert.equal(paragraphDiscovery?.expectedCandidate.occurrences, 1);
+      assert.deepEqual(paragraphDiscovery?.expectedCandidate.range, {
+        start: 2,
+        end: 23,
+      });
+      assert.deepEqual(paragraphDiscovery?.excludedUiCandidate, {
+        text: "workspace",
+        present: false,
+      });
       assert.equal(
         firstReport.scenarios.cfpa?.execution.status,
         "not-executed",
@@ -160,6 +392,159 @@ void describe("术语质量评估入口", () => {
         rm(secondRoot, { recursive: true, force: true }),
       ]);
     }
+  });
+
+  void it("CFPA 按 manifest 显式范围报告英语到简中的 UI 与段落", async () => {
+    const report = await runCfpaScenario(cfpaScenarioInput(), "f".repeat(64));
+    assert.equal(report.execution.status, "passed");
+    const evidence = report.evidence as {
+      readonly termReferenceRun: {
+        readonly languagePair: {
+          readonly sourceLanguage: string;
+          readonly targetLanguage: string;
+        };
+        readonly comparisonGroups: number;
+        readonly problemCount: number;
+      };
+      readonly intervalRecognition: {
+        readonly languagePair: {
+          readonly sourceLanguage: string;
+          readonly targetLanguage: string;
+        };
+        readonly comparisonGroups: number;
+      };
+      readonly contentTypeAnalysis: {
+        readonly languagePair: {
+          readonly sourceLanguage: string;
+          readonly targetLanguage: string;
+        };
+        readonly ui: {
+          readonly selection: {
+            readonly selectedKeys: readonly string[];
+            readonly requestedKeyCount: number;
+            readonly matchedComparisonGroups: number;
+            readonly missingKeys: readonly string[];
+          };
+          readonly assessment: {
+            readonly problemCount: number;
+          };
+          readonly intervalRecognition: {
+            readonly comparisonGroups: number;
+            readonly sourceCertainMatchCount: number;
+            readonly targetCertainMatchCount: number;
+          };
+        };
+        readonly paragraph: {
+          readonly selection: {
+            readonly selectedKeys: readonly string[];
+            readonly requestedKeyCount: number;
+            readonly matchedComparisonGroups: number;
+            readonly missingKeys: readonly string[];
+          };
+          readonly assessment: {
+            readonly problemCount: number;
+            readonly problemCodes: Readonly<Record<string, number>>;
+          };
+          readonly intervalRecognition: {
+            readonly comparisonGroups: number;
+            readonly sourceCertainMatchCount: number;
+            readonly targetCertainMatchCount: number;
+          };
+        };
+      };
+      readonly languages: Readonly<
+        Record<
+          string,
+          { readonly referenceOverlap: { readonly status: string } }
+        >
+      >;
+    };
+
+    const languagePair = { sourceLanguage: "en", targetLanguage: "zh-CN" };
+    assert.deepEqual(evidence.termReferenceRun.languagePair, languagePair);
+    assert.deepEqual(evidence.intervalRecognition.languagePair, languagePair);
+    assert.deepEqual(evidence.contentTypeAnalysis.languagePair, languagePair);
+    assert.equal(evidence.termReferenceRun.comparisonGroups, 3);
+    assert.equal(evidence.termReferenceRun.problemCount, 2);
+    assert.equal(evidence.intervalRecognition.comparisonGroups, 3);
+
+    assert.deepEqual(
+      evidence.contentTypeAnalysis.ui.selection.selectedKeys,
+      contentTypeSelection.cfpa.ui,
+    );
+    assert.equal(
+      evidence.contentTypeAnalysis.ui.selection.requestedKeyCount,
+      11,
+    );
+    assert.equal(
+      evidence.contentTypeAnalysis.ui.selection.matchedComparisonGroups,
+      1,
+    );
+    assert.equal(
+      evidence.contentTypeAnalysis.ui.selection.missingKeys.length,
+      10,
+    );
+    assert.equal(evidence.contentTypeAnalysis.ui.assessment.problemCount, 0);
+    assert.equal(
+      evidence.contentTypeAnalysis.ui.intervalRecognition.comparisonGroups,
+      1,
+    );
+    assert.equal(
+      evidence.contentTypeAnalysis.ui.intervalRecognition
+        .sourceCertainMatchCount,
+      1,
+    );
+    assert.equal(
+      evidence.contentTypeAnalysis.ui.intervalRecognition
+        .targetCertainMatchCount,
+      1,
+    );
+
+    assert.deepEqual(
+      evidence.contentTypeAnalysis.paragraph.selection.selectedKeys,
+      contentTypeSelection.cfpa.paragraph,
+    );
+    assert.equal(
+      evidence.contentTypeAnalysis.paragraph.selection.requestedKeyCount,
+      5,
+    );
+    assert.equal(
+      evidence.contentTypeAnalysis.paragraph.selection.matchedComparisonGroups,
+      1,
+    );
+    assert.equal(
+      evidence.contentTypeAnalysis.paragraph.selection.missingKeys.length,
+      4,
+    );
+    assert.equal(
+      evidence.contentTypeAnalysis.paragraph.assessment.problemCount,
+      1,
+    );
+    assert.equal(
+      evidence.contentTypeAnalysis.paragraph.assessment.problemCodes[
+        "missing-allowed-translation"
+      ],
+      1,
+    );
+    assert.equal(
+      evidence.contentTypeAnalysis.paragraph.intervalRecognition
+        .comparisonGroups,
+      1,
+    );
+    assert.equal(
+      evidence.contentTypeAnalysis.paragraph.intervalRecognition
+        .sourceCertainMatchCount,
+      1,
+    );
+    assert.equal(
+      evidence.contentTypeAnalysis.paragraph.intervalRecognition
+        .targetCertainMatchCount,
+      0,
+    );
+    assert.equal(
+      evidence.languages.ja?.referenceOverlap.status,
+      "not-evaluated",
+    );
   });
 
   void it("显式启用但缺失的外部语料会失败并保留报告", async () => {

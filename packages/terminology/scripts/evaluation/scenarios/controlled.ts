@@ -188,6 +188,20 @@ const discoveryCorpus: TermDiscoveryCorpus = Object.freeze({
     },
   ]),
 });
+const paragraphDiscoveryRefs = Object.freeze([
+  "paragraph-long",
+  "paragraph-ambiguous",
+]);
+const paragraphDiscoveryCorpus: TermDiscoveryCorpus = Object.freeze({
+  language: "en",
+  entries: Object.freeze(
+    comparison.groups.flatMap(({ ref, source }) =>
+      typeof ref === "string" && paragraphDiscoveryRefs.includes(ref)
+        ? [Object.freeze({ ref, fragments: source.fragments })]
+        : [],
+    ),
+  ),
+});
 
 export type ControlledGeneration = {
   readonly seed: number;
@@ -304,6 +318,12 @@ export async function runControlledScenario(
     maxWords: 1,
     minOccurrences: 2,
   });
+  const paragraphDiscovery = await discoverTerms(paragraphDiscoveryCorpus, {
+    maxWords: 3,
+    maxCharacters: 80,
+    minOccurrences: 1,
+    limit: 1_000,
+  });
   const generatedDiscovery = await discoverTerms(generatedCorpus, {
     maxWords: 2,
     maxCharacters: 40,
@@ -318,6 +338,12 @@ export async function runControlledScenario(
     ({ groupIndex }) => groupIndex === 1,
   );
   const candidate = discovery.candidates.find(
+    ({ text }) => text === "workspace",
+  );
+  const paragraphCandidate = paragraphDiscovery.candidates.find(
+    ({ text }) => text === "data retention policy",
+  );
+  const excludedUiCandidate = paragraphDiscovery.candidates.find(
     ({ text }) => text === "workspace",
   );
   const unicodeMatch = analysis.groups[3]!.source.certain.find(
@@ -346,6 +372,15 @@ export async function runControlledScenario(
   assert.equal(candidate.occurrences, 2);
   assert.equal(candidate.entryCount, 2);
   assert.deepEqual(candidate.examples[0]!.range, { start: 5, end: 14 });
+  assert.equal(paragraphDiscovery.status, "complete");
+  assert.equal(paragraphDiscovery.statistics.entries, 2);
+  assert.ok(paragraphCandidate);
+  assert.equal(paragraphCandidate.occurrences, 1);
+  assert.deepEqual(paragraphCandidate.examples[0]!.range, {
+    start: 2,
+    end: 23,
+  });
+  assert.equal(excludedUiCandidate, undefined);
   assert.ok(unicodeMatch);
   assert.deepEqual(unicodeMatch.range, { start: 3, end: 12 });
   assert.ok(longMatch);
@@ -389,6 +424,10 @@ export async function runControlledScenario(
     }),
     evidence: Object.freeze({
       source: "self-authored deterministic cases; no external data",
+      languagePair: Object.freeze({
+        sourceLanguage: "en",
+        targetLanguage: "zh-CN",
+      }),
       policies: Object.freeze({
         assessmentRules: Object.freeze([
           "require-allowed-translation",
@@ -396,6 +435,12 @@ export async function runControlledScenario(
         ]),
         matching: "public default language policies",
         discovery: Object.freeze({ maxWords: 1, minOccurrences: 2 }),
+        paragraphDiscovery: Object.freeze({
+          maxWords: 3,
+          maxCharacters: 80,
+          minOccurrences: 1,
+          limit: 1_000,
+        }),
         generatedDiscovery: Object.freeze({
           maxWords: 2,
           maxCharacters: 40,
@@ -416,6 +461,21 @@ export async function runControlledScenario(
         refs: Object.freeze(["paragraph-long", "paragraph-ambiguous"]),
         longExpressionRange: longMatch.range,
         ambiguityCount: ambiguity.length,
+        discovery: Object.freeze({
+          language: paragraphDiscoveryCorpus.language,
+          status: paragraphDiscovery.status,
+          statistics: paragraphDiscovery.statistics,
+          selectedRefs: paragraphDiscoveryCorpus.entries.map(({ ref }) => ref),
+          expectedCandidate: Object.freeze({
+            text: paragraphCandidate.text,
+            occurrences: paragraphCandidate.occurrences,
+            range: paragraphCandidate.examples[0]!.range,
+          }),
+          excludedUiCandidate: Object.freeze({
+            text: "workspace",
+            present: excludedUiCandidate !== undefined,
+          }),
+        }),
       }),
       assessment: Object.freeze({
         status: assessment.status,
