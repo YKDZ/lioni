@@ -191,18 +191,24 @@ export async function validateWithStandardSchema<TInput, TOutput>(
 export function assertJsonValue(
   value: unknown,
   valueDescription: string,
+  options: { readonly omitUndefinedObjectProperties?: boolean } = {},
 ): asserts value is JsonValue {
-  snapshotJsonValue(value, valueDescription);
+  snapshotJsonValue(value, valueDescription, options);
 }
 
 export function snapshotJsonValue(
   value: unknown,
   valueDescription: string,
+  options: { readonly omitUndefinedObjectProperties?: boolean } = {},
 ): JsonValue {
-  return copyJsonValue(value, valueDescription);
+  return copyJsonValue(value, valueDescription, options);
 }
 
-function copyJsonValue(value: unknown, valueDescription: string): JsonValue {
+function copyJsonValue(
+  value: unknown,
+  valueDescription: string,
+  options: { readonly omitUndefinedObjectProperties?: boolean } = {},
+): JsonValue {
   const active = new Set<object>();
 
   function visit(current: unknown, path: string): JsonValue {
@@ -274,6 +280,11 @@ function copyJsonValue(value: unknown, valueDescription: string): JsonValue {
           !Object.hasOwn(descriptor, "value")
         )
           throw invalidJson(`${location}.${key}`);
+        if (
+          options.omitUndefinedObjectProperties === true &&
+          descriptor.value === undefined
+        )
+          continue;
         Object.defineProperty(result, key, {
           configurable: true,
           enumerable: true,

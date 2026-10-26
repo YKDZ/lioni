@@ -21,13 +21,15 @@ import {
 } from "./source-schema.ts";
 
 type Unit = { id: string; source: string };
-type Translation = { id: string; text: string; sourceId?: string };
+type Translation = { id: string; text: JsonValue; sourceId?: string };
 
 function createScenario(
   options: {
     readonly sources?: readonly Unit[];
     readonly translations?: readonly Translation[];
+    readonly additionalTranslationExamples?: readonly Translation[];
     readonly withWriter?: boolean;
+    readonly sourceToContent?: (source: string) => JsonValue;
   } = {},
 ) {
   const state = {
@@ -67,10 +69,10 @@ function createScenario(
     id: "example",
     source: "Example",
   });
-  const translationSchema = schemaFromExamples<Translation>({
-    id: "example",
-    text: "Example",
-  });
+  const translationSchema = schemaFromExamples<Translation>(
+    { id: "example", text: "Example" },
+    ...(options.additionalTranslationExamples ?? []),
+  );
   const config = defineConfig<
     Unit,
     typeof sourceSchema,
@@ -97,7 +99,7 @@ function createScenario(
       },
     },
     keyOf: ({ id }) => id,
-    sourceToContent: (source) => source,
+    sourceToContent: options.sourceToContent ?? ((source) => source),
     compare: (input) => {
       counts.comparisons += 1;
       return defaultCompare(input);
@@ -160,8 +162,6 @@ function createScenario(
                 );
                 return;
               }
-              if (typeof request.content !== "string")
-                throw new TypeError("测试适配器只接受字符串正文。");
               const existing = state.translations.find(
                 (translation) => translation.id === key,
               );
@@ -192,6 +192,31 @@ function sampleTranslation(id = "A"): Translation {
 }
 
 void describe("apply update plan", () => {
+  void it("保存并执行计划时保留合法 JSON 正文的自有原型保留键", async () => {
+    const content = JSON.parse(
+      '{"__proto__":"Hello","safe":"yes"}',
+    ) as JsonValue;
+    const scenario = createScenario({
+      sources: [{ id: "A", source: JSON.stringify(content) }],
+      additionalTranslationExamples: [{ id: "A", text: content }],
+      sourceToContent: (source) => JSON.parse(source) as JsonValue,
+    });
+
+    const plan = await previewUpdate(scenario.config);
+    const item = plan.items[0];
+    assert.equal(item?.action, "write");
+    if (item?.action !== "write") return;
+    assert.deepEqual(item.after.content, content);
+    assert.deepEqual(item.request.content, content);
+    const restoredPlan = JSON.parse(JSON.stringify(plan)) as unknown;
+
+    const result = await applyUpdatePlan(restoredPlan, scenario.config);
+
+    assert.equal(result.status, "completed");
+    assert.equal(result.results[0]?.status, "written");
+    assert.deepEqual(scenario.state.translations, [{ id: "A", text: content }]);
+  });
+
   void it("executes one direct plan without re-comparing, rerunning policy, or advancing baseline", async () => {
     const scenario = createScenario({ sources: [sampleSource()] });
 

@@ -32,6 +32,7 @@ import type {
 } from "./semantic-edits.ts";
 import {
   assertJsonValue,
+  snapshotJsonValue,
   validateWithStandardSchema,
 } from "./standard-schema.ts";
 
@@ -267,6 +268,7 @@ export async function createUpdatePlan<
     compareInput,
     options.comparisons,
   );
+  assertUpdatePlanAssociations(options.associations);
   if (
     options.sourceToContent !== undefined &&
     typeof options.sourceToContent !== "function"
@@ -282,6 +284,8 @@ export async function createUpdatePlan<
     options.updatePolicy ??
     defaultUpdatePolicy<TUnit, TTranslation, TBody, TUnavailable>;
   const items = await policy(options);
+  // 先验证完整业务决定；后续省略只作用于框架已定义的可恢复 undefined。
+  assertUpdatePlanItems(items);
   const rawPlan = {
     format: UPDATE_PLAN_FORMAT,
     ...(options.previous === undefined ? {} : { previous: options.previous }),
@@ -290,12 +294,9 @@ export async function createUpdatePlan<
     associations: options.associations,
     items,
   };
-  const plan = omitUndefined(rawPlan, "更新计划") as UpdatePlan<
-    TUnit,
-    TTranslation,
-    TBody,
-    TUnavailable
-  >;
+  const plan = snapshotJsonValue(rawPlan, "更新计划", {
+    omitUndefinedObjectProperties: true,
+  }) as UpdatePlan<TUnit, TTranslation, TBody, TUnavailable>;
   validateUpdatePlan(plan);
   return plan;
 }
@@ -974,31 +975,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function omitUndefined<T>(value: T, description: string): T {
-  function visit(current: unknown, path: string): unknown {
-    if (current === undefined) return undefined;
-    if (Array.isArray(current))
-      return current.map((child, index) => {
-        if (child === undefined)
-          throw new TypeError(
-            `${description}${path}[${index}] 不能包含 undefined。`,
-          );
-        return visit(child, `${path}[${index}]`);
-      });
-    if (isRecord(current)) {
-      const result: Record<string, unknown> = {};
-      for (const [key, child] of Object.entries(current)) {
-        if (child !== undefined) result[key] = visit(child, `${path}.${key}`);
-      }
-      return result;
-    }
-    return current;
-  }
-  const json = visit(value, "");
-  assertJsonValue(json, description);
-  return json as T;
-}
-
 function isPlanAssociations(value: unknown): boolean {
   return (
     isRecord(value) &&
@@ -1010,6 +986,58 @@ function isPlanAssociations(value: unknown): boolean {
       (Array.isArray(value.currentFromPrevious) &&
         value.currentFromPrevious.every(isAssociation)))
   );
+}
+
+function assertUpdatePlanAssociations(value: unknown): void {
+  if (!isRecord(value)) {
+    assertJsonValue(value, "更新计划中的关联事实");
+    return;
+  }
+  const { currentFromPrevious, ...associations } = value;
+  assertJsonValue(
+    currentFromPrevious === undefined ? associations : value,
+    "更新计划中的关联事实",
+  );
+  if (currentFromPrevious !== undefined)
+    assertJsonValue(currentFromPrevious, "更新计划中的历史关联事实");
+}
+
+function assertUpdatePlanItems(value: unknown): void {
+  if (!Array.isArray(value)) {
+    assertJsonValue(value, "更新计划中的更新决定");
+    return;
+  }
+  const items = value.map((item) => {
+    if (!isRecord(item) || !isRecord(item.changes)) return item;
+    const { source, translations, ...changes } = item.changes;
+    return {
+      ...item,
+      changes: {
+        ...changes,
+        ...(source === undefined
+          ? {}
+          : { source: withoutUndefinedComparisonSides(source) }),
+        ...(translations === undefined
+          ? {}
+          : {
+              translations: Array.isArray(translations)
+                ? translations.map(withoutUndefinedComparisonSides)
+                : translations,
+            }),
+      },
+    };
+  });
+  assertJsonValue(items, "更新计划中的更新决定");
+}
+
+function withoutUndefinedComparisonSides(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  const { previous, current, ...change } = value;
+  return {
+    ...change,
+    ...(previous === undefined ? {} : { previous }),
+    ...(current === undefined ? {} : { current }),
+  };
 }
 
 function isPlanItem(value: unknown): boolean {

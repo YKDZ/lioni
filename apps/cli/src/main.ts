@@ -298,16 +298,16 @@ function comparisonStatusText(status: string): string {
   );
 }
 
+const updateActionNames: Readonly<Record<string, string>> = {
+  write: "补入待译占位",
+  delete: "删除译文",
+  retain: "保留",
+  review: "待复核",
+  blocked: "暂不可执行",
+};
+
 function updatePlanText(value: unknown): ReturnType<typeof text.lines> {
   const plan = value as UpdatePlan;
-  const actionNames = {
-    write: "补入待译占位",
-    delete: "删除译文",
-    retain: "保留",
-    review: "待复核",
-    blocked: "暂不可执行",
-  } as const;
-
   const decidedSourceKeys = new Set(
     plan.items.flatMap((item) =>
       item.changes.source === undefined ? [] : [item.changes.source.key],
@@ -341,7 +341,9 @@ function updatePlanText(value: unknown): ReturnType<typeof text.lines> {
         item.sourceKey === undefined
           ? `${item.target?.namespace ?? "目标"}:${item.target?.key ?? "多条"}（${item.language}）`
           : `${item.sourceKey} → ${item.language}`;
-      const lines = [`${actionNames[item.action]} ${subject}：${item.reason}`];
+      const lines = [
+        `${updateActionNames[item.action] ?? "更新"} ${subject}：${item.reason}`,
+      ];
       if (item.changes.source !== undefined) {
         const { previous, current, status } = item.changes.source;
         lines.push(
@@ -433,6 +435,16 @@ function updateResultText(value: unknown): ReturnType<typeof text.lines> {
       readonly reason?: string;
     }[];
   };
+  const statusNames: Readonly<Record<string, string>> = {
+    written: "已写入",
+    writeUnconfirmed: "写入结果未确认",
+    conflict: "目标已变化，未写入",
+    notWritable: "当前无法写入",
+    writeFailed: "写入失败",
+    retained: "已保留",
+    review: "待复核",
+    blocked: "暂不可执行",
+  };
   return text.lines([
     `更新执行${result.status === "completed" ? "完成" : "未完整完成"}：${result.results.length} 项决定。`,
     ...result.results.map(({ index, action, status, reason }) => {
@@ -443,7 +455,7 @@ function updateResultText(value: unknown): ReturnType<typeof text.lines> {
           : item.sourceKey === undefined
             ? `${item.target?.namespace ?? "目标"}:${item.target?.key ?? "多条"}（${item.language}）`
             : `${item.sourceKey} → ${item.language}`;
-      return `${action} ${subject}：${status}${reason === undefined ? "" : `；${reason}`}`;
+      return `${updateActionNames[action] ?? "更新"} ${subject}：${statusNames[status] ?? "未完成"}${reason === undefined ? "" : `；${reason}`}`;
     }),
   ]);
 }

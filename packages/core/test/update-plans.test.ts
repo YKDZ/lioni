@@ -5,6 +5,7 @@ import {
   createUpdatePlan,
   defineConfig,
   defaultCompare,
+  defaultUpdatePolicy,
   previewUpdate,
   readFacts,
   readComparisonSnapshot,
@@ -13,9 +14,12 @@ import {
   type ComparisonBaseline,
   type ComparisonBaselineStore,
   type FrameworkConfig,
+  type JsonValue,
   type StandardSchemaV1,
+  type UpdatePlanItem,
 } from "../src/index.ts";
 import {
+  jsonValueSchema,
   schemaFromExamples,
   sourceSchemaFromExamples,
 } from "./source-schema.ts";
@@ -387,6 +391,104 @@ void describe("业务更新计划与预览", () => {
     assert.equal(batchSize, 2);
     assert.equal(plan.items.length, 2);
     assert.ok(plan.items.every(({ action }) => action === "retain"));
+  });
+
+  void it("策略返回的宿主对象不能在计划整理时被静默改成空对象", async () => {
+    for (const value of [new Date(0), new Map([["text", "value"]])]) {
+      const config = makeConfig([], [], {
+        updatePolicy: () => [
+          {
+            action: "retain",
+            language: "fr",
+            reason: "无需写入。",
+            changes: { translations: [] },
+            hostValue: value,
+          } as unknown as UpdatePlanItem<Unit, Translation, string>,
+        ],
+      });
+
+      await assert.rejects(previewUpdate(config), /更新计划/);
+    }
+  });
+
+  void it("自定义策略不能通过省略正文中的 undefined 生成合法计划", async () => {
+    const sourceSchema = sourceSchemaFromExamples<Unit>({
+      id: "welcome",
+      source: "Hello",
+    });
+    const translationSchema = schemaFromExamples<Translation>({
+      targetId: "example",
+      sourceId: "example",
+      text: "example",
+    });
+    const config = defineConfig<
+      Unit,
+      typeof sourceSchema,
+      typeof translationSchema,
+      never,
+      typeof jsonValueSchema
+    >({
+      source: {
+        schema: sourceSchema,
+        read: () => ({
+          scopes: [
+            {
+              range: "source/messages.json",
+              enumeration: "complete",
+              records: [
+                {
+                  value: { id: "welcome", source: "Hello" },
+                  bodyAvailability: "available",
+                },
+              ],
+            },
+          ],
+        }),
+      },
+      keyOf: ({ id }) => id,
+      sourceToContent: () => ({ safe: "yes" }),
+      updatePolicy: async (input) => {
+        const items = await defaultUpdatePolicy(input);
+        return items.map((item) =>
+          item.action === "write"
+            ? {
+                ...item,
+                request: {
+                  ...item.request,
+                  content: {
+                    safe: "yes",
+                    lost: undefined,
+                  } as unknown as JsonValue,
+                },
+              }
+            : item,
+        );
+      },
+      translations: {
+        languages: ["fr"],
+        schema: translationSchema,
+        contentSchema: jsonValueSchema,
+        identityOf: ({ targetId }) => ({
+          language: "fr",
+          namespace: "messages",
+          key: targetId,
+        }),
+        contentOf: ({ text }) => text,
+        matches: (unit, translation) => unit.id === translation.sourceId,
+        read: (_language, sourceUnits) => ({
+          scopes: [
+            {
+              range: "locales/fr.json",
+              covers: sourceUnits.map(({ key }) => key),
+              enumeration: "complete",
+              records: [],
+            },
+          ],
+        }),
+      },
+    });
+
+    await assert.rejects(previewUpdate(config), /更新计划.*JSON/);
   });
 
   void it("可组合读取事实、显式比较与纯计划计算入口", async () => {

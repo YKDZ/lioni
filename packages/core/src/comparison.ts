@@ -15,6 +15,7 @@ import type {
   TranslationReadFact,
   TranslationUnitInput,
 } from "./index.ts";
+import { assertJsonValue } from "./standard-schema.ts";
 
 export type CompareInput<
   TUnit extends TranslationUnitInput,
@@ -117,6 +118,7 @@ export function validateComparisonInput<
 >(
   value: unknown,
 ): asserts value is CompareInput<TUnit, TTranslation, TBody, TUnavailable> {
+  assertComparisonJsonValue(value, "比较输入", "input");
   if (!isRecord(value) || !Object.hasOwn(value, "previous"))
     invalidInput("比较输入必须提供 previous 与 current。");
 
@@ -134,6 +136,7 @@ export function validateComparisonResult<
   input: CompareInput<TUnit, TTranslation, TBody, TUnavailable>,
   value: unknown,
 ): asserts value is ComparisonResult<TUnit, TTranslation, TBody, TUnavailable> {
+  assertComparisonJsonValue(value, "比较结果", "result");
   if (!isRecord(value)) invalidResult("比较结果必须是对象。");
   if (!Array.isArray(value.sourceChanges))
     invalidResult("比较结果必须提供 sourceChanges 数组。");
@@ -834,6 +837,52 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function invalidInput(message: string): never {
   throw new ComparisonContractError("invalid-input", message);
+}
+
+function assertComparisonJsonValue(
+  value: unknown,
+  description: string,
+  kind: "input" | "result",
+): void {
+  let valueToValidate = value;
+  if (kind === "input" && isRecord(value)) {
+    const { previous, ...input } = value;
+    valueToValidate = previous === undefined ? input : value;
+  } else if (kind === "result" && isRecord(value)) {
+    const { sourceChanges, translationChanges, reads, ...result } = value;
+    valueToValidate = {
+      ...result,
+      sourceChanges: withoutUndefinedSides(sourceChanges),
+      translationChanges: withoutUndefinedSides(translationChanges),
+      reads: withoutUndefinedReadPrevious(reads),
+    };
+  }
+  try {
+    assertJsonValue(valueToValidate, description);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (kind === "input") invalidInput(message);
+    invalidResult(message);
+  }
+}
+
+function withoutUndefinedSides(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  return value.map((change) => {
+    if (!isRecord(change)) return change;
+    const { previous, current, ...rest } = change;
+    return {
+      ...rest,
+      ...(previous === undefined ? {} : { previous }),
+      ...(current === undefined ? {} : { current }),
+    };
+  });
+}
+
+function withoutUndefinedReadPrevious(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  const { previous, ...rest } = value;
+  return previous === undefined ? rest : value;
 }
 
 function invalidResult(message: string): never {

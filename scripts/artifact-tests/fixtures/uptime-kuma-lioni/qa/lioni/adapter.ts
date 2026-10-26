@@ -120,7 +120,13 @@ export async function loadKumaQaProject(files: KumaFiles, facts?: KumaFacts) {
     for (const fact of facts.translations.records) {
       if (fact.bodyAvailability !== "available") continue;
       const texts = factTexts.get(fact.language);
-      if (texts !== undefined) texts[fact.translation.key] = fact.content.text;
+      if (texts !== undefined)
+        Object.defineProperty(texts, fact.translation.key, {
+          configurable: true,
+          enumerable: true,
+          value: fact.content.text,
+          writable: true,
+        });
     }
   }
   const resources = new Map<
