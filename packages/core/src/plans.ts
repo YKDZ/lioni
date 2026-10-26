@@ -1,5 +1,14 @@
 import { isDeepStrictEqual } from "node:util";
 
+import type {
+  BodyAvailability,
+  CoverageStatus,
+  EnumerationCompleteness,
+  FrameworkConfig,
+  FrameworkFacts,
+  TranslationAssociationStatus,
+  TranslationUnitInput,
+} from "./index.ts";
 import {
   compareProcessingBaseline,
   validateProcessingBaseline,
@@ -10,16 +19,7 @@ import {
   type ProcessingBaselineSourceScope,
   type ProcessingBaselineTranslationScope,
   type ProcessingChangeStatus,
-} from "./baselines.ts";
-import type {
-  BodyAvailability,
-  CoverageStatus,
-  EnumerationCompleteness,
-  FrameworkConfig,
-  FrameworkFacts,
-  TranslationAssociationStatus,
-  TranslationUnitInput,
-} from "./index.ts";
+} from "./legacy-baselines.ts";
 import {
   prepareSemanticDeletion,
   prepareSemanticEdit,

@@ -1,5 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 
+import { readFacts } from "./index.ts";
+import type {
+  FrameworkConfig,
+  FrameworkFacts,
+  JsonValue,
+  TranslationUnitInput,
+} from "./index.ts";
 import {
   advanceProcessingBaseline,
   compareProcessingBaseline,
@@ -9,14 +16,7 @@ import {
   type ProcessingBaselineEntry,
   type ProcessingBaselineSelection,
   type ProcessingBaselineStore,
-} from "./baselines.ts";
-import { readFacts } from "./index.ts";
-import type {
-  FrameworkConfig,
-  FrameworkFacts,
-  JsonValue,
-  TranslationUnitInput,
-} from "./index.ts";
+} from "./legacy-baselines.ts";
 import {
   validateUpdatePlanHistory,
   type UpdatePlan,
