@@ -139,12 +139,7 @@ export function kanjiNumber(text: string): number {
     九: 9,
   };
   if (!/[十百千万]/u.test(text))
-    return Number(
-      text
-        .split("")
-        .map((char) => digits[char])
-        .join(""),
-    );
+    return Number(Array.from(text, (char) => digits[char]).join(""));
   let total = 0,
     section = 0,
     current = 0;
