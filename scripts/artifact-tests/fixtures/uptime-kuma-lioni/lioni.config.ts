@@ -17,26 +17,34 @@ export const files: KumaFiles = {
   ),
 };
 const analysis = createKumaAnalysis();
-const projects = new WeakMap<KumaFacts, ReturnType<typeof loadKumaQaProject>>();
-function projectForFacts(facts: KumaFacts) {
-  let project = projects.get(facts);
-  if (project === undefined) {
-    project = loadKumaQaProject(files, facts);
-    projects.set(facts, project);
+export function createKumaConfig(kumaFiles: KumaFiles) {
+  const projects = new WeakMap<
+    KumaFacts,
+    ReturnType<typeof loadKumaQaProject>
+  >();
+  function projectForFacts(facts: KumaFacts) {
+    let project = projects.get(facts);
+    if (project === undefined) {
+      project = loadKumaQaProject(kumaFiles, facts);
+      projects.set(facts, project);
+    }
+    return project;
   }
-  return project;
+
+  return defineConfig({
+    ...createKumaAdapter(kumaFiles),
+    sourceToContent: (source) => ({ text: source.text }),
+    qualityChecks: createLazyKumaQualityChecks(projectForFacts, (project) =>
+      createKumaQualityChecks(project, analysis),
+    ),
+    createQualityRequest: async (facts) => {
+      const kumaFacts = facts as KumaFacts;
+      return createKumaQualityRequest(
+        await projectForFacts(kumaFacts),
+        kumaFacts,
+      );
+    },
+  });
 }
 
-export default defineConfig({
-  ...createKumaAdapter(files),
-  qualityChecks: createLazyKumaQualityChecks(projectForFacts, (project) =>
-    createKumaQualityChecks(project, analysis),
-  ),
-  createQualityRequest: async (facts) => {
-    const kumaFacts = facts as KumaFacts;
-    return createKumaQualityRequest(
-      await projectForFacts(kumaFacts),
-      kumaFacts,
-    );
-  },
-});
+export default createKumaConfig(files);

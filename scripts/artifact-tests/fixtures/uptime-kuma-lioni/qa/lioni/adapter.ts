@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -6,7 +7,10 @@ import type {
   FrameworkConfig,
   FrameworkFacts,
   StandardSchemaV1,
+  TranslationIdentity,
   TranslationIdentityParts,
+  TranslationWriteRequest,
+  TranslationWritebackResolution,
 } from "@lioni/core";
 import { loadTermbaseYaml } from "@lioni/terminology/node";
 
@@ -235,17 +239,101 @@ const translationSchema = schema<Translation>(
     typeof v.language === "string",
 );
 const contentSchema = schema<Body>(
-  (v): v is Body =>
-    record(v) &&
-    typeof v.text === "string" &&
-    typeof v.language === "string" &&
-    typeof v.resourceKey === "string",
+  (v): v is Body => record(v) && typeof v.text === "string",
 );
 
 /** 每次正式操作均重读 Kuma 原始 JSON；QA 资料由独立准备入口加载。 */
 export function createKumaAdapter(files: KumaFiles) {
   const sourceUrl = resourceUrl(files.catalog, files.catalog.source);
-  const sourceRange = resourceRange(fileURLToPath(files.root), sourceUrl);
+  const root = fileURLToPath(files.root);
+  const sourceRange = resourceRange(root, sourceUrl);
+  function targetLocation(identity: TranslationIdentity) {
+    if (!files.catalog.targets.includes(identity.language)) return undefined;
+    const url = resourceUrl(files.catalog, identity.language);
+    const range = resourceRange(root, url);
+    return identity.namespace === range
+      ? { url, range, language: identity.language, key: identity.key }
+      : undefined;
+  }
+  function writerLocator(value: unknown): WriterLocator {
+    if (
+      !record(value) ||
+      typeof value.language !== "string" ||
+      typeof value.key !== "string"
+    )
+      throw new Error("Kuma JSON 写入目标定位无效。");
+    if (!files.catalog.targets.includes(value.language))
+      throw new Error(`Kuma JSON 写入目标语言未配置：${value.language}`);
+    return { language: value.language, key: value.key };
+  }
+  async function writeRequest(
+    request: TranslationWriteRequest<Body, Unit>,
+    target: { readonly kind: "existing" | "create"; readonly locator: unknown },
+  ): Promise<void> {
+    const locator = writerLocator(target.locator);
+    const url = resourceUrl(files.catalog, locator.language);
+    const current = await readResource(url, locator.language);
+    if (request.operation === "write") {
+      if ("sourceKey" in request.target) {
+        if (
+          target.kind !== "create" ||
+          request.target.language !== locator.language ||
+          request.target.sourceKey !== locator.key ||
+          request.expectedTarget.status !== "missing"
+        )
+          throw new Error("Kuma JSON 新建目标与请求不匹配。");
+        if (Object.hasOwn(current, locator.key))
+          throw new Error(`Kuma JSON 新建目标已存在：${locator.key}`);
+      } else {
+        const location = targetLocation(request.target.identity);
+        if (
+          target.kind !== "existing" ||
+          location === undefined ||
+          location.language !== locator.language ||
+          location.key !== locator.key ||
+          request.expectedTarget.status !== "present"
+        )
+          throw new Error("Kuma JSON 现有目标与请求不匹配。");
+        if (
+          !Object.hasOwn(current, locator.key) ||
+          current[locator.key] !== request.expectedTarget.content.text
+        )
+          throw new Error(`Kuma JSON 现有目标正文已变化：${locator.key}`);
+        if (
+          request.expectedTarget.range !== undefined &&
+          request.expectedTarget.range !== location.range
+        )
+          throw new Error(`Kuma JSON 现有目标范围已变化：${locator.key}`);
+      }
+      Object.defineProperty(current, locator.key, {
+        configurable: true,
+        enumerable: true,
+        value: request.content.text,
+        writable: true,
+      });
+    } else {
+      const location = targetLocation(request.target.identity);
+      if (
+        target.kind !== "existing" ||
+        location === undefined ||
+        location.language !== locator.language ||
+        location.key !== locator.key
+      )
+        throw new Error("Kuma JSON 删除目标与请求不匹配。");
+      if (
+        !Object.hasOwn(current, locator.key) ||
+        current[locator.key] !== request.expectedTarget.content.text
+      )
+        throw new Error(`Kuma JSON 删除目标正文已变化：${locator.key}`);
+      if (
+        request.expectedTarget.range !== undefined &&
+        request.expectedTarget.range !== location.range
+      )
+        throw new Error(`Kuma JSON 删除目标范围已变化：${locator.key}`);
+      delete current[locator.key];
+    }
+    await writeJsonAtomically(url, current);
+  }
   return {
     source: {
       schema: sourceSchema,
@@ -270,11 +358,7 @@ export function createKumaAdapter(files: KumaFiles) {
       languages: [...files.catalog.targets],
       schema: translationSchema,
       contentSchema,
-      contentOf: (t) => ({
-        text: t.text,
-        language: t.language,
-        resourceKey: t.key,
-      }),
+      contentOf: (t) => ({ text: t.text }),
       identityOf: (
         translation: Translation,
         language: string,
@@ -306,17 +390,69 @@ export function createKumaAdapter(files: KumaFiles) {
       },
       matches: (u, t) => u.key === t.key,
     },
+    translationWriteback: {
+      locateExistingTarget: ({ identity, translation }) => {
+        const location = targetLocation(identity);
+        if (
+          location === undefined ||
+          translation.translation.key !== identity.key ||
+          translation.translation.language !== identity.language
+        )
+          return {
+            status: "notWritable",
+            reason: "Kuma JSON 目标身份与资源位置不匹配。",
+          } satisfies TranslationWritebackResolution;
+        return {
+          status: "located",
+          locator: { language: location.language, key: location.key },
+        } satisfies TranslationWritebackResolution;
+      },
+      locateNewTarget: ({ sourceKey, sourceUnit, language }) => {
+        if (
+          !files.catalog.targets.includes(language) ||
+          sourceUnit.key !== sourceKey
+        )
+          return {
+            status: "notWritable",
+            reason: "Kuma JSON 新建目标与源单元身份不匹配。",
+          } satisfies TranslationWritebackResolution;
+        return {
+          status: "located",
+          locator: { language, key: sourceKey },
+        } satisfies TranslationWritebackResolution;
+      },
+      write: ({ request, target }) => writeRequest(request, target),
+    },
   } satisfies Pick<
     FrameworkConfig<Unit, Translation, Body>,
-    "source" | "keyOf" | "translations"
+    "source" | "keyOf" | "translations" | "translationWriteback"
   >;
 }
 
+type WriterLocator = { readonly language: string; readonly key: string };
+
+async function writeJsonAtomically(
+  url: URL,
+  value: Readonly<Record<string, string>>,
+): Promise<void> {
+  const filename = fileURLToPath(url);
+  const temporary = `${filename}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, `${JSON.stringify(value, null, 4)}\n`, {
+      encoding: "utf8",
+      flag: "wx",
+    });
+    await rename(temporary, filename);
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
+
 export function createKumaQualityRequest(project: Project, facts: KumaFacts) {
-  const sourceTexts = new Map(
+  const sourceTexts = new Map<string, string>(
     facts.source.units.map(({ key, unit }) => [key, unit.source.text]),
   );
-  const targetTexts = new Map(
+  const targetTexts = new Map<string, string>(
     facts.translations.records.flatMap((fact) =>
       fact.bodyAvailability === "available"
         ? [
@@ -331,7 +467,7 @@ export function createKumaQualityRequest(project: Project, facts: KumaFacts) {
   return {
     candidates: project.policies.flatMap((policy) =>
       [
-        ...new Set([
+        ...new Set<string>([
           ...sourceTexts.keys(),
           ...Object.keys(policy.target),
           ...project.usages.entries.map((usage) => usage.key),
@@ -341,8 +477,6 @@ export function createKumaQualityRequest(project: Project, facts: KumaFacts) {
         language: policy.targetLanguage,
         content: {
           text: targetTexts.get(`${policy.targetLanguage}\u0000${key}`) ?? "",
-          language: policy.targetLanguage,
-          resourceKey: key,
         },
       })),
     ),

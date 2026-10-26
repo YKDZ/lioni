@@ -76,16 +76,9 @@ function createKumaConfig(input: Policy | readonly Policy[]) {
       ),
       contentSchema: schema<Body>(
         (value): value is Body =>
-          isRecord(value) &&
-          typeof value.text === "string" &&
-          typeof value.language === "string" &&
-          typeof value.resourceKey === "string",
+          isRecord(value) && typeof value.text === "string",
       ),
-      contentOf: (translation) => ({
-        text: translation.text,
-        language: translation.language,
-        resourceKey: translation.key,
-      }),
+      contentOf: (translation) => ({ text: translation.text }),
       identityOf: (translation, language) => ({
         namespace:
           byLanguage.get(language)?.targetRange ?? `fixtures/${language}.json`,
@@ -203,7 +196,7 @@ async function run(
       {
         sourceKey: key,
         language: "zh-CN",
-        content: { text: target, language: "zh-CN", resourceKey: key },
+        content: { text: target },
       },
     ],
   });
@@ -428,7 +421,7 @@ void test("不同业务的同形消息不互相约束，同范围差异仍提示
       {
         sourceKey: "Active",
         language: "zh-CN",
-        content: { text: "激活", language: "zh-CN", resourceKey: "Active" },
+        content: { text: "激活" },
       },
     ],
   });
@@ -447,11 +440,7 @@ void test("不同业务的同形消息不互相约束，同范围差异仍提示
       {
         sourceKey: "From Email",
         language: "zh-CN",
-        content: {
-          text: "发信人",
-          language: "zh-CN",
-          resourceKey: "From Email",
-        },
+        content: { text: "发信人" },
       },
     ],
   });
@@ -476,11 +465,7 @@ void test("推送URL的明确合法空格差异不产生消息族警告", async 
       {
         sourceKey: "Push URL",
         language: "zh-CN",
-        content: {
-          text: "推送 URL",
-          language: "zh-CN",
-          resourceKey: "Push URL",
-        },
+        content: { text: "推送 URL" },
       },
     ],
   });
@@ -543,7 +528,7 @@ void test("孤立的非法消息由语法检查报告，不污染其他消息族
     candidates: Object.entries(policy.target).map(([key, text]) => ({
       sourceKey: key,
       language: "zh-CN",
-      content: { text, language: "zh-CN", resourceKey: key },
+      content: { text },
     })),
   });
   assert.ok(result.diagnostics.some((d) => d.object.code === "message-syntax"));

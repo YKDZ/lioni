@@ -99,10 +99,18 @@ function requiredEnvironment(name: string): string {
   return value;
 }
 
-function retainOutput(current: string, chunk: Buffer): string {
-  const available = Math.max(0, maxOutputBytes - Buffer.byteLength(current));
-  if (available === 0) return current;
-  return current + chunk.subarray(0, available).toString("utf8");
+type CapturedOutput = { readonly chunks: Buffer[]; bytes: number };
+
+function retainOutput(current: CapturedOutput, chunk: Buffer): void {
+  const available = Math.max(0, maxOutputBytes - current.bytes);
+  if (available === 0) return;
+  const retained = chunk.subarray(0, available);
+  current.chunks.push(retained);
+  current.bytes += retained.byteLength;
+}
+
+function decodeOutput(value: CapturedOutput): string {
+  return Buffer.concat(value.chunks, value.bytes).toString("utf8");
 }
 
 function signalProcessTree(
@@ -145,8 +153,8 @@ export function runSubprocess(
       shell: options.shell ?? false,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    let stdout = "";
-    let stderr = "";
+    const stdout: CapturedOutput = { chunks: [], bytes: 0 };
+    const stderr: CapturedOutput = { chunks: [], bytes: 0 };
     let timedOut = false;
     let interrupted = false;
     let settled = false;
@@ -180,11 +188,11 @@ export function runSubprocess(
     };
 
     child.stdout.on("data", (chunk: Buffer) => {
-      stdout = retainOutput(stdout, chunk);
+      retainOutput(stdout, chunk);
       options.onStdout?.(chunk);
     });
     child.stderr.on("data", (chunk: Buffer) => {
-      stderr = retainOutput(stderr, chunk);
+      retainOutput(stderr, chunk);
       options.onStderr?.(chunk);
     });
     child.once("error", (error) => {
@@ -193,8 +201,8 @@ export function runSubprocess(
         args,
         status: null,
         signal: null,
-        stdout,
-        stderr,
+        stdout: decodeOutput(stdout),
+        stderr: decodeOutput(stderr),
         timedOut,
         interrupted,
         error: error.message,
@@ -206,8 +214,8 @@ export function runSubprocess(
         args,
         status,
         signal,
-        stdout,
-        stderr,
+        stdout: decodeOutput(stdout),
+        stderr: decodeOutput(stderr),
         timedOut,
         interrupted,
         error: undefined,
