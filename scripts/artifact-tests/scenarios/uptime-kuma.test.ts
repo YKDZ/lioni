@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
-import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
+import {
+  cp,
+  mkdir,
+  readFile,
+  rename,
+  symlink,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { test } from "node:test";
 
 import { testArtifactConsumer } from "../support/consumer.ts";
@@ -8,12 +18,20 @@ import type { ConsumerScenario } from "../support/consumer.ts";
 
 const expectedCommit = "d54e4619e52553416e292549f435cc7e57330c29";
 const packageNames = [
+  "@lioni/cli",
   "@lioni/core",
   "@lioni/checks",
   "@lioni/memo",
   "@lioni/terminology",
   "@lioni/text-analysis",
 ] as const;
+const hostDependencies = {
+  "@babel/parser": "7.29.9",
+  "@intlify/message-compiler": "11.2.8",
+  typescript: "5.9.3",
+  "@vue/compiler-dom": "3.4.38",
+  "@vue/compiler-sfc": "3.4.38",
+};
 
 type Artifact = {
   readonly name: string;
@@ -23,6 +41,46 @@ type Artifact = {
   readonly cachePath?: string;
   readonly cacheState?: string;
 };
+type CliEnvelope<TData> = {
+  readonly schemaVersion: string;
+  readonly command: string;
+  readonly kind: "data";
+  readonly variant: string;
+  readonly data: TData;
+};
+type ResourceFacts = {
+  readonly version: string;
+  readonly source: {
+    readonly units: readonly { readonly key: string }[];
+  };
+  readonly translations: {
+    readonly records: readonly {
+      readonly language: string;
+      readonly translation: { readonly key: string };
+    }[];
+  };
+  readonly associations: readonly {
+    readonly language: string;
+    readonly status: string;
+  }[];
+};
+type BaselineResult = {
+  readonly outcome: string;
+  readonly path: string;
+  readonly sourceUnitCount: number;
+  readonly translationRecordCount: number;
+};
+type QualityResult = {
+  readonly status: string;
+  readonly candidates: readonly { readonly language: string }[];
+  readonly diagnostics: readonly {
+    readonly ruleId: string;
+    readonly severity: string;
+    readonly object: { readonly language?: string };
+    readonly location: { readonly language: string | null };
+  }[];
+  readonly checks: readonly { readonly id: string }[];
+};
 
 const requiredEnvironment = (name: string): string => {
   const value = process.env[name];
@@ -30,19 +88,29 @@ const requiredEnvironment = (name: string): string => {
   return value;
 };
 
+function readEnvelope<TData>(stdout: string, command: string): TData {
+  const envelope: unknown = JSON.parse(stdout.trim());
+  assert.ok(envelope !== null && typeof envelope === "object");
+  const value = envelope as CliEnvelope<TData>;
+  assert.equal(value.kind, "data");
+  assert.equal(value.command, command);
+  return value.data;
+}
+
 const scenarioOptions = {
-  name: "固定 Uptime Kuma 宿主使用同批正式制品执行本地化 QA 与写回复读",
+  name: "固定 Uptime Kuma 使用同批 CLI 和 SDK 制品读取、记录基线并运行真实 QA",
   packages: packageNames,
+  additionalDependencies: hostDependencies,
   fixtures: new URL("../fixtures/uptime-kuma-lioni/", import.meta.url),
   timeoutMs: 15 * 60 * 1000,
 };
 
 const runKumaScenario: ConsumerScenario = async ({
   root,
-  runNode,
   runCommand,
   typecheck,
 }) => {
+  const wholeRunStarted = performance.now();
   const fixtureTypes = await typecheck();
   assert.equal(fixtureTypes.status, 0);
 
@@ -98,6 +166,15 @@ const runKumaScenario: ConsumerScenario = async ({
   const hostQaRoot = path.join(hostRoot, "qa", "lioni");
   await mkdir(hostQaRoot, { recursive: true });
   await cp(path.join(root, "qa", "lioni"), hostQaRoot, { recursive: true });
+  await cp(
+    path.join(root, "lioni.config.ts"),
+    path.join(hostRoot, "lioni.config.ts"),
+  );
+  await cp(
+    path.join(root, "src", "lang", "lioni"),
+    path.join(hostRoot, "src", "lang", "lioni"),
+    { recursive: true },
+  );
 
   const artifacts = JSON.parse(
     await readFile(requiredEnvironment("LIONI_ARTIFACT_MANIFEST"), "utf8"),
@@ -108,18 +185,18 @@ const runKumaScenario: ConsumerScenario = async ({
   assert.deepEqual(
     new Set(selectedArtifacts.map(({ name }) => name)),
     new Set(packageNames),
-    "宿主必须安装当前正式套件中的五个相关包。",
+    "宿主必须安装本轮同批 CLI 和 SDK 制品。",
   );
 
   const artifactDirectory = path.join(hostQaRoot, "artifacts");
   await mkdir(artifactDirectory, { recursive: true });
-  const dependencies: Record<string, string> = {};
+  const artifactDependencies: Record<string, string> = {};
   for (const artifact of selectedArtifacts) {
     const filename = path.basename(artifact.filename);
-    const localArtifact = path.join(artifactDirectory, filename);
-    await cp(artifact.filename, localArtifact);
-    dependencies[artifact.name] = `file:artifacts/${filename}`;
+    await cp(artifact.filename, path.join(artifactDirectory, filename));
+    artifactDependencies[artifact.name] = `file:artifacts/${filename}`;
   }
+  const dependencies = { ...artifactDependencies, ...hostDependencies };
   await writeFile(
     path.join(hostQaRoot, "package.json"),
     `${JSON.stringify(
@@ -129,6 +206,7 @@ const runKumaScenario: ConsumerScenario = async ({
         packageManager: "pnpm@12.9.1",
         type: "module",
         dependencies,
+        devDependencies: { "@types/node": "24.19.2" },
       },
       null,
       2,
@@ -136,7 +214,7 @@ const runKumaScenario: ConsumerScenario = async ({
   );
   await writeFile(
     path.join(hostQaRoot, "pnpm-workspace.yaml"),
-    `${JSON.stringify({ overrides: dependencies }, null, 2)}\n`,
+    `${JSON.stringify({ overrides: artifactDependencies }, null, 2)}\n`,
   );
   await writeFile(
     path.join(hostQaRoot, "artifacts.json"),
@@ -154,7 +232,6 @@ const runKumaScenario: ConsumerScenario = async ({
       2,
     )}\n`,
   );
-
   await runCommand("pnpm", [
     "--dir",
     hostQaRoot,
@@ -171,115 +248,129 @@ const runKumaScenario: ConsumerScenario = async ({
   ]);
 
   const tscExecutable = requiredEnvironment("LIONI_TSC_EXECUTABLE");
-  await runCommand(tscExecutable, [
+  const hostTypes = await runCommand(tscExecutable, [
     "--project",
     path.join(hostQaRoot, "tsconfig.json"),
     "--pretty",
     "false",
   ]);
-  const result = await runNode(path.join(hostQaRoot, "consumer.ts"));
-  const report = JSON.parse(result.stdout) as {
-    readonly host: {
-      readonly commit: string;
-      readonly applicationBuildStarted: boolean;
-      readonly applicationServerStarted: boolean;
-    };
-    readonly natural: {
-      readonly sourceLocale: {
-        readonly resource: string;
-        readonly entries: number;
-        readonly nonemptyEntries: number;
-      };
-      readonly localeStats: Record<
-        string,
-        {
-          readonly localeEntries: number;
-          readonly nonemptyLocaleEntries: number;
-          readonly pairedNonemptyEntries: number;
-          readonly uniqueSourceStrings: number;
-        }
-      >;
-      readonly allLocalePairs: number;
-      readonly uniqueSourceStringsAcrossTargets: number;
-      readonly candidateRuns: Record<string, unknown>;
-    };
-    readonly noAnalysis: {
-      readonly simpleCheck: string;
-      readonly emptyCandidates: string;
-    };
-    readonly controlledCorpus: {
-      readonly partial: {
-        readonly status: string;
-        readonly diagnostics: readonly unknown[];
-        readonly writeCondition: string;
-      };
-      readonly forbiddenCandidate: {
-        readonly writeCondition: string;
-        readonly exception: readonly unknown[];
-      };
-      readonly hostConditionedWrite: {
-        readonly status: string;
-        readonly applyStatus: string;
-        readonly rereadValue: string;
-      };
-      readonly heterogeneousBody: {
-        readonly negativeDiagnostics: readonly unknown[];
-      };
-    };
-  };
+  assert.equal(hostTypes.status, 0);
+  await runCommand("pnpm", [
+    "--dir",
+    hostQaRoot,
+    "exec",
+    "node",
+    "--test",
+    "test/checks.test.ts",
+    "test/declarations.test.ts",
+    "test/facts.test.ts",
+    "test/quantity-profiles.test.ts",
+  ]);
 
-  assert.equal(report.host.commit, expectedCommit);
-  assert.equal(report.host.applicationBuildStarted, false);
-  assert.equal(report.host.applicationServerStarted, false);
-  assert.deepEqual(report.natural.sourceLocale, {
-    resource: "src/lang/en.json",
-    entries: 1631,
-    nonemptyEntries: 1631,
-  });
-  assert.equal(report.natural.allLocalePairs, 4065);
-  assert.ok(
-    report.natural.uniqueSourceStringsAcrossTargets <
-      report.natural.allLocalePairs,
-    "语言配对数不能冒充独特原文数。",
+  const resourcePath = (language: string) =>
+    path.join(hostRoot, "src", "lang", `${language}.json`);
+  const sourceRaw = await readFile(resourcePath("en"));
+  const chineseRaw = await readFile(resourcePath("zh-CN"));
+  const termbasePath = path.join(hostRoot, "src", "lang", "lioni", "termbase");
+  const hiddenTermbasePath = `${termbasePath}.temporarily-hidden`;
+  const usageProbePath = path.join(hostRoot, "src", ".lioni-usage-probe.ts");
+  const configPath = "../../lioni.config.ts";
+  const cli = async (command: string) =>
+    runCommand("pnpm", [
+      "--dir",
+      hostQaRoot,
+      "exec",
+      "lioni",
+      command,
+      configPath,
+    ]);
+
+  let factsResult: ResourceFacts;
+  let baselineResult: BaselineResult;
+  let factsMs: number;
+  let baselineMs: number;
+  await rename(termbasePath, hiddenTermbasePath);
+  await symlink("missing-usage-source.ts", usageProbePath);
+  try {
+    const factsCommand = await cli("facts");
+    factsMs = factsCommand.durationMs;
+    factsResult = readEnvelope<ResourceFacts>(factsCommand.stdout, "facts");
+    const baselineCommand = await cli("baseline");
+    baselineMs = baselineCommand.durationMs;
+    baselineResult = readEnvelope<BaselineResult>(
+      baselineCommand.stdout,
+      "baseline",
+    );
+  } finally {
+    await unlink(usageProbePath).catch(() => undefined);
+    await rename(hiddenTermbasePath, termbasePath);
+  }
+
+  const sourceKeys = new Set(factsResult.source.units.map(({ key }) => key));
+  const chineseRecords = factsResult.translations.records.filter(
+    ({ language }) => language === "zh-CN",
   );
-  assert.deepEqual(
-    Object.fromEntries(
-      Object.entries(report.natural.localeStats).map(([language, item]) => [
-        language,
-        [item.pairedNonemptyEntries, item.uniqueSourceStrings],
-      ]),
+  const chineseKeys = new Set(
+    chineseRecords.map(({ translation }) => translation.key),
+  );
+  const missingChinese = factsResult.associations.filter(
+    ({ language, status }) => language === "zh-CN" && status === "missing",
+  ).length;
+  const chineseOnly = [...chineseKeys].filter(
+    (key) => !sourceKeys.has(key),
+  ).length;
+  assert.equal(factsResult.source.units.length, 1631);
+  assert.equal(chineseRecords.length, 1738);
+  assert.equal(missingChinese, 17);
+  assert.equal(chineseOnly, 124);
+  assert.equal(baselineResult.sourceUnitCount, 1631);
+  assert.equal(baselineResult.path, path.join(hostRoot, "lioni.baseline.json"));
+
+  const qaStarted = performance.now();
+  const qaCommand = await cli("qa");
+  const qaMs = performance.now() - qaStarted;
+  const quality = readEnvelope<QualityResult>(qaCommand.stdout, "qa");
+  assert.equal(quality.status, "complete");
+  assert.ok(quality.candidates.some(({ language }) => language === "zh-CN"));
+  assert.ok(
+    quality.checks.some(
+      ({ id }) => id === "terminology/reject-forbidden-translation",
     ),
-    {
-      "zh-CN": [1614, 1522],
-      "zh-TW": [1199, 1160],
-      ja: [1252, 1215],
-    },
-  );
-  assert.equal(report.controlledCorpus.partial.status, "incomplete");
-  assert.ok(report.controlledCorpus.partial.diagnostics.length > 0);
-  assert.equal(report.controlledCorpus.partial.writeCondition, "rejected");
-  assert.equal(
-    report.controlledCorpus.forbiddenCandidate.writeCondition,
-    "rejected",
-  );
-  assert.ok(report.controlledCorpus.forbiddenCandidate.exception.length > 0);
-  assert.equal(report.controlledCorpus.hostConditionedWrite.status, "passed");
-  assert.equal(
-    report.controlledCorpus.hostConditionedWrite.applyStatus,
-    "written",
-  );
-  assert.equal(
-    report.controlledCorpus.hostConditionedWrite.rereadValue,
-    "无法连接 {service}，代码 {code}。",
-  );
-  assert.ok(
-    report.controlledCorpus.heterogeneousBody.negativeDiagnostics.length > 0,
   );
 
-  const completeReport = {
+  const byLanguage = Object.fromEntries(
+    ["zh-CN", "ja"].map((language) => {
+      const diagnostics = quality.diagnostics.filter(
+        (diagnostic) =>
+          (diagnostic.object.language ?? diagnostic.location.language) ===
+          language,
+      );
+      return [
+        language,
+        {
+          candidates: quality.candidates.filter(
+            (candidate) => candidate.language === language,
+          ).length,
+          diagnostics: diagnostics.length,
+          errors: diagnostics.filter(({ severity }) => severity === "error")
+            .length,
+          warnings: diagnostics.filter(({ severity }) => severity === "warning")
+            .length,
+        },
+      ];
+    }),
+  );
+  assert.deepEqual(await readFile(resourcePath("en")), sourceRaw);
+  assert.deepEqual(await readFile(resourcePath("zh-CN")), chineseRaw);
+
+  const report = {
     status: "executed",
-    ...report,
-    artifactIdentity: selectedArtifacts.map(
+    host: {
+      commit: expectedCommit,
+      applicationBuildStarted: false,
+      applicationServerStarted: false,
+    },
+    artifacts: selectedArtifacts.map(
       ({ name, version, sha256, cachePath, cacheState }) => ({
         name,
         version,
@@ -289,11 +380,42 @@ const runKumaScenario: ConsumerScenario = async ({
       }),
     ),
     installation: {
-      consumer: "Uptime Kuma clone / qa/lioni",
+      consumer: "固定 Uptime Kuma 副本 / qa/lioni",
       packageManager: "pnpm",
       packages: packageNames,
-      artifactSources: "同一正式 suite manifest 中散列已校验的 tgz",
+      externalHostDependencies: hostDependencies,
+      artifactSources: "同一正式制品清单中散列已校验的 tgz",
     },
+    facts: {
+      version: factsResult.version,
+      sourceEntries: factsResult.source.units.length,
+      zhCNEntries: chineseRecords.length,
+      zhCNMissingSource: missingChinese,
+      zhCNTargetOnly: chineseOnly,
+    },
+    baseline: baselineResult,
+    quality: {
+      status: quality.status,
+      diagnostics: quality.diagnostics.length,
+      byLanguage,
+      checks: quality.checks.map(({ id }) => id),
+      findings: quality.diagnostics,
+    },
+    timings: {
+      conditions:
+        "Node 24、固定上游副本、已安装同批正式制品；不启动 Kuma 应用。",
+      factsReadAndAssociationMs: factsMs,
+      baselineReadAndRecordMs: baselineMs,
+      qaEndToEndMs: qaMs,
+      completeScenarioMs: performance.now() - wholeRunStarted,
+      hostTypecheckMs: hostTypes.durationMs,
+    },
+    environment: {
+      node: process.version,
+      platform: os.platform(),
+      arch: os.arch(),
+    },
+    resourcesUnchanged: true,
   };
 
   const resultDirectory = process.env.LIONI_ARTIFACT_RESULTS;
@@ -301,12 +423,10 @@ const runKumaScenario: ConsumerScenario = async ({
     await mkdir(resultDirectory, { recursive: true });
     await writeFile(
       path.join(resultDirectory, "uptime-kuma-report.json"),
-      `${JSON.stringify(completeReport, null, 2)}\n`,
+      `${JSON.stringify(report, null, 2)}\n`,
     );
   }
-  process.stdout.write(`${JSON.stringify(completeReport, null, 2)}\n`);
-  assert.ok(report.noAnalysis.simpleCheck.includes("未触发语言分析"));
-  assert.ok(report.noAnalysis.emptyCandidates.includes("未触发分析"));
+  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 };
 
 const explicitlySelected = (() => {

@@ -1,0 +1,142 @@
+import { isDeepStrictEqual } from "node:util";
+
+import {
+  defineQualityCheck,
+  type QualityCheckDefinition,
+  type QualityCheckOutcome,
+  type QualityObject,
+} from "@lioni/core";
+
+import type { KumaFacts } from "./adapter.ts";
+import type { Body, Project, Translation, Unit } from "./model.ts";
+
+type CheckDefinition = QualityCheckDefinition<
+  Unit,
+  Translation,
+  QualityObject,
+  Body,
+  never
+>;
+type PreparedCheck = Awaited<ReturnType<CheckDefinition["prepare"]>>;
+type Input = Parameters<PreparedCheck["check"]>[0];
+type Loader = (facts: KumaFacts) => Promise<Project>;
+type Factory = (project: Project) => readonly CheckDefinition[];
+
+const configurations = [
+  ["kuma/resource-contract", { version: 1 }],
+  ["kuma/vue-message-contract", { version: 1 }],
+  ["kuma/protected-literals", { version: 1 }],
+  ["kuma/quantities", { version: 1 }],
+  ["kuma/critical-copy-review", { version: 1 }],
+  [
+    "terminology/require-allowed-translation",
+    { rules: ["require-allowed-translation"] },
+  ],
+  [
+    "terminology/reject-forbidden-translation",
+    { rules: ["reject-forbidden-translation"] },
+  ],
+  [
+    "message-family-consistency",
+    { limits: { maxCategories: 6, maxSourcesPerCategory: 3 } },
+  ],
+] as const;
+
+const configSchema = {
+  "~standard": {
+    version: 1 as const,
+    vendor: "kuma-localization",
+    validate(value: unknown) {
+      return value !== null && typeof value === "object"
+        ? { value: value as { version: 1 } }
+        : { issues: [{ message: "Kuma QA 配置无效。" }] };
+    },
+  },
+};
+
+/** 复用 Lioni 的 prepare 边界，并按本次 facts 快照共享 QA 资料。 */
+export function createLazyKumaQualityChecks(
+  loadProject: Loader,
+  createChecks: Factory,
+): CheckDefinition[] {
+  const definitionsByProject = new WeakMap<
+    Project,
+    ReadonlyMap<string, CheckDefinition>
+  >();
+  const preparedByFacts = new WeakMap<
+    KumaFacts,
+    Map<string, Promise<PreparedCheck>>
+  >();
+
+  function definitions(project: Project): ReadonlyMap<string, CheckDefinition> {
+    let value = definitionsByProject.get(project);
+    if (value === undefined) {
+      value = new Map(createChecks(project).map((check) => [check.id, check]));
+      if (
+        value.size !== configurations.length ||
+        configurations.some(([id]) => !value!.has(id))
+      )
+        throw new Error("Kuma QA 检查器清单与按需接入声明不一致。");
+      definitionsByProject.set(project, value);
+    }
+    return value;
+  }
+
+  return configurations.map(([id, configuration]) => {
+    const placeholder = defineQualityCheck<
+      Unit,
+      Translation,
+      typeof configSchema,
+      QualityObject,
+      Body,
+      never
+    >({
+      id,
+      configurationSchema: configSchema,
+      configuration: { version: 1 },
+      check: async (): Promise<QualityCheckOutcome> => ({
+        status: "not-applicable",
+        diagnostics: [],
+        issues: [],
+        coverage: {
+          selected: 1,
+          evaluated: 0,
+          notApplicable: 1,
+          incomplete: 0,
+          failed: 0,
+        },
+      }),
+    });
+    return {
+      ...placeholder,
+      async prepare(): Promise<PreparedCheck> {
+        return {
+          configuration,
+          async check(input: Input) {
+            const facts = input.facts as KumaFacts;
+            let byId = preparedByFacts.get(facts);
+            if (byId === undefined) {
+              byId = new Map();
+              preparedByFacts.set(facts, byId);
+            }
+            let prepared = byId.get(id);
+            if (prepared === undefined) {
+              prepared = (async () => {
+                const project = await loadProject(facts);
+                const definition = definitions(project).get(id);
+                if (definition === undefined)
+                  throw new Error(`Kuma QA 缺少 ${id} 检查器。`);
+                const value = await definition.prepare();
+                if (!isDeepStrictEqual(value.configuration, configuration))
+                  throw new Error(`Kuma QA ${id} 配置与按需声明不一致。`);
+                return value;
+              })();
+              byId.set(id, prepared);
+            }
+            return (await prepared).check(input);
+          },
+        };
+      },
+    } satisfies CheckDefinition;
+  });
+}

@@ -80,6 +80,7 @@ export type Consumer = {
 export type ConsumerScenarioOptions = {
   readonly name: string;
   readonly packages: readonly string[];
+  readonly additionalDependencies?: Readonly<Record<string, string>>;
   readonly fixtures?: URL;
   readonly timeoutMs?: number;
 };
@@ -288,6 +289,7 @@ async function createConsumer(
   root: string,
   artifacts: readonly Artifact[],
   packages: readonly string[],
+  additionalDependencies: Readonly<Record<string, string>> | undefined,
   fixtures: URL | undefined,
   signal: AbortSignal,
 ): Promise<void> {
@@ -308,6 +310,7 @@ async function createConsumer(
       `file:${path.relative(root, filename).split(path.sep).join("/")}`,
     ]),
   );
+  const consumerDependencies = { ...dependencies, ...additionalDependencies };
   await writeFile(
     path.join(root, "package.json"),
     JSON.stringify(
@@ -316,7 +319,7 @@ async function createConsumer(
         private: true,
         packageManager: "pnpm@12.9.1",
         type: "module",
-        dependencies,
+        dependencies: consumerDependencies,
         devDependencies:
           fixtures === undefined ? {} : { "@types/node": "24.19.2" },
       },
@@ -407,6 +410,7 @@ export function testArtifactConsumer(
           consumerRoot,
           artifacts,
           options.packages,
+          options.additionalDependencies,
           options.fixtures,
           signal,
         );
