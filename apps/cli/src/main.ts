@@ -8,6 +8,7 @@ import {
   readCompletion,
   previewUpdate,
   recordComparisonBaseline,
+  update,
   type FrameworkConfig,
   type QualityRunResult,
   type TranslationUnitInput,
@@ -194,6 +195,13 @@ const baselineRecordSchema = toStandardJsonSchema(
 );
 const updatePlanSchema = toStandardJsonSchema(
   v.record(v.string(), v.unknown()),
+);
+const updateResultSchema = toStandardJsonSchema(
+  v.object({
+    plan: v.record(v.string(), v.unknown()),
+    status: v.picklist(["completed", "failed"]),
+    results: v.array(v.record(v.string(), v.unknown())),
+  }),
 );
 
 function readStatusText(status: string): string {
@@ -414,6 +422,32 @@ function updateIdentityKey(identity: {
   return JSON.stringify([identity.language, identity.namespace, identity.key]);
 }
 
+function updateResultText(value: unknown): ReturnType<typeof text.lines> {
+  const result = value as {
+    readonly plan: UpdatePlan;
+    readonly status: "completed" | "failed";
+    readonly results: readonly {
+      readonly index: number;
+      readonly action: string;
+      readonly status: string;
+      readonly reason?: string;
+    }[];
+  };
+  return text.lines([
+    `更新执行${result.status === "completed" ? "完成" : "未完整完成"}：${result.results.length} 项决定。`,
+    ...result.results.map(({ index, action, status, reason }) => {
+      const item = result.plan.items[index];
+      const subject =
+        item === undefined
+          ? `第 ${index + 1} 项`
+          : item.sourceKey === undefined
+            ? `${item.target?.namespace ?? "目标"}:${item.target?.key ?? "多条"}（${item.language}）`
+            : `${item.sourceKey} → ${item.language}`;
+      return `${action} ${subject}：${status}${reason === undefined ? "" : `；${reason}`}`;
+    }),
+  ]);
+}
+
 function displayJson(value: unknown): string {
   return value === undefined ? "无" : (JSON.stringify(value) ?? "无");
 }
@@ -525,7 +559,7 @@ function createCliContract(identity: CliCommandIdentity) {
         kind: "command",
         parent: "cli",
         name: "update",
-        description: "比较当前事实并预览更新决定，不修改资源。",
+        description: "预览更新决定，或按决定写入译文资源。",
         fields: {
           config: { kind: "positional", description: "宿主配置文件路径" },
           dryRun: {
@@ -546,6 +580,12 @@ function createCliContract(identity: CliCommandIdentity) {
               schema: updatePlanSchema,
               text: updatePlanText,
             },
+            applied: {
+              description: "更新执行结果",
+              exitCode: 0,
+              schema: updateResultSchema,
+              text: updateResultText,
+            },
           },
         },
         failures: {
@@ -555,6 +595,12 @@ function createCliContract(identity: CliCommandIdentity) {
             schema: toStandardJsonSchema(v.object({ message: v.string() })),
             text: ({ message }) => text.line(`更新预览失败：${message}`),
           },
+          applyFailed: {
+            description: "更新未完整执行",
+            exitCode: 1,
+            schema: updateResultSchema,
+            text: updateResultText,
+          },
         },
         async handler({ input, outcome }) {
           const configPath = path.resolve(process.cwd(), input.config);
@@ -562,15 +608,17 @@ function createCliContract(identity: CliCommandIdentity) {
             path.dirname(configPath),
             "lioni.baseline.json",
           );
-          if (input.dryRun !== true)
-            return outcome.failure.previewFailed({
-              message: "当前只支持预览，请使用 --dry-run。",
-            });
           try {
             const loaded = await loadConfig(configPath);
             return await loaded.use(async (config) => {
-              const plan = await previewUpdateForConfig(config, baselinePath);
-              return outcome.data.previewed(plan);
+              if (input.dryRun === true) {
+                const plan = await previewUpdateForConfig(config, baselinePath);
+                return outcome.data.previewed(plan);
+              }
+              const result = await updateForConfig(config, baselinePath);
+              return result.status === "completed"
+                ? outcome.data.applied(result)
+                : outcome.failure.applyFailed(result);
             });
           } catch (error) {
             return outcome.failure.previewFailed({
@@ -914,6 +962,24 @@ function previewUpdateForConfig<
     TUnavailable
   >(baselinePath);
   return previewUpdate(config, store);
+}
+
+function updateForConfig<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+  baselinePath: string,
+) {
+  const store = createFileComparisonBaselineStore<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable
+  >(baselinePath);
+  return update(config, store);
 }
 
 export async function runCli(runtime: CliRuntime): Promise<number> {

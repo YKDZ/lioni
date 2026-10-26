@@ -1,48 +1,130 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
-import { defineConfig } from "@lioni/core";
+import {
+  defineConfig,
+  type JsonValue,
+  type UpdatePlanItem,
+  type UpdatePolicy,
+} from "@lioni/core";
 
 import { isRecord, standardSchema } from "./schemas.ts";
 
-type Unit = { id: string; source: string };
-type Translation = {
+type SourceUnit = { id: string; source: string };
+type TargetTranslation = {
   targetId: string;
   sourceId: string;
   text: string;
   path: string;
+  writePath?: string;
 };
-const sourceSchema = standardSchema<Unit>(
-  (value): value is Unit =>
+
+const sourceSchema = standardSchema<SourceUnit>(
+  (value): value is SourceUnit =>
     isRecord(value) &&
     typeof value.id === "string" &&
     typeof value.source === "string",
 );
-const translationSchema = standardSchema<Translation>(
-  (value): value is Translation =>
+const translationSchema = standardSchema<TargetTranslation>(
+  (value): value is TargetTranslation =>
     isRecord(value) &&
     typeof value.targetId === "string" &&
     typeof value.sourceId === "string" &&
     typeof value.text === "string" &&
-    typeof value.path === "string",
+    typeof value.path === "string" &&
+    (value.writePath === undefined || typeof value.writePath === "string"),
 );
 const contentSchema = standardSchema<string>(
   (value): value is string => typeof value === "string",
 );
-
 const sourcePath = fileURLToPath(
   new URL("./resume-resources/source.json", import.meta.url),
 );
 const targetPath = (id: string) =>
-  fileURLToPath(
-    new URL("./resume-resources/fr/" + id + ".json", import.meta.url),
-  );
+  fileURLToPath(new URL(`./resume-resources/fr/${id}.json`, import.meta.url));
+
+const updatePolicy: UpdatePolicy<SourceUnit, TargetTranslation, string> = ({
+  current,
+  comparisons,
+  associations,
+}) => {
+  const items: UpdatePlanItem<SourceUnit, TargetTranslation, string>[] = [];
+  for (const change of comparisons.sourceChanges) {
+    if (change.status !== "modified" || change.current === undefined) continue;
+    const sourceUnit = current.source.units.find(
+      ({ key }) => key === change.key,
+    );
+    const association = associations.current.find(
+      ({ sourceKey, language }) =>
+        sourceKey === change.key && language === "fr",
+    );
+    const translationIndex = association?.translationIndexes[0];
+    const translation = current.translations.records.find(
+      ({ index }) => index === translationIndex,
+    );
+    const range =
+      sourceUnit === undefined
+        ? undefined
+        : current.source.read.scopes[sourceUnit.scopeIndex]?.range;
+    if (
+      sourceUnit === undefined ||
+      range === undefined ||
+      association?.status !== "matched" ||
+      translation?.bodyAvailability !== "available"
+    )
+      continue;
+
+    const base = {
+      sourceKey: sourceUnit.key,
+      language: "fr",
+      target: translation.identity,
+      changes: { source: change, translations: [] },
+    };
+    const content = "更新译文 " + sourceUnit.key;
+    if (translation.content === content) {
+      items.push({
+        ...base,
+        action: "retain",
+        reason: "当前译文已是本次计划的目标内容，保留已完成项。",
+      });
+      continue;
+    }
+    items.push({
+      ...base,
+      action: "write",
+      reason: "更新已确认变化的译文。",
+      after: { content },
+      request: {
+        operation: "write",
+        target: { identity: translation.identity },
+        content,
+        expectedSource: {
+          presence: "present",
+          key: sourceUnit.key,
+          unit: sourceUnit.unit,
+          content: sourceUnit.unit.source,
+          range: range as JsonValue,
+        },
+        expectedTarget: {
+          status: "present",
+          identity: translation.identity,
+          content: translation.content,
+          range: translation.range as JsonValue,
+          record: translation.translation,
+        },
+      },
+    });
+  }
+  return items;
+};
 
 export default defineConfig({
   source: {
     schema: sourceSchema,
     async read() {
-      const records = JSON.parse(await readFile(sourcePath, "utf8")) as Unit[];
+      const records = JSON.parse(
+        await readFile(sourcePath, "utf8"),
+      ) as SourceUnit[];
       return {
         scopes: [
           {
@@ -50,7 +132,7 @@ export default defineConfig({
             enumeration: "complete",
             records: records.map((value) => ({
               value,
-              bodyAvailability: "available",
+              bodyAvailability: "available" as const,
             })),
           },
         ],
@@ -72,7 +154,7 @@ export default defineConfig({
         sourceUnits.map(async ({ unit }) => {
           const path = targetPath(unit.id);
           const value = JSON.parse(await readFile(path, "utf8")) as Omit<
-            Translation,
+            TargetTranslation,
             "path"
           >;
           return {
@@ -94,40 +176,33 @@ export default defineConfig({
     },
     matches: (unit, translation) => unit.id === translation.sourceId,
   },
-  updatePolicy: ({ sourceKey, language, change }) =>
-    change === "changed"
-      ? process.argv[2] === "replan-retain" && sourceKey === "C"
-        ? { action: "retain", reason: "保留当前译文并处理本次变化。" }
-        : {
-            action: "candidate",
-            candidate: {
-              sourceKey,
-              language,
-              content: "更新译文 " + sourceKey,
-            },
-          }
-      : { action: "none" },
+  updatePolicy,
   translationWriteback: {
     locateExistingTarget: ({ translation }) => ({
       status: "located",
-      locator: { path: translation.translation.path },
+      locator: {
+        path: translation.translation.writePath ?? translation.translation.path,
+      },
     }),
     locateNewTarget: () => ({
       status: "notWritable",
       reason: "此场景只修改已有译文。",
     }),
-    async write({ edit, currentTranslation }) {
-      if (currentTranslation === undefined || typeof edit.content !== "string")
-        throw new TypeError("恢复场景需要字符串候选和现有译文。");
+    async write({ request, target, currentTranslation }) {
+      if (
+        request.operation !== "write" ||
+        typeof request.content !== "string" ||
+        currentTranslation === undefined
+      )
+        throw new TypeError("恢复场景需要现有译文和字符串写入请求。");
+      const locator = target.locator;
+      if (!isRecord(locator) || typeof locator.path !== "string")
+        throw new TypeError("恢复场景的目标定位缺少资源路径。");
       const value = JSON.parse(
         await readFile(currentTranslation.translation.path, "utf8"),
       ) as Record<string, unknown>;
-      value.text = edit.content;
-      await writeFile(
-        currentTranslation.translation.path,
-        JSON.stringify(value) + "\n",
-        "utf8",
-      );
+      value.text = request.content;
+      await writeFile(locator.path, JSON.stringify(value) + "\n", "utf8");
     },
   },
 });

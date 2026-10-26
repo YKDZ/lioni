@@ -42,11 +42,6 @@ const otherTargetPath = new URL(
   "./deletion-resources/other.json",
   import.meta.url,
 );
-const dependencyPath = new URL(
-  "./deletion-resources/dependencies.json",
-  import.meta.url,
-);
-
 export default defineConfig({
   source: {
     schema: sourceSchema,
@@ -111,10 +106,6 @@ export default defineConfig({
     },
     matches: (unit, translation) => unit.id === translation.id,
   },
-  updatePolicy: ({ change }) =>
-    change === "source-removed"
-      ? { action: "delete", reason: "清理已移除原文的目标译文。" }
-      : { action: "none" },
   translationWriteback: {
     locateExistingTarget: ({ translation }) =>
       translation.translation.context.readonly
@@ -130,14 +121,9 @@ export default defineConfig({
       status: "notWritable",
       reason: "删除场景不创建目标。",
     }),
-    async dependencies() {
-      return JSON.parse(await readFile(dependencyPath, "utf8")) as {
-        revision: number;
-      };
-    },
-    async write({ edit, target }) {
-      if (edit.operation !== "delete" || target.kind !== "existing")
-        throw new TypeError("该宿主场景只执行删除语义编辑。");
+    async write({ request, target }) {
+      if (request.operation !== "delete" || target.kind !== "existing")
+        throw new TypeError("该宿主场景只执行删除写入请求。");
       const locator = target.locator;
       if (
         typeof locator !== "object" ||
@@ -153,16 +139,6 @@ export default defineConfig({
         ({ context }) => context.key === locator.key,
       );
       if (index < 0) throw new Error("宿主明确的删除目标已不存在。");
-      if (
-        process.argv[2] === "apply" &&
-        process.argv[3] === "physical-target-remains"
-      ) {
-        const record = resource.records[index];
-        if (record === undefined) throw new Error("宿主删除目标读取失败。");
-        record.id = "detached-message";
-        await writeFile(targetPath, JSON.stringify(resource) + "\n", "utf8");
-        return;
-      }
       resource.records.splice(index, 1);
       await writeFile(targetPath, JSON.stringify(resource) + "\n", "utf8");
     },

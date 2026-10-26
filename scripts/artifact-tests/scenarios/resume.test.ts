@@ -1,18 +1,18 @@
-import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { testFullConsumer } from "./full-consumer.ts";
 
 testFullConsumer(
-  "跨进程恢复与真实文件权限失败",
+  "跨进程恢复与真实文件 I/O 失败",
   async ({ root, runNode, typecheck }) => {
     await typecheck();
     const resources = path.join(root, "resume-resources");
     const translations = path.join(resources, "fr");
-    const baselineDirectory = path.join(root, ".lioni");
+    const blockedTarget = path.join(translations, "blocked-target");
     await Promise.all([
       mkdir(translations, { recursive: true }),
-      mkdir(baselineDirectory, { recursive: true }),
+      mkdir(blockedTarget, { recursive: true }),
     ]);
     await Promise.all([
       writeFile(
@@ -48,6 +48,13 @@ testFullConsumer(
         }),
       ),
     ]);
+    const bTargetPath = path.join(translations, "B.json");
+    const bTarget = JSON.parse(await readFile(bTargetPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    bTarget.writePath = blockedTarget;
+    await writeFile(bTargetPath, JSON.stringify(bTarget) + "\n", "utf8");
     await runNode("resume-host.ts", ["initialize"]);
 
     await writeFile(
@@ -60,24 +67,12 @@ testFullConsumer(
     );
     await runNode("resume-host.ts", ["save-plan"]);
 
-    const failedTarget = path.join(translations, "B.json");
-    await chmod(failedTarget, 0o444);
-    try {
-      await runNode("resume-host.ts", ["partial"]);
-    } finally {
-      await chmod(failedTarget, 0o644);
-    }
-
-    await runNode("resume-host.ts", ["resume-write"]);
-    await chmod(baselineDirectory, 0o555);
-    try {
-      await runNode("resume-host.ts", ["baseline-failure"]);
-    } finally {
-      await chmod(baselineDirectory, 0o755);
-    }
-
+    await runNode("resume-host.ts", ["partial"]);
+    delete bTarget.writePath;
+    await writeFile(bTargetPath, JSON.stringify(bTarget) + "\n", "utf8");
     await runNode("resume-host.ts", ["stale-old-plan"]);
     await runNode("resume-host.ts", ["replan-retain"]);
+    await runNode("resume-host.ts", ["resume-write"]);
     await runNode("resume-host.ts", ["verify"]);
   },
 );

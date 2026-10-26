@@ -9,7 +9,6 @@ import {
   type ComparisonBaseline,
   type ComparisonBaselineStore,
 } from "./baselines.ts";
-import { frameworkConfigRunner } from "./config-capability.ts";
 import {
   validateFrameworkConfig,
   type FrameworkConfig,
@@ -19,19 +18,15 @@ import { validateUpdatePlan, type UpdatePlanStore } from "./plans.ts";
 import type { JsonValue } from "./semantic-edits.ts";
 import { StandardSchemaContractError } from "./standard-schema.ts";
 
-type FrameworkConfigConsumer<TResult> = <
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TBody,
-  TUnavailable,
->(
-  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
-) => TResult;
+type RuntimeFrameworkConfig = FrameworkConfig<
+  TranslationUnitInput,
+  unknown,
+  JsonValue,
+  unknown
+>;
 
 export type LoadedConfig = {
-  readonly use: <TResult>(
-    consumer: FrameworkConfigConsumer<TResult>,
-  ) => TResult;
+  readonly use: <TResult>(consumer: (config: RuntimeFrameworkConfig) => TResult) => TResult;
 };
 
 /** 从 Node.js 配置模块加载并验证默认导出的宿主配置。 */
@@ -41,12 +36,10 @@ export async function loadConfig(configPath: string): Promise<LoadedConfig> {
     readonly default?: unknown;
   };
   if (configModule.default === undefined)
-    throw new TypeError("宿主配置必须默认导出 defineConfig(...) 的结果。");
+    throw new TypeError("宿主配置必须默认导出配置对象。");
   validateFrameworkConfig(configModule.default);
-  const runner = frameworkConfigRunner(configModule.default);
-  if (runner === undefined)
-    throw new TypeError("宿主配置必须默认导出 defineConfig(...) 的结果。");
-  return { use: runner };
+  const config = configModule.default as RuntimeFrameworkConfig;
+  return { use: (consumer) => consumer(config) };
 }
 
 /** 为 Node.js 宿主创建文件比较基线存储。 */

@@ -19,9 +19,16 @@ testFullConsumer(
     await runNode("deletion-host.ts", ["save-plan"]);
     await runNode("deletion-host.ts", ["read-plan"]);
     await writeFile(dependencyPath, JSON.stringify({ revision: 2 }), "utf8");
-    await runNode("deletion-host.ts", ["apply", "stale-dependency"]);
+    await runNode("deletion-host.ts", ["apply"]);
     await writeFile(dependencyPath, JSON.stringify({ revision: 1 }), "utf8");
-    await runNode("deletion-host.ts", ["apply", "physical-target-remains"]);
+    const changedTarget = JSON.parse(await readFile(targetPath, "utf8")) as {
+      records: Array<{ text: string }>;
+    };
+    const record = changedTarget.records[0];
+    if (record === undefined) throw new Error("缺少计划中的目标译文。");
+    record.text = "外部修改";
+    await writeFile(targetPath, JSON.stringify(changedTarget), "utf8");
+    await runNode("deletion-host.ts", ["apply"]);
     await writeFile(targetPath, originalTarget);
     await runNode("deletion-host.ts", ["apply"]);
     await runNode("deletion-host.ts", ["verify"]);

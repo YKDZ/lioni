@@ -9,14 +9,18 @@ import type { CliJourney } from "../journey.ts";
 
 function configSource(
   sources: readonly { readonly id: string; readonly source: string }[],
-  translations: readonly {
+  _translations: readonly {
     readonly targetId: string;
     readonly sourceId: string;
     readonly text: string;
   }[],
   options: { readonly noDecisions?: boolean } = {},
 ): string {
-  return `import { defineConfig } from "@lioni/core";
+  return `import { readFileSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { defineConfig } from "@lioni/core";
+
+const translationsPath = fileURLToPath(new URL("./lioni.translations.json", import.meta.url));
 
 export default defineConfig({
   source: {
@@ -51,8 +55,23 @@ export default defineConfig({
       range: "locales/fr.json",
       covers: sourceUnits.map(({ key }) => key),
       enumeration: "complete",
-      records: ${JSON.stringify(translations)}.map((value) => ({ value, bodyAvailability: "available" }))
+      records: JSON.parse(readFileSync(translationsPath, "utf8")).map((value) => ({ value, bodyAvailability: "available" }))
     }] })
+  },
+  translationWriteback: {
+    locateExistingTarget: ({ translation }) => ({ status: "located", locator: translation.translation.targetId }),
+    locateNewTarget: ({ sourceKey }) => ({ status: "located", locator: sourceKey }),
+    write: ({ request, target }) => {
+      if (request.operation !== "write") throw new Error("仅支持译文写入。");
+      const records = JSON.parse(readFileSync(translationsPath, "utf8"));
+      const id = String(target.locator);
+      const existing = records.find((record) => record.targetId === id);
+      if (existing === undefined) {
+        const sourceId = "sourceKey" in request.target ? request.target.sourceKey : request.target.identity.key;
+        records.push({ targetId: id, sourceId, text: request.content });
+      } else existing.text = request.content;
+      writeFileSync(translationsPath, JSON.stringify(records) + "\\n");
+    }
   }
 });
 `;
@@ -66,6 +85,7 @@ const journey: CliJourney = {
       path.join(workDir, "lioni.config.ts"),
       configSource([{ id: "welcome", source: "Welcome" }], []),
     );
+    await writeFile(path.join(workDir, "lioni.translations.json"), "[]\n");
 
     const removedDir = path.join(workDir, "removed");
     await mkdir(removedDir);
@@ -86,6 +106,16 @@ const journey: CliJourney = {
     await writeFile(
       path.join(removedDir, "lioni.config.ts"),
       configSource([], []),
+    );
+    await writeFile(
+      path.join(removedDir, "lioni.translations.json"),
+      `${JSON.stringify([
+        {
+          targetId: "target-welcome",
+          sourceId: "welcome",
+          text: "Bienvenue",
+        },
+      ])}\n`,
     );
     const previousConfig = await loadConfig(previousConfigPath);
     const snapshot = await previousConfig.use((config) =>
@@ -118,6 +148,10 @@ const journey: CliJourney = {
         noDecisions: true,
       }),
     );
+    await writeFile(
+      path.join(emptyDir, "lioni.translations.json"),
+      `${JSON.stringify(unchangedTranslations)}\n`,
+    );
     const unchangedConfig = await loadConfig(unchangedConfigPath);
     const unchangedSnapshot = await unchangedConfig.use((config) =>
       readComparisonSnapshot(config),
@@ -144,7 +178,7 @@ const journey: CliJourney = {
         ],
       },
       {
-        name: "require the explicit preview flag in this stage",
+        name: "execute the planned write through the host adapter",
         args: ["update", "lioni.config.ts"],
       },
       {
@@ -172,7 +206,7 @@ const journey: CliJourney = {
   async assertions({ context, results }) {
     const structured = results[0];
     const readable = results[1];
-    const withoutFlag = results[2];
+    const applied = results[2];
     const detachedChanges = results[3];
     const empty = results[4];
     const baselinePath = path.join(context.workDir, "lioni.baseline.json");
@@ -203,9 +237,21 @@ const journey: CliJourney = {
     assert.ok(readable?.stdout.includes("更新预览"));
     assert.ok(readable?.stdout.includes("补入待译占位"));
     assert.ok(readable?.stdout.includes("待译：Welcome"));
-    assert.equal(withoutFlag?.exitCode, 1);
-    assert.equal(withoutFlag?.stdout, "");
-    assert.match(withoutFlag?.stderr ?? "", /previewFailed/);
+    assert.equal(applied?.exitCode, 0, applied?.stderr);
+    assert.equal(applied?.stderr, "");
+    const execution = JSON.parse(applied?.stdout ?? "unknown");
+    assert.equal(execution.variant, "applied");
+    assert.equal(execution.data.status, "completed");
+    assert.equal(execution.data.results[0]?.status, "written");
+    assert.deepStrictEqual(
+      JSON.parse(
+        await readFile(
+          path.join(context.workDir, "lioni.translations.json"),
+          "utf8",
+        ),
+      ),
+      [{ targetId: "welcome", sourceId: "welcome", text: "待译：Welcome" }],
+    );
     assert.equal(detachedChanges?.exitCode, 0, detachedChanges?.stderr);
     assert.equal(detachedChanges?.stderr, "");
     assert.ok(detachedChanges?.stdout.includes("移除"));

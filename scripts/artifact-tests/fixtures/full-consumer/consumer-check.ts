@@ -319,28 +319,6 @@ assert.notEqual(editedResult.version, initialResult.version);
 assert.deepEqual(editedResult.diagnostics, []);
 assert.deepEqual(await readFile(qaResource), editedResource);
 
-const baselineHost = path.join(process.cwd(), "baseline-host.ts");
-for (const scenario of [
-  "establish",
-  "modified",
-  "source-change",
-  "other-range",
-  "identity-change",
-  "removed",
-  "all-gone",
-]) {
-  const result = spawnSync(process.execPath, [baselineHost, scenario], {
-    encoding: "utf8",
-  });
-  assert.equal(result.status, 0, result.stderr);
-}
-for (const scenario of ["corrupt-history", "reject-history"]) {
-  const result = spawnSync(process.execPath, [baselineHost, scenario], {
-    encoding: "utf8",
-  });
-  assert.equal(result.status, 0, result.stderr);
-}
-
 process.stdout.write(
   "独立打包宿主：事实API、完成API、显式QA、基线Node子入口、外部编辑重算和只读检查通过。\n",
 );

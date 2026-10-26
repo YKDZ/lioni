@@ -1,21 +1,25 @@
 import { createNumberChecker } from "@lioni/checks";
 import {
-  applySemanticEdits,
-  advanceProcessingBaseline,
   analyzeQuality,
   applyUpdatePlan,
-  compareProcessingBaseline,
   createUpdatePlan,
+  defaultUpdatePolicy,
   evaluateCompletion,
-  prepareSemanticEdit,
-  prepareQualityConditionedSemanticEdit,
+  previewUpdate,
   readCompletion,
   readFacts,
   readSourceFacts,
-  resolveSemanticEditInput,
+  update,
+  validateUpdatePlan,
+  writeTranslationRequests,
+  type JsonValue,
+  type TranslationWriteRequest,
+  type TranslationUnitInput,
+  type UpdatePlan,
+  type UpdatePolicy,
 } from "@lioni/core";
 import {
-  createFileProcessingBaselineStore,
+  createFileComparisonBaselineStore,
   createFileUpdatePlanStore,
 } from "@lioni/core/node";
 
@@ -23,7 +27,10 @@ import completionConfig from "./completion.config.ts";
 import deletionConfig from "./deletion.config.ts";
 import editConfig from "./edits.config.ts";
 import config from "./lioni.config.ts";
-import planConfig from "./plan.config.ts";
+import planConfig, {
+  type Translation as PlanTranslation,
+  type Unit as PlanUnit,
+} from "./plan.config.ts";
 import qaConfig from "./qa.config.ts";
 
 type NumberUnit = { readonly source: string };
@@ -32,6 +39,8 @@ type NumberTranslation = { readonly text: string };
 void readSourceFacts(config);
 void readFacts(config);
 void readFacts(qaConfig);
+void readFacts(deletionConfig);
+void readFacts(planConfig);
 void qaConfig.qualityChecks;
 void qaConfig.createQualityRequest;
 void createNumberChecker<
@@ -66,59 +75,45 @@ void createNumberChecker<
   sourceText: (unit) => unit.source,
   translationText: (content) => content,
 });
+
 void readCompletion(completionConfig);
 void readFacts(completionConfig).then((facts) =>
   evaluateCompletion(facts, completionConfig.completion!),
 );
-void compareProcessingBaseline;
-void advanceProcessingBaseline;
-void readFacts(deletionConfig);
-void createFileProcessingBaselineStore(".lioni/processing-baseline.json");
-void readFacts(planConfig).then(async (facts) => {
-  const baselineStore = createFileProcessingBaselineStore(
-    ".lioni/plan-baseline.json",
-  );
-  const plan = await createUpdatePlan(
-    facts,
-    await baselineStore.load(),
-    planConfig,
-  );
-  return applyUpdatePlan(plan, planConfig, baselineStore);
-});
-void createFileUpdatePlanStore(".lioni/update-plan.json");
-void readFacts(editConfig).then(async (facts) => {
-  const sourceUnit = facts.source.units[0];
-  if (sourceUnit === undefined) return undefined;
-  const candidate = {
-    sourceKey: sourceUnit.key,
-    language: "fr",
-    content: "Edited translation",
-  };
-  const resolved = await resolveSemanticEditInput(
-    facts,
-    { sourceKey: candidate.sourceKey, language: candidate.language },
-    editConfig,
-  );
-  if (resolved.status !== "resolved") return undefined;
-  const prepared = await prepareSemanticEdit(
-    resolved.input,
-    candidate,
-    editConfig,
-  );
-  if (prepared.status === "prepared")
-    return applySemanticEdits([prepared.edit], editConfig);
-  return undefined;
-});
-const editCandidate = {
-  sourceKey: "source:18",
-  language: "fr",
-  content: "Candidate",
-};
-void analyzeQuality(editConfig, { candidates: [editCandidate] }).then(
-  (quality) =>
-    prepareQualityConditionedSemanticEdit(editConfig, {
-      candidate: editCandidate,
-      quality,
-      condition: (result) => result.diagnostics.length === 0,
-    }),
+void readFacts(editConfig).then((facts) =>
+  analyzeQuality(editConfig, {
+    candidates: facts.source.units.map(({ key }) => ({
+      sourceKey: key,
+      language: "fr",
+      content: "External proposal",
+    })),
+  }),
 );
+void createUpdatePlan;
+void defaultUpdatePolicy;
+void createFileComparisonBaselineStore;
+void createFileUpdatePlanStore;
+
+const baselineStore = createFileComparisonBaselineStore<
+  PlanUnit,
+  PlanTranslation,
+  string
+>("comparison-baseline.json");
+void previewUpdate(planConfig, baselineStore).then(async (plan) => {
+  const stored: UpdatePlan = JSON.parse(JSON.stringify(plan)) as UpdatePlan;
+  validateUpdatePlan(stored);
+  await applyUpdatePlan(stored, planConfig);
+});
+void update(planConfig, baselineStore);
+void writeTranslationRequests([], editConfig);
+
+declare const request: TranslationWriteRequest<JsonValue, TranslationUnitInput>;
+declare const policy: UpdatePolicy<TranslationUnitInput, unknown, JsonValue>;
+declare const unknownPlan: unknown;
+validateUpdatePlan(unknownPlan);
+void policy;
+void request;
+
+type StringPlan = UpdatePlan<TranslationUnitInput, unknown, string>;
+const planType: StringPlan | undefined = undefined;
+void planType;

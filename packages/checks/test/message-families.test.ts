@@ -10,7 +10,6 @@ import type { MessageFamilyLimits } from "@lioni/checks";
 import {
   analyzeQuality,
   defineConfig,
-  prepareQualityConditionedSemanticEdit,
   type QualityCheckInput,
   type SourceUnitFact,
   StandardSchemaContractError,
@@ -642,7 +641,7 @@ void test("非法 UTF-16 保护范围作为投影契约错误拒绝", async () =
   }
 });
 
-void test("投影不完整时保留已知警告并让宿主条件阻止写入", async () => {
+void test("投影不完整时保留已知警告", async () => {
   const units = [
     { id: "editing", source: "Error Code 404" },
     { id: "different", source: "Error Code 504" },
@@ -671,14 +670,6 @@ void test("投影不完整时保留已知警告并让宿主条件阻止写入", 
       ({ code }) => code === "candidateProjectionPartial",
     ),
   );
-
-  const gated = await prepareQualityConditionedSemanticEdit(config, {
-    candidate,
-    condition: (quality) => quality.diagnostics.length === 0,
-  });
-  assert.equal(gated.status, "rejected");
-  if (gated.status === "rejected")
-    assert.equal(gated.quality.diagnostics[0]?.severity, "warning");
 });
 
 void test("目标结构分析不完整时保留已知参照差异并标记不完整", async () => {

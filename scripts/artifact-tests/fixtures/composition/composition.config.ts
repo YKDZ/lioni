@@ -23,8 +23,6 @@ import {
   type QualityException,
   type QualityObject,
   type SourceUnitFact,
-  type UpdatePolicyInput,
-  type UpdateDecision,
   type StandardSchemaV1,
 } from "@lioni/core";
 
@@ -139,9 +137,6 @@ type EntryModule = {
   readonly resolveCompletion: (
     input: CompletionResolverInput<Unit, Translation>,
   ) => CompletionResolution;
-  readonly updatePolicy: (
-    input: UpdatePolicyInput<Unit, Translation, TranslationContent>,
-  ) => UpdateDecision<TranslationContent>;
 };
 
 function readJson(file: string): unknown {
@@ -258,10 +253,6 @@ const catalogModule: EntryModule = {
       target.text.trim().length > 0
     );
   },
-  updatePolicy: ({ processed }) =>
-    processed
-      ? { action: "none", reason: "目录范围已单独处理。" }
-      : { action: "retain", reason: "保留目录中的现有译法。" },
 };
 
 const guideModule: EntryModule = {
@@ -279,10 +270,6 @@ const guideModule: EntryModule = {
       target.content.message.trim().length > 0
     );
   },
-  updatePolicy: ({ processed }) =>
-    processed
-      ? { action: "none", reason: "指南范围已单独处理。" }
-      : { action: "review", reason: "指南内容需要维护者复核。" },
 };
 
 function isCatalogUnit(unit: Unit): unit is CatalogUnit {
@@ -559,14 +546,6 @@ function createInputConfig(
       mergeQualityRequests(
         modules.map(({ domain }) => requestForDomain(facts, domain)),
       ),
-    updatePolicy(input) {
-      const module = modules.find(({ domain }) =>
-        input.sourceKey.startsWith(domain + ":"),
-      );
-      return module === undefined
-        ? { action: "review", reason: "没有对应的局部更新策略。" }
-        : module.updatePolicy(input);
-    },
   });
 }
 
