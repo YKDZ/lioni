@@ -3,164 +3,117 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import {
-  advanceProcessingBaseline,
   applyUpdatePlan,
-  createUpdatePlan,
-  readFacts,
+  previewUpdate,
+  recordComparisonBaseline,
+  validateUpdatePlan,
+  type UpdatePlan,
+  type TranslationWriteCondition,
 } from "@lioni/core";
 import {
-  createFileProcessingBaselineStore,
+  createFileComparisonBaselineStore,
   createFileUpdatePlanStore,
 } from "@lioni/core/node";
 
 import config from "./deletion.config.ts";
-import { parseJson } from "./schemas.ts";
 
-type DeletionTranslation = {
-  readonly id: string;
-  readonly text: string;
-  readonly context: {
-    readonly file: string;
-    readonly key: string;
-    readonly readonly?: boolean;
-  };
+type Unit = { id: string; source: string; context: { file: string } };
+type Translation = {
+  id: string;
+  text: string;
+  context: { file: string; key: string; readonly?: boolean };
 };
-type TranslationResource = {
-  readonly records: readonly DeletionTranslation[];
-};
+type DeletionPlan = UpdatePlan<Unit, Translation, string>;
 
-async function readResource(file: string): Promise<TranslationResource> {
-  return parseJson<TranslationResource>(await readFile(file, "utf8"));
-}
-
-const scenario = process.argv[2];
-const sourcePath = fileURLToPath(
-  new URL("./deletion-resources/source.json", import.meta.url),
-);
+const baselinePath = "deletion-baseline.json";
+const planPath = "deletion-plan.json";
 const targetPath = fileURLToPath(
   new URL("./deletion-resources/fr.json", import.meta.url),
 );
-const otherTargetPath = fileURLToPath(
-  new URL("./deletion-resources/other.json", import.meta.url),
+const dependencyPath = fileURLToPath(
+  new URL("./deletion-resources/dependencies.json", import.meta.url),
 );
-const baselinePath = ".lioni/deletion-baseline.json";
-const planPath = ".lioni/deletion-plan.json";
-const baselineStore = createFileProcessingBaselineStore(baselinePath);
+const baselineStore = createFileComparisonBaselineStore<
+  Unit,
+  Translation,
+  string
+>(baselinePath);
 const planStore = createFileUpdatePlanStore(planPath);
+const condition: TranslationWriteCondition<
+  Unit,
+  Translation,
+  string,
+  never
+> = async () => {
+  const dependency = JSON.parse(await readFile(dependencyPath, "utf8")) as {
+    revision: number;
+  };
+  return dependency.revision === 1
+    ? true
+    : { status: "rejected", reason: "删除所依赖的清单已变化。" };
+};
+const mode = process.argv[2];
 
-if (scenario === "initialize") {
-  const result = await advanceProcessingBaseline(
-    baselineStore,
-    await readFacts(config),
-    [{ sourceKey: "retired-message", language: "fr" }],
-    config,
-  );
-  assert.equal(result.outcome, "saved");
-  assert.equal(result.selections[0]?.outcome, "advanced");
-} else if (scenario === "save-plan") {
-  const before = await Promise.all([
-    readFile(sourcePath),
-    readFile(targetPath),
-    readFile(otherTargetPath),
-    readFile(baselinePath),
-  ]);
-  const facts = await readFacts(config);
-  const plan = await createUpdatePlan(
-    facts,
-    await baselineStore.load(),
-    config,
-  );
-  const item = plan.items.find(
-    ({ sourceKey }) => sourceKey === "retired-message",
-  );
-  assert.equal(item?.change, "source-removed");
-  assert.equal(item?.expectedInput?.source.presence, "removed");
-  assert.equal(item?.decision.action, "delete");
-  assert.equal(item?.status, "delete");
-  assert.equal(item?.edit?.operation, "delete");
-  assert.equal(Object.hasOwn(item?.edit ?? {}, "content"), false);
-  assert.equal("value" in (item?.expectedInput?.source ?? {}), false);
-  assert.equal(item?.edit?.expected.source.presence, "removed");
-  await planStore.save(plan);
-  assert.deepEqual(
-    await Promise.all([
-      readFile(sourcePath),
-      readFile(targetPath),
-      readFile(otherTargetPath),
-      readFile(baselinePath),
-    ]),
-    before,
-  );
-} else if (scenario === "read-plan") {
+async function loadPlan(): Promise<DeletionPlan> {
   const plan = await planStore.load();
   assert.ok(plan);
-  const item = plan.items.find(
-    ({ sourceKey }) => sourceKey === "retired-message",
-  );
-  assert.equal(item?.status, "delete");
-  assert.equal(item?.edit?.operation, "delete");
-  assert.equal(Object.hasOwn(item?.edit ?? {}, "content"), false);
-} else if (scenario === "apply") {
-  const plan = await planStore.load();
-  assert.ok(plan);
-  const baselineBefore = await readFile(baselinePath, "utf8");
-  const result = await applyUpdatePlan(plan, config, baselineStore);
-  const item = result.contentResults.find(
-    ({ sourceKey }) => sourceKey === "retired-message",
-  );
-  const baselineResult = result.baselineResults.find(
-    ({ sourceKey }) => sourceKey === "retired-message",
-  );
-  if (process.argv[3] === "stale-dependency") {
-    assert.equal(item?.status, "conflict");
-    assert.equal(baselineResult?.status, "notAttempted");
-    assert.equal(await readFile(baselinePath, "utf8"), baselineBefore);
-    const target = await readResource(targetPath);
-    assert.equal(target.records[0]?.text, "Enregistrer");
-  } else if (process.argv[3] === "physical-target-remains") {
-    assert.equal(item?.status, "writeUnconfirmed");
-    assert.equal(baselineResult?.status, "notAttempted");
-    assert.equal(await readFile(baselinePath, "utf8"), baselineBefore);
-    const target = await readResource(targetPath);
-    assert.equal(target.records.length, 2);
-    assert.equal(
-      target.records.find(({ context }) => context.key === "archive.save")?.id,
-      "detached-message",
-    );
-  } else {
-    assert.equal(item?.status, "written");
-    assert.equal(baselineResult?.status, "advanced");
-    assert.deepEqual(
-      (await readResource(targetPath)).records.map(({ id }) => id),
-      ["unrelated-message"],
-    );
-    assert.equal(
-      (await readResource(otherTargetPath)).records[0]?.context.readonly,
-      true,
-    );
-  }
-} else if (scenario === "verify") {
-  const baseline = await baselineStore.load();
-  const entry = baseline?.entries.find(
-    ({ sourceKey }) => sourceKey === "retired-message",
-  );
-  assert.equal(entry?.source.presence, "removed");
-  assert.equal(entry?.association.status, "missing");
-  assert.equal(entry?.processed, true);
-  assert.deepEqual(
-    (await readResource(targetPath)).records.map(({ id }) => id),
-    ["unrelated-message"],
-  );
-  assert.deepEqual(
-    (await readResource(otherTargetPath)).records.map(({ id }) => id),
-    ["unmatched-other"],
-  );
-  const facts = await readFacts(config);
-  assert.equal(
-    facts.source.units.some(({ key }) => key === "retired-message"),
-    false,
-  );
-  assert.equal(facts.translations.records.length, 2);
+  validateUpdatePlan(plan);
+  return plan as DeletionPlan;
 }
 
-console.log(JSON.stringify({ scenario, pid: process.pid }));
+if (mode === "initialize") {
+  const result = await recordComparisonBaseline(config, baselineStore);
+  assert.equal(result.outcome, "saved");
+} else if (mode === "save-plan") {
+  const plan = await previewUpdate(config, baselineStore);
+  const deletion = plan.items.find(({ action }) => action === "delete");
+  assert.ok(deletion && deletion.action === "delete");
+  assert.equal(deletion.request.expectedSource?.presence, "absent");
+  assert.equal(deletion.request.expectedTarget.status, "present");
+  assert.ok(deletion.request.expectedTarget.record);
+  await planStore.save(plan);
+} else if (mode === "read-plan") {
+  const plan = await loadPlan();
+  assert.ok(plan.items.some(({ action }) => action === "delete"));
+} else if (mode === "apply") {
+  const plan = await loadPlan();
+  const deletionIndex = plan.items.findIndex(
+    ({ action }) => action === "delete",
+  );
+  const before = await readFile(targetPath, "utf8");
+  const baselineBefore = await readFile(baselinePath, "utf8");
+  const result = await applyUpdatePlan(plan, config, condition);
+  const deletionResult = result.results[deletionIndex];
+  if (deletionResult?.status === "written") {
+    assert.equal(result.status, "completed");
+    assert.deepEqual(JSON.parse(await readFile(targetPath, "utf8")), {
+      enumeration: "complete",
+      records: [
+        {
+          id: "unrelated-message",
+          text: "Annuler",
+          context: {
+            file: "deletion-resources/fr.json",
+            key: "footer.cancel",
+          },
+        },
+      ],
+    });
+  } else {
+    assert.equal(result.status, "failed");
+    assert.equal(deletionResult?.status, "conflict");
+    assert.equal(await readFile(targetPath, "utf8"), before);
+  }
+  assert.equal(await readFile(baselinePath, "utf8"), baselineBefore);
+} else if (mode === "verify") {
+  const target = JSON.parse(await readFile(targetPath, "utf8")) as {
+    readonly records: readonly unknown[];
+  };
+  assert.equal(target.records.length, 1);
+  const remaining = target.records[0] as { readonly id?: string } | undefined;
+  assert.equal(remaining?.id, "unrelated-message");
+  const baseline = await baselineStore.load();
+  assert.ok(baseline);
+  assert.equal(baseline.snapshot.source.units[0]?.key, "retired-message");
+  assert.equal(baseline.snapshot.translations.records.length, 3);
+}

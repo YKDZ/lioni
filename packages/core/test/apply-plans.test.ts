@@ -1,1151 +1,323 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { describe, it } from "node:test";
 
 import {
-  advanceProcessingBaseline,
   applyUpdatePlan,
-  createUpdatePlan,
+  defaultCompare,
+  defaultUpdatePolicy,
   defineConfig,
-  readFacts,
-  StandardSchemaContractError,
-  type FrameworkConfig,
+  previewUpdate,
+  recordComparisonBaseline,
+  update,
+  type ComparisonBaseline,
+  type ComparisonBaselineStore,
   type JsonValue,
-  type ProcessingBaseline,
-  type ProcessingBaselineStore,
-  type StandardSchemaV1,
-  type UpdatePolicy,
+  type TranslationWriteRequest,
 } from "../src/index.ts";
-import {
-  createFileProcessingBaselineStore,
-  createFileUpdatePlanStore,
-} from "../src/node.ts";
 import {
   jsonValueSchema,
   schemaFromExamples,
   sourceSchemaFromExamples,
-  fixtureTranslationIdentity,
 } from "./source-schema.ts";
 
-type Unit = { readonly id: string; readonly source: string };
-type Translation = {
-  id: string;
-  text: string;
-  note?: string;
-  readonly slot?: string;
-};
-type MutableReadState = {
-  sourceEnumeration?: "complete" | "partial" | "failed";
-  translationEnumeration?: "complete" | "partial" | "failed";
-  sourceRange?: string;
-  translationRange?: string;
-  location?: string;
-  unlocatableTranslationId?: string;
-  dependencies?: JsonValue;
-};
+type Unit = { id: string; source: string };
+type Translation = { id: string; text: string; sourceId?: string };
 
-class MemoryBaselineStore implements ProcessingBaselineStore {
-  baseline: ProcessingBaseline | undefined;
-  failSaves = false;
+type Scenario = ReturnType<typeof createScenario>;
 
-  async load(): Promise<ProcessingBaseline | undefined> {
-    return structuredClone(this.baseline);
-  }
-
-  async save(baseline: ProcessingBaseline): Promise<void> {
-    if (this.failSaves) throw new Error("基线存储暂不可用。");
-    this.baseline = structuredClone(baseline);
-  }
-}
-
-function makeConfig(
-  units: readonly Unit[],
-  translations: readonly Translation[],
+function createScenario(
   options: {
-    readonly updatePolicy?: UpdatePolicy<Unit, Translation>;
-    readonly failWriteFor?: string;
-    readonly ignoreWriteFor?: string;
-    readonly detachWriteFor?: string;
-    readonly partialReadAfterWriteFor?: string;
-    readonly contentSchema?: StandardSchemaV1<JsonValue, JsonValue>;
-    readonly withWriteback?: boolean;
-    readonly readState?: MutableReadState;
-    readonly onLocateExisting?: () => void;
+    readonly sources?: readonly Unit[];
+    readonly translations?: readonly Translation[];
+    readonly withWriter?: boolean;
   } = {},
 ) {
-  const contentSchema = options.contentSchema ?? jsonValueSchema;
-  return defineConfig<
+  const state = {
+    sources: [...(options.sources ?? [])],
+    translations: [...(options.translations ?? [])],
+  };
+  const counts = {
+    sourceRead: 0,
+    translationRead: 0,
+    comparisons: 0,
+    policies: 0,
+    writes: 0,
+    baselineLoads: 0,
+    baselineSaves: 0,
+  };
+  const faults: { writeKey?: string } = {};
+  let storedBaseline:
+    | ComparisonBaseline<Unit, Translation, JsonValue, never>
+    | undefined;
+  const baselineStore: ComparisonBaselineStore<
     Unit,
-    StandardSchemaV1<Unit, Unit>,
-    StandardSchemaV1<Translation, Translation>,
+    Translation,
+    JsonValue,
+    never
+  > = {
+    async load() {
+      counts.baselineLoads += 1;
+      return storedBaseline;
+    },
+    async save(baseline) {
+      counts.baselineSaves += 1;
+      storedBaseline = baseline;
+    },
+  };
+
+  const sourceSchema = sourceSchemaFromExamples<Unit>({
+    id: "example",
+    source: "Example",
+  });
+  const translationSchema = schemaFromExamples<Translation>({
+    id: "example",
+    text: "Example",
+  });
+  const config = defineConfig<
+    Unit,
+    typeof sourceSchema,
+    typeof translationSchema,
     never,
     typeof jsonValueSchema
   >({
     source: {
-      schema: sourceSchemaFromExamples<Unit>(
-        { id: "example", source: "example" },
-        ...units,
-      ),
-      read: () => ({
-        scopes: [
-          {
-            range: options.readState?.sourceRange ?? "source/messages.json",
-            enumeration: options.readState?.sourceEnumeration ?? "complete",
-            records: units.map((value) => ({
-              value,
-              bodyAvailability: "available" as const,
-            })),
-          },
-        ],
-      }),
-    },
-    keyOf: (unit) => unit.id,
-    translations: {
-      languages: ["fr"],
-      identityOf: fixtureTranslationIdentity,
-      schema: schemaFromExamples<Translation>({
-        id: "example",
-        text: "example",
-      }),
-      contentSchema,
-      read: (_language, sourceUnits) => ({
-        scopes: [
-          {
-            range: options.readState?.translationRange ?? "locales/fr.json",
-            covers: sourceUnits.map(({ key }) => key),
-            enumeration:
-              options.readState?.translationEnumeration ?? "complete",
-            records: translations.map((value) => ({
-              value,
-              bodyAvailability: "available" as const,
-            })),
-          },
-        ],
-      }),
-      matches: (unit, translation) => unit.id === translation.id,
-      contentOf: (translation) => translation.text,
-    },
-    ...(options.updatePolicy === undefined
-      ? {}
-      : { updatePolicy: options.updatePolicy }),
-    ...(options.withWriteback
-      ? {
-          translationWriteback: {
-            locateExistingTarget: ({ translation }) => {
-              options.onLocateExisting?.();
-              return translation.translation.id ===
-                options.readState?.unlocatableTranslationId
-                ? {
-                    status: "notWritable" as const,
-                    reason: "该记录暂时无法解析宿主位置。",
-                  }
-                : {
-                    status: "located" as const,
-                    locator: {
-                      id:
-                        translation.translation.slot ??
-                        translation.translation.id,
-                      location:
-                        options.readState?.location ?? "locales/fr.json",
-                    },
-                  };
-            },
-            locateNewTarget: ({ sourceUnit }) => ({
-              status: "located" as const,
-              locator: { id: sourceUnit.key },
-            }),
-            dependencies: () => options.readState?.dependencies,
-            write({ edit, currentTranslation }) {
-              if (edit.operation === "delete") {
-                if (currentTranslation === undefined)
-                  throw new TypeError("需要现有译文删除目标。");
-                if (edit.sourceKey === options.ignoreWriteFor) return;
-                if (edit.sourceKey === options.detachWriteFor) {
-                  currentTranslation.translation.id = "B";
-                  return;
-                }
-                if (edit.sourceKey === options.failWriteFor)
-                  throw new Error("目标资源不可写。");
-                const index = translations.indexOf(
-                  currentTranslation.translation,
-                );
-                if (index < 0) throw new Error("删除目标已不存在。");
-                (translations as Translation[]).splice(index, 1);
-                if (edit.sourceKey === options.partialReadAfterWriteFor) {
-                  if (options.readState !== undefined)
-                    options.readState.translationEnumeration = "partial";
-                }
-                return;
-              }
-              if (
-                currentTranslation === undefined ||
-                typeof edit.content !== "string"
-              )
-                throw new TypeError("需要现有译文和字符串候选。");
-              if (edit.sourceKey === options.failWriteFor)
-                throw new Error("目标资源不可写。");
-              if (edit.sourceKey === options.ignoreWriteFor) return;
-              currentTranslation.translation.text = edit.content;
-            },
-          },
-        }
-      : {}),
-  });
-}
-
-function candidatePolicy(
-  contentFor: (sourceKey: string, unit: Unit | undefined) => string,
-): UpdatePolicy<Unit, Translation> {
-  return ({ sourceKey, language, sourceUnit }) => ({
-    action: "candidate",
-    candidate: {
-      sourceKey,
-      language,
-      content: contentFor(sourceKey, sourceUnit),
-    },
-  });
-}
-
-async function establishBaseline(
-  config: FrameworkConfig<Unit, Translation>,
-  sourceKeys: readonly string[],
-): Promise<MemoryBaselineStore> {
-  const store = new MemoryBaselineStore();
-  const facts = await readFacts(config);
-  const result = await advanceProcessingBaseline(
-    store,
-    facts,
-    sourceKeys.map((sourceKey) => ({ sourceKey, language: "fr" })),
-    config,
-  );
-  assert.equal(result.outcome, "saved");
-  return store;
-}
-
-void describe("apply update plans", () => {
-  void it("propagates malformed persisted baseline JSON as a contract error", async () => {
-    const translations: Translation[] = [{ id: "A", text: "Enregistrer" }];
-    const oldConfig = makeConfig([{ id: "A", source: "Save" }], translations);
-    const baseline = await establishBaseline(oldConfig, ["A"]);
-    const config = makeConfig([{ id: "A", source: "Save now" }], translations, {
-      withWriteback: true,
-      updatePolicy: candidatePolicy(() => "Sauvegarder"),
-    });
-    const plan = await createUpdatePlan(
-      await readFacts(config),
-      baseline.baseline,
-      config,
-    );
-    const directory = await mkdtemp(
-      path.join(os.tmpdir(), "lioni-invalid-baseline-"),
-    );
-    const baselinePath = path.join(directory, "processing-baseline.json");
-    const fileStore = createFileProcessingBaselineStore(baselinePath);
-    try {
-      await writeFile(baselinePath, "{\n", "utf8");
-      const facts = await readFacts(config);
-      await assert.rejects(
-        () =>
-          advanceProcessingBaseline(
-            fileStore,
-            facts,
-            [{ sourceKey: "A", language: "fr" }],
-            config,
-          ),
-        StandardSchemaContractError,
-      );
-      await assert.rejects(
-        () => applyUpdatePlan(plan, config, fileStore),
-        StandardSchemaContractError,
-      );
-      assert.deepEqual(translations, [{ id: "A", text: "Enregistrer" }]);
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
-  });
-
-  void it("validates a saved deletion source before locating its target", async () => {
-    const units: Unit[] = [{ id: "A", source: "Save" }];
-    const translations: Translation[] = [{ id: "A", text: "Enregistrer" }];
-    const baselineStore = await establishBaseline(
-      makeConfig(units, translations),
-      ["A"],
-    );
-    units.splice(0, units.length);
-    let locateCalls = 0;
-    const config = makeConfig(units, translations, {
-      withWriteback: true,
-      updatePolicy: () => ({ action: "delete" }),
-      onLocateExisting: () => {
-        locateCalls += 1;
-      },
-    });
-    const plan = await createUpdatePlan(
-      await readFacts(config),
-      baselineStore.baseline,
-      config,
-    );
-    assert.equal(plan.items[0]?.edit?.operation, "delete");
-    assert.equal(locateCalls, 1);
-
-    const invalidPlan = structuredClone(plan) as unknown as {
-      items: {
-        edit: {
-          expected: {
-            source: { historicalContent: { source: unknown } };
-          };
-        };
-      }[];
-    };
-    const item = invalidPlan.items[0];
-    assert.ok(item);
-    item.edit.expected.source.historicalContent.source = 7;
-    const baselineBefore = structuredClone(baselineStore.baseline);
-    locateCalls = 0;
-
-    await assert.rejects(
-      () =>
-        applyUpdatePlan(
-          invalidPlan as unknown as typeof plan,
-          config,
-          baselineStore,
-        ),
-      StandardSchemaContractError,
-    );
-    assert.equal(locateCalls, 0);
-    assert.deepEqual(translations, [{ id: "A", text: "Enregistrer" }]);
-    assert.deepEqual(baselineStore.baseline, baselineBefore);
-  });
-
-  void it("deletes a removed source target and advances its confirmed result", async () => {
-    const units: Unit[] = [{ id: "A", source: "Save" }];
-    const translations: Translation[] = [
-      { id: "A", text: "Enregistrer" },
-      { id: "unrelated", text: "Annuler" },
-    ];
-    const initial = makeConfig(units, translations);
-    const baselineStore = await establishBaseline(initial, ["A"]);
-    units.splice(0, units.length);
-    const config = makeConfig(units, translations, {
-      withWriteback: true,
-      updatePolicy: () => ({ action: "delete" }),
-    });
-    const plan = await createUpdatePlan(
-      await readFacts(config),
-      baselineStore.baseline,
-      config,
-    );
-    assert.equal(plan.items[0]?.status, "delete");
-
-    const directory = await mkdtemp(
-      path.join(os.tmpdir(), "lioni-delete-plan-"),
-    );
-    const planStore = createFileUpdatePlanStore(
-      path.join(directory, "update-plan.json"),
-    );
-    try {
-      await planStore.save(plan);
-      const savedPlan = await planStore.load();
-      assert.deepStrictEqual(savedPlan, plan);
-      const result = await applyUpdatePlan(
-        savedPlan as NonNullable<typeof savedPlan>,
-        config,
-        baselineStore,
-      );
-
-      assert.equal(result.contentResults[0]?.status, "written");
-      assert.equal(result.baselineResults[0]?.status, "advanced");
-      assert.deepStrictEqual(translations, [
-        { id: "unrelated", text: "Annuler" },
-      ]);
-      assert.equal(
-        baselineStore.baseline?.entries[0]?.source.presence,
-        "removed",
-      );
-      assert.equal(
-        baselineStore.baseline?.entries[0]?.association.status,
-        "missing",
-      );
-      assert.equal(baselineStore.baseline?.entries[0]?.processed, true);
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
-  });
-
-  void it("confirms the saved target range despite unrelated unreadable records elsewhere", async () => {
-    type ScopedTranslation = Translation & {
-      readonly scope: "main" | "other";
-    };
-    const units: Unit[] = [{ id: "A", source: "Save" }];
-    const translations: ScopedTranslation[] = [
-      { id: "A", text: "Enregistrer", scope: "main", slot: "one" },
-      { id: "other", text: "Annuler", scope: "other", slot: "other" },
-    ];
-    const config = defineConfig({
-      source: {
-        schema: sourceSchemaFromExamples<Unit>(
-          { id: "example", source: "example" },
-          ...units,
-        ),
-        read: () => ({
+      schema: sourceSchema,
+      read: () => {
+        counts.sourceRead += 1;
+        return {
           scopes: [
             {
-              range: "source/messages.json",
+              range: "source.json",
               enumeration: "complete",
-              records: units.map((value) => ({
+              records: state.sources.map((value) => ({
                 value,
                 bodyAvailability: "available" as const,
               })),
             },
           ],
-        }),
+        };
       },
-      keyOf: (unit) => unit.id,
-      translations: {
-        languages: ["fr"],
-        identityOf: fixtureTranslationIdentity,
-        schema: schemaFromExamples<ScopedTranslation>({
-          id: "example",
-          text: "example",
-          scope: "main",
-        }),
-        contentSchema: jsonValueSchema,
-        contentOf: (translation) => translation.text,
-        read: (_language, sourceUnits) => ({
-          scopes: (["main", "other"] as const).map((scope) => ({
-            range: scope,
-            covers: sourceUnits.map(({ key }) => key),
-            enumeration: "complete" as const,
-            records: translations
-              .filter((translation) => translation.scope === scope)
-              .map((value) => ({
+    },
+    keyOf: ({ id }) => id,
+    sourceToContent: (source) => source,
+    compare: (input) => {
+      counts.comparisons += 1;
+      return defaultCompare(input);
+    },
+    updatePolicy: (input) => {
+      counts.policies += 1;
+      return defaultUpdatePolicy(input);
+    },
+    translations: {
+      languages: ["fr"],
+      identityOf: ({ id }) => ({ namespace: "messages", key: id }),
+      schema: translationSchema,
+      contentSchema: jsonValueSchema,
+      contentOf: ({ text }) => text,
+      matches: (unit, translation) => unit.id === translation.id,
+      read: (_language, sourceUnits) => {
+        counts.translationRead += 1;
+        return {
+          scopes: [
+            {
+              range: "fr.json",
+              covers: sourceUnits.map(({ key }) => key),
+              enumeration: "complete",
+              records: state.translations.map((value) => ({
                 value,
                 bodyAvailability: "available" as const,
               })),
-          })),
-        }),
-        matches: (unit, translation) => unit.id === translation.id,
-      },
-      updatePolicy: () => ({ action: "delete" }),
-      translationWriteback: {
-        locateExistingTarget: ({ translation }) =>
-          translation.translation.scope === "other"
-            ? {
-                status: "notWritable",
-                reason: "另一个 scope 中的记录不可定位。",
-              }
-            : {
-                status: "located",
-                locator: { slot: translation.translation.slot ?? "one" },
-              },
-        locateNewTarget: () => ({
-          status: "notWritable",
-          reason: "删除不创建目标。",
-        }),
-        write: ({ currentTranslation }) => {
-          if (currentTranslation === undefined)
-            throw new TypeError("删除需要现存目标。");
-          const index = translations.indexOf(currentTranslation.translation);
-          if (index < 0) throw new Error("已保存的目标已不存在。");
-          translations.splice(index, 1);
-        },
-      },
-    });
-    const baselineStore = new MemoryBaselineStore();
-    const baselineResult = await advanceProcessingBaseline(
-      baselineStore,
-      await readFacts(config),
-      [{ sourceKey: "A", language: "fr" }],
-      config,
-    );
-    assert.equal(baselineResult.outcome, "saved");
-    units.splice(0, units.length);
-    const plan = await createUpdatePlan(
-      await readFacts(config),
-      baselineStore.baseline,
-      config,
-    );
-    const edit = plan.items[0]?.edit;
-    assert.ok(edit);
-    if (edit.expected.target.status !== "present")
-      throw new TypeError("删除计划应保存存在的物理目标。");
-    assert.equal(edit.expected.target.range, "main");
-    assert.deepStrictEqual(edit.expected.target.scopes, ["main", "other"]);
-
-    const result = await applyUpdatePlan(plan, config, baselineStore);
-
-    assert.equal(result.contentResults[0]?.status, "written");
-    assert.equal(result.baselineResults[0]?.status, "advanced");
-    assert.deepStrictEqual(
-      translations.map(({ scope, slot }) => ({ scope, slot })),
-      [{ scope: "other", slot: "other" }],
-    );
-  });
-
-  void it("rejects stale deletion source, target, location, dependency, and read inputs", async () => {
-    const scenarios: readonly [
-      string,
-      (input: {
-        units: Unit[];
-        translations: Translation[];
-        readState: MutableReadState;
-      }) => void,
-    ][] = [
-      [
-        "source reappears",
-        ({ units }) => units.push({ id: "A", source: "Save" }),
-      ],
-      [
-        "target content changes",
-        ({ translations }) => {
-          const target = translations[0];
-          if (target !== undefined) target.text = "External translation";
-        },
-      ],
-      ["target disappears", ({ translations }) => translations.splice(0, 1)],
-      [
-        "target scope changes",
-        ({ readState }) => {
-          readState.translationRange = "locales/fr/renamed.json";
-        },
-      ],
-      [
-        "declared dependency changes",
-        ({ readState }) => {
-          readState.dependencies = { revision: 2 };
-        },
-      ],
-      [
-        "host target location changes",
-        ({ readState }) => {
-          readState.location = "locales/fr/renamed.json";
-        },
-      ],
-      [
-        "target coverage becomes partial",
-        ({ readState }) => {
-          readState.translationEnumeration = "partial";
-        },
-      ],
-    ];
-
-    for (const [scenario, mutate] of scenarios) {
-      const units: Unit[] = [{ id: "A", source: "Save" }];
-      const translations: Translation[] = [{ id: "A", text: "Enregistrer" }];
-      const baselineStore = await establishBaseline(
-        makeConfig(units, translations),
-        ["A"],
-      );
-      units.splice(0, units.length);
-      const readState: MutableReadState = {
-        dependencies: { revision: 1 },
-      };
-      const config = makeConfig(units, translations, {
-        readState,
-        withWriteback: true,
-        updatePolicy: () => ({ action: "delete" }),
-      });
-      const plan = await createUpdatePlan(
-        await readFacts(config),
-        baselineStore.baseline,
-        config,
-      );
-      const baselineBefore = structuredClone(baselineStore.baseline);
-      mutate({ units, translations, readState });
-
-      const result = await applyUpdatePlan(plan, config, baselineStore);
-
-      assert.equal(
-        result.contentResults[0]?.status,
-        "conflict",
-        `${scenario} must reject the saved deletion`,
-      );
-      assert.equal(result.baselineResults[0]?.status, "notAttempted");
-      assert.deepStrictEqual(baselineStore.baseline, baselineBefore);
-    }
-  });
-
-  void it("does not treat a successful writer return as a confirmed deletion", async () => {
-    const units: Unit[] = [{ id: "A", source: "Save" }];
-    const translations: Translation[] = [{ id: "A", text: "Enregistrer" }];
-    const baselineStore = await establishBaseline(
-      makeConfig(units, translations),
-      ["A"],
-    );
-    units.splice(0, units.length);
-    const baselineBefore = structuredClone(baselineStore.baseline);
-    const config = makeConfig(units, translations, {
-      ignoreWriteFor: "A",
-      withWriteback: true,
-      updatePolicy: () => ({ action: "delete" }),
-    });
-    const plan = await createUpdatePlan(
-      await readFacts(config),
-      baselineStore.baseline,
-      config,
-    );
-
-    const result = await applyUpdatePlan(plan, config, baselineStore);
-
-    assert.equal(result.contentResults[0]?.status, "writeUnconfirmed");
-    assert.equal(result.baselineResults[0]?.status, "notAttempted");
-    assert.deepStrictEqual(translations, [{ id: "A", text: "Enregistrer" }]);
-    assert.deepStrictEqual(baselineStore.baseline, baselineBefore);
-  });
-
-  void it("does not confirm deletion when the saved physical target remains", async () => {
-    const units: Unit[] = [{ id: "A", source: "Save" }];
-    const translations: Translation[] = [
-      { id: "A", slot: "physical-one", text: "Enregistrer" },
-    ];
-    const baselineStore = await establishBaseline(
-      makeConfig(units, translations),
-      ["A"],
-    );
-    units.splice(0, units.length);
-    const baselineBefore = structuredClone(baselineStore.baseline);
-    const config = makeConfig(units, translations, {
-      detachWriteFor: "A",
-      withWriteback: true,
-      updatePolicy: () => ({ action: "delete" }),
-    });
-    const plan = await createUpdatePlan(
-      await readFacts(config),
-      baselineStore.baseline,
-      config,
-    );
-
-    const result = await applyUpdatePlan(plan, config, baselineStore);
-
-    assert.equal(result.contentResults[0]?.status, "writeUnconfirmed");
-    assert.equal(result.baselineResults[0]?.status, "notAttempted");
-    assert.deepStrictEqual(translations, [
-      { id: "B", slot: "physical-one", text: "Enregistrer" },
-    ]);
-    assert.deepStrictEqual(baselineStore.baseline, baselineBefore);
-  });
-
-  void it("does not confirm deletion when the saved scope cannot be resolved", async () => {
-    const scenarios = ["locator", "partial-read"] as const;
-    for (const scenario of scenarios) {
-      const units: Unit[] = [{ id: "A", source: "Save" }];
-      const translations: Translation[] = [
-        { id: "A", text: "Enregistrer" },
-        { id: "unrelated", text: "Annuler" },
-      ];
-      const baselineStore = await establishBaseline(
-        makeConfig(units, translations),
-        ["A"],
-      );
-      units.splice(0, units.length);
-      const readState: MutableReadState = {
-        dependencies: { revision: 1 },
-      };
-      const config = makeConfig(units, translations, {
-        readState,
-        ...(scenario === "partial-read"
-          ? { partialReadAfterWriteFor: "A" }
-          : {}),
-        withWriteback: true,
-        updatePolicy: () => ({ action: "delete" }),
-      });
-      const plan = await createUpdatePlan(
-        await readFacts(config),
-        baselineStore.baseline,
-        config,
-      );
-      const baselineBefore = structuredClone(baselineStore.baseline);
-      if (scenario === "locator")
-        readState.unlocatableTranslationId = "unrelated";
-
-      const result = await applyUpdatePlan(plan, config, baselineStore);
-
-      assert.equal(
-        result.contentResults[0]?.status,
-        "writeUnconfirmed",
-        `${scenario} must not confirm deletion`,
-      );
-      assert.equal(result.baselineResults[0]?.status, "notAttempted");
-      assert.deepStrictEqual(baselineStore.baseline, baselineBefore);
-      assert.deepStrictEqual(translations, [
-        { id: "unrelated", text: "Annuler" },
-      ]);
-    }
-  });
-
-  void it("continues after one deletion write fails and advances only the confirmed target", async () => {
-    const units: Unit[] = [
-      { id: "A", source: "Save" },
-      { id: "B", source: "Cancel" },
-    ];
-    const translations: Translation[] = [
-      { id: "A", text: "Enregistrer" },
-      { id: "B", text: "Annuler" },
-    ];
-    const baselineStore = await establishBaseline(
-      makeConfig(units, translations),
-      ["A", "B"],
-    );
-    units.splice(0, units.length);
-    const config = makeConfig(units, translations, {
-      failWriteFor: "A",
-      withWriteback: true,
-      updatePolicy: () => ({ action: "delete" }),
-    });
-    const plan = await createUpdatePlan(
-      await readFacts(config),
-      baselineStore.baseline,
-      config,
-    );
-
-    const result = await applyUpdatePlan(plan, config, baselineStore);
-
-    assert.equal(
-      result.contentResults.find(({ sourceKey }) => sourceKey === "A")?.status,
-      "writeFailed",
-    );
-    assert.equal(
-      result.contentResults.find(({ sourceKey }) => sourceKey === "B")?.status,
-      "written",
-    );
-    assert.equal(
-      result.baselineResults.find(({ sourceKey }) => sourceKey === "A")?.status,
-      "notAttempted",
-    );
-    assert.equal(
-      result.baselineResults.find(({ sourceKey }) => sourceKey === "B")?.status,
-      "advanced",
-    );
-    assert.deepStrictEqual(translations, [{ id: "A", text: "Enregistrer" }]);
-    assert.equal(
-      baselineStore.baseline?.entries.find(({ sourceKey }) => sourceKey === "A")
-        ?.processed,
-      true,
-    );
-    assert.equal(
-      baselineStore.baseline?.entries.find(({ sourceKey }) => sourceKey === "B")
-        ?.association.status,
-      "missing",
-    );
-  });
-
-  void it("applies a saved candidate without new choices or another policy call", async () => {
-    const original = makeConfig(
-      [{ id: "A", source: "Save" }],
-      [{ id: "A", text: "Enregistrer" }],
-    );
-    const baselineStore = await establishBaseline(original, ["A"]);
-    const translation = { id: "A", text: "Enregistrer" };
-    let policyCalls = 0;
-    const config = makeConfig(
-      [{ id: "A", source: "Save now" }],
-      [translation],
-      {
-        withWriteback: true,
-        updatePolicy: (input) => {
-          policyCalls += 1;
-          return {
-            action: "candidate",
-            candidate: {
-              sourceKey: input.sourceKey,
-              language: input.language,
-              content: "Sauvegarder",
             },
-          };
-        },
+          ],
+        };
       },
-    );
-    const plan = await createUpdatePlan(
-      await readFacts(config),
-      baselineStore.baseline,
-      config,
-    );
-    assert.equal(plan.items[0]?.status, "candidate");
-    assert.equal(plan.items[0]?.edit?.content, "Sauvegarder");
-
-    const directory = await mkdtemp(
-      path.join(os.tmpdir(), "lioni-saved-plan-"),
-    );
-    const planStore = createFileUpdatePlanStore(
-      path.join(directory, "update-plan.json"),
-    );
-    try {
-      await planStore.save(plan);
-      const savedPlan = await planStore.load();
-      assert.deepStrictEqual(savedPlan, plan);
-      const result = await applyUpdatePlan(
-        savedPlan as NonNullable<typeof savedPlan>,
-        config,
-        baselineStore,
-      );
-
-      assert.equal(result.contentResults[0]?.status, "written");
-      assert.equal(result.baselineResults[0]?.status, "advanced");
-      assert.equal(policyCalls, 1);
-      assert.equal(translation.text, "Sauvegarder");
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
+    },
+    ...(options.withWriter === false
+      ? {}
+      : {
+          translationWriteback: {
+            locateExistingTarget: ({ identity }) => ({
+              status: "located" as const,
+              locator: { range: "fr.json", key: identity.key },
+            }),
+            locateNewTarget: ({ sourceKey, language }) => ({
+              status: "located" as const,
+              locator: { range: `${language}.json`, key: sourceKey },
+            }),
+            write: ({
+              request,
+            }: {
+              readonly request: TranslationWriteRequest<JsonValue, Unit>;
+            }) => {
+              counts.writes += 1;
+              const key =
+                "identity" in request.target
+                  ? request.target.identity.key
+                  : request.target.sourceKey;
+              if (key === faults.writeKey)
+                throw new Error("EISDIR: item-level I/O failure");
+              if (request.operation === "delete") {
+                state.translations = state.translations.filter(
+                  (translation) => translation.id !== key,
+                );
+                return;
+              }
+              if (typeof request.content !== "string")
+                throw new TypeError("测试适配器只接受字符串正文。");
+              const existing = state.translations.find(
+                (translation) => translation.id === key,
+              );
+              if (existing === undefined)
+                state.translations.push({ id: key, text: request.content });
+              else existing.text = request.content;
+            },
+          },
+        }),
   });
 
-  void it("applies a saved plan after unrelated translation metadata changes", async () => {
-    const asyncContentSchema: StandardSchemaV1<JsonValue, JsonValue> = {
-      "~standard": {
-        version: 1,
-        vendor: "lioni-test-async-plan-content",
-        async validate(value) {
-          await Promise.resolve();
-          return jsonValueSchema["~standard"].validate(value);
-        },
-      },
-    };
-    const translation: Translation = {
-      id: "A",
-      text: "Enregistrer",
-      note: "first",
-    };
-    const initial = makeConfig([{ id: "A", source: "Save" }], [translation], {
-      contentSchema: asyncContentSchema,
+  return {
+    config,
+    state,
+    counts,
+    faults,
+    baselineStore,
+    currentBaseline: () => storedBaseline,
+  };
+}
+
+function sampleSource(id = "A"): Unit {
+  return { id, source: `Source ${id}` };
+}
+
+function sampleTranslation(id = "A"): Translation {
+  return { id, text: `Text ${id}`, sourceId: id };
+}
+
+void describe("apply update plan", () => {
+  void it("executes one direct plan without re-comparing, rerunning policy, or advancing baseline", async () => {
+    const scenario = createScenario({ sources: [sampleSource()] });
+
+    const result = await update(scenario.config, scenario.baselineStore);
+
+    assert.equal(result.status, "completed");
+    assert.equal(result.plan.items[0]?.action, "write");
+    assert.equal(result.results[0]?.status, "written");
+    assert.deepEqual(scenario.state.translations, [
+      { id: "A", text: "Source A" },
+    ]);
+    assert.equal(scenario.counts.comparisons, 1);
+    assert.equal(scenario.counts.policies, 1);
+    assert.equal(scenario.counts.baselineLoads, 1);
+    assert.equal(scenario.counts.baselineSaves, 0);
+  });
+
+  void it("rejects a restored delete plan when its expected source is present again", async () => {
+    const source = sampleSource();
+    const scenario = createScenario({
+      sources: [source],
+      translations: [sampleTranslation()],
     });
-    const baselineStore = await establishBaseline(initial, ["A"]);
-    const config = makeConfig(
-      [{ id: "A", source: "Save now" }],
-      [translation],
-      {
-        contentSchema: asyncContentSchema,
-        withWriteback: true,
-        updatePolicy: candidatePolicy(() => "Sauvegarder"),
-      },
-    );
-    const plan = await createUpdatePlan(
-      await readFacts(config),
-      baselineStore.baseline,
-      config,
-    );
-    assert.equal(plan.items[0]?.status, "candidate");
+    await recordComparisonBaseline(scenario.config, scenario.baselineStore);
+    scenario.state.sources = [];
+    const plan = await previewUpdate(scenario.config, scenario.baselineStore);
+    const deletion = plan.items.find(({ action }) => action === "delete");
+    assert.ok(deletion);
+    if (deletion === undefined || deletion.action !== "delete") return;
+    assert.equal(deletion?.request?.expectedSource?.presence, "absent");
+    assert.equal(deletion.request.expectedTarget.range, "fr.json");
+    const restoredPlan = JSON.parse(JSON.stringify(plan)) as unknown;
+    const compareCount = scenario.counts.comparisons;
+    const policyCount = scenario.counts.policies;
+    const baselineLoadCount = scenario.counts.baselineLoads;
+    scenario.state.sources = [source];
 
-    translation.note = "second";
+    const result = await applyUpdatePlan(restoredPlan, scenario.config);
 
-    const result = await applyUpdatePlan(plan, config, baselineStore);
-
-    assert.equal(result.contentResults[0]?.status, "written");
-    assert.equal(result.baselineResults[0]?.status, "advanced");
-    assert.equal(translation.text, "Sauvegarder");
-    assert.equal(translation.note, "second");
+    assert.equal(result.status, "failed");
+    assert.equal(result.results[0]?.status, "conflict");
+    assert.deepEqual(scenario.state.translations, [sampleTranslation()]);
+    assert.equal(scenario.counts.comparisons, compareCount);
+    assert.equal(scenario.counts.policies, policyCount);
+    assert.equal(scenario.counts.baselineLoads, baselineLoadCount);
   });
 
-  void it("rejects a saved plan when an explicitly declared dependency changes", async () => {
-    const translation: Translation = {
-      id: "A",
-      text: "Enregistrer",
-      note: "first",
-    };
-    const readState: MutableReadState = { dependencies: { note: "first" } };
-    const initial = makeConfig([{ id: "A", source: "Save" }], [translation]);
-    const baselineStore = await establishBaseline(initial, ["A"]);
-    const config = makeConfig(
-      [{ id: "A", source: "Save now" }],
-      [translation],
-      {
-        readState,
-        withWriteback: true,
-        updatePolicy: candidatePolicy(() => "Sauvegarder"),
-      },
-    );
-    const plan = await createUpdatePlan(
-      await readFacts(config),
-      baselineStore.baseline,
-      config,
-    );
-    assert.equal(plan.items[0]?.status, "candidate");
-    readState.dependencies = { note: "second" };
-
-    const result = await applyUpdatePlan(plan, config, baselineStore);
-
-    assert.equal(result.contentResults[0]?.status, "conflict");
-    assert.equal(result.baselineResults[0]?.status, "notAttempted");
-    assert.equal(translation.text, "Enregistrer");
-  });
-
-  void it("advances a valid retain decision without changing translation content", async () => {
-    const original = makeConfig(
-      [{ id: "A", source: "Save" }],
-      [{ id: "A", text: "Enregistrer" }],
-    );
-    const baselineStore = await establishBaseline(original, ["A"]);
-    const translation = { id: "A", text: "Enregistrer" };
-    const config = makeConfig([{ id: "A", source: "Save now" }], [translation]);
-    const plan = await createUpdatePlan(
-      await readFacts(config),
-      baselineStore.baseline,
-      config,
-    );
-
-    const result = await applyUpdatePlan(plan, config, baselineStore);
-    const savedUnit = baselineStore.baseline?.entries[0]?.source.unit as
-      | Unit
-      | undefined;
-
-    assert.equal(plan.items[0]?.status, "retain");
-    assert.equal(result.contentResults[0]?.status, "retained");
-    assert.equal(result.baselineResults[0]?.status, "advanced");
-    assert.equal(translation.text, "Enregistrer");
-    assert.equal(savedUnit?.source, "Save now");
-  });
-
-  void it("keeps a planned addition valid when another key in its range advances", async () => {
-    const original = makeConfig(
-      [{ id: "A", source: "Save" }],
-      [{ id: "A", text: "Enregistrer" }],
-    );
-    const baselineStore = await establishBaseline(original, ["A"]);
-    const translations = [
-      { id: "A", text: "Enregistrer" },
-      { id: "B", text: "Annuler" },
-      { id: "C", text: "Ouvrir" },
-    ];
-    const units = [
-      { id: "A", source: "Save" },
-      { id: "B", source: "Cancel" },
-      { id: "C", source: "Open" },
-    ];
-    const config = makeConfig(units, translations, {
-      withWriteback: true,
-      updatePolicy: ({ sourceKey, language }) =>
-        sourceKey === "B"
-          ? {
-              action: "candidate",
-              candidate: { sourceKey, language, content: "Annuler maintenant" },
-            }
-          : { action: "none" },
+  void it("rejects a saved delete plan when its target record changes association", async () => {
+    const scenario = createScenario({
+      sources: [sampleSource()],
+      translations: [sampleTranslation()],
     });
-    const plan = await createUpdatePlan(
-      await readFacts(config),
-      baselineStore.baseline,
-      config,
+    await recordComparisonBaseline(scenario.config, scenario.baselineStore);
+    scenario.state.sources = [];
+    const plan = await previewUpdate(scenario.config, scenario.baselineStore);
+    const deletion = plan.items.find(({ action }) => action === "delete");
+    assert.ok(deletion);
+    if (deletion === undefined || deletion.action !== "delete") return;
+    assert.deepEqual(
+      deletion.request.expectedTarget.record,
+      sampleTranslation(),
     );
+    const restoredPlan = JSON.parse(JSON.stringify(plan)) as unknown;
+    scenario.state.translations[0]!.sourceId = "B";
 
-    const otherKeyAdvance = await advanceProcessingBaseline(
-      baselineStore,
-      await readFacts(config),
-      [{ sourceKey: "C", language: "fr" }],
-      config,
-    );
-    assert.equal(otherKeyAdvance.outcome, "saved");
-    assert.equal(
-      baselineStore.baseline?.entries.some(
-        ({ sourceKey }) => sourceKey === "B",
-      ),
-      false,
-    );
+    const result = await applyUpdatePlan(restoredPlan, scenario.config);
 
-    const result = await applyUpdatePlan(plan, config, baselineStore);
-
-    assert.equal(
-      result.contentResults.find(({ sourceKey }) => sourceKey === "B")?.status,
-      "written",
-    );
-    assert.equal(
-      result.baselineResults.find(({ sourceKey }) => sourceKey === "B")?.status,
-      "advanced",
-    );
-    assert.equal(translations[1]?.text, "Annuler maintenant");
+    assert.equal(result.status, "failed");
+    assert.equal(result.results[0]?.status, "conflict");
+    assert.deepEqual(scenario.state.translations, [
+      { ...sampleTranslation(), sourceId: "B" },
+    ]);
   });
 
-  void it("rejects a stale saved candidate and does not advance its baseline", async () => {
-    const original = makeConfig(
-      [{ id: "A", source: "Save" }],
-      [{ id: "A", text: "Enregistrer" }],
-    );
-    const baselineStore = await establishBaseline(original, ["A"]);
-    const translation = { id: "A", text: "Enregistrer" };
-    const config = makeConfig(
-      [{ id: "A", source: "Save now" }],
-      [translation],
-      {
-        withWriteback: true,
-        updatePolicy: candidatePolicy(() => "Sauvegarder"),
-      },
-    );
-    const plan = await createUpdatePlan(
-      await readFacts(config),
-      baselineStore.baseline,
-      config,
-    );
-    translation.text = "Sauver";
-    const baselineBefore = structuredClone(baselineStore.baseline);
+  void it("keeps no-write decisions successful without requiring a writer or reading facts during apply", async () => {
+    const scenario = createScenario({
+      sources: [sampleSource()],
+      translations: [sampleTranslation()],
+      withWriter: false,
+    });
+    const plan = await previewUpdate(scenario.config);
+    assert.equal(plan.items[0]?.action, "retain");
+    const sourceReads = scenario.counts.sourceRead;
+    const comparisonCount = scenario.counts.comparisons;
+    const policyCount = scenario.counts.policies;
 
-    const result = await applyUpdatePlan(plan, config, baselineStore);
+    const result = await applyUpdatePlan(
+      JSON.parse(JSON.stringify(plan)),
+      scenario.config,
+    );
 
-    assert.equal(result.contentResults[0]?.status, "conflict");
-    assert.equal(result.baselineResults[0]?.status, "notAttempted");
-    assert.equal(translation.text, "Sauver");
-    assert.deepStrictEqual(baselineStore.baseline, baselineBefore);
+    assert.equal(result.status, "completed");
+    assert.equal(result.results[0]?.status, "retained");
+    assert.equal(scenario.counts.sourceRead, sourceReads);
+    assert.equal(scenario.counts.comparisons, comparisonCount);
+    assert.equal(scenario.counts.policies, policyCount);
   });
 
-  void it("advances only confirmed items after a partial write failure", async () => {
-    const initial = makeConfig(
-      [
-        { id: "A", source: "Save" },
-        { id: "B", source: "Cancel" },
-      ],
-      [
-        { id: "A", text: "Enregistrer" },
-        { id: "B", text: "Annuler" },
-      ],
+  void it("reports missing writers and continues after an item-level I/O failure", async () => {
+    const missingWriter = createScenario({
+      sources: [sampleSource()],
+      withWriter: false,
+    });
+    const missingWriterPlan = await previewUpdate(missingWriter.config);
+    const missingResult = await applyUpdatePlan(
+      missingWriterPlan,
+      missingWriter.config,
     );
-    const baselineStore = await establishBaseline(initial, ["A", "B"]);
-    const translations = [
-      { id: "A", text: "Enregistrer" },
-      { id: "B", text: "Annuler" },
-    ];
-    const config = makeConfig(
-      [
-        { id: "A", source: "Save now" },
-        { id: "B", source: "Cancel now" },
-      ],
-      translations,
-      {
-        withWriteback: true,
-        failWriteFor: "A",
-        updatePolicy: candidatePolicy((sourceKey) => `Updated ${sourceKey}`),
-      },
-    );
-    const plan = await createUpdatePlan(
-      await readFacts(config),
-      baselineStore.baseline,
-      config,
-    );
+    assert.equal(missingResult.status, "failed");
+    assert.equal(missingResult.results[0]?.status, "notWritable");
 
-    const result = await applyUpdatePlan(plan, config, baselineStore);
+    const partial = createScenario({
+      sources: [sampleSource("A"), sampleSource("B")],
+    });
+    partial.faults.writeKey = "B";
+    const partialResult = await update(partial.config, partial.baselineStore);
 
-    assert.equal(
-      result.contentResults.find(({ sourceKey }) => sourceKey === "A")?.status,
-      "writeFailed",
+    assert.equal(partialResult.status, "failed");
+    assert.deepEqual(
+      partialResult.results.map(({ status }) => status),
+      ["written", "writeFailed"],
     );
-    assert.equal(
-      result.contentResults.find(({ sourceKey }) => sourceKey === "B")?.status,
-      "written",
-    );
-    assert.equal(
-      result.baselineResults.find(({ sourceKey }) => sourceKey === "A")?.status,
-      "notAttempted",
-    );
-    assert.equal(
-      result.baselineResults.find(({ sourceKey }) => sourceKey === "B")?.status,
-      "advanced",
-    );
-    assert.equal(translations[0]?.text, "Enregistrer");
-    assert.equal(translations[1]?.text, "Updated B");
-  });
-
-  void it("does not advance when the writer returns without changing the target", async () => {
-    const original = makeConfig(
-      [{ id: "A", source: "Save" }],
-      [{ id: "A", text: "Enregistrer" }],
-    );
-    const baselineStore = await establishBaseline(original, ["A"]);
-    const translation = { id: "A", text: "Enregistrer" };
-    const config = makeConfig(
-      [{ id: "A", source: "Save now" }],
-      [translation],
-      {
-        withWriteback: true,
-        ignoreWriteFor: "A",
-        updatePolicy: candidatePolicy(() => "Sauvegarder"),
-      },
-    );
-    const plan = await createUpdatePlan(
-      await readFacts(config),
-      baselineStore.baseline,
-      config,
-    );
-    const baselineBefore = structuredClone(baselineStore.baseline);
-
-    const result = await applyUpdatePlan(plan, config, baselineStore);
-
-    assert.equal(result.contentResults[0]?.status, "writeUnconfirmed");
-    assert.equal(result.baselineResults[0]?.status, "notAttempted");
-    assert.equal(translation.text, "Enregistrer");
-    assert.deepStrictEqual(baselineStore.baseline, baselineBefore);
-  });
-
-  void it("reports confirmed content when its baseline cannot be saved", async () => {
-    const original = makeConfig(
-      [{ id: "A", source: "Save" }],
-      [{ id: "A", text: "Enregistrer" }],
-    );
-    const baselineStore = await establishBaseline(original, ["A"]);
-    const translation = { id: "A", text: "Enregistrer" };
-    const config = makeConfig(
-      [{ id: "A", source: "Save now" }],
-      [translation],
-      {
-        withWriteback: true,
-        updatePolicy: candidatePolicy(() => "Sauvegarder"),
-      },
-    );
-    const plan = await createUpdatePlan(
-      await readFacts(config),
-      baselineStore.baseline,
-      config,
-    );
-    const baselineBefore = structuredClone(baselineStore.baseline);
-    baselineStore.failSaves = true;
-
-    const result = await applyUpdatePlan(plan, config, baselineStore);
-
-    assert.equal(result.contentResults[0]?.status, "written");
-    assert.equal(result.baselineResults[0]?.status, "failed");
-    assert.equal(translation.text, "Sauvegarder");
-    assert.deepStrictEqual(baselineStore.baseline, baselineBefore);
-  });
-
-  void it("does not advance review, not processed, or blocked plan items", async () => {
-    const config = makeConfig(
-      [
-        { id: "review", source: "Review" },
-        { id: "none", source: "Skip" },
-        { id: "blocked", source: "Blocked" },
-      ],
-      [
-        { id: "review", text: "Relire" },
-        { id: "none", text: "Ignorer" },
-        { id: "blocked", text: "Bloqué" },
-      ],
-      {
-        updatePolicy: ({ sourceKey, language }) =>
-          sourceKey === "review"
-            ? { action: "review", reason: "À vérifier." }
-            : sourceKey === "none"
-              ? { action: "none" }
-              : {
-                  action: "candidate",
-                  candidate: { sourceKey, language, content: "Candidat" },
-                },
-      },
-    );
-    const baselineStore = new MemoryBaselineStore();
-    const plan = await createUpdatePlan(
-      await readFacts(config),
-      undefined,
-      config,
-    );
-
-    const result = await applyUpdatePlan(plan, config, baselineStore);
-
-    assert.deepStrictEqual(
-      plan.items.map(({ status }) => status),
-      ["review", "notProcessed", "blocked"],
-    );
-    assert.ok(
-      result.contentResults.every(({ status }) => status === "notAttempted"),
-    );
-    assert.ok(
-      result.baselineResults.every(({ status }) => status === "notAttempted"),
-    );
-    assert.equal(baselineStore.baseline, undefined);
+    assert.deepEqual(partial.state.translations, [
+      { id: "A", text: "Source A" },
+    ]);
   });
 });

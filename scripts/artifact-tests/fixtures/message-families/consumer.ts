@@ -12,10 +12,11 @@ import type {
 } from "@lioni/checks";
 import {
   analyzeQuality,
-  applySemanticEdits,
   defineConfig,
-  prepareQualityConditionedSemanticEdit,
+  readFacts,
+  writeTranslationRequests,
   StandardSchemaContractError,
+  type TranslationWriteRequest,
 } from "@lioni/core";
 import type {
   QualityCheckInput,
@@ -300,13 +301,13 @@ function createConfig(options: ConfigOptions = {}) {
         status: "notWritable",
         reason: "本场景只修改已有译文。",
       }),
-      write: ({ edit }) => {
-        if (edit.operation !== "write")
-          throw new Error("本场景收到意外删除操作。");
-        const locator = edit.target.locator;
+      write: ({ request, target }) => {
+        if (request.operation !== "write")
+          throw new Error("本场景收到意外删除写入请求。");
+        const locator = target.locator;
         if (!isRecord(locator) || typeof locator.id !== "string")
           throw new Error("写回定位器缺少译文记录 id。");
-        storedTexts.set(locator.id, edit.content);
+        storedTexts.set(locator.id, request.content);
       },
     },
     qualityChecks: [checker],
@@ -500,24 +501,56 @@ assert.deepEqual(exceptedDiagnostic.handling, {
   reason: "保留现有界面用语。",
 });
 
-const rejected = await prepareQualityConditionedSemanticEdit(baseline.config, {
-  candidate,
-  condition: (quality) => quality.diagnostics.length === 0,
+const facts = await readFacts(baseline.config);
+const sourceUnit = facts.source.units.find(({ key }) => key === "editing");
+const target = facts.translations.records.find(
+  ({ identity }) => identity.key === "physical",
+);
+assert.ok(sourceUnit);
+assert.ok(target && target.bodyAvailability === "available");
+if (
+  sourceUnit === undefined ||
+  target === undefined ||
+  target.bodyAvailability !== "available"
+)
+  throw new Error("消息族消费场景缺少原文或目标译文。");
+const request: TranslationWriteRequest<string, Unit> = {
+  operation: "write",
+  target: { identity: target.identity },
+  content: candidate.content,
+  expectedSource: {
+    presence: "present",
+    key: sourceUnit.key,
+    unit: sourceUnit.unit,
+    content: sourceUnit.unit.source,
+    range: "en.json",
+  },
+  expectedTarget: {
+    status: "present",
+    identity: target.identity,
+    content: target.content,
+    range: "zh.json",
+    record: target.translation,
+  },
+};
+const rejectedQuality = await analyzeQuality(baseline.config, {
+  candidates: [candidate],
 });
-assert.equal(rejected.status, "rejected");
-if (rejected.status === "rejected")
-  assert.equal(rejected.quality.diagnostics[0]?.severity, "warning");
-
-const passed = await prepareQualityConditionedSemanticEdit(baseline.config, {
-  candidate,
-  condition: (quality) => quality.status === "complete",
-});
-assert.equal(passed.status, "passed");
-if (passed.status !== "passed" || passed.preparation.status !== "prepared")
-  throw new Error("宿主接受完整 warning QA 后应获得可写编辑。");
-const write = await applySemanticEdits(
-  [passed.preparation.edit],
+const rejected = await writeTranslationRequests(
+  [request],
   baseline.config,
+  () => rejectedQuality.diagnostics.length === 0,
+);
+assert.equal(rejected.results[0]?.status, "conflict");
+assert.equal(rejectedQuality.diagnostics[0]?.severity, "warning");
+
+const passedQuality = await analyzeQuality(baseline.config, {
+  candidates: [candidate],
+});
+const write = await writeTranslationRequests(
+  [request],
+  baseline.config,
+  () => passedQuality.status === "complete",
 );
 assert.equal(write.results[0]?.status, "written");
 assert.equal(baseline.storedTexts.get("physical"), candidate.content);

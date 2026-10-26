@@ -5,7 +5,6 @@ import {
   analyzeQuality,
   defineConfig,
   defineQualityCheck,
-  prepareQualityConditionedSemanticEdit,
   StandardSchemaContractError,
   type QualityCheckDefinition,
   type QualityCheckOutcome,
@@ -398,22 +397,5 @@ void describe("quality checker configuration contracts", () => {
       },
     );
     assert.equal(checkerCalled, false);
-  });
-
-  void it("matches cached QA results against the parsed configuration", async () => {
-    const config = qualityConfig(createChecks().checks);
-    const candidate = {
-      sourceKey: "save",
-      language: "fr",
-      content: "A",
-    };
-    const quality = await analyzeQuality(config, { candidates: [candidate] });
-    const result = await prepareQualityConditionedSemanticEdit(config, {
-      candidate,
-      quality,
-      condition: () => true,
-    });
-
-    assert.equal(result.status, "passed");
   });
 });
