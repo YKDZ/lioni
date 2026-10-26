@@ -11,10 +11,12 @@ type Unit = {
   };
 };
 type Translation = {
+  readonly id: string;
   readonly text: string;
   readonly context: { readonly sourceLines: readonly number[] };
 };
 type UnavailableTranslation = {
+  readonly id: string;
   readonly context: { readonly sourceLines: readonly number[] };
 };
 
@@ -30,6 +32,7 @@ const sourceSchema = standardSchema<Unit>(
 const translationSchema = standardSchema<Translation>(
   (value): value is Translation =>
     isRecord(value) &&
+    typeof value.id === "string" &&
     typeof value.text === "string" &&
     isRecord(value.context) &&
     isNumberArray(value.context.sourceLines),
@@ -37,6 +40,7 @@ const translationSchema = standardSchema<Translation>(
 const unavailableTranslationSchema = standardSchema<UnavailableTranslation>(
   (value): value is UnavailableTranslation =>
     isRecord(value) &&
+    typeof value.id === "string" &&
     isRecord(value.context) &&
     isNumberArray(value.context.sourceLines),
 );
@@ -109,6 +113,10 @@ const config = defineConfig({
   },
   translations: {
     languages: ["fr", "ja", "de"],
+    identityOf: (translation) => ({
+      namespace: "catalogue",
+      key: translation.id,
+    }),
     schema: translationSchema,
     unavailableSchema: unavailableTranslationSchema,
     contentSchema,
@@ -128,17 +136,26 @@ const config = defineConfig({
               records: [
                 {
                   value: {
+                    id: "shared-fr",
                     text: "Partagé",
                     context: { sourceLines: [18, 19] },
                   },
                   bodyAvailability: "available",
                 },
                 {
-                  value: { text: "Annuler A", context: { sourceLines: [20] } },
+                  value: {
+                    id: "cancel-a-fr",
+                    text: "Annuler A",
+                    context: { sourceLines: [20] },
+                  },
                   bodyAvailability: "available",
                 },
                 {
-                  value: { text: "Annuler B", context: { sourceLines: [20] } },
+                  value: {
+                    id: "cancel-b-fr",
+                    text: "Annuler B",
+                    context: { sourceLines: [20] },
+                  },
                   bodyAvailability: "available",
                 },
               ],
@@ -149,7 +166,11 @@ const config = defineConfig({
               enumeration: "complete",
               records: [
                 {
-                  value: { text: "Isolé", context: { sourceLines: [] } },
+                  value: {
+                    id: "orphan-fr",
+                    text: "Isolé",
+                    context: { sourceLines: [] },
+                  },
                   bodyAvailability: "available",
                 },
               ],
@@ -165,19 +186,31 @@ const config = defineConfig({
             enumeration: "complete",
             records: [
               {
-                value: { text: "共有", context: { sourceLines: [18, 19] } },
+                value: {
+                  id: "shared-ja",
+                  text: "共有",
+                  context: { sourceLines: [18, 19] },
+                },
                 bodyAvailability: "available",
               },
               {
-                value: { context: { sourceLines: [20] } },
+                value: { id: "unavailable-ja", context: { sourceLines: [20] } },
                 bodyAvailability: "unavailable",
               },
               {
-                value: { text: "孤立", context: { sourceLines: [] } },
+                value: {
+                  id: "orphan-ja",
+                  text: "孤立",
+                  context: { sourceLines: [] },
+                },
                 bodyAvailability: "available",
               },
               {
-                value: { text: "ヘルプ", context: { sourceLines: [21] } },
+                value: {
+                  id: "help-ja",
+                  text: "ヘルプ",
+                  context: { sourceLines: [21] },
+                },
                 bodyAvailability: "available",
               },
             ],

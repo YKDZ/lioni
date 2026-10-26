@@ -15,12 +15,13 @@ import {
   jsonValueSchema,
   schemaFromExamples,
   sourceSchemaFromExamples,
+  fixtureTranslationIdentity,
 } from "./source-schema.ts";
 
 void describe("quality checks", () => {
   void it("rejects non-JSON dependencies before reporting a QA check failure", async () => {
     const unit = { source: "Hello" };
-    const translation = { text: "Bonjour" };
+    const translation = { id: "message:hello", text: "Bonjour" };
     const candidate = {
       sourceKey: "message:hello",
       language: "fr",
@@ -47,6 +48,7 @@ void describe("quality checks", () => {
         keyOf: () => "message:hello",
         translations: {
           languages: ["fr"],
+          identityOf: fixtureTranslationIdentity,
           schema: schemaFromExamples(translation),
           contentSchema: jsonValueSchema,
           contentOf: ({ text }) => text,
@@ -117,7 +119,7 @@ void describe("quality checks", () => {
 
   void it("runs selected checks against one facts snapshot and retains findings", async () => {
     const unit = { source: "Hello {name}" };
-    const translation = { text: "Bonjour" };
+    const translation = { id: "message:hello", text: "Bonjour" };
     const facts = await readFacts(
       defineConfig({
         source: {
@@ -135,6 +137,7 @@ void describe("quality checks", () => {
         keyOf: () => "message:save",
         translations: {
           languages: ["fr"],
+          identityOf: fixtureTranslationIdentity,
           schema: schemaFromExamples(translation),
           contentSchema: jsonValueSchema,
           read: (_language, sourceUnits) => ({

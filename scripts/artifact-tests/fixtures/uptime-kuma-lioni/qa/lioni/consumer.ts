@@ -579,6 +579,10 @@ function makeQualityConfig(analysis: ReturnType<typeof createTextAnalysis>) {
         contentSchema,
         contentOf: (translation) =>
           body(translation.text, translation.language, translation.key),
+        identityOf: (translation) => ({
+          namespace: "uptime-kuma/messages",
+          key: translation.key,
+        }),
         async read(language, sourceUnits) {
           assert.ok(
             locales.includes(language as Locale),

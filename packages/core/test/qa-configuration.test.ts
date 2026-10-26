@@ -12,6 +12,7 @@ import {
   type SemanticEditCandidate,
   type StandardSchemaV1,
 } from "../src/index.ts";
+import { fixtureTranslationIdentity } from "./source-schema.ts";
 
 type Unit = { readonly id: string; readonly source: string };
 type ThresholdInput = { readonly threshold?: number };
@@ -153,6 +154,7 @@ function qualityConfig(
     keyOf: ({ id }) => id,
     translations: {
       languages: ["fr"],
+      identityOf: fixtureTranslationIdentity,
       schema: unitSchema,
       contentSchema: stringBodySchema,
       read(_language, sourceUnits) {

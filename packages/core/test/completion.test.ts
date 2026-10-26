@@ -11,6 +11,7 @@ import {
   jsonValueSchema,
   schemaFromExamples,
   sourceSchemaFromExamples,
+  fixtureTranslationIdentity,
 } from "./source-schema.ts";
 
 void describe("completion", () => {
@@ -39,7 +40,9 @@ void describe("completion", () => {
         keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
         translations: {
           languages: ["fr", "de"],
+          identityOf: fixtureTranslationIdentity,
           schema: schemaFromExamples({
+            id: "example-save",
             text: "Save",
             context: { sourceLine: 18 },
           }),
@@ -56,6 +59,7 @@ void describe("completion", () => {
                       ? [
                           {
                             value: {
+                              id: "save-fr",
                               text: "Save",
                               context: { sourceLine: 18 },
                             },
@@ -63,6 +67,7 @@ void describe("completion", () => {
                           },
                           {
                             value: {
+                              id: "legacy-notice-fr",
                               text: "Legacy notice",
                               context: { sourceLine: 999 },
                             },
@@ -164,7 +169,9 @@ void describe("completion", () => {
         keyOf: (value) => `${value.context.file}:${value.context.line}`,
         translations: {
           languages: ["fr", "de"],
+          identityOf: fixtureTranslationIdentity,
           schema: schemaFromExamples({
+            id: "example-save",
             text: "Enregistrer",
             context: { sourceLine: 18 },
           }),
@@ -180,6 +187,7 @@ void describe("completion", () => {
                   records: [
                     {
                       value: {
+                        id: "save-fr",
                         text: "Enregistrer",
                         context: { sourceLine: 18 },
                       },
@@ -263,7 +271,9 @@ void describe("completion", () => {
         keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
         translations: {
           languages: ["fr"],
+          identityOf: fixtureTranslationIdentity,
           schema: schemaFromExamples({
+            id: "example-save",
             text: "Save",
             context: { sourceLine: 18 },
           }),
@@ -278,6 +288,7 @@ void describe("completion", () => {
                   records: [
                     {
                       value: {
+                        id: "save-fr",
                         text: "Save",
                         context: { sourceLine: 18 },
                       },
@@ -346,6 +357,7 @@ void describe("completion", () => {
         keyOf: (unit) => String(unit.context.line),
         translations: {
           languages: ["fr"],
+          identityOf: fixtureTranslationIdentity,
           schema: schemaFromExamples({
             text: "Save",
             context: { line: 18 },

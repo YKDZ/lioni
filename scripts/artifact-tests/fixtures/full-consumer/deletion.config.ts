@@ -69,6 +69,10 @@ export default defineConfig({
   keyOf: (unit) => unit.id,
   translations: {
     languages: ["fr"],
+    identityOf: (translation) => ({
+      namespace: "deletion",
+      key: translation.id,
+    }),
     schema: translationSchema,
     contentSchema,
     contentOf: (translation) => translation.text,

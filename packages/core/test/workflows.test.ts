@@ -15,6 +15,7 @@ import {
   jsonValueSchema,
   schemaFromExamples,
   sourceSchemaFromExamples,
+  fixtureTranslationIdentity,
 } from "./source-schema.ts";
 
 type Unit = {
@@ -25,6 +26,7 @@ type Unit = {
 type Translation = {
   readonly id: string;
   readonly text: string;
+  readonly targetKey?: string;
 };
 
 function diagnosedEditScenario() {
@@ -51,6 +53,7 @@ function diagnosedEditScenario() {
     keyOf: ({ id }) => id,
     translations: {
       languages: ["fr"],
+      identityOf: fixtureTranslationIdentity,
       schema: schemaFromExamples<Translation>(translation),
       contentSchema: jsonValueSchema,
       read: (_language, sourceUnits) => ({
@@ -164,6 +167,7 @@ void describe("configured analysis workflow", () => {
       keyOf: ({ id }) => id,
       translations: {
         languages: ["fr"],
+        identityOf: fixtureTranslationIdentity,
         schema: schemaFromExamples({ id: "save", text: "Enregistrer" }),
         contentSchema: jsonValueSchema,
         read: (_language, sourceUnits) => ({
@@ -288,6 +292,7 @@ void describe("configured analysis workflow", () => {
       keyOf: ({ id }) => id,
       translations: {
         languages: ["fr", "ja"],
+        identityOf: fixtureTranslationIdentity,
         schema: schemaFromExamples<Translation>({
           id: "example",
           text: "example",
@@ -308,11 +313,19 @@ void describe("configured analysis workflow", () => {
                         bodyAvailability: "unavailable" as const,
                       },
                       {
-                        value: { id: "conflict", text: "x" },
+                        value: {
+                          id: "conflict",
+                          targetKey: "conflict.one",
+                          text: "x",
+                        },
                         bodyAvailability: "available" as const,
                       },
                       {
-                        value: { id: "conflict", text: "y" },
+                        value: {
+                          id: "conflict",
+                          targetKey: "conflict.two",
+                          text: "y",
+                        },
                         bodyAvailability: "available" as const,
                       },
                     ],
@@ -461,6 +474,7 @@ void describe("configured analysis workflow", () => {
       keyOf: ({ id }) => id,
       translations: {
         languages: ["fr"],
+        identityOf: fixtureTranslationIdentity,
         schema: schemaFromExamples<Translation>({
           id: "save",
           text: "Enregistrer",
@@ -538,6 +552,7 @@ void describe("configured analysis workflow", () => {
       keyOf: ({ id }) => id,
       translations: {
         languages: ["fr"],
+        identityOf: fixtureTranslationIdentity,
         schema: schemaFromExamples<Translation>({
           id: "external",
           text: "外部",

@@ -21,6 +21,7 @@ import {
   jsonValueSchema,
   schemaFromExamples,
   sourceSchemaFromExamples,
+  fixtureTranslationIdentity,
 } from "./source-schema.ts";
 
 function textContent(content: unknown): string {
@@ -82,6 +83,7 @@ void describe("semantic edits", () => {
       keyOf: (unit) => unit.id,
       translations: {
         languages: ["fr"],
+        identityOf: fixtureTranslationIdentity,
         schema: schemaFromExamples(translation),
         contentSchema: jsonValueSchema,
         contentOf: (value) => value.text,
@@ -212,6 +214,7 @@ void describe("semantic edits", () => {
       keyOf: ({ id }) => id,
       translations: {
         languages: ["fr"],
+        identityOf: fixtureTranslationIdentity,
         schema: schemaFromExamples(translation),
         contentSchema: jsonValueSchema,
         read: () => ({
@@ -274,7 +277,11 @@ void describe("semantic edits", () => {
 
   void it("prepares a structured edit without a writer, QA, or baseline", async () => {
     const source = { source: "Save", context: { key: "toolbar.save" } };
-    const translation = { text: "Enregistrer", state: "reviewed" };
+    const translation = {
+      id: "toolbar.save",
+      text: "Enregistrer",
+      state: "reviewed",
+    };
     const config = defineConfig({
       source: {
         schema: sourceSchemaFromExamples(source),
@@ -291,6 +298,7 @@ void describe("semantic edits", () => {
       keyOf: ({ context }) => context.key,
       translations: {
         languages: ["fr"],
+        identityOf: fixtureTranslationIdentity,
         schema: schemaFromExamples(translation),
         contentSchema: jsonValueSchema,
         read(_language, sourceUnits) {
@@ -357,6 +365,7 @@ void describe("semantic edits", () => {
       state: "draft",
     });
     assert.deepStrictEqual(translation, {
+      id: "toolbar.save",
       text: "Enregistrer",
       state: "reviewed",
     });
@@ -398,6 +407,7 @@ void describe("semantic edits", () => {
       keyOf: (unit) => unit.context.key,
       translations: {
         languages: ["fr"],
+        identityOf: fixtureTranslationIdentity,
         schema: schemaFromExamples(translation),
         contentSchema,
         read(_language, sourceUnits) {
@@ -517,7 +527,9 @@ void describe("semantic edits", () => {
       keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
       translations: {
         languages: ["fr"],
+        identityOf: fixtureTranslationIdentity,
         schema: schemaFromExamples({
+          id: "messages.save.fr",
           text: "Enregistrer",
           context: {
             file: "locales/fr.json",
@@ -536,6 +548,7 @@ void describe("semantic edits", () => {
                 records: [
                   {
                     value: {
+                      id: "messages.save.fr",
                       text: "Enregistrer",
                       context: {
                         file: "locales/fr.json",
@@ -635,7 +648,7 @@ void describe("semantic edits", () => {
 
   void it("rejects writeback dependencies that cannot be saved as JSON", async () => {
     const source = { source: "Save", context: { key: "toolbar.save" } };
-    const translation = { text: "Enregistrer" };
+    const translation = { id: "toolbar.save", text: "Enregistrer" };
     const config = defineConfig({
       source: {
         schema: sourceSchemaFromExamples(source),
@@ -652,6 +665,7 @@ void describe("semantic edits", () => {
       keyOf: ({ context }) => context.key,
       translations: {
         languages: ["fr"],
+        identityOf: fixtureTranslationIdentity,
         schema: schemaFromExamples(translation),
         contentSchema: jsonValueSchema,
         read(_language, sourceUnits) {
@@ -729,6 +743,7 @@ void describe("semantic edits", () => {
         },
         translations: {
           languages: ["fr"],
+          identityOf: fixtureTranslationIdentity,
           schema: schemaFromExamples(translation),
           contentSchema: jsonValueSchema,
           read(_language, sourceUnits) {
@@ -860,7 +875,9 @@ void describe("semantic edits", () => {
       keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
       translations: {
         languages: ["fr"],
+        identityOf: fixtureTranslationIdentity,
         schema: schemaFromExamples({
+          id: "toolbar.save.fr",
           text: "Enregistrer",
           context: {
             file: "locales/fr.json",
@@ -879,6 +896,7 @@ void describe("semantic edits", () => {
                 records: [
                   {
                     value: {
+                      id: "toolbar.save.fr",
                       text: state.translationText,
                       context: {
                         file: "locales/fr.json",
@@ -992,7 +1010,9 @@ void describe("semantic edits", () => {
       keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
       translations: {
         languages: ["fr"],
+        identityOf: fixtureTranslationIdentity,
         schema: schemaFromExamples({
+          id: "toolbar.save.fr",
           text: "Enregistrer",
           context: {
             file: "locales/fr.json",
@@ -1014,6 +1034,7 @@ void describe("semantic edits", () => {
                     : [
                         {
                           value: {
+                            id: "toolbar.save.fr",
                             text: state.translationText,
                             context: {
                               file: "locales/fr.json",
@@ -1115,6 +1136,7 @@ void describe("semantic edits", () => {
       keyOf: (unit) => `message:${unit.context.line}`,
       translations: {
         languages: ["fr"],
+        identityOf: fixtureTranslationIdentity,
         schema: schemaFromExamples({
           text: "Enregistrer",
           context: { file: "locales/fr.json", key: "shared" },

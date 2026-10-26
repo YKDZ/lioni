@@ -19,6 +19,7 @@ import { parseJson } from "./schemas.ts";
 
 type SourceUnit = { readonly id: string; readonly source: string };
 type TargetTranslation = {
+  readonly targetId: string;
   readonly sourceId: string;
   readonly text: string;
   readonly path?: string;

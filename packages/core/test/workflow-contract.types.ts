@@ -8,6 +8,7 @@ import type {
   StandardSchemaV1,
   TranslationUnitInput,
 } from "../src/index.ts";
+import { fixtureTranslationIdentity } from "./source-schema.ts";
 
 type Unit = {
   readonly source: string;
@@ -51,6 +52,7 @@ const config = defineConfig({
   keyOf: (unit) => unit.context.key,
   translations: {
     languages: ["fr"],
+    identityOf: fixtureTranslationIdentity,
     schema: translationSchema,
     contentSchema: bodySchema,
     read: () => ({ scopes: [] }),
@@ -118,6 +120,7 @@ defineConfig({
   keyOf: (unit) => unit.context.key,
   translations: {
     languages: ["fr"],
+    identityOf: fixtureTranslationIdentity,
     schema: translationSchema,
     contentSchema: bodySchema,
     read: () => ({ scopes: [] }),

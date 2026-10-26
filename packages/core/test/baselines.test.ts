@@ -16,6 +16,7 @@ import {
   jsonValueSchema,
   schemaFromExamples,
   sourceSchemaFromExamples,
+  fixtureTranslationIdentity,
 } from "./source-schema.ts";
 
 type Unit = {
@@ -26,6 +27,7 @@ type Unit = {
 type Translation = {
   readonly text: string;
   readonly id: string;
+  readonly targetKey?: string;
 };
 
 const translationSchema = schemaFromExamples<Translation>({
@@ -44,6 +46,7 @@ const historyConfig = defineConfig({
   keyOf: (unit) => unit.id,
   translations: {
     languages: ["fr", "de"],
+    identityOf: fixtureTranslationIdentity,
     schema: translationSchema,
     contentSchema: jsonValueSchema,
     contentOf: () => null,
@@ -119,6 +122,7 @@ function makeScopedFacts(
       keyOf: (unit) => unit.id,
       translations: {
         languages,
+        identityOf: fixtureTranslationIdentity,
         schema: translationSchema,
         contentSchema: jsonValueSchema,
         read: () => {
@@ -856,8 +860,8 @@ void describe("processing baselines", () => {
     const conflictFacts = await makeFacts(
       [{ id: "A", source: "Save" }],
       [
-        { id: "A", text: "Enregistrer A" },
-        { id: "A", text: "Enregistrer B" },
+        { id: "A", targetKey: "A.one", text: "Enregistrer A" },
+        { id: "A", targetKey: "A.two", text: "Enregistrer B" },
       ],
     );
     const conflict = await advanceProcessingBaseline(store, conflictFacts, [

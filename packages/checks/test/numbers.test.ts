@@ -251,6 +251,10 @@ function configFor(
     keyOf: ({ identity }) => `hash:${identity}`,
     translations: {
       languages: ["fr"],
+      identityOf: (translation) => ({
+        namespace: "messages",
+        key: translation.nativeKey,
+      }),
       schema: translationSchema,
       contentSchema: jsonValueSchema,
       contentOf: ({ text }) => text,
@@ -512,6 +516,10 @@ void describe("阿拉伯数字对应检查", () => {
       keyOf: ({ identity }) => `hash:${identity}`,
       translations: {
         languages: ["fr"],
+        identityOf: (translation) => ({
+          namespace: "messages",
+          key: translation.nativeKey,
+        }),
         schema: mixedTranslationSchema,
         contentSchema: mixedBodySchema,
         contentOf: ({ text }) => text,

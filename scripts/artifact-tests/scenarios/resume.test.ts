@@ -25,15 +25,27 @@ testFullConsumer(
       ),
       writeFile(
         path.join(translations, "A.json"),
-        JSON.stringify({ sourceId: "A", text: "译文 A" }),
+        JSON.stringify({
+          targetId: "target-A",
+          sourceId: "A",
+          text: "译文 A",
+        }),
       ),
       writeFile(
         path.join(translations, "B.json"),
-        JSON.stringify({ sourceId: "B", text: "译文 B" }),
+        JSON.stringify({
+          targetId: "target-B",
+          sourceId: "B",
+          text: "译文 B",
+        }),
       ),
       writeFile(
         path.join(translations, "C.json"),
-        JSON.stringify({ sourceId: "C", text: "译文 C" }),
+        JSON.stringify({
+          targetId: "target-C",
+          sourceId: "C",
+          text: "译文 C",
+        }),
       ),
     ]);
     await runNode("resume-host.ts", ["initialize"]);

@@ -5,6 +5,7 @@ import { defineConfig } from "@lioni/core";
 import { isRecord, standardSchema } from "./schemas.ts";
 
 type Translation = {
+  id: string;
   text: string;
   context: { sourceLine: number };
 };
@@ -23,6 +24,7 @@ const sourceSchema = standardSchema<Unit>(
 const translationSchema = standardSchema<Translation>(
   (value): value is Translation =>
     isRecord(value) &&
+    typeof value.id === "string" &&
     typeof value.text === "string" &&
     isRecord(value.context) &&
     typeof value.context.sourceLine === "number",
@@ -57,6 +59,10 @@ export default defineConfig({
   },
   translations: {
     languages: ["fr", "de"],
+    identityOf: (translation) => ({
+      namespace: "completion",
+      key: translation.id,
+    }),
     schema: translationSchema,
     contentSchema,
     contentOf: (translation) => translation.text,

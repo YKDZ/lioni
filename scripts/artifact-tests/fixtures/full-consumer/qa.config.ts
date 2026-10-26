@@ -164,6 +164,10 @@ export default defineConfig({
   keyOf: (unit) => "sha256:" + unit.nativeId,
   translations: {
     languages: ["fr"],
+    identityOf: (translation) => ({
+      namespace: "qa-messages",
+      key: translation.nativeKey,
+    }),
     schema: translationSchema,
     contentSchema,
     contentOf: (translation) => translation.text,

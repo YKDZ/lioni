@@ -5,8 +5,10 @@ import {
   defineConfig,
   DuplicateTranslationUnitKeyError,
   readFacts,
+  readComparisonSnapshot,
   readSourceFacts,
   StandardSchemaContractError,
+  TranslationIdentityContractError,
 } from "../src/index.ts";
 import type { FrameworkConfig, StandardSchemaV1 } from "../src/index.ts";
 import {
@@ -14,6 +16,7 @@ import {
   jsonValueSchema,
   schemaFromExamples,
   sourceSchemaFromExamples,
+  fixtureTranslationIdentity,
 } from "./source-schema.ts";
 
 type StructuredSource = string | readonly string[] | { readonly text: string };
@@ -440,6 +443,7 @@ void describe("framework facts", () => {
         keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
         translations: {
           languages: ["fr"],
+          identityOf: fixtureTranslationIdentity,
           read(language, sourceUnits) {
             reads += 1;
             assert.equal(language, "fr");
@@ -452,13 +456,18 @@ void describe("framework facts", () => {
                   records: [
                     {
                       value: {
+                        id: "save-fr",
                         text: "Enregistrer",
                         context: { sourceLine: 18 },
                       },
                       bodyAvailability: "available",
                     },
                     {
-                      value: { text: "Avis", context: { sourceLine: 999 } },
+                      value: {
+                        id: "legacy-notice-fr",
+                        text: "Avis",
+                        context: { sourceLine: 999 },
+                      },
                       bodyAvailability: "available",
                     },
                   ],
@@ -467,6 +476,7 @@ void describe("framework facts", () => {
             };
           },
           schema: schemaFromExamples({
+            id: "example-save",
             text: "Enregistrer",
             context: { sourceLine: 18 },
           }),
@@ -519,7 +529,13 @@ void describe("framework facts", () => {
       language: "fr",
       scopeIndex: 0,
       range: "catalogue.fr",
+      identity: {
+        language: "fr",
+        namespace: "fixture",
+        key: "save-fr",
+      },
       translation: {
+        id: "save-fr",
         text: "Enregistrer",
         context: { sourceLine: 18 },
       },
@@ -527,6 +543,271 @@ void describe("framework facts", () => {
       bodyAvailability: "available",
     });
     assert.match(facts.version, /^sha256:[a-f0-9]{64}$/u);
+  });
+
+  void it("reads stable target identities and read evidence without association configuration", async () => {
+    const units = [
+      { source: "Save", context: { line: 18 } },
+      { source: "Submit", context: { line: 19 } },
+    ];
+    const translations = [
+      { id: "toolbar.save", text: "Enregistrer" },
+      { id: "legacy.notice", text: "Avis" },
+    ];
+    const read = async (records: readonly (typeof translations)[number][]) =>
+      readComparisonSnapshot(
+        defineConfig({
+          source: {
+            schema: sourceSchemaFromExamples(...units),
+            read: () => completeSource(...units),
+          },
+          keyOf: (unit) => `message:${unit.context.line}`,
+          translations: {
+            languages: ["fr"],
+            schema: schemaFromExamples(translations[0]!),
+            contentSchema: jsonValueSchema,
+            identityOf: (translation) => ({
+              namespace: "messages",
+              key: translation.id,
+            }),
+            read: () => ({
+              scopes: [
+                {
+                  range: "locales/fr.json",
+                  covers: ["message:18", "message:19"],
+                  enumeration: "complete",
+                  records: records.map((value) => ({
+                    value,
+                    bodyAvailability: "available" as const,
+                  })),
+                },
+              ],
+            }),
+            contentOf: (translation) => translation.text,
+          },
+        }),
+      );
+
+    const before = await read(translations);
+    const after = await read([
+      { id: "legacy.notice", text: "Avis corrigé" },
+      { id: "toolbar.save", text: "Sauvegarder" },
+    ]);
+
+    assert.deepStrictEqual(
+      before.translations.records.map(({ identity }) => identity),
+      [
+        { language: "fr", namespace: "messages", key: "toolbar.save" },
+        { language: "fr", namespace: "messages", key: "legacy.notice" },
+      ],
+    );
+    assert.deepStrictEqual(
+      after.translations.records.map(({ identity }) => identity),
+      [
+        { language: "fr", namespace: "messages", key: "legacy.notice" },
+        { language: "fr", namespace: "messages", key: "toolbar.save" },
+      ],
+    );
+    assert.equal(after.translations.records[0]?.content, "Avis corrigé");
+    assert.deepStrictEqual(after.translations.reads[0]?.scopes[0], {
+      range: "locales/fr.json",
+      covers: ["message:18", "message:19"],
+      enumeration: "complete",
+      translationIndexes: [0, 1],
+    });
+  });
+
+  void it("does not validate an unused association callback while reading a snapshot", async () => {
+    const unit = { source: "Save" };
+    const translation = { id: "save", text: "Enregistrer" };
+    const config = defineConfig({
+      source: {
+        schema: sourceSchemaFromExamples(unit),
+        read: () => completeSource(unit),
+      },
+      keyOf: () => "save",
+      translations: {
+        languages: ["fr"],
+        schema: schemaFromExamples(translation),
+        contentSchema: jsonValueSchema,
+        identityOf: (value) => ({ namespace: "messages", key: value.id }),
+        read: () => ({
+          scopes: [
+            {
+              range: "locales/fr.json",
+              covers: ["save"],
+              enumeration: "complete",
+              records: [{ value: translation, bodyAvailability: "available" }],
+            },
+          ],
+        }),
+        matches: 42 as never,
+        contentOf: (value) => value.text,
+      },
+    });
+
+    const snapshot = await readComparisonSnapshot(config);
+
+    assert.equal(snapshot.translations.records[0]?.identity.key, "save");
+    await assert.rejects(readFacts(config), StandardSchemaContractError);
+  });
+
+  void it("rejects missing or duplicate target identities as adapter contract errors", async () => {
+    const unit = { source: "Save" };
+    const records = [
+      { id: "save", text: "Enregistrer" },
+      { id: "save", text: "Sauvegarder" },
+    ];
+    const configFor = (
+      values: readonly (typeof records)[number][],
+      identityOf: (translation: (typeof records)[number]) => unknown,
+    ) =>
+      defineConfig({
+        source: {
+          schema: sourceSchemaFromExamples(unit),
+          read: () => completeSource(unit),
+        },
+        keyOf: () => "save",
+        translations: {
+          languages: ["fr"],
+          schema: schemaFromExamples(records[0]!),
+          contentSchema: jsonValueSchema,
+          identityOf: (translation) => identityOf(translation) as never,
+          read: () => ({
+            scopes: [
+              {
+                range: "locales/fr.json",
+                covers: ["save"],
+                enumeration: "complete",
+                records: values.map((value) => ({
+                  value,
+                  bodyAvailability: "available" as const,
+                })),
+              },
+            ],
+          }),
+          contentOf: (translation) => translation.text,
+        },
+      });
+
+    await assert.rejects(
+      readComparisonSnapshot(configFor([records[0]!], () => undefined)),
+      (error: unknown) =>
+        error instanceof TranslationIdentityContractError &&
+        error.reason === "missing",
+    );
+    await assert.rejects(
+      readComparisonSnapshot(
+        configFor(records, (translation) => ({
+          namespace: "messages",
+          key: translation.id,
+        })),
+      ),
+      (error: unknown) =>
+        error instanceof TranslationIdentityContractError &&
+        error.reason === "duplicate" &&
+        error.firstIndex === 0 &&
+        error.duplicateIndex === 1,
+    );
+  });
+
+  void it("distinguishes a complete empty target scope, an unread language, and unavailable content", async () => {
+    const unit = { source: "Save" };
+    const config = defineConfig({
+      source: {
+        schema: sourceSchemaFromExamples(unit),
+        read: () => completeSource(unit),
+      },
+      keyOf: () => "save",
+      translations: {
+        languages: ["fr", "de", "zh"],
+        schema: schemaFromExamples({ id: "save", text: "Enregistrer" }),
+        unavailableSchema: schemaFromExamples({ id: "old" }),
+        contentSchema: jsonValueSchema,
+        identityOf: (translation) => ({
+          namespace: "targets",
+          key: translation.id,
+        }),
+        read(language) {
+          if (language === "de") return { scopes: [] };
+          if (language === "fr")
+            return {
+              scopes: [
+                {
+                  range: "locales/fr.json",
+                  covers: ["save"],
+                  enumeration: "complete",
+                  records: [],
+                },
+              ],
+            };
+          return {
+            scopes: [
+              {
+                range: "locales/zh.json",
+                covers: ["save"],
+                enumeration: "complete",
+                records: [
+                  {
+                    value: { id: "old" },
+                    bodyAvailability: "unavailable" as const,
+                  },
+                ],
+              },
+            ],
+          };
+        },
+        contentOf: (translation) => translation.text,
+      },
+    });
+
+    const snapshot = await readComparisonSnapshot(config);
+
+    assert.deepStrictEqual(
+      snapshot.translations.reads.map(({ language, status, scopes }) => ({
+        language,
+        status,
+        scopes: scopes.map(({ range, enumeration, translationIndexes }) => ({
+          range,
+          enumeration,
+          translationIndexes,
+        })),
+      })),
+      [
+        {
+          language: "fr",
+          status: "complete",
+          scopes: [
+            {
+              range: "locales/fr.json",
+              enumeration: "complete",
+              translationIndexes: [],
+            },
+          ],
+        },
+        { language: "de", status: "notRead", scopes: [] },
+        {
+          language: "zh",
+          status: "complete",
+          scopes: [
+            {
+              range: "locales/zh.json",
+              enumeration: "complete",
+              translationIndexes: [0],
+            },
+          ],
+        },
+      ],
+    );
+    assert.deepStrictEqual(snapshot.translations.records[0], {
+      index: 0,
+      language: "zh",
+      scopeIndex: 0,
+      range: "locales/zh.json",
+      translation: { id: "old" },
+      identity: { language: "zh", namespace: "targets", key: "old" },
+      bodyAvailability: "unavailable",
+    });
   });
 
   void it("keeps partial matching unknown while retaining observed conflicts and independent facts", async () => {
@@ -544,6 +825,7 @@ void describe("framework facts", () => {
         keyOf: (unit) => `message:${unit.context.line}`,
         translations: {
           languages: ["fr"],
+          identityOf: fixtureTranslationIdentity,
           schema: schemaFromExamples({
             text: "Enregistrer",
             context: { line: 18 },
@@ -558,15 +840,27 @@ void describe("framework facts", () => {
                   enumeration: "partial",
                   records: [
                     {
-                      value: { text: "Enregistrer", context: { line: 18 } },
+                      value: {
+                        id: "save",
+                        text: "Enregistrer",
+                        context: { line: 18 },
+                      },
                       bodyAvailability: "available",
                     },
                     {
-                      value: { text: "Envoyer A", context: { line: 19 } },
+                      value: {
+                        id: "submit-a",
+                        text: "Envoyer A",
+                        context: { line: 19 },
+                      },
                       bodyAvailability: "available",
                     },
                     {
-                      value: { text: "Envoyer B", context: { line: 19 } },
+                      value: {
+                        id: "submit-b",
+                        text: "Envoyer B",
+                        context: { line: 19 },
+                      },
                       bodyAvailability: "available",
                     },
                   ],
@@ -577,7 +871,11 @@ void describe("framework facts", () => {
                   enumeration: "complete",
                   records: [
                     {
-                      value: { text: "Annuler", context: { line: 20 } },
+                      value: {
+                        id: "cancel",
+                        text: "Annuler",
+                        context: { line: 20 },
+                      },
                       bodyAvailability: "available",
                     },
                   ],
@@ -632,6 +930,7 @@ void describe("framework facts", () => {
       { source: "Cancel", context: { line: 20 } },
     ];
     type Translation = {
+      readonly id: string;
       readonly text: string;
       readonly context: { readonly sourceLines: readonly number[] };
     };
@@ -645,11 +944,14 @@ void describe("framework facts", () => {
         keyOf: (unit) => `message:${unit.context.line}`,
         translations: {
           languages: ["fr", "de"],
+          identityOf: fixtureTranslationIdentity,
           schema: schemaFromExamples<Translation>({
+            id: "shared-fr",
             text: "Enregistrer",
             context: { sourceLines: [18, 19] },
           }),
           unavailableSchema: schemaFromExamples({
+            id: "unavailable-fr",
             context: { sourceLines: [20] },
           }),
           contentSchema: jsonValueSchema,
@@ -664,6 +966,7 @@ void describe("framework facts", () => {
                   records: [
                     {
                       value: {
+                        id: "shared-fr",
                         text: "Enregistrer",
                         context: { sourceLines: [18, 19] },
                       },
@@ -671,12 +974,17 @@ void describe("framework facts", () => {
                     },
                     {
                       value: {
+                        id: "unavailable-fr",
                         context: { sourceLines: [20] },
                       },
                       bodyAvailability: "unavailable",
                     },
                     {
-                      value: { text: "Orphan", context: { sourceLines: [] } },
+                      value: {
+                        id: "orphan-fr",
+                        text: "Orphan",
+                        context: { sourceLines: [] },
+                      },
                       bodyAvailability: "available",
                     },
                   ],
@@ -774,9 +1082,11 @@ void describe("framework facts", () => {
       "unavailable",
     );
     assert.deepStrictEqual(facts.translations.records[1]?.translation, {
+      id: "unavailable-fr",
       context: { sourceLines: [20] },
     });
     assert.deepStrictEqual(facts.translations.records[2]?.translation, {
+      id: "orphan-fr",
       text: "Orphan",
       context: { sourceLines: [] },
     });
@@ -841,6 +1151,7 @@ void describe("framework facts", () => {
       keyOf: () => "save",
       translations: {
         languages: ["fr"],
+        identityOf: fixtureTranslationIdentity,
         schema: translationSchema,
         contentSchema: jsonValueSchema,
         read: () => ({
@@ -873,6 +1184,7 @@ void describe("framework facts", () => {
       keyOf: () => "save",
       translations: {
         languages: ["fr"],
+        identityOf: fixtureTranslationIdentity,
         schema: translationSchema,
         contentSchema: jsonValueSchema,
         async read() {
@@ -911,6 +1223,7 @@ void describe("framework facts", () => {
         keyOf: () => "save",
         translations: {
           languages: ["fr"],
+          identityOf: fixtureTranslationIdentity,
           schema: schemaFromExamples(translation),
           contentSchema: jsonValueSchema,
           read() {
@@ -941,6 +1254,7 @@ void describe("framework facts", () => {
         keyOf: (unit) => `message:${unit.context.line}`,
         translations: {
           languages: ["fr"],
+          identityOf: fixtureTranslationIdentity,
           schema: schemaFromExamples({ text: "Example" }),
           contentSchema: jsonValueSchema,
           read: () => ({ scopes: [] }),
@@ -1004,6 +1318,7 @@ void describe("framework facts", () => {
         keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
         translations: {
           languages: ["fr"],
+          identityOf: fixtureTranslationIdentity,
           schema: schemaFromExamples<AvailableTranslation>(available),
           unavailableSchema:
             schemaFromExamples<UnavailableTranslation>(unavailable),
@@ -1078,6 +1393,7 @@ void describe("framework facts", () => {
       keyOf: (value) => `message:${value.context.line}`,
       translations: {
         languages: ["fr"],
+        identityOf: fixtureTranslationIdentity,
         schema: schemaFromExamples<Translation>(validTranslation),
         contentSchema: schemaFromExamples<string>("Enregistrer"),
         read: () => ({
@@ -1120,6 +1436,7 @@ void describe("framework facts", () => {
       keyOf: (value) => `message:${value.context.line}`,
       translations: {
         languages: ["fr"],
+        identityOf: fixtureTranslationIdentity,
         schema: schemaFromExamples<Translation>(translation),
         contentSchema: schemaFromExamples<string>("Enregistrer"),
         read: () => ({
@@ -1168,6 +1485,7 @@ void describe("framework facts", () => {
       keyOf: (value) => `message:${value.context.line}`,
       translations: {
         languages: ["fr"],
+        identityOf: fixtureTranslationIdentity,
         schema: schemaFromExamples<Translation>(translation),
         contentSchema: changedContentSchema,
         read: () => ({
@@ -1197,6 +1515,7 @@ void describe("framework facts", () => {
       keyOf: (value: typeof unit) => `message:${value.context.line}`,
       translations: {
         languages: ["fr"],
+        identityOf: fixtureTranslationIdentity,
         schema: schemaFromExamples<Translation>(translation),
         contentSchema: schemaFromExamples<string>("Enregistrer"),
         read: () => ({

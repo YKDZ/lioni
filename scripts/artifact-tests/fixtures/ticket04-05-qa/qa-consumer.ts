@@ -193,6 +193,7 @@ const config = defineConfig({
     schema: translationSchema,
     contentSchema: stringSchema,
     contentOf: ({ text }) => text,
+    identityOf: ({ id }) => ({ namespace: "ticket05", key: id }),
     read: (_language, sourceUnits) => ({
       scopes: [
         {

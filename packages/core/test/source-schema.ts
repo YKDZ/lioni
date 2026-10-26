@@ -23,6 +23,48 @@ export function schemaFromExamples<TValue>(
   };
 }
 
+export function fixtureTranslationIdentity(value: unknown): {
+  readonly namespace: string;
+  readonly key: string;
+} {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    throw new TypeError("测试译文必须提供稳定的 fixture 身份字段。");
+  const record = value as Record<string, unknown>;
+  const context =
+    typeof record.context === "object" &&
+    record.context !== null &&
+    !Array.isArray(record.context)
+      ? (record.context as Record<string, unknown>)
+      : undefined;
+  // 测试身份只从译文自身的目标键字段读取，不借用原文关联或物理定位。
+  const identityValue =
+    record.targetId ??
+    record.targetKey ??
+    record.id ??
+    record.key ??
+    context?.targetId ??
+    context?.targetKey ??
+    context?.id ??
+    context?.key;
+  if (
+    (typeof identityValue !== "string" &&
+      typeof identityValue !== "number" &&
+      !Array.isArray(identityValue)) ||
+    (typeof identityValue === "string" && identityValue.length === 0)
+  )
+    throw new TypeError("测试译文必须提供稳定的 fixture 身份字段。");
+  const namespaceValue = record.namespace ?? context?.namespace ?? "fixture";
+  if (typeof namespaceValue !== "string" || namespaceValue.length === 0)
+    throw new TypeError("测试译文 fixture 身份空间必须是非空字符串。");
+  return {
+    namespace: namespaceValue,
+    key:
+      typeof identityValue === "string"
+        ? identityValue
+        : JSON.stringify(identityValue),
+  };
+}
+
 export const jsonValueSchema: StandardSchemaV1<JsonValue, JsonValue> = {
   "~standard": {
     version: 1,
