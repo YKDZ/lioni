@@ -844,15 +844,45 @@ function assertComparisonJsonValue(
   description: string,
   kind: "input" | "result",
 ): void {
+  let valueToValidate = value;
+  if (kind === "input" && isRecord(value)) {
+    const { previous, ...input } = value;
+    valueToValidate = previous === undefined ? input : value;
+  } else if (kind === "result" && isRecord(value)) {
+    const { sourceChanges, translationChanges, reads, ...result } = value;
+    valueToValidate = {
+      ...result,
+      sourceChanges: withoutUndefinedSides(sourceChanges),
+      translationChanges: withoutUndefinedSides(translationChanges),
+      reads: withoutUndefinedReadPrevious(reads),
+    };
+  }
   try {
-    assertJsonValue(value, description, {
-      omitUndefinedObjectProperties: true,
-    });
+    assertJsonValue(valueToValidate, description);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (kind === "input") invalidInput(message);
     invalidResult(message);
   }
+}
+
+function withoutUndefinedSides(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  return value.map((change) => {
+    if (!isRecord(change)) return change;
+    const { previous, current, ...rest } = change;
+    return {
+      ...rest,
+      ...(previous === undefined ? {} : { previous }),
+      ...(current === undefined ? {} : { current }),
+    };
+  });
+}
+
+function withoutUndefinedReadPrevious(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  const { previous, ...rest } = value;
+  return previous === undefined ? rest : value;
 }
 
 function invalidResult(message: string): never {
