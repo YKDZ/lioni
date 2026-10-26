@@ -51,7 +51,10 @@ type CliEnvelope<TData> = {
 type ResourceFacts = {
   readonly version: string;
   readonly source: {
-    readonly units: readonly { readonly key: string }[];
+    readonly units: readonly {
+      readonly key: string;
+      readonly unit: { readonly source: { readonly text: string } };
+    }[];
   };
   readonly translations: {
     readonly records: readonly {
@@ -69,6 +72,27 @@ type BaselineResult = {
   readonly path: string;
   readonly sourceUnitCount: number;
   readonly translationRecordCount: number;
+};
+type UpdatePlanResult = {
+  readonly items: readonly {
+    readonly action: string;
+    readonly sourceKey?: string;
+    readonly language: string;
+    readonly request?: {
+      readonly operation: string;
+      readonly target: {
+        readonly sourceKey?: string;
+        readonly language?: string;
+        readonly identity?: {
+          readonly language: string;
+          readonly namespace: string;
+          readonly key: string;
+        };
+      };
+      readonly content?: { readonly text: string };
+      readonly expectedTarget?: { readonly status: string };
+    };
+  }[];
 };
 type QualityResult = {
   readonly status: string;
@@ -169,6 +193,10 @@ const runKumaScenario: ConsumerScenario = async ({
   await cp(
     path.join(root, "lioni.config.ts"),
     path.join(hostRoot, "lioni.config.ts"),
+  );
+  await cp(
+    path.join(root, "lioni.zh-CN.config.ts"),
+    path.join(hostRoot, "lioni.zh-CN.config.ts"),
   );
   await cp(
     path.join(root, "src", "lang", "lioni"),
@@ -275,31 +303,53 @@ const runKumaScenario: ConsumerScenario = async ({
   const hiddenTermbasePath = `${termbasePath}.temporarily-hidden`;
   const usageProbePath = path.join(hostRoot, "src", ".lioni-usage-probe.ts");
   const configPath = "../../lioni.config.ts";
-  const cli = async (command: string) =>
+  const updateConfigPath = "../../lioni.zh-CN.config.ts";
+  const cli = async (
+    command: string,
+    config = configPath,
+    args: readonly string[] = [],
+  ) =>
     runCommand("pnpm", [
       "--dir",
       hostQaRoot,
       "exec",
       "lioni",
       command,
-      configPath,
+      config,
+      ...args,
     ]);
 
   let factsResult: ResourceFacts;
   let baselineResult: BaselineResult;
   let factsMs: number;
   let baselineMs: number;
+  let updatePlanResult: UpdatePlanResult;
+  let updatePlanningMs: number;
+  let updatePreviewMs: number;
+  let baselineRawBeforePreview: string;
   await rename(termbasePath, hiddenTermbasePath);
   await symlink("missing-usage-source.ts", usageProbePath);
   try {
     const factsCommand = await cli("facts");
     factsMs = factsCommand.durationMs;
     factsResult = readEnvelope<ResourceFacts>(factsCommand.stdout, "facts");
-    const baselineCommand = await cli("baseline");
+    const baselineCommand = await cli("baseline", updateConfigPath);
     baselineMs = baselineCommand.durationMs;
     baselineResult = readEnvelope<BaselineResult>(
       baselineCommand.stdout,
       "baseline",
+    );
+    baselineRawBeforePreview = await readFile(
+      path.join(hostRoot, "lioni.baseline.json"),
+      "utf8",
+    );
+    const previewStarted = performance.now();
+    const updateCommand = await cli("update", updateConfigPath, ["--dry-run"]);
+    updatePreviewMs = performance.now() - previewStarted;
+    updatePlanningMs = updateCommand.durationMs;
+    updatePlanResult = readEnvelope<UpdatePlanResult>(
+      updateCommand.stdout,
+      "update",
     );
   } finally {
     await unlink(usageProbePath).catch(() => undefined);
@@ -324,7 +374,37 @@ const runKumaScenario: ConsumerScenario = async ({
   assert.equal(missingChinese, 17);
   assert.equal(chineseOnly, 124);
   assert.equal(baselineResult.sourceUnitCount, 1631);
+  assert.equal(baselineResult.translationRecordCount, 1738);
   assert.equal(baselineResult.path, path.join(hostRoot, "lioni.baseline.json"));
+  const writeItems = updatePlanResult.items.filter(
+    ({ action }) => action === "write",
+  );
+  assert.equal(writeItems.length, 17);
+  assert.equal(
+    updatePlanResult.items.filter(({ action }) => action === "delete").length,
+    0,
+  );
+  assert.ok(
+    updatePlanResult.items.every(({ language }) => language === "zh-CN"),
+  );
+  const sourceByKey = new Map(
+    factsResult.source.units.map(({ key, unit }) => [key, unit.source.text]),
+  );
+  assert.ok(
+    writeItems.every(
+      ({ sourceKey, request }) =>
+        request?.operation === "write" &&
+        request.target.sourceKey === sourceKey &&
+        request.target.language === "zh-CN" &&
+        request.expectedTarget?.status === "missing" &&
+        request.content?.text === sourceByKey.get(sourceKey ?? ""),
+    ),
+  );
+  assert.equal(
+    await readFile(path.join(hostRoot, "lioni.baseline.json"), "utf8"),
+    baselineRawBeforePreview,
+  );
+  assert.deepEqual(await readFile(resourcePath("zh-CN")), chineseRaw);
 
   const qaStarted = performance.now();
   const qaCommand = await cli("qa");
@@ -394,6 +474,16 @@ const runKumaScenario: ConsumerScenario = async ({
       zhCNTargetOnly: chineseOnly,
     },
     baseline: baselineResult,
+    updatePreview: {
+      selectedLanguages: ["zh-CN"],
+      decisions: updatePlanResult.items.length,
+      writes: writeItems.length,
+      deletes: updatePlanResult.items.filter(
+        ({ action }) => action === "delete",
+      ).length,
+      baselineUnchanged: true,
+      targetResourcesUnchanged: true,
+    },
     quality: {
       status: quality.status,
       diagnostics: quality.diagnostics.length,
@@ -406,6 +496,8 @@ const runKumaScenario: ConsumerScenario = async ({
         "Node 24、固定上游副本、已安装同批正式制品；不启动 Kuma 应用。",
       factsReadAndAssociationMs: factsMs,
       baselineReadAndRecordMs: baselineMs,
+      updatePlanningMs,
+      updatePreviewEndToEndMs: updatePreviewMs,
       qaEndToEndMs: qaMs,
       completeScenarioMs: performance.now() - wholeRunStarted,
       hostTypecheckMs: hostTypes.durationMs,

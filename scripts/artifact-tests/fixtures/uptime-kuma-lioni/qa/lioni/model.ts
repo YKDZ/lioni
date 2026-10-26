@@ -1,4 +1,3 @@
-import type { TranslationUnitInput } from "@lioni/core";
 import type { TermbaseData } from "@lioni/terminology";
 export type Resources = {
   source: Readonly<Record<string, string>>;
@@ -83,9 +82,9 @@ export type Finding = {
   severity?: "error" | "warning";
   details?: unknown;
 };
-export type Unit = TranslationUnitInput & {
+export type Unit = {
   key: string;
   source: { text: string };
 };
 export type Translation = { key: string; text: string; language: string };
-export type Body = { text: string; language: string; resourceKey: string };
+export type Body = { text: string };

@@ -14,6 +14,7 @@
   },
   "include": [
     "../../lioni.config.ts",
+    "../../lioni.zh-CN.config.ts",
     "*.ts",
     "checks/**/*.ts",
     "scripts/**/*.ts",
