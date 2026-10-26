@@ -1,0 +1,26 @@
+{
+  "quantityProfile": "en",
+  "reviews": {},
+  "equivalences": [],
+  "quantityUnitAliases": {
+    "responseMaxLengthDescription": {
+      "KB": "KiB"
+    }
+  },
+  "quantityDefaultUnits": {
+    "pingPacketSizeWarning": "bytes"
+  },
+  "quantityIgnoredLiterals": {
+    "Setup 2FA": ["2FA"],
+    "Enable 2FA": ["2FA"],
+    "Disable 2FA": ["2FA"],
+    "2FA Settings": ["2FA"],
+    "twoFAVerifyLabel": ["2FA"],
+    "tokenValidSettingsMsg": ["2FA"],
+    "confirmEnableTwoFAMsg": ["2FA"],
+    "confirmDisableTwoFAMsg": ["2FA"],
+    "2faAlreadyEnabled": ["2FA"],
+    "2faEnabled": ["2FA"],
+    "2faDisabled": ["2FA"]
+  }
+}
