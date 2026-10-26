@@ -1,8 +1,8 @@
 {
   "compilerOptions": {
     "target": "ESNext",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
     "strict": true,
     "exactOptionalPropertyTypes": true,
     "noEmit": true,
@@ -12,5 +12,12 @@
     "allowImportingTsExtensions": true,
     "noUncheckedIndexedAccess": true
   },
-  "files": ["consumer.ts"]
+  "include": [
+    "../../lioni.config.ts",
+    "*.ts",
+    "checks/**/*.ts",
+    "scripts/**/*.ts",
+    "test/**/*.ts",
+    "quantities/**/*.ts"
+  ]
 }
