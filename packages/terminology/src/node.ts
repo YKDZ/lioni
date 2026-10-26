@@ -25,7 +25,7 @@ export async function readTermbaseYamlFiles(
     path.join(directoryPath, "concepts.yaml"),
     "utf8",
   );
-  const languages: Record<string, string> = {};
+  const languages: Record<string, string> = Object.create(null);
   for (const name of yamlNames) {
     if (name === "concepts.yaml") continue;
     const language = name.slice(0, -".yaml".length);

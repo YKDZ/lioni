@@ -1,4 +1,4 @@
-import { parseDocument } from "yaml";
+import { isMap, isPair, isScalar, isSeq, parseDocument } from "yaml";
 
 import { createTermbase, isRecord, type Termbase } from "./data.ts";
 
@@ -116,6 +116,7 @@ function parseMapping(
       })),
     );
   if (emptyAllowed && document.contents === null) return {};
+  rejectNonStringMappingKeys(document.contents, file);
   const value: unknown = document.toJS({ maxAliasCount: 100 });
   if (!isRecord(value))
     throw new TermbaseYamlError("parse", [
@@ -131,4 +132,33 @@ function parseMapping(
       },
     ]);
   return value.concepts;
+}
+
+function rejectNonStringMappingKeys(node: unknown, file: string): void {
+  if (isMap(node)) {
+    for (const pair of node.items) {
+      rejectMappingKey(pair.key, file);
+      rejectNonStringMappingKeys(pair.value, file);
+    }
+    return;
+  }
+  if (isSeq(node)) {
+    for (const item of node.items) rejectNonStringMappingKeys(item, file);
+    return;
+  }
+  if (isPair(node)) {
+    rejectMappingKey(node.key, file);
+    rejectNonStringMappingKeys(node.value, file);
+  }
+}
+
+function rejectMappingKey(key: unknown, file: string): void {
+  if (isScalar(key) && typeof key.value === "string") return;
+  throw new TermbaseYamlError("parse", [
+    {
+      code: "non-string-key",
+      file,
+      message: `${file} 中的映射键必须是文本。`,
+    },
+  ]);
 }
