@@ -32,6 +32,7 @@ import type {
 } from "./semantic-edits.ts";
 import {
   assertJsonValue,
+  snapshotJsonValue,
   validateWithStandardSchema,
 } from "./standard-schema.ts";
 
@@ -290,12 +291,9 @@ export async function createUpdatePlan<
     associations: options.associations,
     items,
   };
-  const plan = omitUndefined(rawPlan, "更新计划") as UpdatePlan<
-    TUnit,
-    TTranslation,
-    TBody,
-    TUnavailable
-  >;
+  const plan = snapshotJsonValue(rawPlan, "更新计划", {
+    omitUndefinedObjectProperties: true,
+  }) as UpdatePlan<TUnit, TTranslation, TBody, TUnavailable>;
   validateUpdatePlan(plan);
   return plan;
 }
@@ -972,31 +970,6 @@ function sameIdentity(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function omitUndefined<T>(value: T, description: string): T {
-  function visit(current: unknown, path: string): unknown {
-    if (current === undefined) return undefined;
-    if (Array.isArray(current))
-      return current.map((child, index) => {
-        if (child === undefined)
-          throw new TypeError(
-            `${description}${path}[${index}] 不能包含 undefined。`,
-          );
-        return visit(child, `${path}[${index}]`);
-      });
-    if (isRecord(current)) {
-      const result: Record<string, unknown> = {};
-      for (const [key, child] of Object.entries(current)) {
-        if (child !== undefined) result[key] = visit(child, `${path}.${key}`);
-      }
-      return result;
-    }
-    return current;
-  }
-  const json = visit(value, "");
-  assertJsonValue(json, description);
-  return json as T;
 }
 
 function isPlanAssociations(value: unknown): boolean {

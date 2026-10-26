@@ -84,8 +84,8 @@ export function assembleTermbaseYaml(parsed: ParsedTermbaseYaml): Termbase {
       throw new TypeError(`concepts.yaml 中的概念 ${id} 必须是映射。`);
     const languages = Object.entries(parsed.languages).flatMap(
       ([language, declarations]) => {
+        if (!Object.hasOwn(declarations, id)) return [];
         const declaration = declarations[id];
-        if (declaration === undefined) return [];
         if (!isRecord(declaration))
           throw new TypeError(`${language}.yaml 中的概念 ${id} 必须是映射。`);
         return [{ ...declaration, language }];

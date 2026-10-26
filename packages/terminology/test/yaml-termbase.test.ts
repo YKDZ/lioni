@@ -134,6 +134,48 @@ void describe("默认 YAML 术语库", () => {
     }
   });
 
+  void it("特殊概念身份可合法缺少某种语言表达", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "lioni-termbase-"));
+    const ids = ["constructor", "toString", "__proto__"];
+    try {
+      await writeFile(
+        path.join(directory, "concepts.yaml"),
+        [
+          "concepts:",
+          ...ids.map((id) => `  ${JSON.stringify(id)}: {}`),
+          "",
+        ].join("\n"),
+      );
+      await writeFile(
+        path.join(directory, "en.yaml"),
+        [
+          "concepts:",
+          ...ids.flatMap((id) => [
+            `  ${JSON.stringify(id)}:`,
+            "    expressions:",
+            `      - id: ${JSON.stringify(`${id}-en`)}`,
+            `        text: ${id}`,
+            "        usage: preferred",
+          ]),
+          "",
+        ].join("\n"),
+      );
+      await writeFile(path.join(directory, "ja.yaml"), "");
+
+      const termbase = await loadTermbaseYaml(directory);
+
+      for (const id of ids) {
+        assert.deepEqual(
+          termbase.getConcept(id)?.languages.map(({ language }) => language),
+          ["en"],
+        );
+        assert.equal(termbase.getExpression(id, `${id}-en`)?.language, "en");
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   void it("拒绝语言文件引用未登记的概念", () => {
     const parsed = parseTermbaseYaml({
       concepts: "concepts:\n  known: {}\n",

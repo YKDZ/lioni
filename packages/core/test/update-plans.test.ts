@@ -14,6 +14,7 @@ import {
   type ComparisonBaselineStore,
   type FrameworkConfig,
   type StandardSchemaV1,
+  type UpdatePlanItem,
 } from "../src/index.ts";
 import {
   schemaFromExamples,
@@ -387,6 +388,24 @@ void describe("业务更新计划与预览", () => {
     assert.equal(batchSize, 2);
     assert.equal(plan.items.length, 2);
     assert.ok(plan.items.every(({ action }) => action === "retain"));
+  });
+
+  void it("策略返回的宿主对象不能在计划整理时被静默改成空对象", async () => {
+    for (const value of [new Date(0), new Map([["text", "value"]])]) {
+      const config = makeConfig([], [], {
+        updatePolicy: () => [
+          {
+            action: "retain",
+            language: "fr",
+            reason: "无需写入。",
+            changes: { translations: [] },
+            hostValue: value,
+          } as unknown as UpdatePlanItem<Unit, Translation, string>,
+        ],
+      });
+
+      await assert.rejects(previewUpdate(config), /更新计划/);
+    }
   });
 
   void it("可组合读取事实、显式比较与纯计划计算入口", async () => {

@@ -658,4 +658,28 @@ void describe("snapshot comparison", () => {
       assert.doesNotThrow(() => validateComparisonResult(input, restored));
     }
   });
+
+  void it("rejects non-JSON values passed through the public comparison input", async () => {
+    const valid = await readSnapshot(
+      [
+        {
+          range: "messages.json",
+          records: [{ value: unit("welcome", "Welcome") }],
+        },
+      ],
+      [{ language: "de", range: "de.json", records: [] }],
+    );
+    const current = structuredClone(valid) as unknown as typeof valid;
+    const sourceUnit = current.source.units[0]?.unit as {
+      source: unknown;
+    };
+    sourceUnit.source = new Date(0);
+
+    assert.throws(
+      () => defaultCompare({ previous: undefined, current }),
+      (error) =>
+        error instanceof ComparisonContractError &&
+        error.reason === "invalid-input",
+    );
+  });
 });

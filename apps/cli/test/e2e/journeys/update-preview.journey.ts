@@ -14,7 +14,10 @@ function configSource(
     readonly sourceId: string;
     readonly text: string;
   }[],
-  options: { readonly noDecisions?: boolean } = {},
+  options: {
+    readonly noDecisions?: boolean;
+    readonly writeUnconfirmed?: boolean;
+  } = {},
 ): string {
   return `import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -63,6 +66,7 @@ export default defineConfig({
     locateNewTarget: ({ sourceKey }) => ({ status: "located", locator: sourceKey }),
     write: ({ request, target }) => {
       if (request.operation !== "write") throw new Error("仅支持译文写入。");
+      if (${options.writeUnconfirmed === true}) return;
       const records = JSON.parse(readFileSync(translationsPath, "utf8"));
       const id = String(target.locator);
       const existing = records.find((record) => record.targetId === id);
@@ -126,6 +130,7 @@ const journey: CliJourney = {
       path.join(removedDir, "lioni.baseline.json"),
       `${JSON.stringify(baseline)}\n`,
     );
+    await writeFile(path.join(removedDir, "lioni.translations.json"), "[]\n");
 
     const emptyDir = path.join(workDir, "empty");
     await mkdir(emptyDir);
@@ -159,6 +164,19 @@ const journey: CliJourney = {
     await writeFile(
       path.join(emptyDir, "lioni.baseline.json"),
       `${JSON.stringify(replaceComparisonBaseline({ current: unchangedSnapshot }))}\n`,
+    );
+
+    const unconfirmedDir = path.join(workDir, "unconfirmed");
+    await mkdir(unconfirmedDir);
+    await writeFile(
+      path.join(unconfirmedDir, "lioni.config.ts"),
+      configSource([{ id: "welcome", source: "Welcome" }], [], {
+        writeUnconfirmed: true,
+      }),
+    );
+    await writeFile(
+      path.join(unconfirmedDir, "lioni.translations.json"),
+      "[]\n",
     );
   },
   commands() {
@@ -201,6 +219,23 @@ const journey: CliJourney = {
           "text",
         ],
       },
+      {
+        name: "render retained execution results as text",
+        args: ["update", "lioni.config.ts", "--output-format", "text"],
+      },
+      {
+        name: "render an unconfirmed write as text",
+        args: [
+          "update",
+          "unconfirmed/lioni.config.ts",
+          "--output-format",
+          "text",
+        ],
+      },
+      {
+        name: "keep machine status in structured execution results",
+        args: ["update", "unconfirmed/lioni.config.ts"],
+      },
     ];
   },
   async assertions({ context, results }) {
@@ -209,6 +244,9 @@ const journey: CliJourney = {
     const applied = results[2];
     const detachedChanges = results[3];
     const empty = results[4];
+    const retained = results[5];
+    const unconfirmedText = results[6];
+    const unconfirmedStructured = results[7];
     const baselinePath = path.join(context.workDir, "lioni.baseline.json");
 
     assert.equal(structured?.exitCode, 0, structured?.stderr);
@@ -254,9 +292,17 @@ const journey: CliJourney = {
     );
     assert.equal(detachedChanges?.exitCode, 0, detachedChanges?.stderr);
     assert.equal(detachedChanges?.stderr, "");
-    assert.ok(detachedChanges?.stdout.includes("移除"));
-    assert.ok(detachedChanges?.stdout.includes("Welcome"));
-    assert.ok(detachedChanges?.stdout.includes("Bienvenue"));
+    assert.ok(
+      detachedChanges?.stdout.includes("0 项决定，2 项变化未形成决定。"),
+    );
+    assert.ok(
+      detachedChanges?.stdout.includes('原文 welcome（移除）："Welcome" → 无'),
+    );
+    assert.ok(
+      detachedChanges?.stdout.includes(
+        '译文 target-welcome（移除）："Bienvenue" → 无',
+      ),
+    );
     assert.ok(detachedChanges?.stdout.includes("未形成更新决定"));
     assert.ok(
       detachedChanges?.stdout.includes(
@@ -274,6 +320,24 @@ const journey: CliJourney = {
       await readFile(baselinePath, "utf8").catch(() => undefined),
       undefined,
     );
+    assert.equal(retained?.exitCode, 0, retained?.stderr);
+    assert.ok(retained?.stdout.includes("已保留"));
+    assert.equal(retained?.stdout.includes("retained"), false);
+    assert.equal(retained?.stdout.includes("retain"), false);
+    assert.equal(unconfirmedText?.exitCode, 1);
+    assert.equal(unconfirmedText?.stdout, "");
+    assert.ok(unconfirmedText?.stderr.includes("写入"));
+    assert.ok(unconfirmedText?.stderr.includes("未确认"));
+    assert.equal(unconfirmedText?.stderr.includes("writeUnconfirmed"), false);
+    assert.equal(unconfirmedStructured?.exitCode, 1);
+    const structuredFailure = JSON.parse(
+      unconfirmedStructured?.stdout ||
+        unconfirmedStructured?.stderr ||
+        "unknown",
+    );
+    assert.equal(structuredFailure.variant, "applyFailed");
+    assert.equal(structuredFailure.data.status, "failed");
+    assert.equal(structuredFailure.data.results[0]?.status, "writeUnconfirmed");
   },
 };
 
