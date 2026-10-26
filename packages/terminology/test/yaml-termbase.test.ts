@@ -83,6 +83,57 @@ void describe("默认 YAML 术语库", () => {
     }
   });
 
+  void it("完整解析原型保留名对应的语言文件", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "lioni-termbase-"));
+    try {
+      await writeFile(
+        path.join(directory, "concepts.yaml"),
+        "concepts:\n  server: {}\n",
+      );
+      await writeFile(
+        path.join(directory, "en.yaml"),
+        [
+          "concepts:",
+          "  server:",
+          "    expressions:",
+          "      - id: server-en",
+          "        text: Server",
+          "        usage: preferred",
+          "",
+        ].join("\n"),
+      );
+      await writeFile(path.join(directory, "__proto__.yaml"), "concepts: [\n");
+
+      await assert.rejects(
+        () => loadTermbaseYaml(directory),
+        (error) =>
+          error instanceof TermbaseYamlError &&
+          error.stage === "parse" &&
+          error.issues.some((issue) => issue.file === "__proto__.yaml"),
+      );
+
+      await writeFile(
+        path.join(directory, "__proto__.yaml"),
+        [
+          "concepts:",
+          "  server:",
+          "    expressions:",
+          "      - id: server-proto",
+          "        text: Prototype",
+          "        usage: preferred",
+          "",
+        ].join("\n"),
+      );
+      const termbase = await loadTermbaseYaml(directory);
+      assert.equal(
+        termbase.getExpression("server", "server-proto")?.language,
+        "__proto__",
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   void it("拒绝语言文件引用未登记的概念", () => {
     const parsed = parseTermbaseYaml({
       concepts: "concepts:\n  known: {}\n",
