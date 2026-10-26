@@ -1,12 +1,20 @@
+import path from "node:path";
+
 import {
   analyzeQuality,
   CompletionConfigurationError,
   DuplicateTranslationUnitKeyError,
   readFacts,
   readCompletion,
+  recordComparisonBaseline,
+  type FrameworkConfig,
   type QualityRunResult,
+  type TranslationUnitInput,
 } from "@lioni/core";
-import { loadConfig } from "@lioni/core/node";
+import {
+  createFileComparisonBaselineStore,
+  loadConfig,
+} from "@lioni/core/node";
 import { toStandardJsonSchema } from "@valibot/to-json-schema";
 import {
   CliWriteError,
@@ -172,6 +180,17 @@ const completionSchema = toStandardJsonSchema(
   }),
 );
 
+const baselineRecordSchema = toStandardJsonSchema(
+  v.object({
+    outcome: v.picklist(["saved", "unchanged"]),
+    path: v.string(),
+    sourceScopeCount: v.number(),
+    sourceUnitCount: v.number(),
+    translationScopeCount: v.number(),
+    translationRecordCount: v.number(),
+  }),
+);
+
 function readStatusText(status: string): string {
   return (
     {
@@ -281,6 +300,79 @@ function createCliContract(identity: CliCommandIdentity) {
         name: identity.commandName,
         description: "读取宿主提供的源译事实。",
       },
+      ...define.command("baseline")({
+        kind: "command",
+        parent: "cli",
+        name: "baseline",
+        description: "记录当前完整源译事实作为比较基线。",
+        fields: {
+          config: { kind: "positional", description: "宿主配置文件路径" },
+        },
+        input: toStandardJsonSchema(v.object({ config: v.string() })),
+        success: {
+          kind: "data",
+          variants: {
+            recorded: {
+              description: "比较基线记录结果",
+              exitCode: 0,
+              schema: baselineRecordSchema,
+              text: (result) =>
+                text.lines([
+                  result.outcome === "saved"
+                    ? `比较基线已保存：${result.path}`
+                    : `比较基线没有变化：${result.path}`,
+                  `原文范围 ${result.sourceScopeCount} 个、原文单元 ${result.sourceUnitCount} 个；译文范围 ${result.translationScopeCount} 个、实际译文 ${result.translationRecordCount} 条。`,
+                ]),
+            },
+          },
+        },
+        failures: {
+          recordFailed: {
+            description: "记录比较基线失败",
+            exitCode: 1,
+            schema: toStandardJsonSchema(
+              v.object({ path: v.string(), message: v.string() }),
+            ),
+            text: ({ path: baselinePath, message }) =>
+              text.line(
+                `记录比较基线失败（未保存 ${baselinePath}）：${message}`,
+              ),
+          },
+        },
+        async handler({ input, outcome }) {
+          const configPath = path.resolve(process.cwd(), input.config);
+          const baselinePath = path.join(
+            path.dirname(configPath),
+            "lioni.baseline.json",
+          );
+          try {
+            const loaded = await loadConfig(configPath);
+            return await loaded.use(async (config) => {
+              const result = await recordBaselineForConfig(
+                config,
+                baselinePath,
+              );
+              const snapshot = result.baseline.snapshot;
+              return outcome.data.recorded({
+                outcome: result.outcome,
+                path: baselinePath,
+                sourceScopeCount: snapshot.source.read.scopes.length,
+                sourceUnitCount: snapshot.source.units.length,
+                translationScopeCount: snapshot.translations.reads.reduce(
+                  (count, read) => count + read.scopes.length,
+                  0,
+                ),
+                translationRecordCount: snapshot.translations.records.length,
+              });
+            });
+          } catch (error) {
+            return outcome.failure.recordFailed({
+              path: baselinePath,
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        },
+      }),
       ...define.command("facts")({
         kind: "command",
         parent: "cli",
@@ -580,6 +672,24 @@ function createCliContract(identity: CliCommandIdentity) {
       }),
     },
   });
+}
+
+function recordBaselineForConfig<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+  baselinePath: string,
+) {
+  const store = createFileComparisonBaselineStore<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable
+  >(baselinePath);
+  return recordComparisonBaseline(config, store);
 }
 
 export async function runCli(runtime: CliRuntime): Promise<number> {

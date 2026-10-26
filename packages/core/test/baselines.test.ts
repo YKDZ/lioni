@@ -1,892 +1,442 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, it } from "node:test";
 
 import {
-  advanceProcessingBaseline as advanceBaselineWithConfig,
-  compareProcessingBaseline as compareBaselineWithConfig,
-  createUpdatePlan,
+  ComparisonBaselineFormatError,
   defineConfig,
-  readFacts,
-  type FrameworkFacts,
+  readComparisonSnapshot,
+  recordComparisonBaseline,
+  replaceComparisonBaseline,
   type JsonValue,
-  type ProcessingBaseline,
-  type ProcessingBaselineStore,
 } from "../src/index.ts";
+import { createFileComparisonBaselineStore } from "../src/node.ts";
 import {
   jsonValueSchema,
   schemaFromExamples,
   sourceSchemaFromExamples,
-  fixtureTranslationIdentity,
 } from "./source-schema.ts";
 
-type Unit = {
-  readonly source: string;
-  readonly id: string;
-};
-
+type Unit = { readonly id: string; readonly source: string };
 type Translation = {
-  readonly text: string;
   readonly id: string;
-  readonly targetKey?: string;
+  readonly namespace: string;
+  readonly text: string;
+};
+type UnavailableTranslation = {
+  readonly id: string;
+  readonly namespace: string;
+  readonly reason: string;
 };
 
 const translationSchema = schemaFromExamples<Translation>({
-  text: "example",
   id: "example",
+  namespace: "messages",
+  text: "example",
+});
+const unavailableSchema = schemaFromExamples<UnavailableTranslation>({
+  id: "example",
+  namespace: "messages",
+  reason: "unavailable",
 });
 
-const historyConfig = defineConfig({
-  source: {
-    schema: sourceSchemaFromExamples<Unit>({
-      id: "example",
-      source: "example",
-    }),
-    read: () => ({ scopes: [] }),
-  },
-  keyOf: (unit) => unit.id,
-  translations: {
-    languages: ["fr", "de"],
-    identityOf: fixtureTranslationIdentity,
-    schema: translationSchema,
-    contentSchema: jsonValueSchema,
-    contentOf: () => null,
-    read: () => ({ scopes: [] }),
-    matches: (unit, translation) => unit.id === translation.id,
-  },
-});
+type SourceScope = {
+  readonly range: string;
+  readonly records: readonly {
+    readonly value: Unit;
+    readonly bodyAvailability?: "available" | "unavailable";
+  }[];
+  readonly enumeration?: "complete" | "partial" | "failed";
+};
 
-function compareProcessingBaseline(
-  facts: FrameworkFacts<Unit, Translation, JsonValue, never>,
-  baseline?: ProcessingBaseline,
-) {
-  return compareBaselineWithConfig(facts, baseline, historyConfig);
-}
+type TranslationScope = {
+  readonly range: string;
+  readonly covers: readonly string[];
+  readonly records: readonly (
+    | {
+        readonly value: Translation;
+        readonly bodyAvailability?: "available";
+      }
+    | {
+        readonly value: UnavailableTranslation;
+        readonly bodyAvailability: "unavailable";
+      }
+  )[];
+  readonly enumeration?: "complete" | "partial" | "failed";
+};
 
-function advanceProcessingBaseline(
-  store: ProcessingBaselineStore,
-  facts: FrameworkFacts<Unit, Translation, JsonValue, never>,
-  selections: readonly { sourceKey: string; language: string }[],
-) {
-  return advanceBaselineWithConfig(store, facts, selections, historyConfig);
-}
-
-function makeFacts(
-  units: readonly Unit[],
-  translations: readonly Translation[],
-) {
-  return makeScopedFacts(
-    [{ range: "messages", units }],
-    [
-      {
-        range: "catalogue.fr",
-        covers: units.map(({ id }) => id),
-        translations,
-      },
-    ],
-  );
-}
-
-function makeScopedFacts(
-  sourceScopes: readonly {
-    readonly range: string;
-    readonly units: readonly Unit[];
-    readonly enumeration?: "complete" | "partial" | "failed";
-  }[],
-  translationScopes: readonly {
-    readonly range: string;
-    readonly covers: readonly string[];
-    readonly translations: readonly Translation[];
-    readonly enumeration?: "complete" | "partial" | "failed";
-  }[],
-  translationReadError?: string,
-  languages: readonly string[] = ["fr"],
-) {
-  return readFacts(
-    defineConfig({
-      source: {
-        schema: sourceSchemaFromExamples<Unit>(
-          { id: "example", source: "example" },
-          ...sourceScopes.flatMap(({ units }) => units),
+function makeConfig(options: {
+  readonly sourceScopes: readonly SourceScope[];
+  readonly translationScopes?: readonly TranslationScope[];
+  readonly sourceError?: string;
+  readonly languages?: readonly string[];
+}) {
+  return defineConfig({
+    source: {
+      schema: sourceSchemaFromExamples<Unit>(
+        { id: "example", source: "example" },
+        ...options.sourceScopes.flatMap(({ records }) =>
+          records.map(({ value }) => value),
         ),
-        read: () => ({
-          scopes: sourceScopes.map(({ range, units, enumeration }) => ({
-            range,
-            enumeration: enumeration ?? ("complete" as const),
-            records: units.map((value) => ({
+      ),
+      read: () => {
+        if (options.sourceError !== undefined)
+          throw new Error(options.sourceError);
+        return {
+          scopes: options.sourceScopes.map((scope) => ({
+            range: scope.range,
+            enumeration: scope.enumeration ?? "complete",
+            records: scope.records.map(({ value, bodyAvailability }) => ({
               value,
-              bodyAvailability: "available" as const,
+              bodyAvailability: bodyAvailability ?? "available",
             })),
           })),
-        }),
+        };
       },
-      keyOf: (unit) => unit.id,
-      translations: {
-        languages,
-        identityOf: fixtureTranslationIdentity,
-        schema: translationSchema,
-        contentSchema: jsonValueSchema,
-        read: () => {
-          if (translationReadError !== undefined)
-            throw new Error(translationReadError);
-          return {
-            scopes: translationScopes.map(
-              ({
-                range,
-                covers,
-                translations: scopeTranslations,
-                enumeration,
-              }) => ({
-                range,
-                covers,
-                enumeration: enumeration ?? ("complete" as const),
-                records: scopeTranslations.map((value) => ({
-                  value,
-                  bodyAvailability: "available" as const,
-                })),
-              }),
-            ),
-          };
-        },
-        matches: (unit, translation) => unit.id === translation.id,
-        contentOf: () => null,
-      },
-    }),
-  );
+    },
+    keyOf: ({ id }) => id,
+    translations: {
+      languages: options.languages ?? ["fr"],
+      schema: translationSchema,
+      unavailableSchema,
+      contentSchema: jsonValueSchema,
+      contentOf: ({ text }) => text,
+      read: () => ({
+        scopes: (options.translationScopes ?? []).map((scope) => ({
+          range: scope.range,
+          covers: scope.covers,
+          enumeration: scope.enumeration ?? "complete",
+          records: scope.records.map((record) =>
+            record.bodyAvailability === "unavailable"
+              ? { ...record, bodyAvailability: "unavailable" as const }
+              : { ...record, bodyAvailability: "available" as const },
+          ),
+        })),
+      }),
+      identityOf: (translation) => ({
+        namespace: translation.namespace,
+        key: translation.id,
+      }),
+    },
+  });
 }
 
-class MemoryBaselineStore implements ProcessingBaselineStore {
-  baseline: ProcessingBaseline | undefined;
-  loads = 0;
-  saves = 0;
+function sourceScope(range: string, ...records: readonly Unit[]): SourceScope {
+  return { range, records: records.map((value) => ({ value })) };
+}
 
-  async load(): Promise<ProcessingBaseline | undefined> {
-    this.loads += 1;
-    return this.baseline;
-  }
+function translationScope(
+  range: string,
+  ...records: readonly (Translation | UnavailableTranslation)[]
+): TranslationScope {
+  return {
+    range,
+    covers: [],
+    records: records.map((value) =>
+      "reason" in value
+        ? { value, bodyAvailability: "unavailable" as const }
+        : { value, bodyAvailability: "available" as const },
+    ),
+  };
+}
 
-  async save(baseline: ProcessingBaseline): Promise<void> {
-    this.saves += 1;
-    this.baseline = baseline;
+function createTestStore(filePath: string) {
+  return createFileComparisonBaselineStore<
+    Unit,
+    Translation,
+    JsonValue,
+    UnavailableTranslation
+  >(filePath);
+}
+
+async function withDirectory(
+  run: (directory: string) => Promise<void>,
+): Promise<void> {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "lioni-baseline-"));
+  try {
+    await run(directory);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
   }
 }
 
-void describe("processing baselines", () => {
-  void it("reports missing history until explicitly established and preserves unselected history", async () => {
-    const facts = await makeFacts(
-      [
-        { id: "A", source: "Save" },
-        { id: "B", source: "Cancel" },
-      ],
-      [
-        { id: "A", text: "Enregistrer" },
-        { id: "B", text: "Annuler" },
-      ],
-    );
-
-    assert.deepStrictEqual(
-      (await compareProcessingBaseline(facts)).changes.map(
-        ({ sourceKey, language, status }) => [sourceKey, language, status],
-      ),
-      [
-        ["A", "fr", "history-insufficient"],
-        ["B", "fr", "history-insufficient"],
-      ],
-    );
-
-    const store = new MemoryBaselineStore();
-    const advanced = await advanceProcessingBaseline(store, facts, [
-      { sourceKey: "A", language: "fr" },
-    ]);
-
-    assert.equal(advanced.outcome, "saved");
-    assert.equal(store.saves, 1);
-    assert.deepStrictEqual(
-      store.baseline?.entries.map(({ sourceKey, processed }) => [
-        sourceKey,
-        processed,
-      ]),
-      [
-        ["A", true],
-        ["B", false],
-      ],
-    );
-    assert.deepStrictEqual(
-      (await compareProcessingBaseline(facts, store.baseline)).changes.map(
-        ({ sourceKey, status, processed }) => [sourceKey, status, processed],
-      ),
-      [
-        ["A", "unchanged", true],
-        ["B", "unchanged", false],
-      ],
-    );
-  });
-
-  void it("keeps confirmed source removal visible when the target read fails", async () => {
-    const initialFacts = await makeScopedFacts(
-      [{ range: "source-r1", units: [{ id: "A", source: "Save" }] }],
-      [
-        {
-          range: "target-r1",
-          covers: ["A"],
-          translations: [{ id: "A", text: "Enregistrer" }],
-        },
-      ],
-    );
-    const store = new MemoryBaselineStore();
-    await advanceProcessingBaseline(store, initialFacts, [
-      { sourceKey: "A", language: "fr" },
-    ]);
-
-    const targetUnavailable = await makeScopedFacts(
-      [{ range: "source-r1", units: [] }],
-      [],
-      "target resource unavailable",
-    );
-    const comparison = await compareProcessingBaseline(
-      targetUnavailable,
-      store.baseline,
-    );
-    const removal = comparison.changes.find(
-      ({ sourceKey }) => sourceKey === "A",
-    );
-    assert.equal(removal?.status, "source-removed");
-    assert.equal(removal?.current?.association.status, "unknown");
-    assert.equal(removal?.current?.association.coverageStatus, "failed");
-
-    const baselineBefore = store.baseline;
-    const advanceAttempt = await advanceProcessingBaseline(
-      store,
-      targetUnavailable,
-      [{ sourceKey: "A", language: "fr" }],
-    );
-    assert.equal(advanceAttempt.outcome, "unchanged");
-    assert.equal(advanceAttempt.selections[0]?.outcome, "unknown");
-    assert.strictEqual(store.baseline, baselineBefore);
-
-    const plan = await createUpdatePlan(
-      targetUnavailable,
-      store.baseline,
-      historyConfig,
-    );
-    const planItem = plan.items.find(({ sourceKey }) => sourceKey === "A");
-    assert.equal(planItem?.change, "source-removed");
-    assert.equal(planItem?.expectedInput?.association.status, "unknown");
-    assert.equal(planItem?.expectedInput?.association.coverageStatus, "failed");
-    assert.equal(planItem?.decision.action, "retain");
-    assert.equal(planItem?.status, "blocked");
-    assert.equal(planItem?.blocker?.code, "translationCoverageIncomplete");
-  });
-
-  void it("rejects a history source that no longer satisfies the current contract", async () => {
-    const initialFacts = await makeFacts(
-      [{ id: "A", source: "Save" }],
-      [{ id: "A", text: "Enregistrer" }],
-    );
-    const store = new MemoryBaselineStore();
-    await advanceProcessingBaseline(store, initialFacts, [
-      { sourceKey: "A", language: "fr" },
-    ]);
-    assert.ok(store.baseline);
-
-    const removedFacts = await makeFacts(
-      [],
-      [{ id: "A", text: "Enregistrer" }],
-    );
-    let matchesCalls = 0;
-    const invalidBaseline: ProcessingBaseline = {
-      ...store.baseline,
-      entries: store.baseline.entries.map((entry) =>
-        entry.sourceKey === "A"
-          ? {
-              ...entry,
-              source: {
-                ...entry.source,
-                unit: { id: "A", source: 7 },
-              },
-            }
-          : entry,
-      ),
-    };
-
-    await assert.rejects(
-      async () =>
-        compareBaselineWithConfig(removedFacts, invalidBaseline, {
-          ...historyConfig,
-          translations: {
-            ...historyConfig.translations!,
-            matches: () => {
-              matchesCalls += 1;
-              return true;
+void describe("comparison baselines", () => {
+  void it("records actual source and target facts without associations or QA", async () => {
+    await withDirectory(async (directory) => {
+      const config = makeConfig({
+        sourceScopes: [
+          sourceScope(
+            "messages",
+            { id: "save", source: "Save" },
+            { id: "submit", source: "Submit" },
+          ),
+        ],
+        translationScopes: [
+          translationScope(
+            "catalogue.fr",
+            {
+              id: "save",
+              namespace: "ui",
+              text: "Enregistrer",
             },
-          },
-        }),
-      { name: "StandardSchemaContractError" },
-    );
-    assert.equal(matchesCalls, 0);
-  });
+            {
+              id: "legacy",
+              namespace: "legacy",
+              reason: "text is encrypted",
+            },
+          ),
+        ],
+      });
+      const pathName = path.join(directory, "lioni.baseline.json");
+      const store = createTestStore(pathName);
 
-  void it("keeps an unselected item old and distinguishes it from a later addition", async () => {
-    const initialFacts = await makeFacts(
-      [
-        { id: "A", source: "Save" },
-        { id: "B", source: "Cancel" },
-      ],
-      [
-        { id: "A", text: "Enregistrer" },
-        { id: "B", text: "Annuler" },
-      ],
-    );
-    const store = new MemoryBaselineStore();
-    await advanceProcessingBaseline(store, initialFacts, [
-      { sourceKey: "A", language: "fr" },
-    ]);
+      const result = await recordComparisonBaseline(config, store);
+      const loaded = await store.load();
 
-    const changedFacts = await makeFacts(
-      [
-        { id: "A", source: "Save" },
-        { id: "B", source: "Cancel" },
-        { id: "C", source: "Help" },
-      ],
-      [
-        { id: "A", text: "Sauvegarder" },
-        { id: "B", text: "Annuler" },
-        { id: "C", text: "Aide" },
-      ],
-    );
-
-    assert.deepStrictEqual(
-      (
-        await compareProcessingBaseline(changedFacts, store.baseline)
-      ).changes.map(({ sourceKey, status, processed }) => [
-        sourceKey,
-        status,
-        processed,
-      ]),
-      [
-        ["A", "changed", true],
-        ["B", "unchanged", false],
-        ["C", "added", false],
-      ],
-    );
-
-    await advanceProcessingBaseline(store, changedFacts, [
-      { sourceKey: "A", language: "fr" },
-    ]);
-    assert.deepStrictEqual(
-      (
-        await compareProcessingBaseline(changedFacts, store.baseline)
-      ).changes.map(({ sourceKey, status, processed }) => [
-        sourceKey,
-        status,
-        processed,
-      ]),
-      [
-        ["A", "unchanged", true],
-        ["B", "unchanged", false],
-        ["C", "added", false],
-      ],
-    );
-  });
-
-  void it("recognizes removal after advancing a new key in an existing source range", async () => {
-    const initialFacts = await makeFacts(
-      [{ id: "A", source: "Save" }],
-      [{ id: "A", text: "Enregistrer" }],
-    );
-    const store = new MemoryBaselineStore();
-    await advanceProcessingBaseline(store, initialFacts, [
-      { sourceKey: "A", language: "fr" },
-    ]);
-
-    const addedFacts = await makeFacts(
-      [
-        { id: "A", source: "Save" },
-        { id: "B", source: "Cancel" },
-      ],
-      [
-        { id: "A", text: "Enregistrer" },
-        { id: "B", text: "Annuler" },
-      ],
-    );
-    assert.equal(
-      (
-        await compareProcessingBaseline(addedFacts, store.baseline)
-      ).changes.find(({ sourceKey }) => sourceKey === "B")?.status,
-      "added",
-    );
-    await advanceProcessingBaseline(store, addedFacts, [
-      { sourceKey: "B", language: "fr" },
-    ]);
-
-    const removedFacts = await makeFacts(
-      [{ id: "A", source: "Save" }],
-      [
-        { id: "A", text: "Enregistrer" },
-        { id: "B", text: "Annuler" },
-      ],
-    );
-    assert.equal(
-      (
-        await compareProcessingBaseline(removedFacts, store.baseline)
-      ).changes.find(({ sourceKey }) => sourceKey === "B")?.status,
-      "source-removed",
-    );
-  });
-
-  void it("uses a key's complete source observation after an older partial scope", async () => {
-    const initialFacts = await makeScopedFacts(
-      [
-        {
-          range: "source-r1",
-          units: [{ id: "A", source: "Save" }],
-          enumeration: "partial",
-        },
-      ],
-      [
-        {
-          range: "target-r1",
-          covers: ["A"],
-          translations: [{ id: "A", text: "Enregistrer" }],
-        },
-      ],
-    );
-    const store = new MemoryBaselineStore();
-    await advanceProcessingBaseline(store, initialFacts, [
-      { sourceKey: "A", language: "fr" },
-    ]);
-
-    const completeFacts = await makeScopedFacts(
-      [
-        {
-          range: "source-r1",
-          units: [
-            { id: "A", source: "Save" },
-            { id: "B", source: "Cancel" },
-          ],
-        },
-      ],
-      [
-        {
-          range: "target-r1",
-          covers: ["A", "B"],
-          translations: [
-            { id: "A", text: "Enregistrer" },
-            { id: "B", text: "Annuler" },
-          ],
-        },
-      ],
-    );
-    assert.equal(
-      (
-        await compareProcessingBaseline(completeFacts, store.baseline)
-      ).changes.find(({ sourceKey }) => sourceKey === "B")?.status,
-      "history-insufficient",
-    );
-    await advanceProcessingBaseline(store, completeFacts, [
-      { sourceKey: "B", language: "fr" },
-    ]);
-    assert.equal(
-      store.baseline?.entries.find(({ sourceKey }) => sourceKey === "B")?.source
-        .enumeration,
-      "complete",
-    );
-
-    const removedFacts = await makeScopedFacts(
-      [{ range: "source-r1", units: [{ id: "A", source: "Save" }] }],
-      [
-        {
-          range: "target-r1",
-          covers: ["A"],
-          translations: [
-            { id: "A", text: "Enregistrer" },
-            { id: "B", text: "Annuler" },
-          ],
-        },
-      ],
-    );
-    assert.equal(
-      (
-        await compareProcessingBaseline(removedFacts, store.baseline)
-      ).changes.find(({ sourceKey }) => sourceKey === "B")?.status,
-      "source-removed",
-    );
-  });
-
-  void it("retains an unprocessed language pair when advancing a new source key", async () => {
-    const initialFacts = await makeScopedFacts(
-      [{ range: "source-r1", units: [{ id: "A", source: "Save" }] }],
-      [
-        {
-          range: "target-r1",
-          covers: ["A"],
-          translations: [{ id: "A", text: "Enregistrer" }],
-        },
-      ],
-      undefined,
-      ["fr", "de"],
-    );
-    const store = new MemoryBaselineStore();
-    await advanceProcessingBaseline(store, initialFacts, [
-      { sourceKey: "A", language: "fr" },
-    ]);
-
-    const addedFacts = await makeScopedFacts(
-      [
-        {
-          range: "source-r1",
-          units: [
-            { id: "A", source: "Save" },
-            { id: "B", source: "Cancel" },
-          ],
-        },
-      ],
-      [
-        {
-          range: "target-r1",
-          covers: ["A", "B"],
-          translations: [
-            { id: "A", text: "Enregistrer" },
-            { id: "B", text: "Annuler" },
-          ],
-        },
-      ],
-      undefined,
-      ["fr", "de"],
-    );
-    assert.deepStrictEqual(
-      (await compareProcessingBaseline(addedFacts, store.baseline)).changes
-        .filter(({ sourceKey }) => sourceKey === "B")
-        .map(({ language, status }) => [language, status]),
-      [
-        ["fr", "added"],
-        ["de", "added"],
-      ],
-    );
-    await advanceProcessingBaseline(store, addedFacts, [
-      { sourceKey: "B", language: "fr" },
-    ]);
-
-    assert.deepStrictEqual(
-      (await compareProcessingBaseline(addedFacts, store.baseline)).changes
-        .filter(({ sourceKey }) => sourceKey === "B")
-        .map(({ language, status, processed }) => [
-          language,
-          status,
-          processed,
+      assert.equal(result.outcome, "saved");
+      assert.deepStrictEqual(loaded, result.baseline);
+      assert.deepStrictEqual(
+        result.baseline.snapshot.translations.records.map((record) => [
+          record.identity,
+          record.bodyAvailability,
         ]),
-      [
-        ["fr", "unchanged", true],
-        ["de", "unchanged", false],
-      ],
-    );
+        [
+          [{ language: "fr", namespace: "ui", key: "save" }, "available"],
+          [
+            { language: "fr", namespace: "legacy", key: "legacy" },
+            "unavailable",
+          ],
+        ],
+      );
+      assert.deepStrictEqual(
+        result.baseline.snapshot.source.units.map(({ key }) => key),
+        ["save", "submit"],
+      );
+      assert.deepStrictEqual(
+        JSON.parse(await readFile(pathName, "utf8")),
+        result.baseline,
+      );
+    });
   });
 
-  void it("does not call an unobserved old item new after a partial scope is later completed", async () => {
-    const initialFacts = await makeScopedFacts(
-      [
-        {
-          range: "messages",
-          units: [{ id: "A", source: "Save" }],
-          enumeration: "partial",
-        },
-      ],
-      [
-        {
-          range: "catalogue.fr",
-          covers: ["A"],
-          translations: [{ id: "A", text: "Enregistrer" }],
-        },
-      ],
-    );
-    const store = new MemoryBaselineStore();
-    await advanceProcessingBaseline(store, initialFacts, [
-      { sourceKey: "A", language: "fr" },
-    ]);
+  void it("records complete empty scopes and skips unchanged file writes", async () => {
+    await withDirectory(async (directory) => {
+      const config = makeConfig({
+        sourceScopes: [sourceScope("empty-source")],
+        translationScopes: [translationScope("empty-target")],
+      });
+      const store = createTestStore(path.join(directory, "baseline.json"));
 
-    const completeFacts = await makeFacts(
-      [
-        { id: "A", source: "Save" },
-        { id: "B", source: "Cancel" },
-      ],
-      [
-        { id: "A", text: "Enregistrer" },
-        { id: "B", text: "Annuler" },
-      ],
-    );
-    assert.equal(
-      (
-        await compareProcessingBaseline(completeFacts, store.baseline)
-      ).changes.find(({ sourceKey }) => sourceKey === "B")?.status,
-      "history-insufficient",
-    );
+      const first = await recordComparisonBaseline(config, store);
+      const pathName = path.join(directory, "baseline.json");
+      const before = await stat(pathName, { bigint: true });
+      const second = await recordComparisonBaseline(config, store);
+      const after = await stat(pathName, { bigint: true });
 
-    await advanceProcessingBaseline(store, completeFacts, [
-      { sourceKey: "A", language: "fr" },
-    ]);
-    assert.equal(
-      (
-        await compareProcessingBaseline(completeFacts, store.baseline)
-      ).changes.find(({ sourceKey }) => sourceKey === "B")?.status,
-      "history-insufficient",
-    );
+      assert.equal(first.outcome, "saved");
+      assert.equal(second.outcome, "unchanged");
+      assert.deepStrictEqual(second.baseline, first.baseline);
+      assert.equal(before.ino, after.ino);
+      assert.equal(before.mtimeNs, after.mtimeNs);
+    });
   });
 
-  void it("confirms source removal from source evidence and reports target uncertainty separately", async () => {
-    const initialFacts = await makeScopedFacts(
-      [{ range: "source-r1", units: [{ id: "A", source: "Save" }] }],
-      [
-        {
-          range: "target-r1",
-          covers: ["A"],
-          translations: [{ id: "A", text: "Enregistrer" }],
+  void it("records a source-only snapshot without requiring target configuration", async () => {
+    await withDirectory(async (directory) => {
+      const config = defineConfig({
+        source: {
+          schema: sourceSchemaFromExamples<Unit>({
+            id: "source-only",
+            source: "Original",
+          }),
+          read: () => ({
+            scopes: [
+              {
+                range: "messages",
+                enumeration: "complete",
+                records: [
+                  {
+                    value: { id: "source-only", source: "Original" },
+                    bodyAvailability: "available",
+                  },
+                ],
+              },
+            ],
+          }),
         },
-      ],
-    );
-    const store = new MemoryBaselineStore();
-    await advanceProcessingBaseline(store, initialFacts, [
-      { sourceKey: "A", language: "fr" },
-    ]);
+        keyOf: ({ id }) => id,
+      });
+      const store = createFileComparisonBaselineStore<Unit, never>(
+        path.join(directory, "baseline.json"),
+      );
 
-    const onlyOtherRanges = await makeScopedFacts(
-      [{ range: "source-r2", units: [{ id: "B", source: "Cancel" }] }],
-      [
-        {
-          range: "target-r2",
-          covers: ["B"],
-          translations: [{ id: "B", text: "Annuler" }],
-        },
-      ],
-    );
-    assert.equal(
-      (
-        await compareProcessingBaseline(onlyOtherRanges, store.baseline)
-      ).changes.find(({ sourceKey }) => sourceKey === "A")?.status,
-      "unknown",
-    );
+      const result = await recordComparisonBaseline(config, store);
 
-    const oldSourcePartial = await makeScopedFacts(
-      [
-        { range: "source-r1", units: [], enumeration: "partial" },
-        { range: "source-r2", units: [{ id: "B", source: "Cancel" }] },
-      ],
-      [
-        {
-          range: "target-r1",
-          covers: [],
-          translations: [],
-        },
-        {
-          range: "target-r2",
-          covers: ["B"],
-          translations: [{ id: "B", text: "Annuler" }],
-        },
-      ],
-    );
-    assert.equal(
-      (
-        await compareProcessingBaseline(oldSourcePartial, store.baseline)
-      ).changes.find(({ sourceKey }) => sourceKey === "A")?.status,
-      "unknown",
-    );
-
-    const oldTargetPartial = await makeScopedFacts(
-      [
-        { range: "source-r1", units: [] },
-        { range: "source-r2", units: [{ id: "B", source: "Cancel" }] },
-      ],
-      [
-        {
-          range: "target-r1",
-          covers: [],
-          translations: [],
-          enumeration: "partial",
-        },
-        {
-          range: "target-r2",
-          covers: ["B"],
-          translations: [{ id: "B", text: "Annuler" }],
-        },
-      ],
-    );
-    const partialTargetRemoval = (
-      await compareProcessingBaseline(oldTargetPartial, store.baseline)
-    ).changes.find(({ sourceKey }) => sourceKey === "A");
-    assert.equal(partialTargetRemoval?.status, "source-removed");
-    assert.equal(partialTargetRemoval?.current?.association.status, "unknown");
-    assert.equal(
-      partialTargetRemoval?.current?.association.coverageStatus,
-      "incomplete",
-    );
-
-    const partialTargetPlan = await createUpdatePlan(
-      oldTargetPartial,
-      store.baseline,
-      historyConfig,
-    );
-    const partialTargetItem = partialTargetPlan.items.find(
-      ({ sourceKey }) => sourceKey === "A",
-    );
-    assert.equal(partialTargetItem?.change, "source-removed");
-    assert.equal(partialTargetItem?.status, "blocked");
-    assert.equal(
-      partialTargetItem?.blocker?.code,
-      "translationCoverageIncomplete",
-    );
-
-    const partialHistory = await makeScopedFacts(
-      [
-        {
-          range: "source-r1",
-          units: [{ id: "A", source: "Save" }],
-          enumeration: "partial",
-        },
-      ],
-      [
-        {
-          range: "target-r1",
-          covers: ["A"],
-          translations: [{ id: "A", text: "Enregistrer" }],
-        },
-      ],
-    );
-    const partialHistoryStore = new MemoryBaselineStore();
-    await advanceProcessingBaseline(partialHistoryStore, partialHistory, [
-      { sourceKey: "A", language: "fr" },
-    ]);
-    const completeCurrentSource = await makeScopedFacts(
-      [{ range: "source-r1", units: [] }],
-      [{ range: "target-r1", covers: [], translations: [] }],
-    );
-    assert.equal(
-      (
-        await compareProcessingBaseline(
-          completeCurrentSource,
-          partialHistoryStore.baseline,
-        )
-      ).changes.find(({ sourceKey }) => sourceKey === "A")?.status,
-      "unknown",
-    );
-
-    const oldRangesComplete = await makeScopedFacts(
-      [
-        { range: "source-r1", units: [] },
-        { range: "source-r2", units: [{ id: "B", source: "Cancel" }] },
-      ],
-      [
-        {
-          range: "target-r1",
-          covers: [],
-          translations: [{ id: "orphan", text: "Orphan" }],
-        },
-        {
-          range: "target-r2",
-          covers: ["B"],
-          translations: [{ id: "B", text: "Annuler" }],
-        },
-      ],
-    );
-    const removal = (
-      await compareProcessingBaseline(oldRangesComplete, store.baseline)
-    ).changes.find(({ sourceKey }) => sourceKey === "A");
-    assert.equal(removal?.status, "source-removed");
-    assert.equal(oldRangesComplete.translations.records.length, 2);
-    assert.ok(
-      oldRangesComplete.translations.records.some(
-        ({ translation }) => translation.id === "orphan",
-      ),
-    );
+      assert.equal(result.outcome, "saved");
+      assert.deepStrictEqual(result.baseline.snapshot.translations, {
+        reads: [],
+        records: [],
+      });
+      assert.deepStrictEqual(
+        result.baseline.snapshot.source.units.map(({ key }) => key),
+        ["source-only"],
+      );
+    });
   });
 
-  void it("advances a reliably removed item while retaining facts needed for later comparisons", async () => {
-    const initialFacts = await makeScopedFacts(
-      [{ range: "source-r1", units: [{ id: "A", source: "Save" }] }],
-      [
-        {
-          range: "target-r1",
-          covers: ["A"],
-          translations: [{ id: "A", text: "Enregistrer" }],
-        },
-      ],
+  void it("replaces only selected scopes and rebuilds all scope and record indexes", async () => {
+    const previousSnapshot = await readComparisonSnapshot(
+      makeConfig({
+        sourceScopes: [
+          sourceScope("a", { id: "a", source: "A" }),
+          sourceScope("b", { id: "b", source: "B old" }),
+        ],
+        translationScopes: [
+          translationScope("target-a", {
+            id: "a",
+            namespace: "ui",
+            text: "A fr",
+          }),
+          translationScope("target-b", {
+            id: "b",
+            namespace: "ui",
+            text: "B old fr",
+          }),
+        ],
+      }),
     );
-    const store = new MemoryBaselineStore();
-    await advanceProcessingBaseline(store, initialFacts, [
-      { sourceKey: "A", language: "fr" },
-    ]);
+    const baseline = replaceComparisonBaseline({ current: previousSnapshot });
+    const currentSnapshot = await readComparisonSnapshot(
+      makeConfig({
+        sourceScopes: [sourceScope("b", { id: "b-new", source: "B new" })],
+        translationScopes: [
+          translationScope("target-b", {
+            id: "b-new",
+            namespace: "ui",
+            text: "B new fr",
+          }),
+        ],
+      }),
+    );
 
-    const removedFacts = await makeScopedFacts(
-      [{ range: "source-r1", units: [] }],
-      [{ range: "target-r1", covers: [], translations: [] }],
-    );
-    const advanced = await advanceProcessingBaseline(store, removedFacts, [
-      { sourceKey: "A", language: "fr" },
-    ]);
-    assert.equal(advanced.outcome, "saved");
-    assert.equal(advanced.selections[0]?.outcome, "advanced");
-    assert.equal(advanced.baseline?.entries[0]?.source.presence, "removed");
-    assert.deepStrictEqual(advanced.baseline?.entries[0]?.source.unit, {
-      id: "A",
-      source: "Save",
+    const replaced = replaceComparisonBaseline({
+      previous: baseline,
+      current: currentSnapshot,
+      selection: {
+        sourceRanges: ["b"],
+        translationRanges: [{ language: "fr", range: "target-b" }],
+      },
     });
 
-    const targetReturned = await makeScopedFacts(
-      [{ range: "source-r1", units: [] }],
+    assert.deepStrictEqual(
+      replaced.snapshot.source.read.scopes.map(({ range }) => range),
+      ["a", "b"],
+    );
+    assert.notEqual(replaced.snapshot.version, baseline.snapshot.version);
+    assert.notEqual(
+      replaced.snapshot.source.version,
+      baseline.snapshot.source.version,
+    );
+    assert.deepStrictEqual(
+      replaced.snapshot.source.units.map(({ key, scopeIndex }) => [
+        key,
+        scopeIndex,
+      ]),
       [
-        {
-          range: "target-r1",
-          covers: [],
-          translations: [{ id: "A", text: "Sauvegarder" }],
-        },
+        ["a", 0],
+        ["b-new", 1],
       ],
     );
-    assert.equal(
-      (
-        await compareProcessingBaseline(targetReturned, advanced.baseline)
-      ).changes.find(({ sourceKey }) => sourceKey === "A")?.status,
-      "changed",
+    assert.deepStrictEqual(
+      replaced.snapshot.translations.reads[0]?.scopes.map(
+        ({ range, translationIndexes }) => [range, translationIndexes],
+      ),
+      [
+        ["target-a", [0]],
+        ["target-b", [1]],
+      ],
+    );
+    assert.deepStrictEqual(
+      replaced.snapshot.translations.records.map(({ index, scopeIndex }) => [
+        index,
+        scopeIndex,
+      ]),
+      [
+        [0, 0],
+        [1, 1],
+      ],
+    );
+    assert.throws(
+      () =>
+        replaceComparisonBaseline({
+          previous: baseline,
+          current: currentSnapshot,
+          selection: { sourceRanges: ["not-read"], translationRanges: [] },
+        }),
+      /没有对应的本次读取证据/u,
     );
   });
 
-  void it("does not advance a conflicting relationship or replace history after a save failure", async () => {
-    const initialFacts = await makeFacts(
-      [{ id: "A", source: "Save" }],
-      [{ id: "A", text: "Enregistrer" }],
-    );
-    const store = new MemoryBaselineStore();
-    await advanceProcessingBaseline(store, initialFacts, [
-      { sourceKey: "A", language: "fr" },
-    ]);
-    const previous = store.baseline;
+  void it("leaves an existing file untouched when configured reads are incomplete", async () => {
+    await withDirectory(async (directory) => {
+      const pathName = path.join(directory, "baseline.json");
+      const store = createTestStore(pathName);
+      const completeConfig = makeConfig({
+        sourceScopes: [sourceScope("messages", { id: "save", source: "Save" })],
+        translationScopes: [translationScope("catalogue.fr")],
+      });
+      const saved = await recordComparisonBaseline(completeConfig, store);
+      const previousContents = await readFile(pathName, "utf8");
+      const incompleteConfig = makeConfig({
+        sourceScopes: [
+          {
+            ...sourceScope("messages", { id: "save", source: "Save" }),
+            enumeration: "partial",
+          },
+        ],
+        translationScopes: [translationScope("catalogue.fr")],
+      });
+      const failedConfig = makeConfig({
+        sourceScopes: [],
+        sourceError: "source resource unavailable",
+        translationScopes: [translationScope("catalogue.fr")],
+      });
+      const incompleteTranslationConfig = makeConfig({
+        sourceScopes: [sourceScope("messages", { id: "save", source: "Save" })],
+        translationScopes: [
+          { ...translationScope("catalogue.fr"), enumeration: "partial" },
+        ],
+      });
 
-    const conflictFacts = await makeFacts(
-      [{ id: "A", source: "Save" }],
-      [
-        { id: "A", targetKey: "A.one", text: "Enregistrer A" },
-        { id: "A", targetKey: "A.two", text: "Enregistrer B" },
-      ],
-    );
-    const conflict = await advanceProcessingBaseline(store, conflictFacts, [
-      { sourceKey: "A", language: "fr" },
-    ]);
-    assert.equal(conflict.outcome, "unchanged");
-    assert.equal(conflict.selections[0]?.outcome, "conflict");
-    assert.strictEqual(store.baseline, previous);
+      for (const config of [
+        incompleteConfig,
+        failedConfig,
+        incompleteTranslationConfig,
+      ]) {
+        await assert.rejects(recordComparisonBaseline(config, store), {
+          name: "ComparisonBaselineIncompleteSnapshotError",
+        });
+        assert.equal(await readFile(pathName, "utf8"), previousContents);
+      }
 
-    const failingStore: ProcessingBaselineStore = {
-      load: async () => previous,
-      save: async () => {
-        throw new Error("disk is read-only");
-      },
-    };
-    const changedFacts = await makeFacts(
-      [{ id: "A", source: "Save" }],
-      [{ id: "A", text: "Sauvegarder" }],
-    );
-    const failed = await advanceProcessingBaseline(failingStore, changedFacts, [
-      { sourceKey: "A", language: "fr" },
-    ]);
-    assert.equal(failed.outcome, "failed");
-    assert.equal(failed.failure?.phase, "save");
-    assert.equal(failed.failure?.message, "disk is read-only");
-    assert.deepEqual(failed.baseline, previous);
+      assert.deepStrictEqual(await store.load(), saved.baseline);
+    });
+  });
+
+  void it("reports old processing baseline files as unsupported", async () => {
+    await withDirectory(async (directory) => {
+      const pathName = path.join(directory, "baseline.json");
+      await writeFile(
+        pathName,
+        `${JSON.stringify({ formatVersion: 1, entries: [], sourceScopes: [] })}\n`,
+      );
+
+      await assert.rejects(
+        createFileComparisonBaselineStore(pathName).load(),
+        ComparisonBaselineFormatError,
+      );
+    });
   });
 });

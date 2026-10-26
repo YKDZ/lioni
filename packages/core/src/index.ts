@@ -50,27 +50,6 @@ export type {
   StandardSchemaV1Issue,
   StandardSchemaV1Result,
 } from "./standard-schema.ts";
-export * from "./apply-plans.ts";
-export {
-  createUpdatePlan,
-  defaultUpdatePolicy,
-  validateUpdatePlanHistory,
-  validateUpdatePlan,
-} from "./plans.ts";
-export type {
-  UpdateDecision,
-  UpdatePlan,
-  UpdatePlanBlock,
-  UpdatePlanBlockCode,
-  UpdatePlanData,
-  UpdatePlanDataItem,
-  UpdatePlanItem,
-  UpdatePlanObservation,
-  UpdatePlanStatus,
-  UpdatePlanStore,
-  UpdatePolicy,
-  UpdatePolicyInput,
-} from "./plans.ts";
 export * from "./qa.ts";
 export {
   compareSnapshots,
@@ -90,19 +69,17 @@ export type {
   TranslationChange,
 } from "./comparison.ts";
 export {
-  advanceProcessingBaseline,
-  compareProcessingBaseline,
-  type ProcessingBaseline,
-  type ProcessingBaselineAdvanceResult,
-  type ProcessingBaselineChange,
-  type ProcessingBaselineEntry,
-  type ProcessingBaselineSelection,
-  type ProcessingBaselineSourceScope,
-  type ProcessingBaselineStore,
-  type ProcessingBaselineTranslation,
-  type ProcessingBaselineTranslationScope,
-  type ProcessingBaselineComparison,
-  type ProcessingChangeStatus,
+  ComparisonBaselineFormatError,
+  ComparisonBaselineIncompleteSnapshotError,
+  recordComparisonBaseline,
+  replaceComparisonBaseline,
+  validateComparisonBaseline,
+} from "./baselines.ts";
+export type {
+  ComparisonBaseline,
+  ComparisonBaselineSelection,
+  ComparisonBaselineStore,
+  RecordComparisonBaselineResult,
 } from "./baselines.ts";
 
 export type Awaitable<T> = T | Promise<T>;

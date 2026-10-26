@@ -4,8 +4,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
-  validateProcessingBaseline,
-  type ProcessingBaselineStore,
+  stableStringify,
+  validateComparisonBaseline,
+  type ComparisonBaseline,
+  type ComparisonBaselineStore,
 } from "./baselines.ts";
 import { frameworkConfigRunner } from "./config-capability.ts";
 import {
@@ -14,6 +16,7 @@ import {
   type TranslationUnitInput,
 } from "./index.ts";
 import { validateUpdatePlan, type UpdatePlanStore } from "./plans.ts";
+import type { JsonValue } from "./semantic-edits.ts";
 import { StandardSchemaContractError } from "./standard-schema.ts";
 
 type FrameworkConfigConsumer<TResult> = <
@@ -46,39 +49,39 @@ export async function loadConfig(configPath: string): Promise<LoadedConfig> {
   return { use: runner };
 }
 
-/** 为 Node.js 宿主创建文件处理基线存储。 */
-export function createFileProcessingBaselineStore(
+/** 为 Node.js 宿主创建文件比较基线存储。 */
+export function createFileComparisonBaselineStore<
+  TUnit extends TranslationUnitInput = TranslationUnitInput,
+  TTranslation = unknown,
+  TBody = JsonValue,
+  TUnavailable = never,
+>(
   filePath: string,
-): ProcessingBaselineStore {
+): ComparisonBaselineStore<TUnit, TTranslation, TBody, TUnavailable> {
   return {
     async load() {
-      let contents: string;
-      try {
-        contents = await readFile(filePath, "utf8");
-      } catch (error) {
-        if (isMissingFile(error)) return undefined;
-        throw error;
-      }
-
-      let value: unknown;
-      try {
-        value = JSON.parse(contents);
-      } catch (error) {
-        throw new StandardSchemaContractError(
-          "处理基线文件",
-          "invalid-json",
-          `处理基线文件不是有效 JSON：${filePath}`,
-          undefined,
-          { cause: error },
-        );
-      }
-      validateProcessingBaseline(value);
-      return value;
+      return await readComparisonBaselineFile<
+        TUnit,
+        TTranslation,
+        TBody,
+        TUnavailable
+      >(filePath);
     },
 
     async save(baseline) {
-      validateProcessingBaseline(baseline);
-      const contents = `${JSON.stringify(baseline, null, 2)}\n`;
+      validateComparisonBaseline(baseline);
+      const contents = `${stableStringify(baseline)}\n`;
+      const existing = await readComparisonBaselineFile<
+        TUnit,
+        TTranslation,
+        TBody,
+        TUnavailable
+      >(filePath);
+      if (
+        existing !== undefined &&
+        stableStringify(existing) === stableStringify(baseline)
+      )
+        return;
       const directory = path.dirname(filePath);
       const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
       let moved = false;
@@ -92,6 +95,45 @@ export function createFileProcessingBaselineStore(
       }
     },
   };
+}
+
+async function readComparisonBaselineFile<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  filePath: string,
+): Promise<
+  ComparisonBaseline<TUnit, TTranslation, TBody, TUnavailable> | undefined
+> {
+  let contents: string;
+  try {
+    contents = await readFile(filePath, "utf8");
+  } catch (error) {
+    if (isMissingFile(error)) return undefined;
+    throw error;
+  }
+
+  let value: unknown;
+  try {
+    value = JSON.parse(contents);
+  } catch (error) {
+    throw new StandardSchemaContractError(
+      "比较基线文件",
+      "invalid-json",
+      `比较基线文件不是有效 JSON：${filePath}`,
+      undefined,
+      { cause: error },
+    );
+  }
+  validateComparisonBaseline(value);
+  return value as unknown as ComparisonBaseline<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable
+  >;
 }
 
 /** 为 Node.js 宿主创建文件更新计划存储。 */
