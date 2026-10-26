@@ -187,6 +187,16 @@ const journey: CliJourney = {
     assert.ok(detachedChanges?.stdout.includes("Welcome"));
     assert.ok(detachedChanges?.stdout.includes("Bienvenue"));
     assert.ok(detachedChanges?.stdout.includes("未形成更新决定"));
+    assert.ok(
+      detachedChanges?.stdout.includes(
+        "原因：原文已从完整范围移除，当前没有对应记录可供处理。",
+      ),
+    );
+    assert.ok(
+      detachedChanges?.stdout.includes(
+        "原因：译文已从完整范围移除，当前没有对应记录可供处理。",
+      ),
+    );
     assert.equal(empty?.exitCode, 0, empty?.stderr);
     assert.equal(empty?.stdout.trim(), "没有变化，也没有需要处理的更新决定。");
     assert.equal(
