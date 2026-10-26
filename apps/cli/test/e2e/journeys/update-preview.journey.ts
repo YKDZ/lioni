@@ -1,16 +1,21 @@
 import assert from "node:assert/strict";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+
+import { readComparisonSnapshot, replaceComparisonBaseline } from "@lioni/core";
+import { loadConfig } from "@lioni/core/node";
 
 import type { CliJourney } from "../journey.ts";
 
-const journey: CliJourney = {
-  name: "update-preview",
-  modes: ["source", "distribution"],
-  async setup({ workDir }) {
-    await writeFile(
-      path.join(workDir, "lioni.config.ts"),
-      `import { defineConfig } from "@lioni/core";
+function configSource(
+  sources: readonly { readonly id: string; readonly source: string }[],
+  translations: readonly {
+    readonly targetId: string;
+    readonly sourceId: string;
+    readonly text: string;
+  }[],
+): string {
+  return `import { defineConfig } from "@lioni/core";
 
 export default defineConfig({
   source: {
@@ -22,7 +27,7 @@ export default defineConfig({
     read: () => ({ scopes: [{
       range: "src/messages.json",
       enumeration: "complete",
-      records: [{ value: { id: "welcome", source: "Welcome" }, bodyAvailability: "available" }]
+      records: ${JSON.stringify(sources)}.map((value) => ({ value, bodyAvailability: "available" }))
     }] })
   },
   keyOf: (unit) => unit.id,
@@ -44,11 +49,57 @@ export default defineConfig({
       range: "locales/fr.json",
       covers: sourceUnits.map(({ key }) => key),
       enumeration: "complete",
-      records: []
+      records: ${JSON.stringify(translations)}.map((value) => ({ value, bodyAvailability: "available" }))
     }] })
   }
 });
-`,
+`;
+}
+
+const journey: CliJourney = {
+  name: "update-preview",
+  modes: ["source", "distribution"],
+  async setup({ workDir }) {
+    await writeFile(
+      path.join(workDir, "lioni.config.ts"),
+      configSource([{ id: "welcome", source: "Welcome" }], []),
+    );
+
+    const removedDir = path.join(workDir, "removed");
+    await mkdir(removedDir);
+    const previousConfigPath = path.join(removedDir, "previous.config.ts");
+    await writeFile(
+      previousConfigPath,
+      configSource(
+        [{ id: "welcome", source: "Welcome" }],
+        [
+          {
+            targetId: "target-welcome",
+            sourceId: "welcome",
+            text: "Bienvenue",
+          },
+        ],
+      ),
+    );
+    await writeFile(
+      path.join(removedDir, "lioni.config.ts"),
+      configSource([], []),
+    );
+    const previousConfig = await loadConfig(previousConfigPath);
+    const snapshot = await previousConfig.use((config) =>
+      readComparisonSnapshot(config),
+    );
+    const baseline = replaceComparisonBaseline({ current: snapshot });
+    await writeFile(
+      path.join(removedDir, "lioni.baseline.json"),
+      `${JSON.stringify(baseline)}\n`,
+    );
+
+    const emptyDir = path.join(workDir, "empty");
+    await mkdir(emptyDir);
+    await writeFile(
+      path.join(emptyDir, "lioni.config.ts"),
+      configSource([], []),
     );
   },
   commands() {
@@ -71,12 +122,34 @@ export default defineConfig({
         name: "require the explicit preview flag in this stage",
         args: ["update", "lioni.config.ts"],
       },
+      {
+        name: "show comparison changes without decisions",
+        args: [
+          "update",
+          "removed/lioni.config.ts",
+          "--dry-run",
+          "--output-format",
+          "text",
+        ],
+      },
+      {
+        name: "describe an actually empty preview",
+        args: [
+          "update",
+          "empty/lioni.config.ts",
+          "--dry-run",
+          "--output-format",
+          "text",
+        ],
+      },
     ];
   },
   async assertions({ context, results }) {
     const structured = results[0];
     const readable = results[1];
     const withoutFlag = results[2];
+    const detachedChanges = results[3];
+    const empty = results[4];
     const baselinePath = path.join(context.workDir, "lioni.baseline.json");
 
     assert.equal(structured?.exitCode, 0, structured?.stderr);
@@ -108,6 +181,14 @@ export default defineConfig({
     assert.equal(withoutFlag?.exitCode, 1);
     assert.equal(withoutFlag?.stdout, "");
     assert.match(withoutFlag?.stderr ?? "", /previewFailed/);
+    assert.equal(detachedChanges?.exitCode, 0, detachedChanges?.stderr);
+    assert.equal(detachedChanges?.stderr, "");
+    assert.ok(detachedChanges?.stdout.includes("移除"));
+    assert.ok(detachedChanges?.stdout.includes("Welcome"));
+    assert.ok(detachedChanges?.stdout.includes("Bienvenue"));
+    assert.ok(detachedChanges?.stdout.includes("未形成更新决定"));
+    assert.equal(empty?.exitCode, 0, empty?.stderr);
+    assert.equal(empty?.stdout.trim(), "没有变化，也没有需要处理的更新决定。");
     assert.equal(
       await readFile(baselinePath, "utf8").catch(() => undefined),
       undefined,

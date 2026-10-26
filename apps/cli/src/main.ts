@@ -299,10 +299,33 @@ function updatePlanText(value: unknown): ReturnType<typeof text.lines> {
     review: "待复核",
     blocked: "暂不可执行",
   } as const;
-  if (plan.items.length === 0) return text.lines(["没有需要处理的更新决定。"]);
+
+  const decidedSourceKeys = new Set(
+    plan.items.flatMap((item) =>
+      item.changes.source === undefined ? [] : [item.changes.source.key],
+    ),
+  );
+  const decidedTranslationKeys = new Set(
+    plan.items.flatMap((item) =>
+      item.changes.translations.map(({ identity }) =>
+        updateIdentityKey(identity),
+      ),
+    ),
+  );
+  const unassignedSources = plan.comparisons.sourceChanges.filter(
+    ({ key }) => !decidedSourceKeys.has(key),
+  );
+  const unassignedTranslations = plan.comparisons.translationChanges.filter(
+    ({ identity }) => !decidedTranslationKeys.has(updateIdentityKey(identity)),
+  );
+  const unassignedCount =
+    unassignedSources.length + unassignedTranslations.length;
+
+  if (plan.items.length === 0 && unassignedCount === 0)
+    return text.lines(["没有变化，也没有需要处理的更新决定。"]);
 
   return text.lines([
-    `更新预览：${plan.items.length} 项决定。`,
+    `更新预览：${plan.items.length} 项决定，${unassignedCount} 项变化未形成决定。`,
     ...plan.items.flatMap((item) => {
       const subject =
         item.sourceKey === undefined
@@ -340,7 +363,53 @@ function updatePlanText(value: unknown): ReturnType<typeof text.lines> {
         lines.push(`  待写正文：${displayJson(item.after.content)}`);
       return lines;
     }),
+    ...(unassignedCount === 0
+      ? []
+      : [
+          "未形成更新决定的变化：",
+          ...unassignedSources.flatMap((change) => [
+            `  原文 ${change.key}（${comparisonStatusText(change.status)}）：${displayJson(change.previous?.unit.source)} → ${displayJson(change.current?.unit.source)}`,
+            `    原因：${unassignedChangeReason("原文", change.status)}`,
+          ]),
+          ...unassignedTranslations.flatMap((change) => {
+            const previous =
+              change.previous?.bodyAvailability === "available"
+                ? change.previous.content
+                : change.previous === undefined
+                  ? undefined
+                  : "正文不可用";
+            const current =
+              change.current?.bodyAvailability === "available"
+                ? change.current.content
+                : change.current === undefined
+                  ? undefined
+                  : "正文不可用";
+            return [
+              `  译文 ${change.identity.key}（${comparisonStatusText(change.status)}）：${displayJson(previous)} → ${displayJson(current)}`,
+              `    原因：${unassignedChangeReason("译文", change.status)}`,
+            ];
+          }),
+        ]),
   ]);
+}
+
+function unassignedChangeReason(
+  subject: "原文" | "译文",
+  status: UpdatePlan["comparisons"]["sourceChanges"][number]["status"],
+): string {
+  if (status === "removed")
+    return `${subject}已从完整范围移除，当前没有对应记录可供处理。`;
+  if (status === "added") return `${subject}为本次新增，但没有对应的更新决定。`;
+  if (status === "modified") return `${subject}已变化，但没有对应的更新决定。`;
+  return `${subject}的变化没有关联到更新决定。`;
+}
+
+function updateIdentityKey(identity: {
+  readonly language: string;
+  readonly namespace: string;
+  readonly key: string;
+}): string {
+  return JSON.stringify([identity.language, identity.namespace, identity.key]);
 }
 
 function displayJson(value: unknown): string {
