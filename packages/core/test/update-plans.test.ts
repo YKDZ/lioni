@@ -33,6 +33,7 @@ function makeConfig(
   units: readonly Unit[],
   translations: readonly Translation[],
   options: {
+    readonly sourceBodyAvailability?: "available" | "unavailable";
     readonly sourceToContent?: (source: string) => string;
     readonly updatePolicy?: Config["updatePolicy"];
     readonly compare?: Config["compare"];
@@ -58,7 +59,7 @@ function makeConfig(
             enumeration: "complete",
             records: units.map((value) => ({
               value,
-              bodyAvailability: "available" as const,
+              bodyAvailability: options.sourceBodyAvailability ?? "available",
             })),
           },
         ],
@@ -172,6 +173,21 @@ void describe("业务更新计划与预览", () => {
       (restored as typeof plan).items[0]?.request,
       item?.request,
     );
+  });
+
+  void it("原文正文不可用时默认策略不生成占位写入", async () => {
+    const config = makeConfig([{ id: "welcome", source: "Welcome" }], [], {
+      sourceBodyAvailability: "unavailable",
+      sourceToContent: (source) => `待译：${source}`,
+    });
+
+    const plan = await previewUpdate(config);
+    const item = plan.items.find(({ sourceKey }) => sourceKey === "welcome");
+
+    assert.equal(item?.action, "blocked");
+    assert.equal(item?.request, undefined);
+    assert.equal(item?.after, undefined);
+    assert.match(item?.reason ?? "", /原文正文不可用/);
   });
 
   void it("原文变化时保留已有译文，包括仍等于旧原文的正文", async () => {
