@@ -14,6 +14,7 @@ function configSource(
     readonly sourceId: string;
     readonly text: string;
   }[],
+  options: { readonly noDecisions?: boolean } = {},
 ): string {
   return `import { defineConfig } from "@lioni/core";
 
@@ -32,6 +33,7 @@ export default defineConfig({
   },
   keyOf: (unit) => unit.id,
   sourceToContent: (source) => "待译：" + source,
+  ${options.noDecisions === true ? "updatePolicy: () => []," : ""}
   translations: {
     languages: ["fr"],
     schema: { "~standard": { version: 1, vendor: "update-preview-translation", validate(value) {
@@ -97,9 +99,32 @@ const journey: CliJourney = {
 
     const emptyDir = path.join(workDir, "empty");
     await mkdir(emptyDir);
+    const unchangedConfigPath = path.join(emptyDir, "previous.config.ts");
+    const unchangedSources = [{ id: "welcome", source: "Welcome" }];
+    const unchangedTranslations = [
+      {
+        targetId: "target-welcome",
+        sourceId: "welcome",
+        text: "Bienvenue",
+      },
+    ];
+    await writeFile(
+      unchangedConfigPath,
+      configSource(unchangedSources, unchangedTranslations),
+    );
     await writeFile(
       path.join(emptyDir, "lioni.config.ts"),
-      configSource([], []),
+      configSource(unchangedSources, unchangedTranslations, {
+        noDecisions: true,
+      }),
+    );
+    const unchangedConfig = await loadConfig(unchangedConfigPath);
+    const unchangedSnapshot = await unchangedConfig.use((config) =>
+      readComparisonSnapshot(config),
+    );
+    await writeFile(
+      path.join(emptyDir, "lioni.baseline.json"),
+      `${JSON.stringify(replaceComparisonBaseline({ current: unchangedSnapshot }))}\n`,
     );
   },
   commands() {
@@ -133,7 +158,7 @@ const journey: CliJourney = {
         ],
       },
       {
-        name: "describe an actually empty preview",
+        name: "describe a preview with no changes or decisions",
         args: [
           "update",
           "empty/lioni.config.ts",

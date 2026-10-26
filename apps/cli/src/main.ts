@@ -313,10 +313,12 @@ function updatePlanText(value: unknown): ReturnType<typeof text.lines> {
     ),
   );
   const unassignedSources = plan.comparisons.sourceChanges.filter(
-    ({ key }) => !decidedSourceKeys.has(key),
+    ({ key, status }) => status !== "unchanged" && !decidedSourceKeys.has(key),
   );
   const unassignedTranslations = plan.comparisons.translationChanges.filter(
-    ({ identity }) => !decidedTranslationKeys.has(updateIdentityKey(identity)),
+    ({ identity, status }) =>
+      status !== "unchanged" &&
+      !decidedTranslationKeys.has(updateIdentityKey(identity)),
   );
   const unassignedCount =
     unassignedSources.length + unassignedTranslations.length;
