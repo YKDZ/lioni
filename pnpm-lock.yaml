@@ -361,6 +361,9 @@ importers:
       '@lioni/text-analysis':
         specifier: workspace:*
         version: link:../text-analysis
+      yaml:
+        specifier: ^2.9.1
+        version: 2.9.1
     devDependencies:
       '@lioni/tooling-config':
         specifier: workspace:*
