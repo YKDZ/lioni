@@ -223,6 +223,12 @@ function readMixedSource() {
 
 const mixedTranslations = {
   languages: ["fr"],
+  identityOf: (
+    translation: MixedTranslation | MixedUnavailableTranslation,
+  ) => ({
+    namespace: "messages",
+    key: translation.key,
+  }),
   schema: mixedTranslationSchema,
   unavailableSchema: mixedUnavailableTranslationSchema,
   contentSchema: mixedBodySchema,

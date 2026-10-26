@@ -515,6 +515,10 @@ function createInputConfig(
         translation.domain === "catalog"
           ? translation.text
           : translation.content.message,
+      identityOf: (translation) => ({
+        namespace: translation.domain,
+        key: translation.nativeKey,
+      }),
       read: (language, sourceUnits) => ({
         scopes: modules.flatMap((module) => {
           const selected = sourceUnits.filter(

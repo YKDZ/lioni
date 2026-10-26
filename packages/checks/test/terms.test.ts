@@ -267,6 +267,10 @@ function createScenario(
     keyOf: ({ id }) => id,
     translations: {
       languages: ["zh"],
+      identityOf: (translation) => ({
+        namespace: "messages",
+        key: translation.id,
+      }),
       schema: schema<Translation>("term-check-translation", isTranslation),
       contentSchema: schema<Body>("term-check-body", isBody),
       contentOf: ({ body }) => body,

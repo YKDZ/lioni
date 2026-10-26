@@ -2,6 +2,7 @@
   "enumeration": "complete",
   "records": [
     {
+      "targetId": "shared-target",
       "text": "Shared original",
       "context": {
         "file": "locales/fr.json",
@@ -11,6 +12,7 @@
       }
     },
     {
+      "targetId": "cancel-target",
       "text": "Cancel original",
       "context": {
         "file": "locales/fr.json",
@@ -19,6 +21,7 @@
       }
     },
     {
+      "targetId": "help-target",
       "text": "Help original",
       "context": {
         "file": "locales/fr.json",
@@ -28,6 +31,7 @@
       }
     },
     {
+      "targetId": "tooltip-target",
       "text": "Tooltip original",
       "context": {
         "file": "locales/fr.json",

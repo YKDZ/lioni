@@ -17,6 +17,7 @@ import { defineTestQualityCheck } from "./quality-check-fixture.ts";
 import {
   schemaFromExamples,
   sourceSchemaFromExamples,
+  fixtureTranslationIdentity,
 } from "./source-schema.ts";
 
 const complete = () => ({
@@ -34,7 +35,7 @@ const complete = () => ({
 
 function configFor(compute: (memo: MemoScope) => void) {
   const source = { source: "Save" };
-  const translation = { text: "保存" };
+  const translation = { id: "save", text: "保存" };
   return defineConfig({
     source: {
       schema: sourceSchemaFromExamples(source),
@@ -51,6 +52,7 @@ function configFor(compute: (memo: MemoScope) => void) {
     keyOf: () => "save",
     translations: {
       languages: ["zh-CN"],
+      identityOf: fixtureTranslationIdentity,
       schema: schemaFromExamples(translation),
       contentSchema: schemaFromExamples(""),
       contentOf: ({ text }) => text,

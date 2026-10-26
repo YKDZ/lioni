@@ -24,7 +24,11 @@ import type {
 } from "@lioni/text-analysis";
 
 type Unit = { readonly id: string; readonly source: string };
-type Translation = { readonly id: string; readonly text: string };
+type Translation = {
+  readonly id: string;
+  readonly text: string;
+  readonly targetKey?: string;
+};
 
 const unitSchema: StandardSchemaV1<Unit, Unit> = {
   "~standard": {
@@ -58,10 +62,21 @@ const translationSchema: StandardSchemaV1<Translation, Translation> = {
         !("id" in value) ||
         typeof value.id !== "string" ||
         !("text" in value) ||
-        typeof value.text !== "string"
+        typeof value.text !== "string" ||
+        ("targetKey" in value && typeof value.targetKey !== "string")
       )
         return { issues: [{ message: "译文记录结构不匹配。" }] };
-      return { value: { id: value.id, text: value.text } };
+      const targetKey =
+        "targetKey" in value && typeof value.targetKey === "string"
+          ? value.targetKey
+          : undefined;
+      return {
+        value: {
+          id: value.id,
+          text: value.text,
+          ...(targetKey === undefined ? {} : { targetKey }),
+        },
+      };
     },
   },
 };
@@ -221,6 +236,10 @@ function configFor(
     keyOf: ({ id }) => id,
     translations: {
       languages: ["zh"],
+      identityOf: (translation) => ({
+        namespace: "messages",
+        key: translation.targetKey ?? translation.id,
+      }),
       schema: translationSchema,
       contentSchema: stringSchema,
       contentOf: ({ text }) => text,
@@ -552,8 +571,8 @@ void test("关联冲突时保留全部已知记录并标记不完整", async () 
       { id: "other", source: "Error Code 504" },
     ],
     [
-      { id: "editing", text: "错误码 404" },
-      { id: "editing", text: "错误 404" },
+      { id: "editing", targetKey: "editing.one", text: "错误码 404" },
+      { id: "editing", targetKey: "editing.two", text: "错误 404" },
       { id: "other", text: "错误码 504" },
     ],
     checkerFor(),

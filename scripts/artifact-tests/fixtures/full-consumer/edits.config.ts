@@ -15,6 +15,7 @@ type Unit = {
   };
 };
 type Translation = {
+  targetId: string;
   text: string;
   context: {
     file: string;
@@ -41,6 +42,7 @@ const sourceSchema = standardSchema<Unit>(
 const translationSchema = standardSchema<Translation>(
   (value): value is Translation =>
     isRecord(value) &&
+    typeof value.targetId === "string" &&
     typeof value.text === "string" &&
     isRecord(value.context) &&
     typeof value.context.file === "string" &&
@@ -101,6 +103,10 @@ export default defineConfig({
   keyOf: (unit) => unit.context.identity,
   translations: {
     languages: ["fr"],
+    identityOf: (translation) => ({
+      namespace: "edit-targets",
+      key: translation.targetId,
+    }),
     schema: translationSchema,
     contentSchema,
     contentOf: (translation) => translation.text,
@@ -220,6 +226,7 @@ export default defineConfig({
           throw new Error("该宿主只接受字符串译文。");
         const locator = target.locator as { file: string; key: string };
         catalogue.records.push({
+          targetId: locator.key,
           text: edit.content,
           context: {
             file: locator.file,

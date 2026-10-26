@@ -21,6 +21,7 @@ import {
   jsonValueSchema,
   schemaFromExamples,
   sourceSchemaFromExamples,
+  fixtureTranslationIdentity,
 } from "./source-schema.ts";
 
 type Unit = {
@@ -74,6 +75,7 @@ function makeConfig(
     keyOf: (unit) => unit.id,
     translations: {
       languages: ["fr"],
+      identityOf: fixtureTranslationIdentity,
       schema: schemaFromExamples<Translation>({
         id: "example",
         text: "example",

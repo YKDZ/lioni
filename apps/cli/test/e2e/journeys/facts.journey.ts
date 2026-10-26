@@ -38,10 +38,11 @@ export default defineConfig({
   keyOf: (unit) => unit.context.file + ":" + unit.context.line,
   translations: {
     languages: ["fr"],
+    identityOf: (translation) => ({ namespace: "messages", key: translation.id }),
     schema: { "~standard": { version: 1, vendor: "facts-journey-translation", validate(value) {
       const context = value?.context;
       return typeof value === "object" && value !== null && !Array.isArray(value) &&
-        typeof value.text === "string" && typeof context === "object" && context !== null &&
+        typeof value.id === "string" && typeof value.text === "string" && typeof context === "object" && context !== null &&
         typeof context.file === "string" && typeof context.line === "number"
         ? { value }
         : { issues: [{ message: "译文记录结构不匹配。" }] };
@@ -57,11 +58,11 @@ export default defineConfig({
       enumeration: "complete",
       records: [
         {
-          value: { text: "Enregistrer", context: { file: "src/messages.ts", line: 18 } },
+          value: { id: "save-button", text: "Enregistrer", context: { file: "src/messages.ts", line: 18 } },
           bodyAvailability: "available"
         },
         {
-          value: { text: "Avis", context: { file: "legacy/messages.ts", line: 999 } },
+          value: { id: "legacy-notice", text: "Avis", context: { file: "legacy/messages.ts", line: 999 } },
           bodyAvailability: "available"
         }
       ]
@@ -239,7 +240,9 @@ export default defineConfig({
             language: string;
             scopeIndex: number;
             range: string;
+            identity: { language: string; namespace: string; key: string };
             translation: {
+              id: string;
               text: string;
               context: { file: string; line: number };
             };
@@ -296,7 +299,13 @@ export default defineConfig({
         language: "fr",
         scopeIndex: 0,
         range: "locales/fr.json",
+        identity: {
+          language: "fr",
+          namespace: "messages",
+          key: "save-button",
+        },
         translation: {
+          id: "save-button",
           text: "Enregistrer",
           context: { file: "src/messages.ts", line: 18 },
         },
@@ -308,7 +317,13 @@ export default defineConfig({
         language: "fr",
         scopeIndex: 0,
         range: "locales/fr.json",
+        identity: {
+          language: "fr",
+          namespace: "messages",
+          key: "legacy-notice",
+        },
         translation: {
+          id: "legacy-notice",
           text: "Avis",
           context: { file: "legacy/messages.ts", line: 999 },
         },

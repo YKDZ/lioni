@@ -89,6 +89,11 @@ const factsSchema = toStandardJsonSchema(
             language: v.string(),
             scopeIndex: v.number(),
             range: v.unknown(),
+            identity: v.strictObject({
+              language: v.string(),
+              namespace: v.string(),
+              key: v.string(),
+            }),
             translation: v.unknown(),
             content: v.unknown(),
             bodyAvailability: v.literal("available"),
@@ -98,6 +103,11 @@ const factsSchema = toStandardJsonSchema(
             language: v.string(),
             scopeIndex: v.number(),
             range: v.unknown(),
+            identity: v.strictObject({
+              language: v.string(),
+              namespace: v.string(),
+              key: v.string(),
+            }),
             translation: v.unknown(),
             bodyAvailability: v.literal("unavailable"),
           }),

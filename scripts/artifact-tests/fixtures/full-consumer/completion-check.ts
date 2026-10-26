@@ -28,7 +28,9 @@ const resourcePath = fileURLToPath(
 );
 await writeFile(
   resourcePath,
-  JSON.stringify([{ text: "Save", context: { sourceLine: 18 } }]),
+  JSON.stringify([
+    { id: "fr-save", text: "Save", context: { sourceLine: 18 } },
+  ]),
   "utf8",
 );
 const executable = path.join(

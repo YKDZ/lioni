@@ -148,11 +148,16 @@ export type TranslationAdapter<
     StandardSchemaV1<TBody, TBody> &
     PreservingStandardSchema<TBody, TContentSchema>;
   readonly contentOf: (translation: NoInfer<TTranslation>) => NoInfer<TBody>;
+  /** 从译文记录提取稳定目标身份，不依赖正文或本次读取索引。 */
+  readonly identityOf: (
+    translation: NoInfer<TTranslation | TUnavailable>,
+    language: string,
+  ) => TranslationIdentityParts;
   read(
     language: string,
     sourceUnits: readonly SourceUnitFact<TUnit>[],
   ): Awaitable<TranslationRead<TTranslation, TUnavailable>>;
-  matches: (
+  matches?: (
     unit: NoInfer<TUnit>,
     translation: NoInfer<TTranslation | TUnavailable>,
   ) => boolean;
@@ -265,6 +270,12 @@ type TranslationAdapterInput<
   readonly contentOf: (
     translation: NoInfer<SchemaOutput<TTranslationSchema>>,
   ) => NoInfer<SchemaOutput<TContentSchema>>;
+  readonly identityOf: (
+    translation: NoInfer<
+      SchemaOutput<TTranslationSchema> | SchemaOutput<TUnavailableSchema>
+    >,
+    language: string,
+  ) => TranslationIdentityParts;
   read(
     language: string,
     sourceUnits: readonly SourceUnitFact<NoInfer<TUnit>>[],
@@ -274,7 +285,7 @@ type TranslationAdapterInput<
       NoInfer<SchemaOutput<TUnavailableSchema>>
     >
   >;
-  matches: (
+  matches?: (
     unit: NoInfer<TUnit>,
     translation: NoInfer<
       SchemaOutput<TTranslationSchema> | SchemaOutput<TUnavailableSchema>
@@ -351,11 +362,13 @@ export type ActualTranslationFact<
 > =
   | (ActualTranslationFactBase & {
       readonly translation: TTranslation;
+      readonly identity: TranslationIdentity;
       readonly content: TBody;
       readonly bodyAvailability: "available";
     })
   | (ActualTranslationFactBase & {
       readonly translation: TUnavailable;
+      readonly identity: TranslationIdentity;
       readonly content?: never;
       readonly bodyAvailability: "unavailable";
     });
@@ -369,7 +382,20 @@ export type TranslationAssociationFact = {
   readonly translationIndexes: readonly number[];
 };
 
-export type FrameworkFacts<
+/** 快照中译文目标的完整稳定身份。 */
+export type TranslationIdentity = {
+  readonly language: string;
+  readonly namespace: string;
+  readonly key: string;
+};
+
+/** 宿主提供的稳定目标身份部分；语言由框架补入。 */
+export type TranslationIdentityParts = {
+  readonly namespace: string;
+  readonly key: string;
+};
+
+export type ComparisonSnapshot<
   TUnit extends TranslationUnitInput,
   TTranslation,
   TBody = JsonValue,
@@ -385,6 +411,14 @@ export type FrameworkFacts<
       TUnavailable
     >[];
   };
+};
+
+export type FrameworkFacts<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody = JsonValue,
+  TUnavailable = never,
+> = ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable> & {
   readonly associations: readonly TranslationAssociationFact[];
 };
 
@@ -401,6 +435,34 @@ export class DuplicateTranslationUnitKeyError extends Error {
     this.key = key;
     this.firstIndex = firstIndex;
     this.duplicateIndex = duplicateIndex;
+  }
+}
+
+export class TranslationIdentityContractError extends TypeError {
+  readonly reason: "missing" | "duplicate";
+  readonly identity?: TranslationIdentity;
+  readonly firstIndex?: number;
+  readonly duplicateIndex?: number;
+
+  constructor(
+    reason: "missing" | "duplicate",
+    details: {
+      readonly identity?: TranslationIdentity;
+      readonly firstIndex?: number;
+      readonly duplicateIndex?: number;
+    } = {},
+  ) {
+    super(
+      reason === "missing"
+        ? "译文身份必须提供非空的 namespace 与 key。"
+        : `译文身份重复：${JSON.stringify(details.identity)}（第 ${(details.firstIndex ?? -1) + 1} 与第 ${(details.duplicateIndex ?? -1) + 1} 条记录）`,
+    );
+    this.name = "TranslationIdentityContractError";
+    this.reason = reason;
+    if (details.identity !== undefined) this.identity = details.identity;
+    if (details.firstIndex !== undefined) this.firstIndex = details.firstIndex;
+    if (details.duplicateIndex !== undefined)
+      this.duplicateIndex = details.duplicateIndex;
   }
 }
 
@@ -428,6 +490,15 @@ export function defineConfig<
 }
 
 export function validateFrameworkConfig(value: unknown): void {
+  validateSourceConfig(value);
+  if (!isRecord(value))
+    invalidFrameworkConfig("宿主配置必须是 defineConfig(...) 的对象结果。");
+  const translations = value.translations;
+  if (translations === undefined) return;
+  validateTranslationAdapterConfig(translations);
+}
+
+function validateSourceConfig(value: unknown): void {
   if (!isRecord(value))
     invalidFrameworkConfig("宿主配置必须是 defineConfig(...) 的对象结果。");
   if (!isRecord(value.source) || typeof value.source.read !== "function")
@@ -438,15 +509,15 @@ export function validateFrameworkConfig(value: unknown): void {
     );
   if (typeof value.keyOf !== "function")
     invalidFrameworkConfig("defineConfig 的 keyOf 必须是函数。");
+}
 
-  const translations = value.translations;
-  if (translations === undefined) return;
+function validateTranslationAdapterConfig(translations: unknown): void {
   if (
     !isRecord(translations) ||
     !Array.isArray(translations.languages) ||
     translations.languages.some((language) => typeof language !== "string") ||
     typeof translations.read !== "function" ||
-    typeof translations.matches !== "function" ||
+    typeof translations.identityOf !== "function" ||
     typeof translations.contentOf !== "function" ||
     !isStandardSchema(translations.schema) ||
     !isStandardSchema(translations.contentSchema) ||
@@ -454,7 +525,7 @@ export function validateFrameworkConfig(value: unknown): void {
       !isStandardSchema(translations.unavailableSchema))
   )
     invalidFrameworkConfig(
-      "defineConfig 的 translations 必须提供语言列表、记录与正文 schema、read、matches 与 contentOf 函数。",
+      "defineConfig 的 translations 必须提供语言列表、记录与正文 schema、identityOf、read 与 contentOf 函数；matches 可按需提供。",
     );
 }
 
@@ -474,7 +545,7 @@ export async function readSourceFacts<
 >(
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
 ): Promise<SourceFacts<TUnit>> {
-  validateFrameworkConfig(config);
+  validateSourceConfig(config);
   let read: SourceRead<TUnit> | undefined;
   let errorMessage: string | undefined;
   try {
@@ -534,21 +605,34 @@ export async function readSourceFacts<
   };
 }
 
-export async function readFacts<
+/** 读取源、目标事实及依据，不计算源译关联、完成度或 QA。 */
+export async function readComparisonSnapshot<
   TUnit extends TranslationUnitInput,
   TTranslation,
   TBody,
   TUnavailable,
 >(
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
-): Promise<FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>> {
+): Promise<ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>> {
   validateFrameworkConfig(config);
+  return await collectComparisonSnapshot(config);
+}
+
+async function collectComparisonSnapshot<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+): Promise<ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>> {
   const source = await readSourceFacts(config);
   const translationAdapter = config.translations;
   const translations = {
     reads: [] as TranslationReadFact[],
     records: [] as ActualTranslationFact<TTranslation, TBody, TUnavailable>[],
   };
+  const firstTranslationIndexes = new Map<string, number>();
 
   if (translationAdapter !== undefined) {
     for (const language of translationAdapter.languages) {
@@ -582,6 +666,15 @@ export async function readFacts<
               `译文记录 ${index + 1}`,
               { preserveValue: true, requireJson: true },
             );
+            const identity = readTranslationIdentity(
+              translationAdapter.identityOf(translation, language),
+              language,
+            );
+            assertUniqueTranslationIdentity(
+              identity,
+              firstTranslationIndexes,
+              index,
+            );
             const content = await validateWithStandardSchema(
               translationAdapter.contentSchema,
               translationAdapter.contentOf(translation),
@@ -591,6 +684,7 @@ export async function readFacts<
             translations.records.push({
               ...fact,
               translation,
+              identity,
               content,
               bodyAvailability: "available",
             });
@@ -608,9 +702,19 @@ export async function readFacts<
               `不可用译文记录 ${index + 1}`,
               { preserveValue: true, requireJson: true },
             );
+            const identity = readTranslationIdentity(
+              translationAdapter.identityOf(translation, language),
+              language,
+            );
+            assertUniqueTranslationIdentity(
+              identity,
+              firstTranslationIndexes,
+              index,
+            );
             translations.records.push({
               ...fact,
               translation,
+              identity,
               bodyAvailability: "unavailable",
             });
           } else {
@@ -638,12 +742,36 @@ export async function readFacts<
     }
   }
 
+  const version = comparisonSnapshotVersion({ source, translations });
+  return { version, source, translations };
+}
+
+export async function readFacts<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+): Promise<FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>> {
+  validateFrameworkConfig(config);
+  const translationAdapter = config.translations;
+  if (
+    translationAdapter !== undefined &&
+    translationAdapter.languages.length > 0 &&
+    typeof translationAdapter.matches !== "function"
+  )
+    invalidFrameworkConfig(
+      "readFacts 需要 translations.matches 来计算源译关联；独立快照读取无需此函数。",
+    );
+  const snapshot = await collectComparisonSnapshot(config);
+
   const associations: TranslationAssociationFact[] = [];
-  for (const languageRead of translations.reads) {
-    const languageRecords = translations.records.filter(
+  for (const languageRead of snapshot.translations.reads) {
+    const languageRecords = snapshot.translations.records.filter(
       ({ language }) => language === languageRead.language,
     );
-    for (const sourceUnit of source.units) {
+    for (const sourceUnit of snapshot.source.units) {
       const scopeIndexes = languageRead.scopes.flatMap((scope, index) =>
         scope.covers.includes(sourceUnit.key) ? [index] : [],
       );
@@ -656,9 +784,8 @@ export async function readFacts<
       );
       const translationIndexes = languageRecords
         .filter(({ scopeIndex }) => scopeIndexes.includes(scopeIndex))
-        .filter(
-          ({ translation }) =>
-            translationAdapter?.matches(sourceUnit.unit, translation) ?? false,
+        .filter(({ translation }) =>
+          translationAdapter!.matches!(sourceUnit.unit, translation),
         )
         .map(({ index }) => index);
 
@@ -671,7 +798,7 @@ export async function readFacts<
               : "unknown"
             : coverageStatus !== "complete"
               ? "unknown"
-              : translations.records[translationIndexes[0] as number]
+              : snapshot.translations.records[translationIndexes[0] as number]
                     ?.bodyAvailability === "available"
                 ? "matched"
                 : "unavailable";
@@ -686,8 +813,12 @@ export async function readFacts<
     }
   }
 
-  const version = factsVersion({ source, translations, associations });
-  return { version, source, translations, associations };
+  const version = factsVersion({
+    source: snapshot.source,
+    translations: snapshot.translations,
+    associations,
+  });
+  return { ...snapshot, version, associations };
 }
 
 export async function readCompletion<
@@ -1101,6 +1232,66 @@ function readStatus(
   return scopes.every(({ enumeration }) => enumeration === "complete")
     ? "complete"
     : "incomplete";
+}
+
+function readTranslationIdentity(
+  value: unknown,
+  language: string,
+): TranslationIdentity {
+  if (
+    !isRecord(value) ||
+    typeof value.namespace !== "string" ||
+    value.namespace.trim().length === 0 ||
+    typeof value.key !== "string" ||
+    value.key.trim().length === 0
+  )
+    throw new TranslationIdentityContractError("missing");
+  return { language, namespace: value.namespace, key: value.key };
+}
+
+function assertUniqueTranslationIdentity(
+  identity: TranslationIdentity,
+  firstIndexes: Map<string, number>,
+  duplicateIndex: number,
+): void {
+  const serialized = JSON.stringify(identity);
+  const firstIndex = firstIndexes.get(serialized);
+  if (firstIndex !== undefined)
+    throw new TranslationIdentityContractError("duplicate", {
+      identity,
+      firstIndex,
+      duplicateIndex,
+    });
+  firstIndexes.set(serialized, duplicateIndex);
+}
+
+function comparisonSnapshotVersion<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(snapshot: {
+  readonly source: SourceFacts<TUnit>;
+  readonly translations: {
+    readonly reads: readonly TranslationReadFact[];
+    readonly records: readonly ActualTranslationFact<
+      TTranslation,
+      TBody,
+      TUnavailable
+    >[];
+  };
+}): string {
+  let serialized: string | undefined;
+  try {
+    serialized = JSON.stringify(snapshot);
+  } catch (error) {
+    throw new TypeError("比较快照及读取依据必须可序列化为 JSON。", {
+      cause: error,
+    });
+  }
+  if (serialized === undefined)
+    throw new TypeError("比较快照及读取依据必须可序列化为 JSON。");
+  return `sha256:${createHash("sha256").update(serialized).digest("hex")}`;
 }
 
 function sourceFactsVersion<TUnit extends TranslationUnitInput>(facts: {

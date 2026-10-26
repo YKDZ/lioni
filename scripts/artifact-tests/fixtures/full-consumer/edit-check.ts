@@ -17,6 +17,7 @@ import config from "./edits.config.ts";
 import { parseJson } from "./schemas.ts";
 
 type EditCatalogueRecord = {
+  targetId: string;
   text: string;
   context: {
     file: string;
@@ -273,6 +274,7 @@ actualCatalogue = parseJson<EditCatalogue>(
   await readFile(cataloguePath, "utf8"),
 );
 actualCatalogue.records.push({
+  targetId: "duplicate-cancel-target",
   text: "Second cancel translation",
   context: {
     file: "locales/fr.json",
@@ -375,6 +377,7 @@ actualCatalogue = parseJson<EditCatalogue>(
   await readFile(cataloguePath, "utf8"),
 );
 actualCatalogue.records.push({
+  targetId: "external-about-target",
   text: "Externally created About",
   context: {
     file: "locales/fr.json",

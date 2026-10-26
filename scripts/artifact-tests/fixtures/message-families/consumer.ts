@@ -272,6 +272,7 @@ function createConfig(options: ConfigOptions = {}) {
       schema: translationSchema,
       contentSchema: stringSchema,
       contentOf: ({ text }) => text,
+      identityOf: ({ id }) => ({ namespace: "messages", key: id }),
       read: (_language, sourceUnits) => ({
         scopes: [
           {

@@ -34,10 +34,11 @@ export default defineConfig({
   keyOf: (unit) => unit.context.file + ":" + unit.context.line,
   translations: {
     languages: ["fr", "de"],
+    identityOf: (translation) => ({ namespace: "catalogue", key: translation.id }),
     schema: { "~standard": { version: 1, vendor: "completion-journey-translation", validate(value) {
       const context = value?.context;
       return typeof value === "object" && value !== null && !Array.isArray(value) &&
-        typeof value.text === "string" && typeof context === "object" && context !== null &&
+        typeof value.id === "string" && typeof value.text === "string" && typeof context === "object" && context !== null &&
         typeof context.sourceLine === "number"
         ? { value }
         : { issues: [{ message: "译文记录结构不匹配。" }] };
@@ -53,8 +54,8 @@ export default defineConfig({
         covers: sourceUnits.map(({ key }) => key),
         enumeration: "complete",
         records: language === "fr" ? [
-          { value: { text: "Save", context: { sourceLine: 18 } }, bodyAvailability: "available" },
-          { value: { text: "Legacy", context: { sourceLine: 999 } }, bodyAvailability: "available" }
+          { value: { id: "save", text: "Save", context: { sourceLine: 18 } }, bodyAvailability: "available" },
+          { value: { id: "legacy", text: "Legacy", context: { sourceLine: 999 } }, bodyAvailability: "available" }
         ] : []
       }] };
     },
@@ -91,10 +92,11 @@ export default defineConfig({
   keyOf: (unit) => String(unit.context.line),
   translations: {
     languages: ["fr"],
+    identityOf: (translation) => ({ namespace: "catalogue", key: translation.id }),
     schema: { "~standard": { version: 1, vendor: "completion-journey-translation", validate(value) {
       const context = value?.context;
       return typeof value === "object" && value !== null && !Array.isArray(value) &&
-        typeof value.text === "string" && typeof context === "object" && context !== null &&
+        typeof value.id === "string" && typeof value.text === "string" && typeof context === "object" && context !== null &&
         typeof context.sourceLine === "number"
         ? { value }
         : { issues: [{ message: "译文记录结构不匹配。" }] };
@@ -108,7 +110,7 @@ export default defineConfig({
       range: "locales/fr.json",
       covers: sourceUnits.map(({ key }) => key),
       enumeration: "complete",
-      records: [{ value: { text: "Save", context: { sourceLine: 18 } }, bodyAvailability: "available" }]
+      records: [{ value: { id: "save", text: "Save", context: { sourceLine: 18 } }, bodyAvailability: "available" }]
     }] }),
     matches: (unit, translation) => unit.context.line === translation.context.sourceLine,
     contentOf: (translation) => translation.text
