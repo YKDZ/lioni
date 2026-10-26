@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
 
 import type { MemoScope } from "@lioni/memo";
 
@@ -9,7 +8,6 @@ import {
   evaluateCompletion,
 } from "./completion.ts";
 import type { CompletionFacts, CompletionPolicy } from "./completion.ts";
-import { bindFrameworkConfig } from "./config-capability.ts";
 import type { UpdatePolicy } from "./plans.ts";
 import {
   runQualityChecks,
@@ -18,12 +16,7 @@ import {
   type QualityRunResult,
   type QualityObject,
 } from "./qa.ts";
-import {
-  prepareSemanticEdit,
-  resolveSemanticEditInput,
-  validateSemanticEditCandidate,
-  type SemanticEditPreparation,
-} from "./semantic-edits.ts";
+import { validateSemanticEditCandidate } from "./semantic-edits.ts";
 import type {
   JsonValue,
   SemanticEditCandidate,
@@ -31,7 +24,6 @@ import type {
 } from "./semantic-edits.ts";
 import {
   assertJsonValue,
-  snapshotJsonValue,
   StandardSchemaContractError,
   validateWithStandardSchema,
 } from "./standard-schema.ts";
@@ -41,8 +33,40 @@ import type {
   StandardSchemaTypes,
 } from "./standard-schema.ts";
 
-export * from "./completion.ts";
-export * from "./semantic-edits.ts";
+export { CompletionConfigurationError, evaluateCompletion } from "./completion.ts";
+export type {
+  CompletionResolution,
+  CompletionResolverInput,
+  ResolveCompletion,
+  CompletionPolicy,
+  CompletionStatus,
+  CompletionObligationFact,
+  CompletionReport,
+  CompletionFacts,
+  CompletionConfigurationErrorReason,
+} from "./completion.ts";
+export {
+  validateSemanticEditCandidate,
+  validateTranslationWriteRequest,
+  writeTranslationRequests,
+} from "./semantic-edits.ts";
+export type {
+  JsonValue,
+  SemanticEditCandidate,
+  TranslationWriteTarget,
+  TranslationWriteSourceExpectation,
+  TranslationWriteTargetExpectation,
+  TranslationWriteRequest,
+  TranslationWritebackTarget,
+  TranslationWritebackResolution,
+  TranslationWritebackAdapter,
+  TranslationWriteConditionInput,
+  TranslationWriteConditionResult,
+  TranslationWriteCondition,
+  TranslationWriteStatus,
+  TranslationWriteResult,
+  TranslationWriteBatchResult,
+} from "./semantic-edits.ts";
 export { StandardSchemaContractError } from "./standard-schema.ts";
 export type {
   StandardSchemaFailureKind,
@@ -50,7 +74,45 @@ export type {
   StandardSchemaV1Issue,
   StandardSchemaV1Result,
 } from "./standard-schema.ts";
-export * from "./qa.ts";
+export {
+  QualityCheckBindingError,
+  defineQualityCheck,
+  bindQualityCheck,
+  runQualityChecks,
+} from "./qa.ts";
+export type {
+  QualityCheckStatus,
+  QualityObject,
+  QualityLocation,
+  QualitySubject,
+  QualityRelationship,
+  QualityExceptionObjectScope,
+  QualityExceptionLocationScope,
+  QualityExceptionScope,
+  QualityException,
+  QualityDiagnosticHandling,
+  QualityEvidence,
+  QualityDiagnostic,
+  QualityFinding,
+  QualityIssue,
+  QualityCoverage,
+  QualityCheckOutcome,
+  QualityCheckRequest,
+  QualityCheckInput,
+  QualityCheckSelection,
+  QualityCheckProjection,
+  QualityCheckProjectionInput,
+  QualityCheckRuleInput,
+  QualityCheckBindingStage,
+  StandardSchemaInput,
+  StandardSchemaOutput,
+  QualityCheckDefinition,
+  QualityCheckBinding,
+  QualityCheckResult,
+  QualityFactCoverage,
+  QualityRunResult,
+  QualityExecutionOptions,
+} from "./qa.ts";
 export {
   compareSnapshots,
   defaultCompare,
@@ -482,21 +544,16 @@ export function defineConfig<
   SchemaOutput<TContentSchema>,
   SchemaOutput<TUnavailableSchema>
 > {
-  return bindFrameworkConfig(config);
+  return config;
 }
 
 export function validateFrameworkConfig(value: unknown): void {
   validateSourceConfig(value);
-  if (!isRecord(value))
-    invalidFrameworkConfig("宿主配置必须是 defineConfig(...) 的对象结果。");
-  const translations = value.translations;
-  if (translations === undefined) return;
-  validateTranslationAdapterConfig(translations);
 }
 
 function validateSourceConfig(value: unknown): void {
   if (!isRecord(value))
-    invalidFrameworkConfig("宿主配置必须是 defineConfig(...) 的对象结果。");
+    invalidFrameworkConfig("宿主配置必须是对象。");
   if (!isRecord(value.source) || typeof value.source.read !== "function")
     invalidFrameworkConfig("defineConfig 的 source.read 必须是函数。");
   if (!isStandardSchema(value.source.schema))
@@ -611,6 +668,8 @@ export async function readComparisonSnapshot<
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
 ): Promise<ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>> {
   validateFrameworkConfig(config);
+  if (config.translations !== undefined)
+    validateTranslationAdapterConfig(config.translations);
   return await collectComparisonSnapshot(config);
 }
 
@@ -624,6 +683,8 @@ async function collectComparisonSnapshot<
 ): Promise<ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>> {
   const source = await readSourceFacts(config);
   const translationAdapter = config.translations;
+  if (translationAdapter !== undefined)
+    validateTranslationAdapterConfig(translationAdapter);
   const translations = {
     reads: [] as TranslationReadFact[],
     records: [] as ActualTranslationFact<TTranslation, TBody, TUnavailable>[],
@@ -752,6 +813,8 @@ export async function readFacts<
 ): Promise<FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>> {
   validateFrameworkConfig(config);
   const translationAdapter = config.translations;
+  if (translationAdapter !== undefined)
+    validateTranslationAdapterConfig(translationAdapter);
   if (
     translationAdapter !== undefined &&
     translationAdapter.languages.length > 0 &&
@@ -868,188 +931,6 @@ export async function analyzeQuality<
   for (const candidate of request.candidates)
     candidates.push(await validateSemanticEditCandidate(candidate, config));
   return runQualityChecks(facts, { ...request, candidates }, checks, options);
-}
-
-export type QualityWriteCondition<TBody = JsonValue> = (
-  quality: QualityRunResult<QualityObject, TBody>,
-) => Awaitable<boolean>;
-
-export type PrepareQualityConditionedSemanticEditOptions<TBody = JsonValue> = {
-  readonly candidate: SemanticEditCandidate<TBody>;
-  readonly condition?: QualityWriteCondition<TBody>;
-  readonly quality?: QualityRunResult<QualityObject, TBody>;
-  readonly memo?: MemoScope;
-};
-
-export type QualityConditionedSemanticEditResult<TBody = JsonValue> =
-  | {
-      readonly status: "not-required";
-      readonly preparation: SemanticEditPreparation<TBody>;
-    }
-  | {
-      readonly status: "passed";
-      readonly quality: QualityRunResult<QualityObject, TBody>;
-      readonly preparation: SemanticEditPreparation<TBody>;
-    }
-  | {
-      readonly status: "rejected";
-      readonly quality: QualityRunResult<QualityObject, TBody>;
-    }
-  | {
-      readonly status: "input-mismatch";
-      readonly reason: string;
-    };
-
-/**
- * 根据宿主选择的质量条件决定是否准备语义编辑。
- * 未提供条件时不要求执行质量检查，候选仍走普通语义编辑准备流程。
- */
-export async function prepareQualityConditionedSemanticEdit<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TBody,
-  TUnavailable,
->(
-  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
-  options: PrepareQualityConditionedSemanticEditOptions<TBody>,
-): Promise<QualityConditionedSemanticEditResult<TBody>> {
-  const candidate = await validateSemanticEditCandidate(
-    options.candidate,
-    config,
-  );
-  const { condition } = options;
-  const providedQuality =
-    condition === undefined || options.quality === undefined
-      ? undefined
-      : (snapshotJson(options.quality, "QA 结果") as QualityRunResult<
-          QualityObject,
-          TBody
-        >);
-  const facts = await readFacts(config);
-  if (condition === undefined)
-    return {
-      status: "not-required",
-      preparation: await prepareCandidateEdit(facts, candidate, config),
-    };
-
-  const checks = configuredQualityChecks(config);
-  const configuredRequest = await createConfiguredQualityRequest(config, facts);
-  const qualityCandidate = candidate;
-  const request = { ...configuredRequest, candidates: [qualityCandidate] };
-  const quality =
-    providedQuality ??
-    (await runQualityChecks(facts, request, checks, options));
-  if (
-    providedQuality !== undefined &&
-    !(await qualityRunMatchesInputs(
-      facts,
-      qualityCandidate,
-      configuredRequest,
-      checks,
-      quality,
-    ))
-  )
-    return {
-      status: "input-mismatch",
-      reason: "质量检查结果不匹配当前候选、事实或明确检查输入。",
-    };
-
-  if (!(await condition(quality))) return { status: "rejected", quality };
-  return {
-    status: "passed",
-    quality,
-    preparation: await prepareCandidateEdit(facts, candidate, config),
-  };
-}
-
-async function prepareCandidateEdit<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TBody,
-  TUnavailable,
->(
-  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
-  candidate: SemanticEditCandidate<TBody>,
-  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
-): Promise<SemanticEditPreparation<TBody>> {
-  const resolved = await resolveSemanticEditInput(
-    facts,
-    { sourceKey: candidate.sourceKey, language: candidate.language },
-    config,
-  );
-  return resolved.status === "resolved"
-    ? prepareSemanticEdit(resolved.input, candidate, config)
-    : resolved;
-}
-
-async function qualityRunMatchesInputs<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TBody,
-  TUnavailable,
->(
-  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
-  candidate: SemanticEditCandidate<TBody>,
-  request: QualityCheckRequest<TBody>,
-  checks: readonly QualityCheckDefinition<
-    TUnit,
-    TTranslation,
-    QualityObject,
-    TBody,
-    TUnavailable
-  >[],
-  quality: QualityRunResult<QualityObject, TBody>,
-): Promise<boolean> {
-  const configurationRun = await runQualityChecks(
-    facts,
-    { ...request, candidates: [] },
-    checks,
-  );
-  if (quality.version !== facts.version) return false;
-  const expectedRequest = snapshotJson(
-    {
-      ...request,
-      candidates: [candidate],
-      relationships: request.relationships ?? [],
-      exceptions: request.exceptions ?? [],
-    },
-    "QA 输入",
-  ) as Pick<
-    QualityRunResult<QualityObject, TBody>,
-    "candidates" | "dependencies" | "relationships" | "exceptions"
-  >;
-  if (
-    !isDeepStrictEqual(quality.candidates, expectedRequest.candidates) ||
-    !isDeepStrictEqual(quality.dependencies, expectedRequest.dependencies) ||
-    !isDeepStrictEqual(quality.relationships, expectedRequest.relationships) ||
-    !isDeepStrictEqual(quality.exceptions, expectedRequest.exceptions)
-  )
-    return false;
-
-  const expectedFactCoverage = snapshotJson(
-    {
-      source: facts.source.read,
-      translations: facts.translations.reads,
-      associations: facts.associations.map((association) => ({
-        ...association,
-        candidateSelected:
-          association.sourceKey === candidate.sourceKey &&
-          association.language === candidate.language,
-      })),
-    },
-    "QA 事实覆盖",
-  );
-  if (!isDeepStrictEqual(quality.factCoverage, expectedFactCoverage))
-    return false;
-
-  const expectedChecks = configurationRun.checks.map(
-    ({ id, configuration }) => ({ id, configuration }),
-  );
-  const actualChecks = quality.checks.map(({ id, configuration }) => ({
-    id,
-    configuration,
-  }));
-  return isDeepStrictEqual(actualChecks, expectedChecks);
 }
 
 function defaultQualityRequest<
@@ -1207,10 +1088,6 @@ function invalidReadStructure(
   message: string,
 ): never {
   throw new StandardSchemaContractError(adapter, "schema-mismatch", message);
-}
-
-function snapshotJson(value: unknown, description: string): JsonValue {
-  return snapshotJsonValue(value, description);
 }
 
 function readStatus(
