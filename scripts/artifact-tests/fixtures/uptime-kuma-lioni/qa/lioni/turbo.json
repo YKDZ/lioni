@@ -1,0 +1,34 @@
+{
+  "extends": ["//"],
+  "tags": ["app"],
+  "tasks": {
+    "format:check": {
+      "inputs": [],
+      "outputs": [],
+      "tags": ["quality:light"]
+    },
+    "format:write": {
+      "inputs": [],
+      "outputs": [],
+      "cache": false,
+      "tags": ["work:repair"]
+    },
+    "lint": {
+      "inputs": [],
+      "outputs": [],
+      "tags": ["quality:light"]
+    },
+    "test": {
+      "dependsOn": [],
+      "inputs": [],
+      "outputs": [],
+      "tags": ["quality:light"]
+    },
+    "typecheck": {
+      "dependsOn": ["^typecheck"],
+      "inputs": [],
+      "outputs": [],
+      "tags": ["quality:light"]
+    }
+  }
+}
