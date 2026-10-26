@@ -6,10 +6,12 @@ import {
   DuplicateTranslationUnitKeyError,
   readFacts,
   readCompletion,
+  previewUpdate,
   recordComparisonBaseline,
   type FrameworkConfig,
   type QualityRunResult,
   type TranslationUnitInput,
+  type UpdatePlan,
 } from "@lioni/core";
 import {
   createFileComparisonBaselineStore,
@@ -190,6 +192,9 @@ const baselineRecordSchema = toStandardJsonSchema(
     translationRecordCount: v.number(),
   }),
 );
+const updatePlanSchema = toStandardJsonSchema(
+  v.record(v.string(), v.unknown()),
+);
 
 function readStatusText(status: string): string {
   return (
@@ -268,6 +273,78 @@ function qualityText(value: unknown): ReturnType<typeof text.lines> {
       ),
     ),
   ]);
+}
+
+function comparisonStatusText(status: string): string {
+  return (
+    {
+      historyMissing: "没有历史参照",
+      historyInsufficient: "历史依据不足",
+      currentInsufficient: "当前依据不足",
+      bothInsufficient: "两侧依据不足",
+      added: "新增",
+      removed: "移除",
+      modified: "已变化",
+      unchanged: "未变化",
+    }[status] ?? "状态未知"
+  );
+}
+
+function updatePlanText(value: unknown): ReturnType<typeof text.lines> {
+  const plan = value as UpdatePlan;
+  const actionNames = {
+    write: "补入待译占位",
+    delete: "删除译文",
+    retain: "保留",
+    review: "待复核",
+    blocked: "暂不可执行",
+  } as const;
+  if (plan.items.length === 0) return text.lines(["没有需要处理的更新决定。"]);
+
+  return text.lines([
+    `更新预览：${plan.items.length} 项决定。`,
+    ...plan.items.flatMap((item) => {
+      const subject =
+        item.sourceKey === undefined
+          ? `${item.target?.namespace ?? "目标"}:${item.target?.key ?? "多条"}（${item.language}）`
+          : `${item.sourceKey} → ${item.language}`;
+      const lines = [`${actionNames[item.action]} ${subject}：${item.reason}`];
+      if (item.changes.source !== undefined) {
+        const { previous, current, status } = item.changes.source;
+        lines.push(
+          `  原文（${comparisonStatusText(status)}）：${displayJson(previous?.unit.source)} → ${displayJson(current?.unit.source)}`,
+        );
+      }
+      for (const change of item.changes.translations) {
+        const previous =
+          change.previous?.bodyAvailability === "available"
+            ? change.previous.content
+            : change.previous === undefined
+              ? undefined
+              : "正文不可用";
+        const current =
+          change.current?.bodyAvailability === "available"
+            ? change.current.content
+            : change.current === undefined
+              ? undefined
+              : "正文不可用";
+        lines.push(
+          `  译文 ${change.identity.key}（${comparisonStatusText(change.status)}）：${displayJson(previous)} → ${displayJson(current)}`,
+        );
+      }
+      if (item.targets !== undefined)
+        lines.push(
+          `  匹配目标：${item.targets.map(({ namespace, key }) => `${namespace}:${key}`).join("、")}`,
+        );
+      if (item.after !== undefined)
+        lines.push(`  待写正文：${displayJson(item.after.content)}`);
+      return lines;
+    }),
+  ]);
+}
+
+function displayJson(value: unknown): string {
+  return value === undefined ? "无" : (JSON.stringify(value) ?? "无");
 }
 
 function createCliContract(identity: CliCommandIdentity) {
@@ -368,6 +445,64 @@ function createCliContract(identity: CliCommandIdentity) {
           } catch (error) {
             return outcome.failure.recordFailed({
               path: baselinePath,
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        },
+      }),
+      ...define.command("update")({
+        kind: "command",
+        parent: "cli",
+        name: "update",
+        description: "比较当前事实并预览更新决定，不修改资源。",
+        fields: {
+          config: { kind: "positional", description: "宿主配置文件路径" },
+          dryRun: {
+            kind: "flag",
+            longOption: "--dry-run",
+            description: "只预览更新决定",
+          },
+        },
+        input: toStandardJsonSchema(
+          v.object({ config: v.string(), dryRun: v.optional(v.boolean()) }),
+        ),
+        success: {
+          kind: "data",
+          variants: {
+            previewed: {
+              description: "更新预览",
+              exitCode: 0,
+              schema: updatePlanSchema,
+              text: updatePlanText,
+            },
+          },
+        },
+        failures: {
+          previewFailed: {
+            description: "更新预览失败",
+            exitCode: 1,
+            schema: toStandardJsonSchema(v.object({ message: v.string() })),
+            text: ({ message }) => text.line(`更新预览失败：${message}`),
+          },
+        },
+        async handler({ input, outcome }) {
+          const configPath = path.resolve(process.cwd(), input.config);
+          const baselinePath = path.join(
+            path.dirname(configPath),
+            "lioni.baseline.json",
+          );
+          if (input.dryRun !== true)
+            return outcome.failure.previewFailed({
+              message: "当前只支持预览，请使用 --dry-run。",
+            });
+          try {
+            const loaded = await loadConfig(configPath);
+            return await loaded.use(async (config) => {
+              const plan = await previewUpdateForConfig(config, baselinePath);
+              return outcome.data.previewed(plan);
+            });
+          } catch (error) {
+            return outcome.failure.previewFailed({
               message: error instanceof Error ? error.message : String(error),
             });
           }
@@ -690,6 +825,24 @@ function recordBaselineForConfig<
     TUnavailable
   >(baselinePath);
   return recordComparisonBaseline(config, store);
+}
+
+function previewUpdateForConfig<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+  baselinePath: string,
+) {
+  const store = createFileComparisonBaselineStore<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable
+  >(baselinePath);
+  return previewUpdate(config, store);
 }
 
 export async function runCli(runtime: CliRuntime): Promise<number> {

@@ -1,1150 +1,1105 @@
 import { isDeepStrictEqual } from "node:util";
 
+import { validateComparisonBaseline } from "./baselines.ts";
+import {
+  compareSnapshots,
+  validateComparisonInput,
+  validateComparisonResult,
+  type SourceChange,
+  type TranslationChange,
+} from "./comparison.ts";
 import type {
-  BodyAvailability,
-  CoverageStatus,
-  EnumerationCompleteness,
+  ActualTranslationFact,
+  Awaitable,
+  ComparisonSnapshot,
+  ComparisonStatus,
+  ComparisonResult,
+  ComparisonBaselineStore,
   FrameworkConfig,
   FrameworkFacts,
-  TranslationAssociationStatus,
+  SourceUnitFact,
+  TranslationAssociationFact,
+  TranslationIdentity,
   TranslationUnitInput,
+  StandardSchemaV1,
 } from "./index.ts";
-import {
-  compareProcessingBaseline,
-  validateProcessingBaseline,
-  validateProcessingBaselineHistory,
-  type ProcessingBaseline,
-  type ProcessingBaselineChange,
-  type ProcessingBaselineEntry,
-  type ProcessingBaselineSourceScope,
-  type ProcessingBaselineTranslationScope,
-  type ProcessingChangeStatus,
-} from "./legacy-baselines.ts";
-import {
-  prepareSemanticDeletion,
-  prepareSemanticEdit,
-  resolveSemanticDeleteInput,
-  resolveSemanticEditInput,
-  validateSemanticEditCandidate,
-  validateSemanticEditHistory,
-  type JsonValue,
-  type SemanticEdit,
-  type SemanticEditCandidate,
-} from "./semantic-edits.ts";
+import { readFacts, validateFrameworkConfig } from "./index.ts";
+import type { JsonValue } from "./semantic-edits.ts";
 import {
   assertJsonValue,
-  StandardSchemaContractError,
+  validateWithStandardSchema,
 } from "./standard-schema.ts";
 
-export type UpdatePlanObservation<
-  TSource = unknown,
-  TTranslation = unknown,
-  TUnavailable = never,
-> = {
-  readonly source: {
-    readonly presence: "present" | "removed";
-    readonly value?: TSource;
-    readonly bodyAvailability: BodyAvailability;
-    readonly range: unknown;
-    readonly enumeration: EnumerationCompleteness;
-  };
-  readonly association: {
-    readonly status: TranslationAssociationStatus;
-    readonly coverageStatus: CoverageStatus;
-    readonly scopes: readonly ProcessingBaselineTranslationScope[];
-    readonly translations: readonly (
-      | {
-          readonly range: unknown;
-          readonly translation: TTranslation;
-          readonly bodyAvailability: "available";
-        }
-      | {
-          readonly range: unknown;
-          readonly translation: TUnavailable;
-          readonly bodyAvailability: "unavailable";
-        }
-    )[];
-  };
-};
+const UPDATE_PLAN_FORMAT = "lioni.update-plan/v1" as const;
 
-export type UpdateDecision<TBody = JsonValue> =
-  | { readonly action: "retain"; readonly reason?: string }
-  | {
-      readonly action: "candidate";
-      readonly candidate: SemanticEditCandidate<TBody>;
-      readonly reason?: string;
-    }
-  | { readonly action: "delete"; readonly reason?: string }
-  | { readonly action: "review"; readonly reason?: string }
-  | { readonly action: "none"; readonly reason?: string };
-
-export type UpdatePlanStatus =
-  | "candidate"
+export type UpdatePlanAction =
+  | "write"
   | "delete"
   | "retain"
   | "review"
-  | "notProcessed"
   | "blocked";
 
-export type UpdatePlanBlockCode =
-  | "historyInsufficient"
-  | "changeUnknown"
-  | "associationConflict"
-  | "planBaselineChanged"
-  | "planInputChanged"
-  | "currentInputUnavailable"
-  | "missingCurrentInput"
-  | "sourceEnumerationIncomplete"
-  | "sourceUnavailable"
-  | "translationCoverageIncomplete"
-  | "associationUnknown"
-  | "associationUnavailable"
-  | "translationScopeIncomplete"
-  | "translationUnavailable"
-  | "previousInputIncomplete"
-  | "addedSourceEvidenceIncomplete"
-  | "deleteTargetUnavailable"
-  | "deleteRequiresSourceRemoval"
-  | "sourceRemoved"
-  | "candidateIdentityMismatch"
-  | "semanticEditInputUnavailable";
+export type UpdateSourceExpectation<TUnit extends TranslationUnitInput> =
+  | {
+      readonly presence: "present";
+      readonly key: string;
+      readonly unit: TUnit;
+      readonly content: JsonValue;
+      readonly range: JsonValue;
+    }
+  | {
+      readonly presence: "absent";
+      readonly key: string;
+      readonly range: JsonValue;
+    };
 
-export type UpdatePlanBlock = {
-  readonly code: UpdatePlanBlockCode;
-  readonly message?: string;
+export type UpdateTargetExpectation<TBody> =
+  | { readonly status: "missing" }
+  | {
+      readonly status: "present";
+      readonly identity: TranslationIdentity;
+      readonly content: TBody;
+      readonly range?: JsonValue;
+    };
+
+/** 供写入器直接消费的候选；不包含文件定位、准备阶段或策略门禁。 */
+export type UpdatePlanWriteRequest<TUnit extends TranslationUnitInput, TBody> =
+  | {
+      readonly operation: "write";
+      readonly target:
+        | { readonly sourceKey: string; readonly language: string }
+        | { readonly identity: TranslationIdentity };
+      readonly content: TBody;
+      readonly expectedSource?: UpdateSourceExpectation<TUnit>;
+      readonly expectedTarget: UpdateTargetExpectation<TBody>;
+    }
+  | {
+      readonly operation: "delete";
+      readonly target: { readonly identity: TranslationIdentity };
+      readonly expectedSource?: UpdateSourceExpectation<TUnit>;
+      readonly expectedTarget: Extract<
+        UpdateTargetExpectation<TBody>,
+        { readonly status: "present" }
+      >;
+    };
+
+export type UpdatePlanSourceChange<TUnit extends TranslationUnitInput> = {
+  readonly key: string;
+  readonly status: ComparisonStatus;
+  readonly previous?: SourceUnitFact<TUnit>;
+  readonly current?: SourceUnitFact<TUnit>;
 };
 
-export type UpdatePolicyInput<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TUnavailable = never,
-> = {
-  readonly sourceKey: string;
-  readonly language: string;
-  readonly change: ProcessingChangeStatus;
-  readonly processed: boolean;
-  readonly previous?: UpdatePlanObservation<
-    TUnit["source"],
-    TTranslation,
-    TUnavailable
-  >;
-  readonly expectedInput?: UpdatePlanObservation<
-    TUnit["source"],
-    TTranslation,
-    TUnavailable
-  >;
-  readonly sourceUnit?: TUnit;
-  readonly translations: readonly (TTranslation | TUnavailable)[];
+export type UpdatePlanTranslationChange<TTranslation, TBody, TUnavailable> = {
+  readonly identity: TranslationIdentity;
+  readonly status: ComparisonStatus;
+  readonly previous?: ActualTranslationFact<TTranslation, TBody, TUnavailable>;
+  readonly current?: ActualTranslationFact<TTranslation, TBody, TUnavailable>;
 };
 
-export type UpdatePolicy<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TBody = JsonValue,
-  TUnavailable = never,
-> = (
-  input: UpdatePolicyInput<TUnit, TTranslation, TUnavailable>,
-) => UpdateDecision<TBody>;
-
-export type UpdatePlanItem<
-  TSource = unknown,
+type UpdatePlanItemBase<
+  TUnit extends TranslationUnitInput = TranslationUnitInput,
   TTranslation = unknown,
   TBody = JsonValue,
   TUnavailable = never,
-  TUnit extends TranslationUnitInput = TranslationUnitInput,
 > = {
-  readonly sourceKey: string;
+  /** 原文身份只在该决定确实针对某个原文时出现。 */
+  readonly sourceKey?: string;
   readonly language: string;
-  readonly change: ProcessingChangeStatus;
-  readonly processed: boolean;
-  readonly previous?: ProcessingBaselineEntry<
-    TUnit,
-    TTranslation,
-    TUnavailable
-  >;
-  readonly current?: ProcessingBaselineEntry<TUnit, TTranslation, TUnavailable>;
-  readonly expectedInput?: UpdatePlanObservation<
-    TSource,
-    TTranslation,
-    TUnavailable
-  >;
-  readonly decision: UpdateDecision<TBody>;
-  readonly status: UpdatePlanStatus;
-  readonly blocker?: UpdatePlanBlock;
-  readonly edit?: SemanticEdit<TBody>;
+  /** 单目标决定使用 target；多匹配冲突使用 targets 并保留全部身份。 */
+  readonly target?: TranslationIdentity;
+  readonly targets?: readonly TranslationIdentity[];
+  readonly changes: {
+    readonly source?: SourceChange<TUnit> | UpdatePlanSourceChange<TUnit>;
+    readonly translations: readonly UpdatePlanTranslationChange<
+      TTranslation,
+      TBody,
+      TUnavailable
+    >[];
+  };
+  readonly reason: string;
 };
 
+export type UpdatePlanItem<
+  TUnit extends TranslationUnitInput = TranslationUnitInput,
+  TTranslation = unknown,
+  TBody = JsonValue,
+  TUnavailable = never,
+> = UpdatePlanItemBase<TUnit, TTranslation, TBody, TUnavailable> &
+  (
+    | {
+        readonly action: "write";
+        readonly after: { readonly content: TBody };
+        readonly request: Extract<
+          UpdatePlanWriteRequest<TUnit, TBody>,
+          { readonly operation: "write" }
+        >;
+      }
+    | {
+        readonly action: "delete";
+        readonly request: Extract<
+          UpdatePlanWriteRequest<TUnit, TBody>,
+          { readonly operation: "delete" }
+        >;
+        readonly after?: never;
+      }
+    | {
+        readonly action: "retain" | "review" | "blocked";
+        readonly request?: never;
+        readonly after?: never;
+      }
+  );
+
+export type UpdatePlanComparisons<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+> = {
+  readonly sourceChanges: readonly UpdatePlanSourceChange<TUnit>[];
+  readonly translationChanges: readonly UpdatePlanTranslationChange<
+    TTranslation,
+    TBody,
+    TUnavailable
+  >[];
+  readonly reads: {
+    readonly previous?: ComparisonResult<
+      TUnit,
+      TTranslation,
+      TBody,
+      TUnavailable
+    >["reads"]["previous"];
+    readonly current: ComparisonResult<
+      TUnit,
+      TTranslation,
+      TBody,
+      TUnavailable
+    >["reads"]["current"];
+  };
+};
+
+/** 计划内只保留计算结果，不含适配器、函数、undefined 或宿主对象原型。 */
 export type UpdatePlan<
   TUnit extends TranslationUnitInput = TranslationUnitInput,
   TTranslation = unknown,
   TBody = JsonValue,
   TUnavailable = never,
 > = {
-  readonly formatVersion: 3;
-  readonly sourceScopeEvidence: readonly ProcessingBaselineSourceScope[];
-  readonly items: readonly UpdatePlanItem<
-    TUnit["source"],
+  readonly format: typeof UPDATE_PLAN_FORMAT;
+  readonly previous?: ComparisonSnapshot<
+    TUnit,
     TTranslation,
     TBody,
-    TUnavailable,
-    TUnit
+    TUnavailable
+  >;
+  readonly current: ComparisonSnapshot<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable
+  >;
+  readonly comparisons: UpdatePlanComparisons<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable
+  >;
+  readonly associations: {
+    readonly previous: readonly TranslationAssociationFact[];
+    readonly current: readonly TranslationAssociationFact[];
+  };
+  readonly items: readonly UpdatePlanItem<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable
   >[];
 };
 
-/** 通过 JSON 结构检查后的计划数据；其中业务值仍保持未知类型。 */
-export type UpdatePlanData = {
-  readonly formatVersion: 3;
-  readonly sourceScopeEvidence: readonly ProcessingBaselineSourceScope[];
-  readonly items: readonly UpdatePlanDataItem[];
+export type UpdatePlanData = UpdatePlan;
+
+export type UpdatePlanAssociations = {
+  readonly previous: readonly TranslationAssociationFact[];
+  readonly current: readonly TranslationAssociationFact[];
 };
 
-export type UpdatePlanDataItem = {
-  readonly sourceKey: string;
-  readonly language: string;
-  readonly change: ProcessingChangeStatus;
-  readonly processed: boolean;
-  readonly previous?: ProcessingBaselineEntry;
-  readonly current?: ProcessingBaselineEntry;
-  readonly expectedInput?: UpdatePlanObservation<unknown, unknown, unknown>;
-  readonly decision: UpdateDecision<unknown>;
-  readonly status: UpdatePlanStatus;
-  readonly blocker?: UpdatePlanBlock;
-  readonly edit?: SemanticEdit<unknown>;
+export type UpdatePlanInput<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+> = {
+  readonly previous?: ComparisonSnapshot<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable
+  >;
+  readonly current: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>;
+  readonly comparisons: ComparisonResult<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable
+  >;
+  readonly associations: UpdatePlanAssociations;
+  readonly sourceToContent?: (source: TUnit["source"]) => TBody;
+  readonly contentSchema?: StandardSchemaV1<TBody, TBody>;
 };
+
+/** 一次消费本次业务相关的事实、关联与比较集合，返回完整决定集合。 */
+export type UpdatePolicy<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody = JsonValue,
+  TUnavailable = never,
+> = (
+  input: UpdatePlanInput<TUnit, TTranslation, TBody, TUnavailable>,
+) => Awaitable<
+  readonly UpdatePlanItem<TUnit, TTranslation, TBody, TUnavailable>[]
+>;
 
 export type UpdatePlanStore = {
   load(): Promise<UpdatePlanData | undefined>;
   save(plan: UpdatePlanData): Promise<void>;
 };
 
-export function defaultUpdatePolicy<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TBody = JsonValue,
-  TUnavailable = never,
->(
-  input: UpdatePolicyInput<TUnit, TTranslation, TUnavailable>,
-): UpdateDecision<TBody> {
-  if (input.change === "history-insufficient")
-    return { action: "review", reason: "缺少处理历史，无法确认本次变化。" };
-  if (input.change === "unknown")
-    return { action: "review", reason: "相关原文或译文范围尚未可靠读取。" };
-  if (input.change === "conflict")
-    return { action: "review", reason: "原文与译文存在关联冲突。" };
-  if (input.change === "added") {
-    return input.expectedInput?.association.status === "matched"
-      ? { action: "retain", reason: "保留当前译文。" }
-      : {
-          action: "review",
-          reason: "新增原文尚无可保留的译文，请确认后续处理。",
-        };
-  }
-  if (input.change === "source-removed")
-    return {
-      action: "retain",
-      reason: "保留当前目标内容，不自动删除目标独有条目。",
-    };
-  if (
-    input.change === "changed" &&
-    input.expectedInput?.association.status !== "matched"
-  )
-    return {
-      action: "review",
-      reason: "当前没有可保留的译文，请核查变化；不自动删除未关联的目标条目。",
-    };
-  if (input.change === "changed")
-    return {
-      action: "retain",
-      reason: "保留当前译文；若原文发生变化，请核查其影响。",
-    };
-  if (input.processed)
-    return { action: "none", reason: "该范围没有新的待处理变化。" };
-  return { action: "retain", reason: "保留当前内容。" };
-}
-
-/** 根据变化、历史与策略计算已确定的更新意图。 */
+/**
+ * 纯业务规划入口。比较结果、两侧快照与关联均为显式输入；策略只调用一次，
+ * 计划可 JSON 序列化后交给另一阶段消费。
+ */
 export async function createUpdatePlan<
   TUnit extends TranslationUnitInput,
   TTranslation,
   TBody,
   TUnavailable,
 >(
-  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
-  baseline: ProcessingBaseline | undefined,
-  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+  options: UpdatePlanInput<TUnit, TTranslation, TBody, TUnavailable> & {
+    readonly updatePolicy?: UpdatePolicy<
+      TUnit,
+      TTranslation,
+      TBody,
+      TUnavailable
+    >;
+  },
 ): Promise<UpdatePlan<TUnit, TTranslation, TBody, TUnavailable>> {
-  const changes = await compareProcessingBaseline(facts, baseline, config);
-  const addedRanges = changes.changes.flatMap((change) =>
-    change.status === "added" && change.current !== undefined
-      ? [change.current.source.range]
-      : [],
+  const current = snapshotOf(options.current);
+  const compareInput = {
+    previous: options.previous,
+    current,
+  } as const;
+  validateComparisonInput<TUnit, TTranslation, TBody, TUnavailable>(
+    compareInput,
   );
-  const sourceScopeEvidence = structuredClone(
-    (baseline?.sourceScopes ?? []).filter((scope) =>
-      addedRanges.some((range) => sameJson(scope.range, range)),
-    ),
+  validateComparisonResult<TUnit, TTranslation, TBody, TUnavailable>(
+    compareInput,
+    options.comparisons,
   );
-  const policy = config.updatePolicy ?? defaultUpdatePolicy;
-  const items: UpdatePlanItem<
-    TUnit["source"],
+  if (
+    options.sourceToContent !== undefined &&
+    typeof options.sourceToContent !== "function"
+  )
+    throw new TypeError("sourceToContent 必须是纯原文到目标正文的投影函数。");
+  if (
+    options.updatePolicy !== undefined &&
+    typeof options.updatePolicy !== "function"
+  )
+    throw new TypeError("updatePolicy 必须是集合更新策略函数。");
+
+  const policy: UpdatePolicy<TUnit, TTranslation, TBody, TUnavailable> =
+    options.updatePolicy ??
+    defaultUpdatePolicy<TUnit, TTranslation, TBody, TUnavailable>;
+  const items = await policy(options);
+  const rawPlan = {
+    format: UPDATE_PLAN_FORMAT,
+    ...(options.previous === undefined ? {} : { previous: options.previous }),
+    current,
+    comparisons: options.comparisons,
+    associations: options.associations,
+    items,
+  };
+  const plan = omitUndefined(rawPlan, "更新计划") as UpdatePlan<
+    TUnit,
     TTranslation,
     TBody,
-    TUnavailable,
-    TUnit
-  >[] = [];
-
-  for (const change of changes.changes) {
-    const previousEntry =
-      change.previous === undefined
-        ? undefined
-        : structuredClone(change.previous);
-    const currentEntry =
-      change.current === undefined
-        ? undefined
-        : structuredClone(change.current);
-    const previousObservation =
-      change.previous === undefined
-        ? undefined
-        : observe<TUnit, TTranslation, TUnavailable>(change.previous);
-    const expectedInput =
-      change.current === undefined
-        ? undefined
-        : observe<TUnit, TTranslation, TUnavailable>(change.current);
-    const previousBasis =
-      previousObservation === undefined
-        ? undefined
-        : structuredClone(previousObservation);
-    const expectedBasis =
-      expectedInput === undefined ? undefined : structuredClone(expectedInput);
-    const sourceUnit = currentSourceUnit(facts, change);
-    const translations =
-      expectedInput?.association.translations.map(
-        ({ translation }) => translation,
-      ) ?? [];
-    let decision = structuredClone(
-      policy({
-        sourceKey: change.sourceKey,
-        language: change.language,
-        change: change.status,
-        processed: change.processed,
-        ...(previousObservation === undefined
-          ? {}
-          : { previous: previousObservation }),
-        ...(expectedInput === undefined ? {} : { expectedInput }),
-        ...(sourceUnit === undefined ? {} : { sourceUnit }),
-        translations,
-      }),
-    );
-    if (decision.action === "candidate") {
-      decision = {
-        ...decision,
-        candidate: await validateSemanticEditCandidate(
-          decision.candidate,
-          config,
-        ),
-      };
-    }
-
-    const baseItem = {
-      sourceKey: change.sourceKey,
-      language: change.language,
-      change: change.status,
-      processed: change.processed,
-      ...(previousEntry === undefined ? {} : { previous: previousEntry }),
-      ...(currentEntry === undefined ? {} : { current: currentEntry }),
-      ...(expectedBasis === undefined ? {} : { expectedInput: expectedBasis }),
-      decision,
-    };
-
-    if (decision.action === "review") {
-      items.push({ ...baseItem, status: "review" });
-      continue;
-    }
-    if (decision.action === "none") {
-      items.push({ ...baseItem, status: "notProcessed" });
-      continue;
-    }
-
-    const blocker = processingBlocker(
-      change,
-      previousBasis,
-      expectedBasis,
-      decision,
-      sourceScopeEvidence,
-    );
-    if (blocker !== undefined) {
-      items.push({ ...baseItem, status: "blocked", blocker });
-      continue;
-    }
-
-    if (decision.action === "delete") {
-      const historicalSource = change.previous?.source.unit;
-      if (
-        historicalSource === undefined ||
-        expectedBasis?.source.presence !== "removed"
-      ) {
-        items.push({
-          ...baseItem,
-          status: "blocked",
-          blocker: {
-            code: "deleteTargetUnavailable",
-            message: "缺少用于定位删除目标的历史原文。",
-          },
-        });
-        continue;
-      }
-      const resolved = await resolveSemanticDeleteInput(
-        facts,
-        { sourceKey: change.sourceKey, language: change.language },
-        historicalSource,
-        expectedBasis.source.range,
-        expectedBasis.association.scopes.map(({ range }) => range),
-        config,
-      );
-      if (resolved.status !== "resolved") {
-        items.push({
-          ...baseItem,
-          status: "blocked",
-          blocker: {
-            code: "semanticEditInputUnavailable",
-            message: resolved.reason,
-          },
-        });
-        continue;
-      }
-      const prepared = prepareSemanticDeletion(resolved.input);
-      if (prepared.status !== "prepared") {
-        items.push({
-          ...baseItem,
-          status: "blocked",
-          blocker: {
-            code: "semanticEditInputUnavailable",
-            message: prepared.reason,
-          },
-        });
-        continue;
-      }
-      items.push({
-        ...baseItem,
-        status: "delete",
-        edit: prepared.edit,
-      });
-      continue;
-    }
-    if (decision.action === "retain") {
-      items.push({ ...baseItem, status: "retain" });
-      continue;
-    }
-
-    const candidate = decision.candidate;
-    if (
-      candidate.sourceKey !== change.sourceKey ||
-      candidate.language !== change.language
-    ) {
-      items.push({
-        ...baseItem,
-        status: "blocked",
-        blocker: {
-          code: "candidateIdentityMismatch",
-          message: "策略候选与计划项的原文身份或语言不匹配。",
-        },
-      });
-      continue;
-    }
-    const resolved = await resolveSemanticEditInput(
-      facts,
-      { sourceKey: change.sourceKey, language: change.language },
-      config,
-    );
-    if (resolved.status !== "resolved") {
-      items.push({
-        ...baseItem,
-        status: "blocked",
-        blocker: {
-          code: "semanticEditInputUnavailable",
-          message: resolved.reason,
-        },
-      });
-      continue;
-    }
-    const prepared = await prepareSemanticEdit(
-      resolved.input,
-      candidate,
-      config,
-    );
-    if (prepared.status !== "prepared") {
-      items.push({
-        ...baseItem,
-        status: "blocked",
-        blocker: {
-          code: "semanticEditInputUnavailable",
-          message: prepared.reason,
-        },
-      });
-      continue;
-    }
-    items.push({ ...baseItem, status: "candidate", edit: prepared.edit });
-  }
-
-  return { formatVersion: 3, sourceScopeEvidence, items };
+    TUnavailable
+  >;
+  validateUpdatePlan(plan);
+  return plan;
 }
 
+/** 默认策略保留现有译文；仅为完整读取的缺译补占位，并删除有历史依据的未改目标。 */
+export async function defaultUpdatePolicy<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  input: UpdatePlanInput<TUnit, TTranslation, TBody, TUnavailable>,
+): Promise<
+  readonly UpdatePlanItem<TUnit, TTranslation, TBody, TUnavailable>[]
+> {
+  const items: UpdatePlanItem<TUnit, TTranslation, TBody, TUnavailable>[] = [];
+  const current = input.current;
+  const sourceChanges = new Map(
+    input.comparisons.sourceChanges.map((change) => [change.key, change]),
+  );
+  const translationChanges = new Map(
+    input.comparisons.translationChanges.map((change) => [
+      identityKey(change.identity),
+      change,
+    ]),
+  );
+  for (const sourceUnit of current.source.units) {
+    for (const languageRead of current.translations.reads) {
+      const association = input.associations.current.find(
+        (entry) =>
+          entry.sourceKey === sourceUnit.key &&
+          entry.language === languageRead.language,
+      );
+      const associated =
+        association === undefined
+          ? []
+          : association.translationIndexes.flatMap((index) => {
+              const record = current.translations.records[index];
+              return record === undefined ? [] : [record];
+            });
+      const changes = sourceDecisionChanges(
+        sourceChanges.get(sourceUnit.key),
+        associated.map((record) =>
+          translationChanges.get(identityKey(record.identity)),
+        ),
+      );
+      const base = {
+        sourceKey: sourceUnit.key,
+        language: languageRead.language,
+        changes,
+      };
+
+      if (association === undefined) {
+        items.push({
+          ...base,
+          action: "review",
+          reason: "本次没有对应的源译关联依据，请复核目标范围。",
+        });
+        continue;
+      }
+
+      if (association.status === "conflict") {
+        items.push({
+          ...base,
+          action: "review",
+          targets: associated.map(({ identity }) => identity),
+          reason: "同一原文匹配到多条译文；保留全部条目并复核关联。",
+        });
+        continue;
+      }
+
+      if (association.status === "matched") {
+        const target = associated[0];
+        if (target === undefined) {
+          items.push({
+            ...base,
+            action: "review",
+            reason: "关联结果缺少对应译文事实，请复核当前读取。",
+          });
+          continue;
+        }
+        items.push({
+          ...base,
+          action: "retain",
+          target: target.identity,
+          reason:
+            changes.source?.status === "modified"
+              ? "原文已变化；保留现有译文，避免覆盖人工内容。"
+              : "保留已存在的译文。",
+        });
+        continue;
+      }
+
+      if (association.status === "missing") {
+        if (sourceUnit.bodyAvailability !== "available") {
+          items.push({
+            ...base,
+            action: "blocked",
+            reason: "原文正文不可用，无法生成待译占位。",
+          });
+          continue;
+        }
+        if (input.sourceToContent === undefined) {
+          items.push({
+            ...base,
+            action: "blocked",
+            reason: "宿主没有提供原文到目标正文的投影，无法生成待译占位。",
+          });
+          continue;
+        }
+        const projected = input.sourceToContent(sourceUnit.unit.source);
+        const content =
+          input.contentSchema === undefined
+            ? projected
+            : await validateWithStandardSchema(
+                input.contentSchema,
+                projected,
+                "更新占位正文",
+                { preserveValue: true, requireJson: true },
+              );
+        assertJsonValue(content, "更新占位正文");
+        const range = current.source.read.scopes[sourceUnit.scopeIndex]?.range;
+        if (range === undefined) {
+          items.push({
+            ...base,
+            action: "blocked",
+            reason: "原文读取事实缺少可验证的范围，无法保留写入依据。",
+          });
+          continue;
+        }
+        const request: UpdatePlanWriteRequest<TUnit, TBody> = {
+          operation: "write",
+          target: {
+            sourceKey: sourceUnit.key,
+            language: languageRead.language,
+          },
+          content,
+          expectedSource: {
+            presence: "present",
+            key: sourceUnit.key,
+            unit: sourceUnit.unit,
+            content: sourceUnit.unit.source as JsonValue,
+            range: range as JsonValue,
+          },
+          expectedTarget: { status: "missing" },
+        };
+        items.push({
+          ...base,
+          action: "write",
+          after: { content },
+          request,
+          reason: "目标范围已完整读取且没有对应译文；复制原文作为待译占位。",
+        });
+        continue;
+      }
+
+      items.push({
+        ...base,
+        action: association.status === "unavailable" ? "blocked" : "review",
+        ...(associated.length === 1 ? { target: associated[0]!.identity } : {}),
+        ...(associated.length > 1
+          ? { targets: associated.map(({ identity }) => identity) }
+          : {}),
+        reason:
+          association.status === "unavailable"
+            ? "译文正文不可用；保留目标并阻止自动修改。"
+            : "目标读取依据不完整；不判断为缺译或已处理。",
+      });
+    }
+  }
+
+  const currentOwners = new Map<number, TranslationAssociationFact[]>();
+  for (const association of input.associations.current) {
+    for (const index of association.translationIndexes) {
+      const owners = currentOwners.get(index) ?? [];
+      owners.push(association);
+      currentOwners.set(index, owners);
+    }
+  }
+
+  for (const translation of current.translations.records) {
+    if ((currentOwners.get(translation.index)?.length ?? 0) > 0) continue;
+    const change = translationChanges.get(identityKey(translation.identity));
+    const previousRecord = input.previous?.translations.records.find(
+      ({ identity }) => isDeepStrictEqual(identity, translation.identity),
+    );
+    const previousOwners =
+      previousRecord === undefined
+        ? []
+        : input.associations.previous.filter((association) =>
+            association.translationIndexes.includes(previousRecord.index),
+          );
+    const historicalSources = previousOwners.flatMap((association) => {
+      const sourceChange = sourceChanges.get(association.sourceKey);
+      const source =
+        sourceChange?.previous?.key === association.sourceKey
+          ? sourceChange.previous
+          : undefined;
+      return source === undefined
+        ? []
+        : [{ association, source, sourceChange }];
+    });
+    const changes = sourceDecisionChanges(
+      historicalSources.length === 1
+        ? historicalSources[0]!.sourceChange
+        : undefined,
+      change === undefined ? [] : [change],
+    );
+    const base = {
+      language: translation.language,
+      target: translation.identity,
+      changes,
+    };
+    const uniquelyHistoricallyMatched =
+      historicalSources.length === 1 &&
+      historicalSources[0]!.association.status === "matched";
+    const removedSource = uniquelyHistoricallyMatched
+      ? historicalSources[0]
+      : undefined;
+
+    if (removedSource?.sourceChange?.status === "removed") {
+      const read = current.translations.reads.find(
+        ({ language }) => language === translation.language,
+      );
+      const scope = read?.scopes[translation.scopeIndex];
+      if (
+        read?.status !== "complete" ||
+        scope?.enumeration !== "complete" ||
+        translation.bodyAvailability !== "available"
+      ) {
+        items.push({
+          ...base,
+          action: "review",
+          reason:
+            "原文移除已确认，但当前目标的正文或完整读取依据不足；保留并复核。",
+        });
+        continue;
+      }
+
+      if (change?.status === "unchanged") {
+        const previousRange =
+          input.previous?.source.read.scopes[removedSource.source.scopeIndex]
+            ?.range;
+        const sourceRange =
+          previousRange === undefined
+            ? undefined
+            : sourceRangeForRemoved(previousRange, current);
+        if (sourceRange === undefined) {
+          items.push({
+            ...base,
+            action: "review",
+            reason: "未能确认原文移除对应的完整当前范围；保留目标并复核。",
+          });
+          continue;
+        }
+        items.push({
+          ...base,
+          action: "delete",
+          request: {
+            operation: "delete",
+            target: { identity: translation.identity },
+            expectedSource: {
+              presence: "absent",
+              key: removedSource.source.key,
+              range: sourceRange as JsonValue,
+            },
+            expectedTarget: {
+              status: "present",
+              identity: translation.identity,
+              content: translation.content,
+              range: translation.range as JsonValue,
+            },
+          },
+          reason:
+            "该译文明确关联的历史原文已从完整范围移除，目标正文未变化；可删除。",
+        });
+        continue;
+      }
+
+      items.push({
+        ...base,
+        action: "retain",
+        reason:
+          translation.bodyAvailability === "available" &&
+          change?.status === "modified"
+            ? "历史原文已移除，但目标正文此后发生变化；保留人工修改。"
+            : "历史原文已移除，但缺少确认目标未变化的历史依据；保留目标。",
+      });
+      continue;
+    }
+
+    if (
+      previousOwners.length > 1 ||
+      previousOwners.some(({ status }) => status === "conflict")
+    ) {
+      items.push({
+        ...base,
+        action: "review",
+        reason:
+          "目标与多条历史源译关联相连，无法唯一确认删除依据；保留并复核。",
+      });
+      continue;
+    }
+
+    if (previousOwners.length === 0) {
+      items.push({
+        ...base,
+        action: "retain",
+        reason: "没有充分的历史原文关联依据；保留目标独有项。",
+      });
+      continue;
+    }
+
+    items.push({
+      ...base,
+      action: "review",
+      reason: "历史原文尚未被充分确认移除；保留目标并复核当前证据。",
+    });
+  }
+
+  return items;
+}
+
+/** 读取当前事实、选用配置比较器并生成业务计划；不写资源或推进基线。 */
+export async function previewUpdate<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+  store?: ComparisonBaselineStore<TUnit, TTranslation, TBody, TUnavailable>,
+): Promise<UpdatePlan<TUnit, TTranslation, TBody, TUnavailable>> {
+  validateFrameworkConfig(config);
+  if (
+    config.updatePolicy !== undefined &&
+    typeof config.updatePolicy !== "function"
+  )
+    throw new TypeError(
+      "defineConfig 的 updatePolicy 必须是集合更新策略函数。",
+    );
+  if (
+    config.sourceToContent !== undefined &&
+    typeof config.sourceToContent !== "function"
+  )
+    throw new TypeError("defineConfig 的 sourceToContent 必须是纯投影函数。");
+
+  const baseline = await store?.load();
+  if (baseline !== undefined) validateComparisonBaseline(baseline);
+  const current = await readFacts(config);
+  const previous = baseline?.snapshot;
+  const comparisons = await compareSnapshots<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable
+  >({ previous, current: snapshotOf(current) }, config.compare);
+  const associations: UpdatePlanAssociations = {
+    previous:
+      previous === undefined
+        ? []
+        : associateSnapshot<TUnit, TTranslation, TBody, TUnavailable>(
+            previous,
+            config,
+          ),
+    current: current.associations,
+  };
+  return createUpdatePlan<TUnit, TTranslation, TBody, TUnavailable>({
+    ...(previous === undefined ? {} : { previous }),
+    current,
+    comparisons,
+    associations,
+    ...(config.sourceToContent === undefined
+      ? {}
+      : { sourceToContent: config.sourceToContent }),
+    ...(config.translations === undefined
+      ? {}
+      : { contentSchema: config.translations.contentSchema }),
+    ...(config.updatePolicy === undefined
+      ? {}
+      : { updatePolicy: config.updatePolicy }),
+  });
+}
+
+/** 验证保存后的 JSON 计划；不会重新比较、关联或调用策略。 */
 export function validateUpdatePlan(
   value: unknown,
 ): asserts value is UpdatePlanData {
   assertJsonValue(value, "更新计划");
   if (
     !isRecord(value) ||
-    value.formatVersion !== 3 ||
-    !isUnknownArray(value.sourceScopeEvidence) ||
-    !isUnknownArray(value.items)
-  ) {
-    invalidUpdatePlan("格式无效或版本不受支持。");
-  }
-  for (const scope of value.sourceScopeEvidence) {
-    if (
-      !isRecord(scope) ||
-      !Object.hasOwn(scope, "range") ||
-      !isEnumerationCompleteness(scope.enumeration) ||
-      !isUnknownArray(scope.sourceKeys) ||
-      scope.sourceKeys.some((key) => typeof key !== "string")
-    ) {
-      invalidUpdatePlan("包含无效的原文范围依据。");
-    }
-  }
-  const seen = new Set<string>();
-  for (const item of value.items) {
-    if (
-      !isRecord(item) ||
-      typeof item.sourceKey !== "string" ||
-      typeof item.language !== "string" ||
-      typeof item.processed !== "boolean" ||
-      !isChangeStatus(item.change) ||
-      !isUpdateDecision(item.decision) ||
-      !isUpdatePlanStatus(item.status) ||
-      (item.previous !== undefined && !isBaselineEntry(item.previous)) ||
-      (item.current !== undefined && !isBaselineEntry(item.current)) ||
-      (item.expectedInput !== undefined &&
-        !isUpdatePlanObservation(item.expectedInput)) ||
-      (item.blocker !== undefined && !isUpdatePlanBlock(item.blocker)) ||
-      (item.edit !== undefined && !isSemanticEdit(item.edit)) ||
-      !matchesDecisionState(item)
-    ) {
-      invalidUpdatePlan("包含无效条目。");
-    }
-    const key = JSON.stringify([item.sourceKey, item.language]);
-    if (seen.has(key)) invalidUpdatePlan("包含重复的原文身份与语言。");
-    seen.add(key);
-  }
-}
+    value.format !== UPDATE_PLAN_FORMAT ||
+    !isPlanAssociations(value.associations) ||
+    !Array.isArray(value.items) ||
+    value.items.some((item) => !isPlanItem(item))
+  )
+    invalidPlan("格式无效或包含不完整的业务决定。");
 
-/** 验证保存计划内的业务历史，并由完整历史快照重建策略观察。 */
-export async function validateUpdatePlanHistory<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TBody,
-  TUnavailable,
->(
-  value: unknown,
-  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
-): Promise<UpdatePlan<TUnit, TTranslation, TBody, TUnavailable>> {
-  validateUpdatePlan(value);
-  const items: UpdatePlanItem<
-    TUnit["source"],
-    TTranslation,
-    TBody,
-    TUnavailable,
-    TUnit
-  >[] = [];
-  for (const item of value.items) {
-    const previous =
-      item.previous === undefined
-        ? undefined
-        : await validateEntryHistory(item.previous, config);
-    const current =
-      item.current === undefined
-        ? undefined
-        : await validateEntryHistory(item.current, config);
-    let expectedInput:
-      | UpdatePlanObservation<TUnit["source"], TTranslation, TUnavailable>
-      | undefined;
-    if (item.expectedInput !== undefined) {
-      if (current === undefined)
-        invalidUpdatePlan("包含没有完整原文依据的策略观察。");
-      const derived = observe<TUnit, TTranslation, TUnavailable>(current);
-      if (!isDeepStrictEqual(item.expectedInput, derived))
-        invalidUpdatePlan("策略观察与其完整历史快照不一致。");
-      expectedInput = derived;
-    }
-
-    let edit: SemanticEdit<TBody> | undefined;
-    if (item.edit !== undefined) {
-      const validated = await validateSemanticEditHistory(item.edit, config);
-      edit = validated.edit;
-      if (current === undefined)
-        invalidUpdatePlan("包含没有完整原文依据的语义编辑。");
-      if (edit.operation === "write") {
-        if (
-          current.source.presence !== "present" ||
-          !isDeepStrictEqual(edit.expected.source.unit, current.source.unit) ||
-          !isDeepStrictEqual(
-            edit.expected.source.content,
-            current.source.unit.source,
-          )
-        )
-          invalidUpdatePlan("语义编辑原文与完整历史快照不一致。");
-      } else if (
-        current.source.presence !== "removed" ||
-        !isDeepStrictEqual(
-          edit.expected.source.historicalContent,
-          current.source.unit,
-        )
-      ) {
-        invalidUpdatePlan("删除编辑原文与完整历史快照不一致。");
-      }
-
-      if (edit.expected.target.status === "present") {
-        const translation = current.association.translations.find(
-          ({ bodyAvailability }) => bodyAvailability === "available",
-        );
-        const adapter = config.translations;
-        if (
-          translation === undefined ||
-          translation.bodyAvailability !== "available" ||
-          adapter === undefined ||
-          !isDeepStrictEqual(
-            adapter.contentOf(translation.translation),
-            edit.expected.target.content,
-          )
-        )
-          invalidUpdatePlan("语义编辑目标与完整历史快照不一致。");
-      }
-    }
-    let decision: UpdateDecision<TBody>;
-    if (item.decision.action === "candidate") {
-      if (
-        item.decision.candidate.sourceKey !== item.sourceKey ||
-        item.decision.candidate.language !== item.language
-      )
-        invalidUpdatePlan("策略候选与计划项的原文身份或语言不匹配。");
-      const content =
-        edit?.operation === "write"
-          ? edit.content
-          : (
-              await validateSemanticEditCandidate(
-                item.decision.candidate,
-                config,
-              )
-            ).content;
-      decision = {
-        ...item.decision,
-        candidate: {
-          ...item.decision.candidate,
-          content,
-        },
-      };
-    } else {
-      decision = item.decision;
-    }
-    items.push({
-      sourceKey: item.sourceKey,
-      language: item.language,
-      change: item.change,
-      processed: item.processed,
-      ...(previous === undefined ? {} : { previous }),
-      ...(current === undefined ? {} : { current }),
-      ...(expectedInput === undefined ? {} : { expectedInput }),
-      decision,
-      status: item.status,
-      ...(item.blocker === undefined ? {} : { blocker: item.blocker }),
-      ...(edit === undefined ? {} : { edit }),
-    });
-  }
-  return {
-    formatVersion: 3,
-    sourceScopeEvidence: value.sourceScopeEvidence,
-    items,
+  const comparisonInput = {
+    previous: value.previous as
+      | ComparisonSnapshot<TranslationUnitInput, unknown, JsonValue, unknown>
+      | undefined,
+    current: value.current as ComparisonSnapshot<
+      TranslationUnitInput,
+      unknown,
+      JsonValue,
+      unknown
+    >,
   };
-}
-
-async function validateEntryHistory<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TBody,
-  TUnavailable,
->(
-  entry: unknown,
-  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
-): Promise<ProcessingBaselineEntry<TUnit, TTranslation, TUnavailable>> {
-  const baseline = await validateProcessingBaselineHistory(
-    { formatVersion: 1, entries: [entry], sourceScopes: [] },
-    config,
+  validateComparisonInput<TranslationUnitInput, unknown, JsonValue, unknown>(
+    comparisonInput,
   );
-  const validated = baseline.entries[0];
-  if (validated === undefined) invalidUpdatePlan("缺少可验证的历史条目。");
-  return validated;
+  validateComparisonResult<TranslationUnitInput, unknown, JsonValue, unknown>(
+    comparisonInput,
+    value.comparisons,
+  );
 }
 
-function matchesDecisionState(value: Record<string, unknown>): boolean {
-  const decision = value.decision;
-  if (!isUpdateDecision(decision)) return false;
-  const edit = value.edit;
-  if (value.status === "blocked")
-    return value.blocker !== undefined && edit === undefined;
-  if (value.blocker !== undefined) return false;
-  if (value.status === "candidate")
-    return (
-      decision.action === "candidate" &&
-      isRecord(edit) &&
-      edit.operation === "write" &&
-      edit.sourceKey === value.sourceKey &&
-      edit.language === value.language &&
-      isRecord(decision.candidate) &&
-      isDeepStrictEqual(edit.content, decision.candidate.content)
-    );
-  if (value.status === "delete")
-    return (
-      decision.action === "delete" &&
-      isRecord(edit) &&
-      edit.operation === "delete" &&
-      edit.sourceKey === value.sourceKey &&
-      edit.language === value.language
-    );
-  if (edit !== undefined) return false;
-  if (value.status === "retain") return decision.action === "retain";
-  if (value.status === "review") return decision.action === "review";
-  return decision.action === "none";
-}
-
-function observe<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TUnavailable = never,
->(
-  entry: ProcessingBaselineEntry<TUnit, TTranslation, TUnavailable>,
-): UpdatePlanObservation<TUnit["source"], TTranslation, TUnavailable> {
-  const unit = entry.source.unit;
-  return {
-    source: {
-      presence: entry.source.presence,
-      ...(entry.source.presence === "present" ? { value: unit.source } : {}),
-      bodyAvailability: entry.source.bodyAvailability,
-      range: entry.source.range,
-      enumeration: entry.source.enumeration,
-    },
-    association: {
-      status: entry.association.status,
-      coverageStatus: entry.association.coverageStatus,
-      scopes: entry.association.scopes.map((scope) => ({ ...scope })),
-      translations: entry.association.translations.map((translation) => ({
-        ...translation,
-      })),
-    },
-  };
-}
-
-function currentSourceUnit<
+function snapshotOf<
   TUnit extends TranslationUnitInput,
   TTranslation,
   TBody,
   TUnavailable,
 >(
   facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
-  change: ProcessingBaselineChange,
-): TUnit | undefined {
-  return facts.source.units.find(({ key }) => key === change.sourceKey)?.unit;
+): ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable> {
+  return {
+    version: facts.version,
+    source: facts.source,
+    translations: facts.translations,
+  };
 }
 
-function processingBlocker<TSource, TTranslation, TBody, TUnavailable>(
-  change: ProcessingBaselineChange,
-  previous:
-    | UpdatePlanObservation<TSource, TTranslation, TUnavailable>
-    | undefined,
-  expectedInput:
-    | UpdatePlanObservation<TSource, TTranslation, TUnavailable>
-    | undefined,
-  decision: UpdateDecision<TBody>,
-  sourceScopeEvidence: readonly ProcessingBaselineSourceScope[],
-): UpdatePlanBlock | undefined {
-  if (change.status === "history-insufficient")
-    return { code: "historyInsufficient", message: "缺少足够的历史依据。" };
-  if (change.status === "unknown")
-    return { code: "changeUnknown", message: "相关范围的读取证据不足。" };
-  if (change.status === "conflict")
-    return { code: "associationConflict", message: "源译关联存在冲突。" };
-  if (expectedInput === undefined)
-    return {
-      code: "missingCurrentInput",
-      message: "缺少当前原文或译文范围依据。",
-    };
-  const currentBlock = observationBlocker(expectedInput);
-  if (currentBlock !== undefined) return currentBlock;
-  if (previous !== undefined) {
-    const previousBlock = observationBlocker(previous);
-    if (previousBlock !== undefined)
-      return {
-        code: "previousInputIncomplete",
-        message: `历史依据不足：${previousBlock.message ?? previousBlock.code}`,
-      };
-  }
-  if (decision.action === "delete") {
-    if (
-      change.status !== "source-removed" ||
-      expectedInput.source.presence !== "removed"
-    )
-      return {
-        code: "deleteRequiresSourceRemoval",
-        message: "只能在原文已确认移除后处理删除译文。",
-      };
-    if (
-      expectedInput.association.status !== "matched" ||
-      expectedInput.association.translations.length !== 1
-    )
-      return {
-        code: "deleteTargetUnavailable",
-        message: "没有唯一且可读取的历史关联目标。",
-      };
-  }
-  if (
-    decision.action === "candidate" &&
-    expectedInput.source.presence !== "present"
-  )
-    return {
-      code: "sourceRemoved",
-      message: "已移除原文没有可写入的候选目标。",
-    };
-  if (change.status === "added") {
-    const matchingScopes = sourceScopeEvidence.filter(({ range }) =>
-      sameJson(range, expectedInput.source.range),
-    );
-    if (
-      matchingScopes.length === 0 ||
-      matchingScopes.some(
-        ({ enumeration, sourceKeys }) =>
-          enumeration !== "complete" || sourceKeys.includes(change.sourceKey),
-      )
-    ) {
-      return {
-        code: "addedSourceEvidenceIncomplete",
-        message: "没有完整的历史原文范围依据证明此项为新增。",
-      };
+function associateSnapshot<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  snapshot: ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+): TranslationAssociationFact[] {
+  const adapter = config.translations;
+  if (adapter === undefined || typeof adapter.matches !== "function") return [];
+  const associations: TranslationAssociationFact[] = [];
+  for (const languageRead of snapshot.translations.reads) {
+    for (const sourceUnit of snapshot.source.units) {
+      const scopeIndexes = languageRead.scopes.flatMap((scope, index) =>
+        scope.covers.includes(sourceUnit.key) ? [index] : [],
+      );
+      const relevantScopes = languageRead.scopes.filter((_, index) =>
+        scopeIndexes.includes(index),
+      );
+      const coverageStatus = readStatus(
+        relevantScopes,
+        scopeIndexes.length === 0 ? languageRead.error : undefined,
+      );
+      const translationIndexes = snapshot.translations.records
+        .filter(
+          ({ language, scopeIndex }) =>
+            language === languageRead.language &&
+            scopeIndexes.includes(scopeIndex),
+        )
+        .filter(({ translation }) =>
+          adapter.matches!(sourceUnit.unit, translation),
+        )
+        .map(({ index }) => index);
+      const status =
+        translationIndexes.length > 1
+          ? "conflict"
+          : translationIndexes.length === 0
+            ? coverageStatus === "complete"
+              ? "missing"
+              : "unknown"
+            : coverageStatus !== "complete"
+              ? "unknown"
+              : snapshot.translations.records[translationIndexes[0] as number]
+                    ?.bodyAvailability === "available"
+                ? "matched"
+                : "unavailable";
+      associations.push({
+        sourceKey: sourceUnit.key,
+        language: languageRead.language,
+        status,
+        coverageStatus,
+        scopeIndexes,
+        translationIndexes,
+      });
     }
   }
-  return undefined;
+  return associations;
 }
 
-function observationBlocker<TSource, TTranslation, TUnavailable>(
-  observation: UpdatePlanObservation<TSource, TTranslation, TUnavailable>,
-): UpdatePlanBlock | undefined {
-  if (observation.source.enumeration !== "complete")
-    return {
-      code: "sourceEnumerationIncomplete",
-      message: "原文范围枚举不完整。",
-    };
-  if (observation.source.bodyAvailability !== "available")
-    return { code: "sourceUnavailable", message: "原文内容不可用。" };
-  if (observation.association.coverageStatus !== "complete")
-    return {
-      code: "translationCoverageIncomplete",
-      message: "译文范围覆盖不完整。",
-    };
-  if (observation.association.status === "unknown")
-    return {
-      code: "associationUnknown",
-      message: "源译关联未知。",
-    };
-  if (observation.association.status === "conflict")
-    return {
-      code: "associationConflict",
-      message: "源译关联存在冲突。",
-    };
-  if (observation.association.status === "unavailable")
-    return {
-      code: "associationUnavailable",
-      message: "相关译文正文不可用。",
-    };
+function sourceDecisionChanges<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  source: SourceChange<TUnit> | undefined,
+  translations: readonly (
+    | TranslationChange<TTranslation, TBody, TUnavailable>
+    | undefined
+  )[],
+): {
+  readonly source?: UpdatePlanSourceChange<TUnit>;
+  readonly translations: readonly UpdatePlanTranslationChange<
+    TTranslation,
+    TBody,
+    TUnavailable
+  >[];
+} {
+  return {
+    ...(source === undefined
+      ? {}
+      : {
+          source: {
+            key: source.key,
+            status: source.status,
+            ...(source.previous === undefined
+              ? {}
+              : { previous: source.previous }),
+            ...(source.current === undefined
+              ? {}
+              : { current: source.current }),
+          },
+        }),
+    translations: translations.flatMap((change) =>
+      change === undefined
+        ? []
+        : [
+            {
+              identity: change.identity,
+              status: change.status,
+              ...(change.previous === undefined
+                ? {}
+                : { previous: change.previous }),
+              ...(change.current === undefined
+                ? {}
+                : { current: change.current }),
+            },
+          ],
+    ),
+  };
+}
+
+function sourceRangeForRemoved<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  previousRange: unknown,
+  current: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
+): unknown {
+  const range = current.source.read.scopes.find(
+    ({ range: currentRange, enumeration }) =>
+      enumeration === "complete" &&
+      isDeepStrictEqual(currentRange, previousRange),
+  )?.range;
+  return range;
+}
+
+function readStatus(
+  scopes: readonly {
+    readonly enumeration: "complete" | "partial" | "failed";
+  }[],
+  error?: string,
+): "complete" | "incomplete" | "failed" | "notRead" {
   if (
-    observation.association.scopes.length === 0 ||
-    observation.association.scopes.some(
-      ({ enumeration }) => enumeration !== "complete",
-    )
+    error !== undefined ||
+    scopes.some(({ enumeration }) => enumeration === "failed")
   )
-    return {
-      code: "translationScopeIncomplete",
-      message: "相关译文范围枚举不完整。",
-    };
-  if (
-    observation.association.translations.some(
-      ({ bodyAvailability }) => bodyAvailability !== "available",
-    )
-  )
-    return {
-      code: "translationUnavailable",
-      message: "相关译文内容不可用。",
-    };
-  return undefined;
+    return "failed";
+  if (scopes.length === 0) return "notRead";
+  return scopes.every(({ enumeration }) => enumeration === "complete")
+    ? "complete"
+    : "incomplete";
 }
 
-function isUpdateDecision(value: unknown): value is UpdateDecision {
-  if (!isRecord(value)) return false;
-  const decision = value;
-  if (
-    decision.action !== "retain" &&
-    decision.action !== "delete" &&
-    decision.action !== "none" &&
-    decision.action !== "candidate" &&
-    decision.action !== "review"
-  )
-    return false;
-  if ("reason" in decision && typeof decision.reason !== "string") return false;
-  if (decision.action !== "candidate") return true;
-  const candidate = decision.candidate;
-  return (
-    isRecord(candidate) &&
-    typeof candidate.sourceKey === "string" &&
-    typeof candidate.language === "string" &&
-    isJsonValue(candidate.content)
-  );
-}
-
-function isUpdatePlanStatus(value: unknown): value is UpdatePlanStatus {
-  return (
-    value === "candidate" ||
-    value === "delete" ||
-    value === "retain" ||
-    value === "review" ||
-    value === "notProcessed" ||
-    value === "blocked"
-  );
-}
-
-function isUpdatePlanBlock(value: unknown): value is UpdatePlanBlock {
-  if (!isRecord(value)) return false;
-  const blocker = value;
-  return (
-    isUpdatePlanBlockCode(blocker.code) &&
-    (!("message" in blocker) || typeof blocker.message === "string")
-  );
-}
-
-function isUpdatePlanBlockCode(value: unknown): value is UpdatePlanBlockCode {
-  return (
-    value === "historyInsufficient" ||
-    value === "changeUnknown" ||
-    value === "associationConflict" ||
-    value === "planBaselineChanged" ||
-    value === "planInputChanged" ||
-    value === "currentInputUnavailable" ||
-    value === "missingCurrentInput" ||
-    value === "sourceEnumerationIncomplete" ||
-    value === "sourceUnavailable" ||
-    value === "translationCoverageIncomplete" ||
-    value === "associationUnknown" ||
-    value === "associationUnavailable" ||
-    value === "translationScopeIncomplete" ||
-    value === "translationUnavailable" ||
-    value === "previousInputIncomplete" ||
-    value === "addedSourceEvidenceIncomplete" ||
-    value === "deleteTargetUnavailable" ||
-    value === "deleteRequiresSourceRemoval" ||
-    value === "sourceRemoved" ||
-    value === "candidateIdentityMismatch" ||
-    value === "semanticEditInputUnavailable"
-  );
-}
-
-function isSemanticEdit(value: unknown): value is SemanticEdit {
-  if (!isRecord(value)) return false;
-  const edit = value;
-  if (
-    edit.formatVersion !== "lioni.semantic-edit/v2" ||
-    typeof edit.createdFromFactsVersion !== "string" ||
-    typeof edit.sourceKey !== "string" ||
-    typeof edit.language !== "string" ||
-    !isSemanticEditTarget(edit.target) ||
-    !isRecord(edit.expected)
-  )
-    return false;
-  const expected = edit.expected;
-  if (
-    !isSemanticEditSourceExpectation(expected.source) ||
-    !isJsonValue(expected.dependencies) ||
-    !isSemanticEditTargetExpected(expected.target)
-  )
-    return false;
-  if (edit.operation === "write")
-    return isJsonValue(edit.content) && expected.source.presence === "present";
-  return (
-    edit.operation === "delete" &&
-    !Object.hasOwn(edit, "content") &&
-    isRecord(edit.target) &&
-    edit.target.kind === "existing" &&
-    expected.source.presence === "removed" &&
-    isRecord(expected.target) &&
-    expected.target.status === "present"
-  );
-}
-
-function isSemanticEditSourceExpectation(
-  value: unknown,
-): value is SemanticEdit["expected"]["source"] {
-  if (!isRecord(value)) return false;
-  const source = value;
-  if (source.presence === "present")
-    return (
-      isJsonValue(source.range) &&
-      isJsonValue(source.unit) &&
-      isJsonValue(source.content)
-    );
-  return (
-    source.presence === "removed" &&
-    isJsonValue(source.range) &&
-    isJsonValue(source.historicalContent)
-  );
-}
-
-function isSemanticEditTarget(value: unknown): boolean {
-  if (!isRecord(value)) return false;
-  const target = value;
-  return (
-    (target.kind === "existing" || target.kind === "create") &&
-    isJsonValue(target.locator)
-  );
-}
-
-function isSemanticEditTargetExpected(value: unknown): boolean {
-  if (!isRecord(value)) return false;
-  const target = value;
-  return target.status === "missing"
-    ? true
-    : target.status === "present" &&
-        isJsonValue(target.content) &&
-        isJsonValue(target.range) &&
-        Array.isArray(target.scopes) &&
-        target.scopes.every((range) => isJsonValue(range));
-}
-
-function isJsonValue(value: unknown): value is JsonValue {
-  try {
-    assertJsonValue(value, "更新计划字段");
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function isBaselineEntry(value: unknown): boolean {
-  try {
-    const baseline: unknown = {
-      formatVersion: 1,
-      entries: [value],
-      sourceScopes: [],
-    };
-    validateProcessingBaseline(baseline);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function isUpdatePlanObservation(value: unknown): boolean {
-  if (!isRecord(value)) return false;
-  const source = value.source;
-  const association = value.association;
-  if (
-    !isRecord(source) ||
-    (source.presence !== "present" && source.presence !== "removed") ||
-    !isBodyAvailability(source.bodyAvailability) ||
-    !isEnumerationCompleteness(source.enumeration) ||
-    !isRecord(association) ||
-    !isAssociationStatus(association.status) ||
-    !isCoverageStatus(association.coverageStatus) ||
-    !isUnknownArray(association.scopes) ||
-    !isUnknownArray(association.translations)
-  ) {
-    return false;
-  }
-  return (
-    association.scopes.every((scope) => {
-      if (!isRecord(scope) || !Object.hasOwn(scope, "range")) return false;
-      const translationScope = scope;
-      return (
-        isUnknownArray(translationScope.covers) &&
-        translationScope.covers.every((key) => typeof key === "string") &&
-        isEnumerationCompleteness(translationScope.enumeration)
-      );
-    }) &&
-    association.translations.every((translation) => {
-      if (
-        !isRecord(translation) ||
-        !Object.hasOwn(translation, "range") ||
-        !Object.hasOwn(translation, "translation")
-      )
-        return false;
-      return isBodyAvailability(translation.bodyAvailability);
-    })
-  );
-}
-
-function isChangeStatus(value: unknown): value is ProcessingChangeStatus {
-  return (
-    value === "history-insufficient" ||
-    value === "added" ||
-    value === "unchanged" ||
-    value === "changed" ||
-    value === "source-removed" ||
-    value === "unknown" ||
-    value === "conflict"
-  );
-}
-
-function isEnumerationCompleteness(
-  value: unknown,
-): value is EnumerationCompleteness {
-  return value === "complete" || value === "partial" || value === "failed";
-}
-
-function isBodyAvailability(value: unknown): value is BodyAvailability {
-  return value === "available" || value === "unavailable";
-}
-
-function isCoverageStatus(value: unknown): value is CoverageStatus {
-  return (
-    value === "complete" ||
-    value === "incomplete" ||
-    value === "failed" ||
-    value === "notRead"
-  );
-}
-
-function isAssociationStatus(
-  value: unknown,
-): value is TranslationAssociationStatus {
-  return (
-    value === "matched" ||
-    value === "missing" ||
-    value === "unavailable" ||
-    value === "unknown" ||
-    value === "conflict"
-  );
+function identityKey(identity: TranslationIdentity): string {
+  return JSON.stringify(identity);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isUnknownArray(value: unknown): value is readonly unknown[] {
-  return Array.isArray(value);
+function omitUndefined<T>(value: T, description: string): T {
+  function visit(current: unknown, path: string): unknown {
+    if (current === undefined) return undefined;
+    if (Array.isArray(current))
+      return current.map((child, index) => {
+        if (child === undefined)
+          throw new TypeError(
+            `${description}${path}[${index}] 不能包含 undefined。`,
+          );
+        return visit(child, `${path}[${index}]`);
+      });
+    if (isRecord(current)) {
+      const result: Record<string, unknown> = {};
+      for (const [key, child] of Object.entries(current)) {
+        if (child !== undefined) result[key] = visit(child, `${path}.${key}`);
+      }
+      return result;
+    }
+    return current;
+  }
+  const json = visit(value, "");
+  assertJsonValue(json, description);
+  return json as T;
 }
 
-function invalidUpdatePlan(message: string): never {
-  throw new StandardSchemaContractError(
-    "更新计划",
-    "schema-mismatch",
-    `更新计划${message}`,
+function isPlanAssociations(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.previous) &&
+    value.previous.every(isAssociation) &&
+    Array.isArray(value.current) &&
+    value.current.every(isAssociation)
   );
 }
 
-function sameJson(left: unknown, right: unknown): boolean {
-  return isDeepStrictEqual(left, right);
+function isPlanItem(value: unknown): boolean {
+  if (
+    !isRecord(value) ||
+    !isPlanAction(value.action) ||
+    typeof value.language !== "string" ||
+    typeof value.reason !== "string" ||
+    !isRecord(value.changes) ||
+    (value.sourceKey !== undefined && typeof value.sourceKey !== "string") ||
+    (value.target !== undefined && !isIdentity(value.target)) ||
+    (value.targets !== undefined &&
+      (!Array.isArray(value.targets) || !value.targets.every(isIdentity))) ||
+    (value.changes.source !== undefined &&
+      (!isRecord(value.changes.source) ||
+        typeof value.changes.source.key !== "string" ||
+        !isComparisonStatus(value.changes.source.status))) ||
+    !Array.isArray(value.changes.translations) ||
+    !value.changes.translations.every(
+      (change: unknown) =>
+        isRecord(change) &&
+        isIdentity(change.identity) &&
+        isComparisonStatus(change.status),
+    ) ||
+    (value.after !== undefined && !isRecord(value.after))
+  )
+    return false;
+  if (value.action === "write")
+    return (
+      isWriteRequest(value.request) &&
+      value.request.operation === "write" &&
+      isRecord(value.after) &&
+      Object.hasOwn(value.after, "content") &&
+      isDeepStrictEqual(value.after.content, value.request.content)
+    );
+  if (value.action === "delete")
+    return (
+      isDeleteRequest(value.request) && value.request.operation === "delete"
+    );
+  return value.request === undefined && value.after === undefined;
+}
+
+function isWriteRequest(
+  value: unknown,
+): value is UpdatePlanWriteRequest<TranslationUnitInput, JsonValue> {
+  if (
+    !isRecord(value) ||
+    value.operation !== "write" ||
+    !isRecord(value.target) ||
+    Object.hasOwn(value, "content") === false ||
+    !isTargetExpectation(value.expectedTarget) ||
+    (value.expectedSource !== undefined &&
+      !isSourceExpectation(value.expectedSource))
+  )
+    return false;
+  const sourceTarget =
+    typeof value.target.sourceKey === "string" &&
+    typeof value.target.language === "string";
+  if (sourceTarget) return value.expectedTarget.status === "missing";
+  return (
+    isIdentity(value.target.identity) &&
+    value.expectedTarget.status === "present" &&
+    isDeepStrictEqual(value.target.identity, value.expectedTarget.identity)
+  );
+}
+
+function isDeleteRequest(
+  value: unknown,
+): value is UpdatePlanWriteRequest<TranslationUnitInput, JsonValue> {
+  return (
+    isRecord(value) &&
+    value.operation === "delete" &&
+    isRecord(value.target) &&
+    isIdentity(value.target.identity) &&
+    isRecord(value.expectedTarget) &&
+    value.expectedTarget.status === "present" &&
+    isIdentity(value.expectedTarget.identity) &&
+    isDeepStrictEqual(value.target.identity, value.expectedTarget.identity) &&
+    (value.expectedSource === undefined ||
+      isSourceExpectation(value.expectedSource))
+  );
+}
+
+function isSourceExpectation(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    (value.presence === "present"
+      ? typeof value.key === "string" &&
+        Object.hasOwn(value, "unit") &&
+        Object.hasOwn(value, "content") &&
+        Object.hasOwn(value, "range")
+      : value.presence === "absent" &&
+        typeof value.key === "string" &&
+        Object.hasOwn(value, "range"))
+  );
+}
+
+function isTargetExpectation(
+  value: unknown,
+): value is UpdateTargetExpectation<JsonValue> {
+  return (
+    isRecord(value) &&
+    (value.status === "missing" ||
+      (value.status === "present" &&
+        isIdentity(value.identity) &&
+        Object.hasOwn(value, "content")))
+  );
+}
+
+function isAssociation(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.sourceKey === "string" &&
+    typeof value.language === "string" &&
+    ["matched", "missing", "unavailable", "unknown", "conflict"].includes(
+      String(value.status),
+    ) &&
+    ["complete", "incomplete", "failed", "notRead"].includes(
+      String(value.coverageStatus),
+    ) &&
+    Array.isArray(value.scopeIndexes) &&
+    value.scopeIndexes.every((index) => Number.isInteger(index)) &&
+    Array.isArray(value.translationIndexes) &&
+    value.translationIndexes.every((index) => Number.isInteger(index))
+  );
+}
+
+function isIdentity(value: unknown): value is TranslationIdentity {
+  return (
+    isRecord(value) &&
+    typeof value.language === "string" &&
+    typeof value.namespace === "string" &&
+    typeof value.key === "string"
+  );
+}
+
+function isPlanAction(value: unknown): value is UpdatePlanAction {
+  return ["write", "delete", "retain", "review", "blocked"].includes(
+    String(value),
+  );
+}
+
+function isComparisonStatus(value: unknown): value is ComparisonStatus {
+  return [
+    "historyMissing",
+    "historyInsufficient",
+    "currentInsufficient",
+    "bothInsufficient",
+    "added",
+    "removed",
+    "modified",
+    "unchanged",
+  ].includes(String(value));
+}
+
+function invalidPlan(message: string): never {
+  throw new TypeError(`更新计划无效：${message}`);
 }
