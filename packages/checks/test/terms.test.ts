@@ -6,6 +6,7 @@ import {
   defineConfig,
   readFacts,
   StandardSchemaContractError,
+  type JsonValue,
   type QualityException,
   type StandardSchemaV1,
   writeTranslationRequests,
@@ -440,7 +441,7 @@ void test("QA 例外保留术语发现，宿主条件控制语义编辑", async 
       key: sourceUnit.key,
       unit: sourceUnit.unit,
       content: sourceUnit.unit.source,
-      range: sourceScope.range,
+      range: sourceScope.range as JsonValue,
     },
     expectedTarget: {
       status: "present",

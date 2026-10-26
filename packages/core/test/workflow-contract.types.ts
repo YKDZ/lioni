@@ -147,7 +147,7 @@ const config = defineConfig<
 const frameworkConfig: FrameworkConfig<Unit, Translation, Body> = config;
 void frameworkConfig;
 
-const typedPlan: UpdatePlan<Unit, Translation, Body> | undefined = undefined;
+declare const typedPlan: UpdatePlan<Unit, Translation, Body>;
 void typedPlan;
 
 const invalidCandidate: SemanticEditCandidate<Body> = {

@@ -115,5 +115,5 @@ void policy;
 void request;
 
 type StringPlan = UpdatePlan<TranslationUnitInput, unknown, string>;
-const planType: StringPlan | undefined = undefined;
+declare const planType: StringPlan;
 void planType;
