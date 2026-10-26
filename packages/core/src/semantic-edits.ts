@@ -620,11 +620,6 @@ async function prepareWrite<
       sourceUnit = findSourceUnit(current, request.target.sourceKey);
       if (sourceUnit === undefined)
         return sourceAbsenceResult(current, request.target.sourceKey);
-      if (sourceUnit.bodyAvailability !== "available")
-        return {
-          status: "notWritable",
-          reason: "新建目标对应的当前原文正文不可用。",
-        };
       const targetAbsence = checkSourceTargetMissing(
         current,
         sourceUnit,
@@ -957,11 +952,7 @@ function confirmsWrite<
   const adapter = config.translations;
   if (adapter?.matches === undefined) return false;
   const currentSource = findSourceUnit(after, sourceTarget.sourceKey);
-  if (
-    currentSource === undefined ||
-    currentSource.bodyAvailability !== "available"
-  )
-    return false;
+  if (currentSource === undefined) return false;
   const languageRead = after.translations.reads.find(
     ({ language }) => language === sourceTarget.language,
   );
