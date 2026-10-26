@@ -199,4 +199,55 @@ void describe("默认 YAML 术语库", () => {
         error.issues.some((issue) => issue.code === "invalid-expressions"),
     );
   });
+
+  void it("拒绝非文本映射键且接受文本数字概念身份", () => {
+    assert.throws(
+      () =>
+        parseTermbaseYaml({
+          concepts: [
+            "concepts:",
+            "  1:",
+            "    note: first",
+            '  "1":',
+            "    note: second",
+            "",
+          ].join("\n"),
+          languages: {
+            en: [
+              "concepts:",
+              '  "1":',
+              "    expressions:",
+              "      - id: numeric-en",
+              "        text: Numeric",
+              "        usage: preferred",
+              "",
+            ].join("\n"),
+          },
+        }),
+      (error) =>
+        error instanceof TermbaseYamlError &&
+        error.stage === "parse" &&
+        error.issues.some((issue) => issue.code === "non-string-key"),
+    );
+
+    const parsed = parseTermbaseYaml({
+      concepts: ["concepts:", '  "1":', "    note: retained", ""].join("\n"),
+      languages: {
+        en: [
+          "concepts:",
+          '  "1":',
+          "    expressions:",
+          "      - id: numeric-en",
+          "        text: Numeric",
+          "        usage: preferred",
+          "",
+        ].join("\n"),
+      },
+    });
+    const termbase = assembleTermbaseYaml(parsed);
+
+    assert.equal(termbase.concepts.length, 1);
+    assert.equal(termbase.getConcept("1")?.id, "1");
+    assert.equal(termbase.getConcept("1")?.note, "retained");
+  });
 });
