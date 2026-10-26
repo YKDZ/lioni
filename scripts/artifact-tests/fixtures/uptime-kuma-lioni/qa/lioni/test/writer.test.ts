@@ -22,6 +22,13 @@ import {
 import { createKumaAdapter, loadKumaCatalog } from "../adapter.ts";
 import type { Body } from "../model.ts";
 
+const identity = (key: string): TranslationIdentity => ({
+  language: "zh-CN",
+  namespace: "src/lang/zh-CN.json",
+  key,
+});
+const body = (text: string): Body => ({ text });
+
 void test("官方写入契约编辑真实 JSON 并保留目标独有条目", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "kuma-json-writer-"));
   const languageRoot = path.join(root, "src", "lang");
@@ -50,18 +57,12 @@ void test("官方写入契约编辑真实 JSON 并保留目标独有条目", asy
         catalog,
       }),
     });
-    const identity = (key: string): TranslationIdentity => ({
-      language: "zh-CN",
-      namespace: "src/lang/zh-CN.json",
-      key,
-    });
-    const body = (text: string): Body => ({ text });
     const expectedTarget = (
       key: string,
       text: string,
     ): Extract<
       TranslationWriteRequest<Body, { key: string; source: { text: string } }>,
-      { operation: "write" }
+      { operation: "delete" }
     >["expectedTarget"] => ({
       status: "present",
       identity: identity(key),
