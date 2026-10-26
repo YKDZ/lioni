@@ -60,6 +60,7 @@ export type UpdateTargetExpectation<TBody> =
       readonly identity: TranslationIdentity;
       readonly content: TBody;
       readonly range?: JsonValue;
+      readonly record?: JsonValue;
     };
 
 /** 供写入器直接消费的候选；不包含文件定位、准备阶段或策略门禁。 */
@@ -204,10 +205,7 @@ export type UpdatePlan<
     TBody,
     TUnavailable
   >;
-  readonly associations: {
-    readonly previous: readonly TranslationAssociationFact[];
-    readonly current: readonly TranslationAssociationFact[];
-  };
+  readonly associations: UpdatePlanAssociations;
   readonly items: readonly UpdatePlanItem<
     TUnit,
     TTranslation,
@@ -221,6 +219,8 @@ export type UpdatePlanData = UpdatePlan;
 export type UpdatePlanAssociations = {
   readonly previous: readonly TranslationAssociationFact[];
   readonly current: readonly TranslationAssociationFact[];
+  /** 把历史原文重新与当前目标匹配后的关系，用于确认删除依据仍成立。 */
+  readonly currentFromPrevious?: readonly TranslationAssociationFact[];
 };
 
 export type UpdatePlanInput<
@@ -508,7 +508,7 @@ export async function defaultUpdatePolicy<
     if ((currentOwners.get(translation.index)?.length ?? 0) > 0) continue;
     const change = translationChanges.get(identityKey(translation.identity));
     const previousRecord = input.previous?.translations.records.find(
-      ({ identity }) => isDeepStrictEqual(identity, translation.identity),
+      ({ identity }) => sameIdentity(identity, translation.identity),
     );
     const previousOwners =
       previousRecord === undefined
@@ -564,6 +564,29 @@ export async function defaultUpdatePolicy<
       }
 
       if (change?.status === "unchanged") {
+        const currentHistoricalAssociation =
+          input.associations.currentFromPrevious?.find(
+            ({ sourceKey, language }) =>
+              sourceKey === removedSource.source.key &&
+              language === translation.language,
+          );
+        if (
+          currentHistoricalAssociation?.status !== "matched" ||
+          !currentHistoricalAssociation.translationIndexes.includes(
+            translation.index,
+          )
+        ) {
+          const associationChanged =
+            currentHistoricalAssociation?.status === "missing";
+          items.push({
+            ...base,
+            action: associationChanged ? "retain" : "review",
+            reason: associationChanged
+              ? "目标已不再匹配被移除的历史原文；保留现有译文。"
+              : "当前目标与历史原文的关联依据不足或有冲突；保留并复核。",
+          });
+          continue;
+        }
         const previousRange =
           input.previous?.source.read.scopes[removedSource.source.scopeIndex]
             ?.range;
@@ -595,6 +618,7 @@ export async function defaultUpdatePolicy<
               identity: translation.identity,
               content: translation.content,
               range: translation.range as JsonValue,
+              record: translation.translation as JsonValue,
             },
           },
           reason:
@@ -690,6 +714,15 @@ export async function previewUpdate<
             config,
           ),
     current: current.associations,
+    currentFromPrevious:
+      previous === undefined
+        ? []
+        : associatePreviousSourcesWithCurrentTargets<
+            TUnit,
+            TTranslation,
+            TBody,
+            TUnavailable
+          >(previous, current, config),
   };
   return createUpdatePlan<TUnit, TTranslation, TBody, TUnavailable>({
     ...(previous === undefined ? {} : { previous }),
@@ -817,6 +850,56 @@ function associateSnapshot<
   return associations;
 }
 
+function associatePreviousSourcesWithCurrentTargets<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  previous: ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
+  current: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+): TranslationAssociationFact[] {
+  const matches = config.translations?.matches;
+  if (matches === undefined) return [];
+
+  const associations: TranslationAssociationFact[] = [];
+  for (const languageRead of current.translations.reads) {
+    const coverageStatus = readStatus(languageRead.scopes, languageRead.error);
+    for (const sourceUnit of previous.source.units) {
+      const matchingRecords = current.translations.records.filter(
+        (record) =>
+          record.language === languageRead.language &&
+          matches(sourceUnit.unit, record.translation),
+      );
+      const translationIndexes = matchingRecords.map(({ index }) => index);
+      const status =
+        translationIndexes.length > 1
+          ? "conflict"
+          : translationIndexes.length === 0
+            ? coverageStatus === "complete"
+              ? "missing"
+              : "unknown"
+            : coverageStatus !== "complete"
+              ? "unknown"
+              : matchingRecords[0]?.bodyAvailability === "available"
+                ? "matched"
+                : "unavailable";
+      associations.push({
+        sourceKey: sourceUnit.key,
+        language: languageRead.language,
+        status,
+        coverageStatus,
+        scopeIndexes: [
+          ...new Set(matchingRecords.map(({ scopeIndex }) => scopeIndex)),
+        ],
+        translationIndexes,
+      });
+    }
+  }
+  return associations;
+}
+
 function sourceDecisionChanges<
   TUnit extends TranslationUnitInput,
   TTranslation,
@@ -905,7 +988,14 @@ function readStatus(
 }
 
 function identityKey(identity: TranslationIdentity): string {
-  return JSON.stringify(identity);
+  return JSON.stringify([identity.language, identity.namespace, identity.key]);
+}
+
+function sameIdentity(
+  left: TranslationIdentity,
+  right: TranslationIdentity,
+): boolean {
+  return identityKey(left) === identityKey(right);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -943,7 +1033,10 @@ function isPlanAssociations(value: unknown): boolean {
     Array.isArray(value.previous) &&
     value.previous.every(isAssociation) &&
     Array.isArray(value.current) &&
-    value.current.every(isAssociation)
+    value.current.every(isAssociation) &&
+    (value.currentFromPrevious === undefined ||
+      (Array.isArray(value.currentFromPrevious) &&
+        value.currentFromPrevious.every(isAssociation)))
   );
 }
 
@@ -1007,7 +1100,7 @@ function isWriteRequest(
   return (
     isIdentity(value.target.identity) &&
     value.expectedTarget.status === "present" &&
-    isDeepStrictEqual(value.target.identity, value.expectedTarget.identity)
+    sameIdentity(value.target.identity, value.expectedTarget.identity)
   );
 }
 
@@ -1022,7 +1115,7 @@ function isDeleteRequest(
     isRecord(value.expectedTarget) &&
     value.expectedTarget.status === "present" &&
     isIdentity(value.expectedTarget.identity) &&
-    isDeepStrictEqual(value.target.identity, value.expectedTarget.identity) &&
+    sameIdentity(value.target.identity, value.expectedTarget.identity) &&
     (value.expectedSource === undefined ||
       isSourceExpectation(value.expectedSource))
   );
