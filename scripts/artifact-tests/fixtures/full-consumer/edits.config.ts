@@ -202,11 +202,10 @@ export default defineConfig({
         locator: { file: "locales/" + language + ".json", key },
       };
     },
-    dependencies: ({ sourceUnit }) => ({
-      screenshot: sourceUnit.unit.context.screenshot,
-    }),
-    write({ edit, sourceUnit, target, currentTranslation }) {
+    write({ request, sourceUnit, target, currentTranslation }) {
       const catalogue = readCatalogue();
+      if (request.operation !== "write" || typeof request.content !== "string")
+        throw new Error("编辑宿主只接受字符串译文写入请求。");
       if (target.kind === "existing") {
         if (currentTranslation?.translation.context.writeFailure)
           throw new Error("宿主资源拒绝保存该译文。");
@@ -218,16 +217,14 @@ export default defineConfig({
             item.context.resourceKey === locator.key,
         );
         if (record === undefined) throw new Error("实际译文定位已失效。");
-        if (typeof edit.content !== "string")
-          throw new Error("该宿主只接受字符串译文。");
-        record.text = edit.content;
+        record.text = request.content;
       } else {
-        if (typeof edit.content !== "string")
-          throw new Error("该宿主只接受字符串译文。");
+        if (sourceUnit === undefined)
+          throw new Error("新建目标需要明确的原文单元。");
         const locator = target.locator as { file: string; key: string };
         catalogue.records.push({
           targetId: locator.key,
-          text: edit.content,
+          text: request.content,
           context: {
             file: locator.file,
             resourceKey: locator.key,

@@ -24,7 +24,12 @@ import type {
   StandardSchemaV1,
 } from "./index.ts";
 import { readFacts, validateFrameworkConfig } from "./index.ts";
-import type { JsonValue } from "./semantic-edits.ts";
+import type {
+  JsonValue,
+  TranslationWriteRequest,
+  TranslationWriteSourceExpectation,
+  TranslationWriteTargetExpectation,
+} from "./semantic-edits.ts";
 import {
   assertJsonValue,
   validateWithStandardSchema,
@@ -40,49 +45,16 @@ export type UpdatePlanAction =
   | "blocked";
 
 export type UpdateSourceExpectation<TUnit extends TranslationUnitInput> =
-  | {
-      readonly presence: "present";
-      readonly key: string;
-      readonly unit: TUnit;
-      readonly content: JsonValue;
-      readonly range: JsonValue;
-    }
-  | {
-      readonly presence: "absent";
-      readonly key: string;
-      readonly range: JsonValue;
-    };
+  TranslationWriteSourceExpectation<TUnit>;
 
 export type UpdateTargetExpectation<TBody> =
-  | { readonly status: "missing" }
-  | {
-      readonly status: "present";
-      readonly identity: TranslationIdentity;
-      readonly content: TBody;
-      readonly range?: JsonValue;
-      readonly record?: JsonValue;
-    };
+  TranslationWriteTargetExpectation<TBody>;
 
 /** 供写入器直接消费的候选；不包含文件定位、准备阶段或策略门禁。 */
-export type UpdatePlanWriteRequest<TUnit extends TranslationUnitInput, TBody> =
-  | {
-      readonly operation: "write";
-      readonly target:
-        | { readonly sourceKey: string; readonly language: string }
-        | { readonly identity: TranslationIdentity };
-      readonly content: TBody;
-      readonly expectedSource?: UpdateSourceExpectation<TUnit>;
-      readonly expectedTarget: UpdateTargetExpectation<TBody>;
-    }
-  | {
-      readonly operation: "delete";
-      readonly target: { readonly identity: TranslationIdentity };
-      readonly expectedSource?: UpdateSourceExpectation<TUnit>;
-      readonly expectedTarget: Extract<
-        UpdateTargetExpectation<TBody>,
-        { readonly status: "present" }
-      >;
-    };
+export type UpdatePlanWriteRequest<
+  TUnit extends TranslationUnitInput,
+  TBody,
+> = TranslationWriteRequest<TBody, TUnit>;
 
 export type UpdatePlanSourceChange<TUnit extends TranslationUnitInput> = {
   readonly key: string;
@@ -1143,7 +1115,9 @@ function isTargetExpectation(
     (value.status === "missing" ||
       (value.status === "present" &&
         isIdentity(value.identity) &&
-        Object.hasOwn(value, "content")))
+        Object.hasOwn(value, "content") &&
+        (!Object.hasOwn(value, "range") || value.range !== undefined) &&
+        (!Object.hasOwn(value, "record") || value.record !== undefined)))
   );
 }
 

@@ -10,7 +10,6 @@ import {
 import {
   analyzeQuality,
   defineConfig,
-  prepareQualityConditionedSemanticEdit,
   QualityCheckBindingError,
 } from "../src/index.ts";
 import { defineTestQualityCheck } from "./quality-check-fixture.ts";
@@ -122,7 +121,7 @@ void test("调用方范围可以跨运行复用，core 不取得关闭权", asyn
   memo.dispose();
 });
 
-void test("条件写入沿用正式 QA 共享范围并在返回后关闭自有范围", async () => {
+void test("显式候选沿用正式 QA 共享范围并在返回后关闭自有范围", async () => {
   let calls = 0;
   const observed: MemoScope[] = [];
   const operation = (text: string) => ({ text, ordinal: ++calls });
@@ -136,58 +135,12 @@ void test("条件写入沿用正式 QA 共享范围并在返回后关闭自有�
     content: "保存",
   };
 
-  const result = await prepareQualityConditionedSemanticEdit(config, {
-    candidate,
-    condition: (quality) => quality.status === "complete",
-  });
+  const result = await analyzeQuality(config, { candidates: [candidate] });
 
-  assert.equal(result.status, "passed");
+  assert.equal(result.status, "complete");
   assert.equal(calls, 1);
   assert.equal(observed[0], observed[1]);
   assert.throws(() => observed[0]!.memo(operation), MemoScopeClosedError);
-});
-
-void test("条件回调抛错后自有范围已关闭且借入范围仍可复用", async () => {
-  const reason = new Error("宿主条件失败");
-  const observed: MemoScope[] = [];
-  let calls = 0;
-  const operation = () => ++calls;
-  const config = configFor((memo) => {
-    observed.push(memo);
-    memo.memo(operation)();
-  });
-  const candidate = {
-    sourceKey: "save",
-    language: "zh-CN",
-    content: "保存",
-  };
-
-  await assert.rejects(
-    prepareQualityConditionedSemanticEdit(config, {
-      candidate,
-      condition: () => {
-        throw reason;
-      },
-    }),
-    (error) => error === reason,
-  );
-  assert.ok(observed[0]);
-  assert.throws(() => observed[0]!.memo(operation), MemoScopeClosedError);
-
-  const memo = createMemoScope();
-  await assert.rejects(
-    prepareQualityConditionedSemanticEdit(config, {
-      candidate,
-      memo,
-      condition: () => {
-        throw reason;
-      },
-    }),
-    (error) => error === reason,
-  );
-  assert.equal(memo.memo(operation)(), 2);
-  assert.equal(calls, 2);
-  memo.dispose();
 });
 
 void test("检查失败和绑定异常均释放自有范围，借用范围仍归宿主管理", async () => {

@@ -3,12 +3,13 @@ import { test } from "node:test";
 
 import {
   analyzeQuality,
-  applySemanticEdits,
   defineConfig,
-  prepareQualityConditionedSemanticEdit,
+  readFacts,
   StandardSchemaContractError,
   type QualityException,
   type StandardSchemaV1,
+  writeTranslationRequests,
+  type TranslationWriteRequest,
 } from "@lioni/core";
 import {
   compileTerms,
@@ -300,8 +301,8 @@ function createScenario(
         status: "notWritable",
         reason: "本场景仅修改已有译文。",
       }),
-      write: ({ edit }) => {
-        if (edit.operation === "write") storedBody = edit.content;
+      write: ({ request }) => {
+        if (request.operation === "write") storedBody = request.content;
       },
     },
     createQualityRequest: () => ({
@@ -413,17 +414,53 @@ void test("QA 例外保留术语发现，宿主条件控制语义编辑", async 
     language: "zh",
     content: { visible: "作业区", hidden: "工作区" },
   };
-  const rejected = await prepareQualityConditionedSemanticEdit(
-    scenario.config,
-    {
-      candidate,
-      condition: (quality) => quality.diagnostics.length === 0,
+  const facts = await readFacts(scenario.config);
+  const sourceUnit = facts.source.units.find(({ key }) => key === "workspace");
+  const sourceScope =
+    sourceUnit === undefined
+      ? undefined
+      : facts.source.read.scopes[sourceUnit.scopeIndex];
+  const translation = facts.translations.records[0];
+  assert.ok(sourceUnit);
+  assert.ok(sourceScope);
+  assert.ok(translation && translation.bodyAvailability === "available");
+  if (
+    sourceUnit === undefined ||
+    sourceScope === undefined ||
+    translation === undefined ||
+    translation.bodyAvailability !== "available"
+  )
+    return;
+  const request: TranslationWriteRequest<Body, Unit> = {
+    operation: "write",
+    target: { identity: translation.identity },
+    content: candidate.content,
+    expectedSource: {
+      presence: "present",
+      key: sourceUnit.key,
+      unit: sourceUnit.unit,
+      content: sourceUnit.unit.source,
+      range: sourceScope.range,
     },
+    expectedTarget: {
+      status: "present",
+      identity: translation.identity,
+      content: translation.content,
+      range: "locale.json",
+      record: translation.translation,
+    },
+  };
+  const rejectedQuality = await analyzeQuality(scenario.config, {
+    candidates: [candidate],
+  });
+  const rejected = await writeTranslationRequests(
+    [request],
+    scenario.config,
+    () => rejectedQuality.diagnostics.length === 0,
   );
-  assert.equal(rejected.status, "rejected");
-  if (rejected.status !== "rejected") return;
+  assert.equal(rejected.results[0]?.status, "conflict");
   assert.deepEqual(
-    rejected.quality.diagnostics.map((diagnostic) => [
+    rejectedQuality.diagnostics.map((diagnostic) => [
       diagnostic.object.code,
       diagnostic.handling.status,
     ]),
@@ -449,29 +486,25 @@ void test("QA 例外保留术语发现，宿主条件控制语义编辑", async 
       reason: "本地化审校接受此项候选。",
     },
   ]);
-  const passed = await prepareQualityConditionedSemanticEdit(scenario.config, {
-    candidate,
-    condition: (quality) =>
-      quality.diagnostics.length === 2 &&
-      quality.diagnostics.every(
-        (diagnostic) => diagnostic.handling.status === "excepted",
-      ),
+  const passedQuality = await analyzeQuality(scenario.config, {
+    candidates: [candidate],
   });
-  assert.equal(passed.status, "passed");
-  if (passed.status !== "passed") return;
   assert.deepEqual(
-    passed.quality.diagnostics.map((diagnostic) => diagnostic.object.code),
+    passedQuality.diagnostics.map((diagnostic) => diagnostic.object.code),
     ["missing-allowed-translation", "forbidden-translation"],
   );
   assert.deepEqual(
-    passed.quality.diagnostics.map((diagnostic) => diagnostic.handling.status),
+    passedQuality.diagnostics.map((diagnostic) => diagnostic.handling.status),
     ["excepted", "excepted"],
   );
-  assert.equal(passed.preparation.status, "prepared");
-  if (passed.preparation.status !== "prepared") return;
-  const applied = await applySemanticEdits(
-    [passed.preparation.edit],
+  const applied = await writeTranslationRequests(
+    [request],
     scenario.config,
+    () =>
+      passedQuality.diagnostics.length === 2 &&
+      passedQuality.diagnostics.every(
+        (diagnostic) => diagnostic.handling.status === "excepted",
+      ),
   );
   assert.equal(applied.results[0]?.status, "written");
   assert.equal(scenario.storedBody().visible, "作业区");

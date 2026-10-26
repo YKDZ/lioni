@@ -1,14 +1,15 @@
 import {
   defineConfig,
   validateUpdatePlan,
-  validateUpdatePlanHistory,
+  type FrameworkConfig,
+  type SemanticEditCandidate,
+  type StandardSchemaV1,
+  type TranslationUnitInput,
+  type TranslationWriteRequest,
+  type TranslationWritebackAdapter,
+  type UpdatePlan,
+  type UpdatePolicy,
 } from "../src/index.ts";
-import type {
-  SemanticEditCandidate,
-  StandardSchemaV1,
-  TranslationUnitInput,
-} from "../src/index.ts";
-import { fixtureTranslationIdentity } from "./source-schema.ts";
 
 type Unit = {
   readonly source: string;
@@ -25,19 +26,19 @@ type Body = {
   readonly state: "draft" | "reviewed";
 };
 
-declare const unknownPlan: unknown;
-validateUpdatePlan(unknownPlan);
-if (unknownPlan.items[0]?.decision.action === "candidate") {
-  // @ts-expect-error JSON结构校验不能恢复宿主正文类型。
-  const unvalidatedBody: Body = unknownPlan.items[0].decision.candidate.content;
-  void unvalidatedBody;
-}
-// @ts-expect-error 只有绑定配置契约的历史校验才能恢复业务类型。
-validateUpdatePlan<Unit, Translation, Body>(unknownPlan);
-
 declare const unitSchema: StandardSchemaV1<Unit, Unit>;
 declare const translationSchema: StandardSchemaV1<Translation, Translation>;
 declare const bodySchema: StandardSchemaV1<Body, Body>;
+declare const unknownPlan: unknown;
+
+validateUpdatePlan(unknownPlan);
+if (unknownPlan.items[0]?.action === "write") {
+  // @ts-expect-error JSON-only validation cannot restore the host body type.
+  const untypedBody: Body = unknownPlan.items[0].request.content;
+  void untypedBody;
+}
+// @ts-expect-error the saved-plan validator does not take host type parameters.
+validateUpdatePlan<Unit, Translation, Body>(unknownPlan);
 
 const candidate: SemanticEditCandidate<Body> = {
   sourceKey: "toolbar.save",
@@ -47,106 +48,114 @@ const candidate: SemanticEditCandidate<Body> = {
 const candidateBody: Body = candidate.content;
 void candidateBody;
 
-const config = defineConfig({
-  source: { schema: unitSchema, read: () => ({ scopes: [] }) },
-  keyOf: (unit) => unit.context.key,
-  translations: {
-    languages: ["fr"],
-    identityOf: fixtureTranslationIdentity,
-    schema: translationSchema,
-    contentSchema: bodySchema,
-    read: () => ({ scopes: [] }),
-    matches: () => true,
-    contentOf: (translation) => translation.body,
+const request: TranslationWriteRequest<Body, Unit> = {
+  operation: "write",
+  target: { sourceKey: "toolbar.save", language: "fr" },
+  content: { message: "Enregistrer", state: "draft" },
+  expectedSource: {
+    presence: "present",
+    key: "toolbar.save",
+    range: "messages.json",
+    unit: { source: "Save", context: { key: "toolbar.save" } },
+    content: "Save",
   },
-  translationWriteback: {
-    locateExistingTarget: ({ translation }) => ({
-      status: "located",
-      locator: translation.translation.id,
-    }),
-    locateNewTarget: () => ({ status: "located", locator: "new-save" }),
-    write({ edit, currentTranslation }) {
-      if (edit.operation === "write") {
-        const body: Body = edit.content;
-        const message: string = edit.content.message;
-        void body;
-        void message;
-        if (edit.expected.target.status === "present") {
-          const previousBody: Body = edit.expected.target.content;
-          void previousBody;
-        }
-      }
-      if (currentTranslation?.bodyAvailability === "available") {
-        const actualBody: Body = currentTranslation.content;
-        void actualBody;
-      }
-    },
-  },
-  updatePolicy(input) {
-    const previousSource: string | undefined = input.previous?.source.value;
-    const currentSource: string | undefined = input.expectedInput?.source.value;
-    void previousSource;
-    void currentSource;
-    // @ts-expect-error 历史原文正文应保留原文 schema 的字符串类型。
-    const invalidPreviousSource: number | undefined =
-      input.previous?.source.value;
-    void invalidPreviousSource;
-    return {
-      action: "candidate",
-      candidate: {
-        sourceKey: "toolbar.save",
-        language: "fr",
-        content: { message: "Enregistrer", state: "reviewed" as const },
-      },
-    };
-  },
-});
+  expectedTarget: { status: "missing" },
+};
+void request;
 
-void validateUpdatePlanHistory(unknownPlan, config).then((validatedPlan) => {
-  const item = validatedPlan.items[0];
-  if (item?.decision.action !== "candidate") return;
-  const validatedBody: Body = item.decision.candidate.content;
-  void validatedBody;
-});
+const policy: UpdatePolicy<Unit, Translation, Body> = (input) => {
+  const previousSource: string | undefined =
+    input.previous?.source.units[0]?.unit.source;
+  const currentSource: string | undefined =
+    input.current.source.units[0]?.unit.source;
+  void previousSource;
+  void currentSource;
+  // @ts-expect-error the policy sees source records validated by the source schema.
+  const invalidSource: number | undefined =
+    input.current.source.units[0]?.unit.source;
+  void invalidSource;
 
-const configuredBody: Body = config.translations!.contentOf({
-  id: "save",
-  body: { message: "Enregistrer", state: "reviewed" },
-});
-void configuredBody;
-
-defineConfig({
-  source: { schema: unitSchema, read: () => ({ scopes: [] }) },
-  keyOf: (unit) => unit.context.key,
-  translations: {
-    languages: ["fr"],
-    identityOf: fixtureTranslationIdentity,
-    schema: translationSchema,
-    contentSchema: bodySchema,
-    read: () => ({ scopes: [] }),
-    matches: () => true,
-    contentOf: (translation) => translation.body,
-  },
-  // @ts-expect-error 更新策略候选正文必须符合 contentSchema。
-  updatePolicy: () => ({
-    action: "candidate",
-    candidate: {
-      sourceKey: "toolbar.save",
+  return [
+    {
+      action: "write",
       language: "fr",
-      content: {
-        message: "Enregistrer",
-        state: "accepted" as const,
+      changes: { translations: [] },
+      reason: "将原文投影为待译候选。",
+      after: { content: { message: "Enregistrer", state: "reviewed" } },
+      request: {
+        operation: "write",
+        target: { sourceKey: "toolbar.save", language: "fr" },
+        content: { message: "Enregistrer", state: "reviewed" },
+        expectedTarget: { status: "missing" },
       },
     },
+  ];
+};
+
+const writeback: TranslationWritebackAdapter<Unit, Translation, Body> = {
+  locateExistingTarget: ({ translation }) => ({
+    status: "located",
+    locator: translation.translation.id,
   }),
+  locateNewTarget: ({ sourceKey }) => ({
+    status: "located",
+    locator: sourceKey,
+  }),
+  write({ request: writeRequest, currentTranslation }) {
+    if (writeRequest.operation === "write") {
+      const body: Body = writeRequest.content;
+      const targetBody: Body | undefined =
+        writeRequest.expectedTarget.status === "present"
+          ? writeRequest.expectedTarget.content
+          : undefined;
+      void body;
+      void targetBody;
+    }
+    if (currentTranslation?.bodyAvailability === "available") {
+      const actualBody: Body = currentTranslation.content;
+      void actualBody;
+    }
+  },
+};
+
+const config = defineConfig<
+  Unit,
+  typeof unitSchema,
+  typeof translationSchema,
+  never,
+  typeof bodySchema
+>({
+  source: { schema: unitSchema, read: () => ({ scopes: [] }) },
+  keyOf: (unit) => unit.context.key,
+  sourceToContent: (source) => ({ message: source, state: "draft" }),
+  translations: {
+    languages: ["fr"],
+    identityOf: (translation) => ({
+      namespace: "fixture",
+      key: translation.id,
+    }),
+    schema: translationSchema,
+    contentSchema: bodySchema,
+    contentOf: (translation) => translation.body,
+    read: () => ({ scopes: [] }),
+    matches: (unit, translation) => unit.context.key === translation.id,
+  },
+  translationWriteback: writeback,
+  updatePolicy: policy,
 });
+
+const frameworkConfig: FrameworkConfig<Unit, Translation, Body> = config;
+void frameworkConfig;
+
+const typedPlan: UpdatePlan<Unit, Translation, Body> | undefined = undefined;
+void typedPlan;
 
 const invalidCandidate: SemanticEditCandidate<Body> = {
   sourceKey: "toolbar.save",
   language: "fr",
   content: {
     message: "Enregistrer",
-    // @ts-expect-error 声明的正文只允许这两种状态。
+    // @ts-expect-error the declared body contract only permits these states.
     state: "accepted",
   },
 };

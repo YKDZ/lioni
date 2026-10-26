@@ -1,13 +1,19 @@
 import { isDeepStrictEqual } from "node:util";
 
-import { readComparisonSnapshot, TranslationIdentityContractError } from "./index.ts";
+import {
+  readComparisonSnapshot,
+  readSourceFacts,
+  TranslationIdentityContractError,
+} from "./index.ts";
 import type {
   ActualTranslationFact,
   Awaitable,
   ComparisonSnapshot,
   FrameworkConfig,
+  SourceFacts,
   SourceUnitFact,
   TranslationIdentity,
+  TranslationReadFact,
   TranslationUnitInput,
 } from "./index.ts";
 import {
@@ -18,6 +24,7 @@ import {
 } from "./standard-schema.ts";
 import type { JsonValue } from "./standard-schema.ts";
 import type { StandardSchemaV1 } from "./standard-schema.ts";
+import { readTranslationFacts } from "./translation-snapshot.ts";
 
 export type { JsonValue } from "./standard-schema.ts";
 
@@ -52,6 +59,8 @@ export type TranslationWriteTargetExpectation<TBody = JsonValue> =
       readonly identity: TranslationIdentity;
       readonly content: TBody;
       readonly range?: JsonValue;
+      /** 可选地锁定宿主原始目标记录中的关联字段等写入依据。 */
+      readonly record?: JsonValue;
     };
 
 export type TranslationWriteRequest<
@@ -200,6 +209,23 @@ type PreparedWrite<
     TBody,
     TUnavailable
   >;
+};
+
+type WriteSnapshot<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+> = {
+  readonly source?: SourceFacts<TUnit>;
+  readonly translations: {
+    readonly reads: readonly TranslationReadFact[];
+    readonly records: readonly ActualTranslationFact<
+      TTranslation,
+      TBody,
+      TUnavailable
+    >[];
+  };
 };
 
 /** 校验候选正文数据；是否检查或写入由调用者另外组合。 */
@@ -353,9 +379,19 @@ export async function writeTranslationRequests<
       "附加写入条件必须是函数。",
     );
 
-  let current: ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>;
+  const needsSource =
+    condition !== undefined ||
+    validated.some(
+      ({ expectedSource, target }) =>
+        expectedSource !== undefined || "sourceKey" in target,
+    );
+  const readCurrent = () =>
+    condition === undefined
+      ? readWriteSnapshot(config, needsSource)
+      : readComparisonSnapshot(config);
+  let current: WriteSnapshot<TUnit, TTranslation, TBody, TUnavailable>;
   try {
-    current = await readComparisonSnapshot(config);
+    current = await readCurrent();
   } catch (error) {
     rethrowContractError(error);
     const reason = `读取当前事实失败：${errorMessage(error)}`;
@@ -394,7 +430,12 @@ export async function writeTranslationRequests<
       try {
         decision = await condition({
           request,
-          current,
+          current: current as ComparisonSnapshot<
+            TUnit,
+            TTranslation,
+            TBody,
+            TUnavailable
+          >,
           target: resolved.target,
           ...(resolved.sourceUnit === undefined
             ? {}
@@ -424,7 +465,7 @@ export async function writeTranslationRequests<
         decision === true ||
         (isRecord(decision) && decision.status === "allowed")
       ) {
-        // Allowed; continue to the preflight batch.
+        // 允许；继续处理已完成预检的批次。
       } else if (
         isRecord(decision) &&
         decision.status === "rejected" &&
@@ -485,9 +526,9 @@ export async function writeTranslationRequests<
       continue;
     }
 
-    let after: ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>;
+    let after: WriteSnapshot<TUnit, TTranslation, TBody, TUnavailable>;
     try {
-      after = await readComparisonSnapshot(config);
+      after = await readCurrent();
     } catch (error) {
       rethrowContractError(error);
       const reason = `写入已返回成功，但回读失败：${errorMessage(error)}`;
@@ -501,9 +542,8 @@ export async function writeTranslationRequests<
       continue;
     }
 
-    const confirmed = confirmsWrite(first, after, config);
     for (const item of group) {
-      results[item.index] = confirmed
+      results[item.index] = confirmsWrite(item, after, config)
         ? { request: item.request, status: "written" }
         : {
             request: item.request,
@@ -525,6 +565,26 @@ export async function writeTranslationRequests<
         );
       return { request, status: "notWritable", reason: "写入项未处理。" };
     }),
+  };
+}
+
+async function readWriteSnapshot<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+  includeSource: boolean,
+): Promise<WriteSnapshot<TUnit, TTranslation, TBody, TUnavailable>> {
+  const source = includeSource ? await readSourceFacts(config) : undefined;
+  const translations = await readTranslationFacts(
+    config.translations,
+    source?.units ?? [],
+  );
+  return {
+    ...(source === undefined ? {} : { source }),
+    translations,
   };
 }
 
@@ -550,7 +610,7 @@ async function prepareWrite<
 >(
   index: number,
   request: TranslationWriteRequest<TBody, TUnit>,
-  current: ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
+  current: WriteSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
 ): Promise<PreparedWriteResolution<TUnit, TTranslation, TBody, TUnavailable>> {
   const sourceCheck = checkExpectedSource(request, current);
@@ -642,6 +702,14 @@ async function prepareWrite<
         !isDeepStrictEqual(currentTranslation.range, request.expectedTarget.range)
       )
         return { status: "conflict", reason: "目标译文所在范围已变化。" };
+      if (
+        request.expectedTarget.record !== undefined &&
+        !isDeepStrictEqual(
+          currentTranslation.translation,
+          request.expectedTarget.record,
+        )
+      )
+        return { status: "conflict", reason: "目标译文记录已变化。" };
       if (adapter.locateExistingTarget === undefined)
         return {
           status: "notWritable",
@@ -715,12 +783,14 @@ function checkExpectedSource<
   TUnavailable,
 >(
   request: TranslationWriteRequest<TBody, TUnit>,
-  current: ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
+  current: WriteSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
 ):
   | { readonly status: "ready"; readonly sourceUnit?: SourceUnitFact<TUnit> }
   | { readonly status: "conflict" | "notWritable"; readonly reason: string } {
   const expectation = request.expectedSource;
   if (expectation === undefined) return { status: "ready" };
+  if (current.source === undefined)
+    return { status: "notWritable", reason: "本次写入没有读取原文依据。" };
   if (expectation.presence === "present") {
     const sourceUnit = findSourceUnit(current, expectation.key);
     if (sourceUnit === undefined) {
@@ -756,7 +826,7 @@ function checkSourceTargetMissing<
   TBody,
   TUnavailable,
 >(
-  current: ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
+  current: WriteSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
   sourceUnit: SourceUnitFact<TUnit>,
   language: string,
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
@@ -845,7 +915,7 @@ function confirmsWrite<
   TUnavailable,
 >(
   prepared: PreparedWrite<TUnit, TTranslation, TBody, TUnavailable>,
-  after: ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
+  after: WriteSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
 ): boolean {
   const { request } = prepared;
@@ -940,7 +1010,11 @@ async function validateExpectedTarget<TBody>(
   }
   if (value.status !== "present")
     invalidWriteRequest("expectedTarget.status 必须为 missing 或 present。");
-  assertOnlyKeys(value, ["status", "identity", "content", "range"], "expectedTarget");
+  assertOnlyKeys(
+    value,
+    ["status", "identity", "content", "range", "record"],
+    "expectedTarget",
+  );
   const identity = validateIdentity(value.identity);
   const validatedContent = await validateWithStandardSchema(
     contentSchema,
@@ -957,6 +1031,9 @@ async function validateExpectedTarget<TBody>(
     content,
     ...(Object.hasOwn(value, "range")
       ? { range: snapshotJson(value.range, "预期译文范围") }
+      : {}),
+    ...(Object.hasOwn(value, "record")
+      ? { record: snapshotJson(value.record, "预期译文记录") }
       : {}),
   };
 }
@@ -1031,10 +1108,10 @@ function findSourceUnit<
   TBody,
   TUnavailable,
 >(
-  current: ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
+  current: WriteSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
   key: string,
 ): SourceUnitFact<TUnit> | undefined {
-  return current.source.units.find((unit) => unit.key === key);
+  return current.source?.units.find((unit) => unit.key === key);
 }
 
 function findTranslationByIdentity<
@@ -1043,7 +1120,7 @@ function findTranslationByIdentity<
   TBody,
   TUnavailable,
 >(
-  current: ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
+  current: WriteSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
   identity: TranslationIdentity,
 ): ActualTranslationFact<TTranslation, TBody, TUnavailable> | undefined {
   return current.translations.records.find((translation) =>
@@ -1057,10 +1134,10 @@ function sourceAbsenceResult<
   TBody,
   TUnavailable,
 >(
-  current: ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
+  current: WriteSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
   key: string,
 ): { readonly status: "conflict" | "notWritable"; readonly reason: string } {
-  return current.source.read.status === "complete"
+  return current.source?.read.status === "complete"
     ? { status: "conflict", reason: `原文 ${key} 已不存在。` }
     : {
         status: "notWritable",
@@ -1074,10 +1151,12 @@ function isSourceRangeComplete<
   TBody,
   TUnavailable,
 >(
-  current: ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
+  current: WriteSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
   range: JsonValue,
 ): boolean {
-  const scopes = current.source.read.scopes.filter(({ range: currentRange }) =>
+  const source = current.source;
+  if (source === undefined) return false;
+  const scopes = source.read.scopes.filter(({ range: currentRange }) =>
     isDeepStrictEqual(currentRange, range),
   );
   return (
@@ -1092,7 +1171,7 @@ function isTranslationReadComplete<
   TBody,
   TUnavailable,
 >(
-  current: ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
+  current: WriteSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
   language: string,
 ): boolean {
   const read = current.translations.reads.find(
@@ -1112,7 +1191,7 @@ function isTranslationRangeComplete<
   TBody,
   TUnavailable,
 >(
-  current: ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
+  current: WriteSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
   language: string,
   range: unknown,
 ): boolean {

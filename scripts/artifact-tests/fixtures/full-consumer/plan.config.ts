@@ -1,10 +1,15 @@
 import { readFile, writeFile } from "node:fs/promises";
 
-import { defineConfig } from "@lioni/core";
+import {
+  defineConfig,
+  type JsonValue,
+  type UpdatePlanItem,
+  type UpdatePolicy,
+} from "@lioni/core";
 
 import { isRecord, standardSchema } from "./schemas.ts";
 
-type Unit = {
+export type Unit = {
   readonly id: string;
   readonly source: string;
   readonly context: {
@@ -13,7 +18,7 @@ type Unit = {
     readonly screenshot: string;
   };
 };
-type Translation = { readonly id: string; text: string };
+export type Translation = { readonly id: string; text: string };
 const sourceSchema = standardSchema<Unit>(
   (value): value is Unit =>
     isRecord(value) &&
@@ -35,6 +40,73 @@ const contentSchema = standardSchema<string>(
 );
 export const callbackCounts = { matches: 0, policy: 0, locate: 0, write: 0 };
 
+const updatePolicy: UpdatePolicy<Unit, Translation, string> = ({
+  current,
+  comparisons,
+  associations,
+}) => {
+  callbackCounts.policy += 1;
+  const items: UpdatePlanItem<Unit, Translation, string>[] = [];
+  for (const change of comparisons.sourceChanges) {
+    if (change.status !== "modified" || change.current === undefined) continue;
+    const sourceUnit = current.source.units.find(
+      ({ key }) => key === change.key,
+    );
+    const association = associations.current.find(
+      ({ sourceKey, language }) =>
+        sourceKey === change.key && language === "fr",
+    );
+    const translationIndex = association?.translationIndexes[0];
+    const translation = current.translations.records.find(
+      ({ index }) => index === translationIndex,
+    );
+    const range =
+      sourceUnit === undefined
+        ? undefined
+        : current.source.read.scopes[sourceUnit.scopeIndex]?.range;
+    if (
+      sourceUnit === undefined ||
+      range === undefined ||
+      association?.status !== "matched" ||
+      translation?.bodyAvailability !== "available"
+    )
+      continue;
+    const content = sourceUnit.unit.source;
+    items.push({
+      action: "write",
+      sourceKey: sourceUnit.key,
+      language: "fr",
+      target: translation.identity,
+      changes: {
+        source: change,
+        translations: [],
+      },
+      reason: "将当前原文写入已定位的目标译文。",
+      after: { content },
+      request: {
+        operation: "write",
+        target: { identity: translation.identity },
+        content,
+        expectedSource: {
+          presence: "present",
+          key: sourceUnit.key,
+          unit: sourceUnit.unit,
+          content,
+          range: range as JsonValue,
+        },
+        expectedTarget: {
+          status: "present",
+          identity: translation.identity,
+          content: translation.content,
+          range: translation.range as JsonValue,
+          record: translation.translation,
+        },
+      },
+    });
+  }
+  return items;
+};
+
 export default defineConfig({
   source: {
     schema: sourceSchema,
@@ -52,7 +124,7 @@ export default defineConfig({
             enumeration: "complete",
             records: units.map((value) => ({
               value,
-              bodyAvailability: "available",
+              bodyAvailability: "available" as const,
             })),
           },
         ],
@@ -84,7 +156,7 @@ export default defineConfig({
             enumeration: "complete",
             records: translations.map((value) => ({
               value,
-              bodyAvailability: "available",
+              bodyAvailability: "available" as const,
             })),
           },
         ],
@@ -95,20 +167,7 @@ export default defineConfig({
       return unit.id === translation.id;
     },
   },
-  updatePolicy: ({ sourceKey, language, change, sourceUnit }) => {
-    callbackCounts.policy += 1;
-    return change === "changed"
-      ? {
-          action: "candidate",
-          candidate: {
-            sourceKey,
-            language,
-            content: sourceUnit?.source ?? "",
-          },
-          reason: "读取计划时生成的候选。",
-        }
-      : { action: "none", reason: "该项未由此计划处理。" };
-  },
+  updatePolicy,
   translationWriteback: {
     locateExistingTarget: ({ translation }) => {
       callbackCounts.locate += 1;
@@ -121,29 +180,25 @@ export default defineConfig({
       status: "notWritable",
       reason: "此消费场景只更新现有译文。",
     }),
-    dependencies: ({ sourceUnit }) => ({
-      screenshot: sourceUnit.unit.context.screenshot,
-    }),
-    async write({ edit, target }) {
+    async write({ request, target }) {
       callbackCounts.write += 1;
-      if (typeof edit.content !== "string")
-        throw new TypeError("候选译文必须是字符串。");
+      if (request.operation !== "write" || typeof request.content !== "string")
+        throw new TypeError("本消费场景只接收字符串译文写入请求。");
       const locator = target.locator;
       if (
         typeof locator !== "object" ||
         locator === null ||
         !("id" in locator) ||
         typeof locator.id !== "string"
-      ) {
+      )
         throw new TypeError("译文定位缺少实际记录身份。");
-      }
       const path = new URL("./update-plan-resources/fr.json", import.meta.url);
       const translations = JSON.parse(
         await readFile(path, "utf8"),
       ) as Translation[];
       const translation = translations.find(({ id }) => id === locator.id);
       if (translation === undefined) throw new Error("实际译文记录已不存在。");
-      translation.text = edit.content;
+      translation.text = request.content;
       await writeFile(path, JSON.stringify(translations), "utf8");
     },
   },

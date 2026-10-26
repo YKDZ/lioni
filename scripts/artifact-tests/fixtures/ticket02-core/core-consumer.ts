@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
 
 import {
-  applySemanticEdits,
   analyzeQuality,
   defineConfig,
   defineQualityCheck,
-  prepareQualityConditionedSemanticEdit,
+  readFacts,
+  writeTranslationRequests,
   type QualityCheckOutcome,
   type QualityObject,
   type StandardSchemaV1,
+  type TranslationWriteRequest,
 } from "@lioni/core";
 import {
   createMemoScope,
@@ -171,8 +172,8 @@ const config = defineConfig({
       status: "notWritable",
       reason: "本场景只修改已有译文。",
     }),
-    write: ({ edit }) => {
-      if (edit.operation === "write") storedText = edit.content;
+    write: ({ request }) => {
+      if (request.operation === "write") storedText = request.content;
     },
   },
   createQualityRequest: () => ({
@@ -200,12 +201,46 @@ const candidate = {
   language: "fr",
   content: "Sauver",
 };
+const facts = await readFacts(config);
+const sourceUnit = facts.source.units[0];
+const target = facts.translations.records[0];
+assert.ok(sourceUnit);
+assert.ok(target && target.bodyAvailability === "available");
+if (
+  sourceUnit === undefined ||
+  target === undefined ||
+  target.bodyAvailability !== "available"
+)
+  throw new Error("QA 消费场景缺少原文或目标译文。");
+const writeRequest: TranslationWriteRequest<string, Unit> = {
+  operation: "write",
+  target: { identity: target.identity },
+  content: candidate.content,
+  expectedSource: {
+    presence: "present",
+    key: sourceUnit.key,
+    unit: sourceUnit.unit,
+    content: sourceUnit.unit.source,
+    range: "messages.json",
+  },
+  expectedTarget: {
+    status: "present",
+    identity: target.identity,
+    content: target.content,
+    range: "fr.json",
+    record: target.translation,
+  },
+};
 const rejectedScopeStart = observedScopes.length;
-const rejected = await prepareQualityConditionedSemanticEdit(config, {
-  candidate,
-  condition: () => false,
+const rejectedQuality = await analyzeQuality(config, {
+  candidates: [candidate],
 });
-assert.equal(rejected.status, "rejected");
+const rejected = await writeTranslationRequests(
+  [writeRequest],
+  config,
+  () => rejectedQuality.status === "failed",
+);
+assert.equal(rejected.results[0]?.status, "conflict");
 assert.equal(calculations, 3);
 assert.equal(
   observedScopes[rejectedScopeStart],
@@ -218,11 +253,7 @@ assert.throws(
 assert.equal(storedText, "Enregistrer");
 
 const passedScopeStart = observedScopes.length;
-const passed = await prepareQualityConditionedSemanticEdit(config, {
-  candidate,
-  condition: (quality) => quality.status === "complete",
-});
-assert.equal(passed.status, "passed");
+const passedQuality = await analyzeQuality(config, { candidates: [candidate] });
 assert.equal(calculations, 4);
 assert.equal(
   observedScopes[passedScopeStart],
@@ -232,8 +263,10 @@ assert.throws(
   () => observedScopes[passedScopeStart]!.memo(operation),
   MemoScopeClosedError,
 );
-if (passed.status !== "passed" || passed.preparation.status !== "prepared")
-  throw new Error("QA 条件通过后应准备可写入的编辑。");
-const applied = await applySemanticEdits([passed.preparation.edit], config);
+const applied = await writeTranslationRequests(
+  [writeRequest],
+  config,
+  () => passedQuality.status === "complete",
+);
 assert.equal(applied.results[0]?.status, "written");
 assert.equal(storedText, "Sauver");

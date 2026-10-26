@@ -16,7 +16,7 @@ import {
 } from "./source-schema.ts";
 
 type Unit = { id: string; source: string };
-type Translation = { id: string; text: string };
+type Translation = { id: string; text: string; sourceId?: string };
 type WriteInput = Parameters<
   NonNullable<TranslationWritebackAdapter<Unit, Translation>["write"]>
 >[0];
@@ -126,6 +126,44 @@ void describe("translation write requests", () => {
     assert.equal(result.results[0]?.status, "written");
   });
 
+  void it("does not read or validate source data for an identity-only request", async () => {
+    const target: Translation = { id: "A", text: "Ancien" };
+    let writeCalls = 0;
+    let sourceReadCalls = 0;
+    const config = configFor({
+      translations: [target],
+      onWrite: ({ request }) => {
+        writeCalls += 1;
+        if (request.operation === "write") target.text = request.content as string;
+      },
+    });
+    const brokenSource = config.source as unknown as {
+      schema: unknown;
+      read: () => never;
+    };
+    brokenSource.read = () => {
+      sourceReadCalls += 1;
+      throw new Error("source adapter should not run");
+    };
+    brokenSource.schema = null;
+    const request: TranslationWriteRequest<JsonValue, Unit> = {
+      operation: "write",
+      target: { identity: identity("A") },
+      content: "Nouveau",
+      expectedTarget: {
+        status: "present",
+        identity: identity("A"),
+        content: "Ancien",
+      },
+    };
+
+    const result = await writeTranslationRequests([request], config);
+
+    assert.equal(sourceReadCalls, 0);
+    assert.equal(writeCalls, 1);
+    assert.equal(result.results[0]?.status, "written");
+  });
+
   void it("rejects an identity target whose expected content changed", async () => {
     const target: Translation = { id: "A", text: "Actuel" };
     let writeCalls = 0;
@@ -177,6 +215,34 @@ void describe("translation write requests", () => {
 
     assert.equal(writeCalls, 0);
     assert.equal(result.results[0]?.status, "conflict");
+  });
+
+  void it("rejects a saved target request when the original target record changed", async () => {
+    const target: Translation = { id: "A", text: "Actuel", sourceId: "B" };
+    let writeCalls = 0;
+    const config = configFor({
+      translations: [target],
+      onWrite: () => {
+        writeCalls += 1;
+      },
+    });
+    const request: TranslationWriteRequest<JsonValue, Unit> = {
+      operation: "delete",
+      target: { identity: identity("A") },
+      expectedTarget: {
+        status: "present",
+        identity: identity("A"),
+        content: "Actuel",
+        range: "fr.json",
+        record: { id: "A", text: "Actuel", sourceId: "A" },
+      },
+    };
+
+    const result = await writeTranslationRequests([request], config);
+
+    assert.equal(writeCalls, 0);
+    assert.equal(result.results[0]?.status, "conflict");
+    assert.match(result.results[0]?.reason ?? "", /记录已变化/);
   });
 
   void it("runs an explicitly composed condition before a valid write", async () => {
