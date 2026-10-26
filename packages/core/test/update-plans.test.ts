@@ -236,9 +236,48 @@ void describe("业务更新计划与预览", () => {
         },
         content: "Bienvenue",
         range: "locales/fr.json",
+        record: {
+          targetId: "target-welcome",
+          sourceId: "welcome",
+          text: "Bienvenue",
+        },
       },
     });
     assert.equal(item?.changes.source?.status, "removed");
+    const restored = JSON.parse(JSON.stringify(plan)) as unknown;
+    assert.doesNotThrow(() => validateUpdatePlan(restored));
+    assert.deepStrictEqual(
+      (restored as typeof plan).items.find(
+        ({ target }) => target?.key === "target-welcome",
+      )?.request,
+      item?.request,
+    );
+  });
+
+  void it("历史原文移除后目标关联发生变化时保留目标", async () => {
+    const store = await storedSnapshot(
+      [{ id: "welcome", source: "Welcome" }],
+      [{ targetId: "target-welcome", sourceId: "welcome", text: "Bienvenue" }],
+    );
+    const config = makeConfig(
+      [],
+      [
+        {
+          targetId: "target-welcome",
+          sourceId: "another-source",
+          text: "Bienvenue",
+        },
+      ],
+    );
+
+    const plan = await previewUpdate(config, store);
+    const item = plan.items.find(
+      ({ target }) => target?.key === "target-welcome",
+    );
+
+    assert.equal(item?.action, "retain");
+    assert.match(item?.reason ?? "", /匹配|关联/);
+    assert.equal(item?.request, undefined);
   });
 
   void it("无原文历史的目标独有项保留，并完整报告多匹配冲突", async () => {
@@ -386,5 +425,40 @@ void describe("业务更新计划与预览", () => {
     );
     await assert.rejects(previewUpdate(failingConfig), /自定义比较失败/);
     assert.equal(compareCalls, 2);
+  });
+
+  void it("按身份字段值读取自定义比较结果而不依赖对象属性顺序", async () => {
+    const store = await storedSnapshot(
+      [{ id: "welcome", source: "Welcome" }],
+      [{ targetId: "target-welcome", sourceId: "welcome", text: "Bienvenue" }],
+    );
+    const config = makeConfig(
+      [],
+      [{ targetId: "target-welcome", sourceId: "welcome", text: "Bienvenue" }],
+      {
+        compare(input) {
+          const result = defaultCompare(input);
+          return {
+            ...result,
+            translationChanges: result.translationChanges.map((change) => ({
+              ...change,
+              identity: {
+                key: change.identity.key,
+                namespace: change.identity.namespace,
+                language: change.identity.language,
+              },
+            })),
+          };
+        },
+      },
+    );
+
+    const plan = await previewUpdate(config, store);
+    const item = plan.items.find(
+      ({ target }) => target?.key === "target-welcome",
+    );
+
+    assert.equal(item?.action, "delete");
+    assert.equal(item?.changes.translations[0]?.status, "unchanged");
   });
 });
