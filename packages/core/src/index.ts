@@ -82,6 +82,28 @@ export type {
   RecordComparisonBaselineResult,
 } from "./baselines.ts";
 
+export {
+  createUpdatePlan,
+  defaultUpdatePolicy,
+  previewUpdate,
+  validateUpdatePlan,
+} from "./plans.ts";
+export type {
+  UpdatePlan,
+  UpdatePlanAction,
+  UpdatePlanAssociations,
+  UpdatePlanComparisons,
+  UpdatePlanData,
+  UpdatePlanInput,
+  UpdatePlanItem,
+  UpdatePlanSourceChange,
+  UpdatePlanTranslationChange,
+  UpdatePlanWriteRequest,
+  UpdatePolicy,
+  UpdateSourceExpectation,
+  UpdateTargetExpectation,
+} from "./plans.ts";
+
 export type Awaitable<T> = T | Promise<T>;
 
 export type TranslationUnitInput = {
@@ -185,6 +207,10 @@ export type FrameworkConfig<
     TBody,
     TUnavailable
   >;
+  /** 将宿主原文正文映射为目标语言中的待译占位正文。 */
+  readonly sourceToContent?: (
+    source: NoInfer<TUnit["source"]>,
+  ) => NoInfer<TBody>;
   readonly updatePolicy?: UpdatePolicy<
     TUnit,
     TTranslation,
