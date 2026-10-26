@@ -17,11 +17,7 @@ import {
   validateWithStandardSchema,
 } from "./standard-schema.ts";
 
-export type TranslationFactsSnapshot<
-  TTranslation,
-  TBody,
-  TUnavailable,
-> = {
+export type TranslationFactsSnapshot<TTranslation, TBody, TUnavailable> = {
   readonly reads: readonly TranslationReadFact[];
   readonly records: readonly ActualTranslationFact<
     TTranslation,
@@ -58,9 +54,7 @@ export class TranslationIdentityContractError extends TypeError {
   }
 }
 
-export function validateTranslationAdapterConfig(
-  translations: unknown,
-): void {
+export function validateTranslationAdapterConfig(translations: unknown): void {
   if (
     !isRecord(translations) ||
     !Array.isArray(translations.languages) ||
@@ -87,7 +81,9 @@ export async function readTranslationFacts<
   TBody,
   TUnavailable,
 >(
-  adapter: TranslationAdapter<TUnit, TTranslation, TBody, TUnavailable> | undefined,
+  adapter:
+    | TranslationAdapter<TUnit, TTranslation, TBody, TUnavailable>
+    | undefined,
   sourceUnits: readonly SourceUnitFact<TUnit>[],
 ): Promise<TranslationFactsSnapshot<TTranslation, TBody, TUnavailable>> {
   const translations = {
@@ -207,7 +203,9 @@ export async function readTranslationFacts<
 
 function validateTranslationRead(value: unknown): void {
   if (!isRecord(value) || !Array.isArray(value.scopes))
-    invalidTranslationRead("translations.read 必须返回包含 scopes 数组的读取结果。");
+    invalidTranslationRead(
+      "translations.read 必须返回包含 scopes 数组的读取结果。",
+    );
   for (const [scopeIndex, scope] of value.scopes.entries()) {
     if (
       !isRecord(scope) ||

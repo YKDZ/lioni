@@ -23,8 +23,6 @@ import {
 type Unit = { id: string; source: string };
 type Translation = { id: string; text: string; sourceId?: string };
 
-type Scenario = ReturnType<typeof createScenario>;
-
 function createScenario(
   options: {
     readonly sources?: readonly Unit[];

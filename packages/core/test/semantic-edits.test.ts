@@ -59,7 +59,10 @@ function configFor(options: {
     },
     translations: {
       languages: ["fr"],
-      identityOf: (translation) => ({ namespace: "messages", key: translation.id }),
+      identityOf: (translation) => ({
+        namespace: "messages",
+        key: translation.id,
+      }),
       schema: schemaFromExamples({ id: "example", text: "Exemple" }),
       contentSchema: jsonValueSchema,
       contentOf: ({ text }) => text,
@@ -81,11 +84,10 @@ function configFor(options: {
     translationWriteback: {
       locateExistingTarget: ({ identity: targetIdentity }) => ({
         status: "located",
-        locator:
-          options.locateExistingTarget?.(targetIdentity) ?? {
-            file: "fr.json",
-            key: targetIdentity.key,
-          },
+        locator: options.locateExistingTarget?.(targetIdentity) ?? {
+          file: "fr.json",
+          key: targetIdentity.key,
+        },
       }),
       locateNewTarget: ({ sourceUnit, language }) => ({
         status: "located",
@@ -134,7 +136,8 @@ void describe("translation write requests", () => {
       translations: [target],
       onWrite: ({ request }) => {
         writeCalls += 1;
-        if (request.operation === "write") target.text = request.content as string;
+        if (request.operation === "write")
+          target.text = request.content as string;
       },
     });
     const brokenSource = config.source as unknown as {

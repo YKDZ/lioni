@@ -58,7 +58,10 @@ void describe("动态 Node 配置契约", () => {
         deferred.use(readComparisonSnapshot),
         StandardSchemaContractError,
       );
-      await assert.rejects(loadConfig(invalidPath), StandardSchemaContractError);
+      await assert.rejects(
+        loadConfig(invalidPath),
+        StandardSchemaContractError,
+      );
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

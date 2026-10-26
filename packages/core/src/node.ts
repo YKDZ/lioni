@@ -26,7 +26,9 @@ type RuntimeFrameworkConfig = FrameworkConfig<
 >;
 
 export type LoadedConfig = {
-  readonly use: <TResult>(consumer: (config: RuntimeFrameworkConfig) => TResult) => TResult;
+  readonly use: <TResult>(
+    consumer: (config: RuntimeFrameworkConfig) => TResult,
+  ) => TResult;
 };
 
 /** 从 Node.js 配置模块加载并验证默认导出的宿主配置。 */

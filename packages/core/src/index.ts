@@ -17,10 +17,6 @@ import {
   type QualityObject,
 } from "./qa.ts";
 import { validateSemanticEditCandidate } from "./semantic-edits.ts";
-import {
-  readTranslationFacts,
-  TranslationIdentityContractError,
-} from "./translation-snapshot.ts";
 import type {
   JsonValue,
   SemanticEditCandidate,
@@ -36,8 +32,12 @@ import type {
   StandardSchemaV1,
   StandardSchemaTypes,
 } from "./standard-schema.ts";
+import { readTranslationFacts } from "./translation-snapshot.ts";
 
-export { CompletionConfigurationError, evaluateCompletion } from "./completion.ts";
+export {
+  CompletionConfigurationError,
+  evaluateCompletion,
+} from "./completion.ts";
 export type {
   CompletionResolution,
   CompletionResolverInput,
@@ -562,8 +562,7 @@ export function validateFrameworkConfig(value: unknown): void {
 }
 
 function validateSourceConfig(value: unknown): void {
-  if (!isRecord(value))
-    invalidFrameworkConfig("宿主配置必须是对象。");
+  if (!isRecord(value)) invalidFrameworkConfig("宿主配置必须是对象。");
   if (!isRecord(value.source) || typeof value.source.read !== "function")
     invalidFrameworkConfig("defineConfig 的 source.read 必须是函数。");
   if (!isStandardSchema(value.source.schema))
@@ -900,7 +899,9 @@ function validateSourceRead(value: unknown): void {
         scope.enumeration !== "failed") ||
       (scope.error !== undefined && typeof scope.error !== "string")
     )
-      invalidReadStructure(`source.read 的第 ${scopeIndex + 1} 个范围结构无效。`);
+      invalidReadStructure(
+        `source.read 的第 ${scopeIndex + 1} 个范围结构无效。`,
+      );
     assertJsonValue(scope.range, `原文范围 ${scopeIndex + 1}`);
     for (const [recordIndex, record] of scope.records.entries()) {
       if (
@@ -916,7 +917,11 @@ function validateSourceRead(value: unknown): void {
 }
 
 function invalidReadStructure(message: string): never {
-  throw new StandardSchemaContractError("source.read", "schema-mismatch", message);
+  throw new StandardSchemaContractError(
+    "source.read",
+    "schema-mismatch",
+    message,
+  );
 }
 
 function readStatus(
