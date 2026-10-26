@@ -5,10 +5,12 @@ import {
   ComparisonContractError,
   compareSnapshots,
   defineConfig,
+  defaultCompare,
   readComparisonSnapshot,
   type ComparisonResult,
   type ComparisonSnapshot,
   type Compare,
+  validateComparisonResult,
 } from "../src/index.ts";
 import {
   schemaFromExamples,
@@ -619,5 +621,41 @@ void describe("snapshot comparison", () => {
       (error: unknown) => error instanceof ComparisonContractError,
     );
     assert.equal(calls, 1);
+  });
+
+  void it("restores comparison results after JSON omits undefined history fields", async () => {
+    const empty = await readSnapshot(
+      [{ range: "messages.json", records: [] }],
+      [
+        { language: "de", range: "de.json", records: [] },
+        { language: "fr", range: "fr.json", records: [] },
+      ],
+    );
+    const withData = await readSnapshot(
+      [
+        {
+          range: "messages.json",
+          records: [{ value: unit("welcome", "Welcome") }],
+        },
+      ],
+      [
+        { language: "de", range: "de.json", records: [] },
+        {
+          language: "fr",
+          range: "fr.json",
+          records: [translated("messages", "welcome", "Bienvenue")],
+        },
+      ],
+    );
+
+    for (const current of [empty, withData]) {
+      const input = { previous: undefined, current };
+      const result = defaultCompare(input);
+      const serialized = JSON.stringify(result);
+      assert.ok(serialized);
+      const restored: unknown = JSON.parse(serialized);
+
+      assert.doesNotThrow(() => validateComparisonResult(input, restored));
+    }
   });
 });

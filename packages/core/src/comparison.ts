@@ -140,11 +140,10 @@ export function validateComparisonResult<
   if (!Array.isArray(value.translationChanges))
     invalidResult("比较结果必须提供 translationChanges 数组。");
   if (!isRecord(value.reads)) invalidResult("比较结果必须提供 reads 对象。");
-  if (
-    !Object.hasOwn(value.reads, "previous") ||
-    !Object.hasOwn(value.reads, "current")
-  )
-    invalidResult("比较结果必须同时提供 previous 与 current 读取依据。");
+  if (!Object.hasOwn(value.reads, "current"))
+    invalidResult("比较结果必须提供 current 读取依据。");
+  if (input.previous !== undefined && !Object.hasOwn(value.reads, "previous"))
+    invalidResult("存在 previous 快照时，比较结果必须提供 previous 读取依据。");
 
   const expectedPrevious =
     input.previous === undefined ? undefined : readEvidence(input.previous);
@@ -534,12 +533,17 @@ function validateBeforeAndAfter(
   current: unknown,
   description: string,
 ): void {
-  if (
-    !Object.hasOwn(change, "previous") ||
-    !Object.hasOwn(change, "current") ||
-    !isDeepStrictEqual(change.previous, previous) ||
-    !isDeepStrictEqual(change.current, current)
-  )
+  const previousMatches =
+    previous === undefined
+      ? change.previous === undefined
+      : Object.hasOwn(change, "previous") &&
+        isDeepStrictEqual(change.previous, previous);
+  const currentMatches =
+    current === undefined
+      ? change.current === undefined
+      : Object.hasOwn(change, "current") &&
+        isDeepStrictEqual(change.current, current);
+  if (!previousMatches || !currentMatches)
     invalidResult(`${description} 的前后事实必须与输入一致。`);
 }
 
