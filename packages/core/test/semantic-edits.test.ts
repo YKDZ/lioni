@@ -27,9 +27,11 @@ function identity(id: string): TranslationIdentity {
 
 function configFor(options: {
   readonly sources?: readonly Unit[];
+  readonly sourceBodyAvailability?: "available" | "unavailable";
   readonly translations: Translation[];
   readonly matches?: (unit: Unit, translation: Translation) => boolean;
   readonly locateExistingTarget?: (identity: TranslationIdentity) => JsonValue;
+  readonly locateNewTarget?: (unit: Unit, language: string) => JsonValue;
   readonly onWrite: (input: WriteInput) => void;
 }) {
   const sources = [...(options.sources ?? [])];
@@ -44,7 +46,7 @@ function configFor(options: {
             enumeration: "complete",
             records: sources.map((value) => ({
               value,
-              bodyAvailability: "available" as const,
+              bodyAvailability: options.sourceBodyAvailability ?? "available",
             })),
           },
         ],
@@ -91,7 +93,10 @@ function configFor(options: {
       }),
       locateNewTarget: ({ sourceUnit, language }) => ({
         status: "located",
-        locator: { file: `${language}.json`, key: sourceUnit.key },
+        locator: options.locateNewTarget?.(sourceUnit.unit, language) ?? {
+          file: `${language}.json`,
+          key: sourceUnit.key,
+        },
       }),
       write: options.onWrite,
     },
@@ -421,6 +426,57 @@ void describe("translation write requests", () => {
 
     assert.deepEqual(writtenSource, source);
     assert.equal(result.results[0]?.status, "written");
+  });
+
+  void it("writes an external candidate when source identity is known but its body is unavailable", async () => {
+    const source: Unit = { id: "new", source: "unavailable source body" };
+    const records: Translation[] = [];
+    let writeCalls = 0;
+    const config = configFor({
+      sources: [source],
+      sourceBodyAvailability: "unavailable",
+      translations: records,
+      matches: (unit, translation) => unit.id === translation.id,
+      locateNewTarget: (unit, language) => ({ id: unit.id, language }),
+      onWrite: ({ request, sourceUnit }) => {
+        writeCalls += 1;
+        assert.equal(request.operation, "write");
+        assert.equal(sourceUnit?.unit.id, "new");
+        if (
+          request.operation === "write" &&
+          typeof request.content === "string"
+        )
+          records.push({ id: "new", text: request.content });
+      },
+    });
+    const request: TranslationWriteRequest<JsonValue, Unit> = {
+      operation: "write",
+      target: { sourceKey: "new", language: "fr" },
+      content: "人工候选译文",
+      expectedTarget: { status: "missing" },
+    };
+    const explicitSourceRequest: TranslationWriteRequest<JsonValue, Unit> = {
+      ...request,
+      expectedSource: {
+        presence: "present",
+        key: "new",
+        range: "source.json",
+        unit: source,
+        content: source.source,
+      },
+    };
+
+    const sourceDependent = await writeTranslationRequests(
+      [explicitSourceRequest],
+      config,
+    );
+    assert.equal(sourceDependent.results[0]?.status, "notWritable");
+    assert.equal(writeCalls, 0);
+
+    const externalCandidate = await writeTranslationRequests([request], config);
+    assert.equal(externalCandidate.results[0]?.status, "written");
+    assert.equal(writeCalls, 1);
+    assert.deepEqual(records, [{ id: "new", text: "人工候选译文" }]);
   });
 
   void it("detects incompatible requests for one physical target before writing", async () => {
