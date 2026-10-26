@@ -274,7 +274,10 @@ export async function validateTranslationWriteRequest<
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
 ): Promise<TranslationWriteRequest<TBody, TUnit>> {
   assertJsonValue(value, "译文写入请求");
-  if (!isRecord(value) || (value.operation !== "write" && value.operation !== "delete"))
+  if (
+    !isRecord(value) ||
+    (value.operation !== "write" && value.operation !== "delete")
+  )
     invalidWriteRequest("必须包含 write 或 delete 操作。");
   const translations = config.translations;
   if (translations === undefined)
@@ -288,11 +291,7 @@ export async function validateTranslationWriteRequest<
     translations.contentSchema,
   );
   const expectedSource = Object.hasOwn(value, "expectedSource")
-    ? await validateExpectedSource(
-        value.expectedSource,
-        config,
-        target,
-      )
+    ? await validateExpectedSource(value.expectedSource, config, target)
     : undefined;
   if (value.operation === "write") {
     if (!Object.hasOwn(value, "content"))
@@ -404,19 +403,10 @@ export async function writeTranslationRequests<
     };
   }
 
-  const prepared: PreparedWrite<
-    TUnit,
-    TTranslation,
-    TBody,
-    TUnavailable
-  >[] = [];
+  const prepared: PreparedWrite<TUnit, TTranslation, TBody, TUnavailable>[] =
+    [];
   for (const [index, request] of validated.entries()) {
-    const resolved = await prepareWrite(
-      index,
-      request,
-      current,
-      config,
-    );
+    const resolved = await prepareWrite(index, request, current, config);
     if (resolved.status !== "ready") {
       results[index] = {
         request,
@@ -653,11 +643,13 @@ async function prepareWrite<
           "schema-mismatch",
           "translationWriteback.locateNewTarget 必须是函数。",
         );
-      resolved = validateWritebackResolution(await adapter.locateNewTarget({
-        sourceKey: request.target.sourceKey,
-        sourceUnit,
-        language: request.target.language,
-      }));
+      resolved = validateWritebackResolution(
+        await adapter.locateNewTarget({
+          sourceKey: request.target.sourceKey,
+          sourceUnit,
+          language: request.target.language,
+        }),
+      );
       if (resolved.status === "notWritable")
         return { status: "notWritable", reason: resolved.reason };
       target = {
@@ -668,9 +660,13 @@ async function prepareWrite<
       currentTranslation = findTranslationByIdentity(
         current,
         request.target.identity,
-      ) as AvailableTranslationFact<TTranslation, TBody, TUnavailable> | undefined;
+      ) as
+        | AvailableTranslationFact<TTranslation, TBody, TUnavailable>
+        | undefined;
       if (currentTranslation === undefined) {
-        if (isTranslationReadComplete(current, request.target.identity.language))
+        if (
+          isTranslationReadComplete(current, request.target.identity.language)
+        )
           return {
             status: "conflict",
             reason: "预期存在的译文目标现在已缺失。",
@@ -699,7 +695,10 @@ async function prepareWrite<
         return { status: "conflict", reason: "目标译文正文已变化。" };
       if (
         request.expectedTarget.range !== undefined &&
-        !isDeepStrictEqual(currentTranslation.range, request.expectedTarget.range)
+        !isDeepStrictEqual(
+          currentTranslation.range,
+          request.expectedTarget.range,
+        )
       )
         return { status: "conflict", reason: "目标译文所在范围已变化。" };
       if (
@@ -721,10 +720,12 @@ async function prepareWrite<
           "schema-mismatch",
           "translationWriteback.locateExistingTarget 必须是函数。",
         );
-      resolved = validateWritebackResolution(await adapter.locateExistingTarget({
-        identity: request.target.identity,
-        translation: currentTranslation,
-      }));
+      resolved = validateWritebackResolution(
+        await adapter.locateExistingTarget({
+          identity: request.target.identity,
+          translation: currentTranslation,
+        }),
+      );
       if (resolved.status === "notWritable")
         return { status: "notWritable", reason: resolved.reason };
       target = {
@@ -796,12 +797,18 @@ function checkExpectedSource<
     if (sourceUnit === undefined) {
       if (isSourceRangeComplete(current, expectation.range))
         return { status: "conflict", reason: "预期原文现在已缺失。" };
-      return { status: "notWritable", reason: "原文读取不足，无法核对预期原文。" };
+      return {
+        status: "notWritable",
+        reason: "原文读取不足，无法核对预期原文。",
+      };
     }
     if (sourceUnit.bodyAvailability !== "available")
       return { status: "notWritable", reason: "当前原文正文不可用。" };
     const scope = current.source.read.scopes[sourceUnit.scopeIndex];
-    if (scope === undefined || !isDeepStrictEqual(scope.range, expectation.range))
+    if (
+      scope === undefined ||
+      !isDeepStrictEqual(scope.range, expectation.range)
+    )
       return { status: "conflict", reason: "原文所在范围已变化。" };
     if (!isDeepStrictEqual(sourceUnit.unit, expectation.unit))
       return { status: "conflict", reason: "原文单元已变化。" };
@@ -830,10 +837,12 @@ function checkSourceTargetMissing<
   sourceUnit: SourceUnitFact<TUnit>,
   language: string,
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
-): { readonly status: "ready" } | {
-  readonly status: "conflict" | "notWritable";
-  readonly reason: string;
-} {
+):
+  | { readonly status: "ready" }
+  | {
+      readonly status: "conflict" | "notWritable";
+      readonly reason: string;
+    } {
   const translations = config.translations;
   const languageRead = current.translations.reads.find(
     (read) => read.language === language,
@@ -879,7 +888,8 @@ function groupByPhysicalTarget<
 >(
   prepared: readonly PreparedWrite<TUnit, TTranslation, TBody, TUnavailable>[],
 ): PreparedWrite<TUnit, TTranslation, TBody, TUnavailable>[][] {
-  const groups: PreparedWrite<TUnit, TTranslation, TBody, TUnavailable>[][] = [];
+  const groups: PreparedWrite<TUnit, TTranslation, TBody, TUnavailable>[][] =
+    [];
   for (const item of prepared) {
     const group = groups.find((items) =>
       isDeepStrictEqual(items[0]?.target.locator, item.target.locator),
@@ -900,11 +910,12 @@ function compatibleRequests<
 ): boolean {
   const first = group[0]?.request;
   if (first === undefined) return true;
-  return group.every(({ request }) =>
-    request.operation === first.operation &&
-    (request.operation === "delete" ||
-      (first.operation === "write" &&
-        isDeepStrictEqual(request.content, first.content))),
+  return group.every(
+    ({ request }) =>
+      request.operation === first.operation &&
+      (request.operation === "delete" ||
+        (first.operation === "write" &&
+          isDeepStrictEqual(request.content, first.content))),
   );
 }
 
@@ -926,7 +937,11 @@ function confirmsWrite<
       return (
         target === undefined &&
         prior !== undefined &&
-        isTranslationRangeComplete(after, request.target.identity.language, prior.range)
+        isTranslationRangeComplete(
+          after,
+          request.target.identity.language,
+          prior.range,
+        )
       );
     }
     return (
@@ -942,7 +957,10 @@ function confirmsWrite<
   const adapter = config.translations;
   if (adapter?.matches === undefined) return false;
   const currentSource = findSourceUnit(after, sourceTarget.sourceKey);
-  if (currentSource === undefined || currentSource.bodyAvailability !== "available")
+  if (
+    currentSource === undefined ||
+    currentSource.bodyAvailability !== "available"
+  )
     return false;
   const languageRead = after.translations.reads.find(
     ({ language }) => language === sourceTarget.language,
@@ -1024,7 +1042,9 @@ async function validateExpectedTarget<TBody>(
   );
   const content = snapshotValue(validatedContent, "预期译文正文");
   if ("identity" in target && !isDeepStrictEqual(target.identity, identity))
-    invalidWriteRequest("expectedTarget identity 必须与 target identity 相同。");
+    invalidWriteRequest(
+      "expectedTarget identity 必须与 target identity 相同。",
+    );
   return {
     status: "present",
     identity,
