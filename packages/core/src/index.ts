@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import type { MemoScope } from "@lioni/memo";
 
+import type { Compare } from "./comparison.ts";
 import {
   CompletionConfigurationError,
   evaluateCompletion,
@@ -71,6 +72,23 @@ export type {
   UpdatePolicyInput,
 } from "./plans.ts";
 export * from "./qa.ts";
+export {
+  compareSnapshots,
+  defaultCompare,
+  ComparisonContractError,
+  validateComparisonInput,
+  validateComparisonResult,
+} from "./comparison.ts";
+export type {
+  Compare,
+  CompareInput,
+  ComparisonContractErrorReason,
+  ComparisonResult,
+  ComparisonStatus,
+  SnapshotReadEvidence,
+  SourceChange,
+  TranslationChange,
+} from "./comparison.ts";
 export {
   advanceProcessingBaseline,
   compareProcessingBaseline,
@@ -177,6 +195,7 @@ export type FrameworkConfig<
     TBody,
     TUnavailable
   >;
+  readonly compare?: Compare<TUnit, TTranslation, TBody, TUnavailable>;
   readonly completion?: CompletionPolicy<
     TUnit,
     TTranslation,
