@@ -485,6 +485,46 @@ void test("消息族只比较同一声明范围，并接受明确列出的目标
   assert.deepEqual(findings(equivalent, checkIds.messageFamilyConsistency), []);
 });
 
+void test("消息族目标等价声明仅影响其目标语言", async () => {
+  const chinese = policyFor({
+    sourceMessages: { first: "Enabled", second: "Enabled" },
+    targetMessages: { first: "A", second: "B" },
+    scopes: [{ scope: "ui", keys: ["first", "second"] }],
+  });
+  const japanese = policyFor({
+    sourceMessages: { first: "Enabled", second: "Enabled" },
+    targetMessages: { first: "A", second: "B" },
+    targetLanguage: "ja",
+    targetRange: "translations/ja.json",
+    scopes: [{ scope: "ui", keys: ["first", "second"] }],
+    targetEquivalences: [["A", "B"]],
+  });
+
+  const withoutJapanesePolicy = await createQualityFixture({
+    policies: [chinese],
+  }).run([candidate("first", "A")]);
+  const withJapanesePolicy = await createQualityFixture({
+    policies: [chinese, japanese],
+  }).run([candidate("first", "A", "zh-CN"), candidate("first", "A", "ja")]);
+
+  assert.equal(
+    findings(withoutJapanesePolicy, checkIds.messageFamilyConsistency).length,
+    1,
+  );
+  assert.equal(
+    findings(withJapanesePolicy, checkIds.messageFamilyConsistency).filter(
+      ({ object }) => object.language === "zh-CN",
+    ).length,
+    1,
+  );
+  assert.deepEqual(
+    findings(withJapanesePolicy, checkIds.messageFamilyConsistency).filter(
+      ({ object }) => object.language === "ja",
+    ),
+    [],
+  );
+});
+
 void test("多语言沿用各自资源位置，反向语言对仍标注正确来源", async () => {
   const terms: TermbaseData = {
     concepts: [

@@ -690,7 +690,7 @@ process.stdout.write(JSON.stringify(result) + "\\n");
     ({ checkId }) => checkId === "kuma/resource-contract",
   );
   assert.ok(resourceCheck);
-  assert.equal(resourceCheck.version, "kuma/resource-contract/v1");
+  assert.equal(resourceCheck.version, "kuma/resource-contract/v2");
   assert.ok(
     resourceCheck.executions.some(
       ({ inputFingerprint }) => typeof inputFingerprint === "string",

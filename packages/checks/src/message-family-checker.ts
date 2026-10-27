@@ -138,7 +138,10 @@ export type MessageFamilyCheckerOptions<
   readonly sourceTemplate?: TemplateOptions;
   readonly targetTemplate?: TemplateOptions;
   /** 将合法等价签名映射到同一键；未映射签名使用自身签名键。 */
-  readonly targetEquivalence?: (signature: TemplateSignature) => string;
+  readonly targetEquivalence?: (
+    signature: TemplateSignature,
+    language: string,
+  ) => string;
   readonly limits?: Partial<MessageFamilyLimits>;
 };
 
@@ -398,6 +401,7 @@ export function createMessageFamilyChecker<
             sourceTemplate,
             targetTemplate,
             options.targetEquivalence,
+            group.target.language,
             { sourceKey: association.sourceKey },
             memo,
           );
@@ -603,6 +607,7 @@ export function createMessageFamilyChecker<
           sourceTemplate,
           targetTemplate,
           options.targetEquivalence,
+          group.target.language,
           { sourceKey: input.subject.sourceKey },
           input.memo,
         );
@@ -714,7 +719,10 @@ async function signGroup(
   analysis: TextAnalysis,
   sourceTemplate: TemplateOptions,
   targetTemplate: TemplateOptions,
-  targetEquivalence: ((signature: TemplateSignature) => string) | undefined,
+  targetEquivalence:
+    | ((signature: TemplateSignature, language: string) => string)
+    | undefined,
+  language: string,
   context: { readonly sourceKey?: string },
   memo: MemoScope,
 ): Promise<SignedMessageGroup> {
@@ -759,7 +767,8 @@ async function signGroup(
       issues,
     };
   const targetParts = target.signatures.map((signature) => {
-    const key = targetEquivalence?.(signature) ?? signatureKey(signature);
+    const key =
+      targetEquivalence?.(signature, language) ?? signatureKey(signature);
     if (typeof key !== "string" || key.length === 0)
       throw new TypeError("目标签名等价键必须为非空字符串。");
     return key;
