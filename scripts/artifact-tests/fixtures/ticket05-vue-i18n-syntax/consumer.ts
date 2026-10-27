@@ -7,7 +7,10 @@ import config from "./lioni.config.ts";
 const result = await analyzeQuality(config);
 assert.equal(result.status, "complete");
 assert.deepEqual(
-  result.checks.map(({ id, status }) => ({ id, status })),
+  result.checks.map((check) => ({
+    id: checkId(check),
+    status: check.status,
+  })),
   [
     { id: "vue-i18n/source-syntax", status: "complete" },
     { id: "vue-i18n/target-syntax", status: "complete" },
@@ -36,5 +39,13 @@ function diagnosticId(value: unknown): string | undefined {
     return value.checkId;
   if ("ruleId" in value && typeof value.ruleId === "string")
     return value.ruleId;
+  return undefined;
+}
+
+function checkId(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  if ("checkId" in value && typeof value.checkId === "string")
+    return value.checkId;
+  if ("id" in value && typeof value.id === "string") return value.id;
   return undefined;
 }

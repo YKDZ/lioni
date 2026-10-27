@@ -60,6 +60,7 @@ const contentSchema: StandardSchemaV1<Content, Content> = {
 
 function sourceChecker() {
   return createVueI18nSourceSyntaxChecker<Unit, Translation, Unit, Content>({
+    hostVersion: "checks-test-v1",
     select: (input: QualityCheckInput<Unit, Translation, unknown, Content>) => {
       if (input.sourceUnit === null)
         return {
@@ -86,6 +87,7 @@ function sourceChecker() {
 
 function targetChecker() {
   return createVueI18nTargetSyntaxChecker<Unit, Translation, Content, Content>({
+    hostVersion: "checks-test-v1",
     select: (input) => ({
       status: "selected",
       subject: {
@@ -187,10 +189,10 @@ void test("原文与候选译文语法分别报告，并将原文错误映射回
   assert.equal(result.status, "complete");
   assert.equal(result.diagnostics.length, 2);
   const source = result.diagnostics.find(
-    ({ ruleId }) => ruleId === "vue-i18n/source-syntax",
+    (diagnostic) => diagnosticCheckId(diagnostic) === "vue-i18n/source-syntax",
   );
   const target = result.diagnostics.find(
-    ({ ruleId }) => ruleId === "vue-i18n/target-syntax",
+    (diagnostic) => diagnosticCheckId(diagnostic) === "vue-i18n/target-syntax",
   );
   assert.equal(source?.severity, "error");
   assert.equal(source?.object.kind, "source-unit");
@@ -263,4 +265,11 @@ function isTranslation(value: unknown): value is Translation {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function diagnosticCheckId(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined;
+  if (typeof value.checkId === "string") return value.checkId;
+  if (typeof value.ruleId === "string") return value.ruleId;
+  return undefined;
 }

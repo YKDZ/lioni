@@ -43,6 +43,8 @@ export type VueI18nSourceSyntaxCheckerOptions<
   TBody = unknown,
   TUnavailable = never,
 > = {
+  /** 宿主选择、正文投影和位置映射的版本。 */
+  readonly hostVersion: string;
   readonly select: (
     input: QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
   ) => Awaitable<
@@ -70,6 +72,8 @@ export type VueI18nTargetSyntaxCheckerOptions<
   TBody = unknown,
   TUnavailable = never,
 > = {
+  /** 宿主选择、正文投影和位置映射的版本。 */
+  readonly hostVersion: string;
   readonly select: (
     input: QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
   ) => Awaitable<QualityCheckSelection<VueI18nTargetSyntaxSubject<TContent>>>;
@@ -142,6 +146,7 @@ export function createVueI18nSourceSyntaxChecker<
     TUnavailable
   >({
     id: "vue-i18n/source-syntax",
+    version: `checks.vue-i18n/source-syntax/v1+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}+${options.hostVersion}`,
     configurationSchema,
     configuration,
     inputSchema,
@@ -246,6 +251,7 @@ export function createVueI18nTargetSyntaxChecker<
     TUnavailable
   >({
     id: "vue-i18n/target-syntax",
+    version: `checks.vue-i18n/target-syntax/v1+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}+${options.hostVersion}`,
     configurationSchema,
     configuration,
     inputSchema,

@@ -6,6 +6,8 @@
 
 原文与译文语法有独立检查身份：`vue-i18n/source-syntax` 和 `vue-i18n/target-syntax`。宿主分别选择所需检查器，并通过 `sourceText`、`targetText` 指定正文投影。译文检查只依赖候选投影，所以目标独有键也能检查；显式空字符串会作为正文检查。
 
+两个工厂都要求填写 `hostVersion`，用来标记宿主的候选选择、正文投影和位置映射。最终版本始终合入内置检查算法及 `@intlify/message-compiler` 11.2.8 基准；调整宿主行为时也应更新 `hostVersion`。
+
 ```ts
 import {
   createVueI18nSourceSyntaxChecker,
@@ -13,6 +15,7 @@ import {
 } from "@lioni/checks";
 
 const sourceSyntax = createVueI18nSourceSyntaxChecker({
+  hostVersion: "catalog-projection-v1",
   select: ({ sourceUnit, candidate }) => {
     if (sourceUnit === null)
       return {
@@ -37,6 +40,7 @@ const sourceSyntax = createVueI18nSourceSyntaxChecker({
 });
 
 const targetSyntax = createVueI18nTargetSyntaxChecker({
+  hostVersion: "catalog-projection-v1",
   select: ({ candidate }) => ({
     status: "selected",
     subject: {

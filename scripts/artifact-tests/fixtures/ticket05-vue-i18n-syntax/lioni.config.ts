@@ -28,6 +28,7 @@ const contentSchema: StandardSchemaV1<Content, Content> =
 
 const qualityChecks = [
   createVueI18nSourceSyntaxChecker<Unit, Translation, Unit, Content>({
+    hostVersion: "artifact-fixture-v1",
     select: (input: QualityCheckInput<Unit, Translation, unknown, Content>) => {
       if (input.sourceUnit === null)
         return {
@@ -51,6 +52,7 @@ const qualityChecks = [
     }),
   }),
   createVueI18nTargetSyntaxChecker<Unit, Translation, Content, Content>({
+    hostVersion: "artifact-fixture-v1",
     select: (input) => ({
       status: "selected",
       subject: {
