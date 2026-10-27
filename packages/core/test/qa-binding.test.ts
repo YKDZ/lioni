@@ -320,7 +320,7 @@ function selectedText(
 }
 
 void describe("quality check bindings", () => {
-  void it("reports stable per-candidate fingerprints and links findings to their execution", async () => {
+  void it("按候选生成稳定指纹并将诊断关联到对应执行", async () => {
     const candidates = [
       { sourceKey: "message", language: "fr", content: "Bonjour" },
       { sourceKey: "message", language: "fr", content: "Salut" },
@@ -475,7 +475,7 @@ void describe("quality check bindings", () => {
     );
   });
 
-  void it("lets a bound check fingerprint its validated projection from the same execution snapshot", async () => {
+  void it("绑定检查从同次执行快照中的已校验投影生成指纹", async () => {
     const candidates = [
       { sourceKey: "message", language: "fr", content: "Bonjour" },
       { sourceKey: "message", language: "fr", content: "Salut" },
@@ -601,6 +601,72 @@ void describe("quality check bindings", () => {
     );
     assert.deepEqual(basis.dependencies, { policyVersion: 3 });
     assert.deepEqual(basis.relationships, []);
+  });
+
+  void it("自定义指纹依据可从非 JSON 主体与投影中选取序列化数据", async () => {
+    const checker = bindQualityCheck<
+      MixedUnit,
+      MixedTranslation,
+      typeof checkerConfigurationSchema,
+      typeof projectedTextSchema,
+      {
+        readonly unit: TextUnit;
+        readonly capturedAt: Date;
+        readonly render: () => string;
+      },
+      QualityObject,
+      MixedBody,
+      MixedUnavailableTranslation
+    >({
+      id: "non-json-subject",
+      version: "non-json-subject-v1",
+      configurationSchema: checkerConfigurationSchema,
+      configuration: { includeListEvidence: false },
+      inputSchema: projectedTextSchema,
+      select: (input) => {
+        const sourceUnit = input.sourceUnit;
+        if (
+          sourceUnit === null ||
+          sourceUnit.unit.kind !== "text" ||
+          typeof input.candidate.content !== "string"
+        )
+          return { status: "not-applicable" };
+        return {
+          status: "selected",
+          subject: {
+            unit: sourceUnit.unit,
+            capturedAt: new Date("2026-10-27T00:00:00.000Z"),
+            render: () => input.candidate.content as string,
+          },
+        };
+      },
+      project: ({ subject }) => ({
+        status: "ready",
+        value: {
+          source: subject.unit.source,
+          target: subject.render(),
+        },
+      }),
+      fingerprintInput: ({ subject, projected }) => ({
+        source: subject.unit.source,
+        capturedAt: subject.capturedAt.toISOString(),
+        target: projected.target,
+      }),
+      check: () => completeOutcome(),
+    });
+
+    const result = await analyzeQuality(
+      qualityConfig(
+        [checker],
+        [{ sourceKey: "message", language: "fr", content: "Bonjour" }],
+      ),
+    );
+
+    assert.equal(result.status, "complete");
+    assert.equal(
+      typeof result.checks[0]?.executions[0]?.inputFingerprint,
+      "string",
+    );
   });
 
   void it("projects selected text while preserving full mixed facts and other outcomes", async () => {

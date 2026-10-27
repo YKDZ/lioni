@@ -111,6 +111,7 @@ function createCheck(id: string) {
     string
   >({
     id,
+    version: "core-consumer-check-v1",
     configurationSchema: checkConfigSchema,
     configuration: { version: 1 },
     check: ({ memo }) => {
