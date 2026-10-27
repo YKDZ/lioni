@@ -18,27 +18,35 @@ type CheckDefinition = QualityCheckDefinition<
   never
 >;
 type PreparedCheck = Awaited<ReturnType<CheckDefinition["prepare"]>>;
-type Input = Parameters<PreparedCheck["check"]>[0];
+type Input = Parameters<PreparedCheck["prepareInput"]>[0];
 type Loader = (facts: KumaFacts) => Promise<Project>;
 type Factory = (project: Project) => readonly CheckDefinition[];
 
+const textRuleVersion = "kuma-host-text-rule-v1";
+const terminologyVersion = "checks.terminology-rule/v1+kuma-terminology-v1";
+const messageFamilyVersion =
+  "checks.message-family-consistency/v1+kuma-message-family-v1";
+
 const configurations = [
-  ["kuma/resource-contract", { version: 1 }],
-  ["kuma/vue-message-contract", { version: 1 }],
-  ["kuma/protected-literals", { version: 1 }],
-  ["kuma/quantities", { version: 1 }],
-  ["kuma/critical-copy-review", { version: 1 }],
+  ["kuma/resource-contract", { version: 1 }, textRuleVersion],
+  ["kuma/vue-message-contract", { version: 1 }, textRuleVersion],
+  ["kuma/protected-literals", { version: 1 }, textRuleVersion],
+  ["kuma/quantities", { version: 1 }, textRuleVersion],
+  ["kuma/critical-copy-review", { version: 1 }, textRuleVersion],
   [
     "terminology/require-allowed-translation",
     { rules: ["require-allowed-translation"] },
+    terminologyVersion,
   ],
   [
     "terminology/reject-forbidden-translation",
     { rules: ["reject-forbidden-translation"] },
+    terminologyVersion,
   ],
   [
     "message-family-consistency",
     { limits: { maxCategories: 6, maxSourcesPerCategory: 3 } },
+    messageFamilyVersion,
   ],
 ] as const;
 
@@ -82,7 +90,7 @@ export function createLazyKumaQualityChecks(
     return value;
   }
 
-  return configurations.map(([id, configuration]) => {
+  return configurations.map(([id, configuration, version]) => {
     const placeholder = defineQualityCheck<
       Unit,
       Translation,
@@ -92,6 +100,7 @@ export function createLazyKumaQualityChecks(
       never
     >({
       id,
+      version,
       configurationSchema: configSchema,
       configuration: { version: 1 },
       check: async (): Promise<QualityCheckOutcome> => ({
@@ -112,7 +121,8 @@ export function createLazyKumaQualityChecks(
       async prepare(): Promise<PreparedCheck> {
         return {
           configuration,
-          async check(input: Input) {
+          version,
+          async prepareInput(input: Input) {
             const facts = input.facts as KumaFacts;
             let byId = preparedByFacts.get(facts);
             if (byId === undefined) {
@@ -126,14 +136,19 @@ export function createLazyKumaQualityChecks(
                 const definition = definitions(project).get(id);
                 if (definition === undefined)
                   throw new Error(`Kuma QA 缺少 ${id} 检查器。`);
+                if (definition.version !== version)
+                  throw new Error(`Kuma QA ${id} 实现版本与按需声明不一致。`);
                 const value = await definition.prepare();
-                if (!isDeepStrictEqual(value.configuration, configuration))
+                if (
+                  value.version !== version ||
+                  !isDeepStrictEqual(value.configuration, configuration)
+                )
                   throw new Error(`Kuma QA ${id} 配置与按需声明不一致。`);
                 return value;
               })();
               byId.set(id, prepared);
             }
-            return (await prepared).check(input);
+            return (await prepared).prepareInput(input);
           },
         };
       },

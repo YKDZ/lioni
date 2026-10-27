@@ -230,7 +230,7 @@ function readGuideTargets(): TargetResource {
 
 const catalogException: QualityException = {
   id: "catalog-approved-numbers",
-  ruleId: "catalog-numbers",
+  checkId: "catalog-numbers",
   scope: {
     object: { kind: "translation-unit", key: "catalog:save", language: "fr" },
   },
@@ -321,6 +321,7 @@ function createDomainChecker(
     never
   >({
     id: module.domain + "-numbers",
+    version: "composition-number-check-v1",
     configurationSchema: qualityConfigurationSchema,
     configuration: {
       options: module.checkConfiguration,
