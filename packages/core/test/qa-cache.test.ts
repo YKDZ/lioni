@@ -21,7 +21,7 @@ import {
   type StandardSchemaV1,
   StandardSchemaContractError,
 } from "../src/index.ts";
-import { createFileQualityCheckResultCache } from "../src/node.ts";
+import { createFileQualityCheckResultCache } from "../src/node/index.ts";
 import { defineTestQualityCheck } from "./quality-check-fixture.ts";
 import {
   jsonValueSchema,
@@ -522,14 +522,16 @@ function createTestConfig(
       }),
       matches: () => true,
     },
-    qualityChecks: [...(options.precedingChecks ?? []), check],
-    ...(options.cache === undefined
-      ? {}
-      : { qualityCheckResultCache: options.cache }),
-    ...(options.exceptionStore === undefined
-      ? {}
-      : { qualityExceptionStore: options.exceptionStore }),
-    createQualityRequest: () => ({ candidates: [candidate], dependencies: {} }),
+    quality: {
+      prepare: () => ({
+        checks: [...(options.precedingChecks ?? []), check],
+        request: { candidates: [candidate], dependencies: {} },
+      }),
+      ...(options.cache === undefined ? {} : { resultCache: options.cache }),
+      ...(options.exceptionStore === undefined
+        ? {}
+        : { exceptionStore: options.exceptionStore }),
+    },
   });
 }
 

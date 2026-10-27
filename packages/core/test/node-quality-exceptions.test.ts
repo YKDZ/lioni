@@ -8,7 +8,7 @@ import { createQualityException } from "../src/index.ts";
 import {
   createFileQualityExceptionStore,
   resolveDefaultQualityExceptionFilePath,
-} from "../src/node.ts";
+} from "../src/node/index.ts";
 
 const execution = {
   executionId: 0,

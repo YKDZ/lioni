@@ -121,7 +121,8 @@ const enabledConfigurationSchema = {
 
 export default defineConfig({
   ...baseConfig,
-  qualityChecks: [defineQualityCheck({
+  quality: { prepare(facts) {
+    const checks = [defineQualityCheck({
     id: "host-rule",
     version: "facts-journey-qa-v1",
     configurationSchema: enabledConfigurationSchema,
@@ -153,8 +154,7 @@ export default defineConfig({
         }
       };
     }
-  })],
-  createQualityRequest(facts) {
+  })];
     const candidates = facts.associations.flatMap((association) => {
       if (association.status !== "matched") return [];
       const record = facts.translations.records[association.translationIndexes[0]];
@@ -165,9 +165,10 @@ export default defineConfig({
       }];
     });
     return {
-      candidates,
-      dependencies: { selectedBy: "defineConfig" },
+      checks,
+      request: { candidates, dependencies: { selectedBy: "defineConfig" } },
     };
+  },
   },
 });
 `,

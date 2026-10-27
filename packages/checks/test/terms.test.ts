@@ -309,28 +309,32 @@ function createScenario(
         if (request.operation === "write") storedBody = request.content;
       },
     },
-    qualityExceptionStore: {
-      async load() {
-        return exceptions;
-      },
-      async upsert(exception) {
-        exceptions = [
-          ...exceptions.filter(({ id }) => id !== exception.id),
-          exception,
-        ];
-      },
-    },
-    createQualityRequest: () => ({
-      candidates: [
-        {
-          sourceKey: "workspace",
-          language: "zh",
-          content: { visible: "工作区", hidden: "作业区" },
+    quality: {
+      exceptionStore: {
+        async load() {
+          return exceptions;
         },
-      ],
-      dependencies: {},
-    }),
-    qualityChecks: checks,
+        async upsert(exception) {
+          exceptions = [
+            ...exceptions.filter(({ id }) => id !== exception.id),
+            exception,
+          ];
+        },
+      },
+      prepare: () => ({
+        checks,
+        request: {
+          candidates: [
+            {
+              sourceKey: "workspace",
+              language: "zh",
+              content: { visible: "工作区", hidden: "作业区" },
+            },
+          ],
+          dependencies: {},
+        },
+      }),
+    },
   });
 
   return {

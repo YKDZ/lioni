@@ -6,6 +6,8 @@
 
 使用 `@lioni/checks` 的内置工厂时，另提供 `hostVersion` 描述宿主的选择、投影和组合逻辑。工厂会将它与固定的内置算法版本合并。
 
+质量设置集中在 `defineConfig` 的 `quality` 对象中。`quality.prepare(facts)` 每次 `analyzeQuality` 在读取事实后调用一次，返回本次使用的 `checks` 和可选 `request`。静态检查使用相同形式，例如 `quality: { prepare: () => ({ checks }) }`。省略 `prepare` 时使用空检查列表和默认候选；省略 request 时仍使用默认候选。结果缓存与例外存储分别配置为 `quality.resultCache` 和 `quality.exceptionStore`。
+
 ## 默认输入依据
 
 默认依据包含完整框架事实、当前候选、对应原文单元、检查依赖和关联关系。对象属性顺序不影响摘要，数组顺序保留。输入必须是普通 JSON；函数、`memo`、例外和存储实例不属于默认依据。框架始终把检查身份、实现版本及经过 schema 转换的最终配置加入指纹。完整框架事实可能包含与某条诊断无关的条目；这些条目改变时指纹也可能变化，使现有例外不再匹配，这是保守范围带来的代价。
@@ -85,7 +87,7 @@ exceptions:
       inputFingerprint: sha256:复制报告中的业务输入摘要
 ```
 
-直接向 `analyzeQuality(config)` 传入纯配置对象时，框架不会猜测当前目录；没有配置存储就不使用例外。自定义 `qualityExceptionStore` 会替换 Node 默认 YAML 来源。低层 `runQualityChecks` 仍可接收宿主已读取的例外列表。QA 报告分别给出诊断处理和 `exceptionApplicability`：输入、最终配置或检查版本改变时显示原因，局部未执行时标记为本次未验证；依据恢复后，旧例外会重新适用。即使本次没有诊断，也会报告适用性。
+直接向 `analyzeQuality(config)` 传入纯配置对象时，框架不会猜测当前目录；没有配置存储就不使用例外。自定义 `quality.exceptionStore` 会替换 Node 默认 YAML 来源。低层 `runQualityChecks` 仍可接收宿主已读取的例外列表。QA 报告分别给出诊断处理和 `exceptionApplicability`：输入、最终配置或检查版本改变时显示原因，局部未执行时标记为本次未验证；依据恢复后，旧例外会重新适用。即使本次没有诊断，也会报告适用性。
 
 人工编辑 YAML 与命令维护具有同等地位，二者使用相同的例外记录契约。CLI 可以直接使用现有 SDK 报告或 `qa` 命令的 JSON 报告创建或刷新记录：
 
@@ -97,7 +99,7 @@ lioni exceptions upsert lioni.config.ts qa-report.json \
   --reason '该术语选择已由维护者确认。'
 ```
 
-`--execution-id` 用于从同组多个候选中选定一条执行记录。命令只消费给定报告中的指纹，不重新运行 QA 或读取当前资源；给出旧报告时，新记录仍绑定旧依据。配置未指定存储时使用配置文件同目录的 `lioni.exceptions.yaml`，显式设置 `qualityExceptionStore` 时则只使用该自定义存储。SDK 可调用公开的 `upsertQualityExceptionFromReport` 选择并保存同一类型的执行记录。例外只批准一个检查项对指定原文键和语言产生的全部诊断；可独立接受的问题应由不同检查项负责，避免一条批准扩大到其他职责。
+`--execution-id` 用于从同组多个候选中选定一条执行记录。命令只消费给定报告中的指纹，不重新运行 QA 或读取当前资源；给出旧报告时，新记录仍绑定旧依据。配置未指定存储时使用配置文件同目录的 `lioni.exceptions.yaml`，显式设置 `quality.exceptionStore` 时则只使用该自定义存储。SDK 可调用公开的 `upsertQualityExceptionFromReport` 选择并保存同一类型的执行记录。例外只批准一个检查项对指定原文键和语言产生的全部诊断；可独立接受的问题应由不同检查项负责，避免一条批准扩大到其他职责。
 
 例外批准与结果缓存有不同用途。Node QA 默认读取人工维护的例外 YAML；缓存须显式装配，只影响计算成本。普通 QA 不会写入或刷新例外，也不会改写比较基线。调用方可直接组合报告数组：
 
@@ -112,7 +114,7 @@ const activeErrors = report.diagnostics.filter(
 
 ## QA 结果缓存
 
-缓存通过配置中的 `qualityCheckResultCache` 显式启用。Node 环境可选择官方文件实现；文件位于配置文件同目录的 `.lioni/cache/quality-results.json`。纯配置对象不会猜测当前工作目录，未配置缓存的 SDK 或 CLI 不会读写缓存：
+缓存通过配置中的 `quality.resultCache` 显式启用。Node 环境可选择官方文件实现；文件位于配置文件同目录的 `.lioni/cache/quality-results.json`。纯配置对象不会猜测当前工作目录，未配置缓存的 SDK 或 CLI 不会读写缓存：
 
 ```ts
 import { fileURLToPath } from "node:url";
@@ -122,10 +124,12 @@ import { defineConfig } from "@lioni/core";
 
 export default defineConfig({
   // 其余宿主配置……
-  qualityCheckResultCache: createDefaultQualityCheckResultCache(
-    fileURLToPath(import.meta.url),
-  ),
+  quality: {
+    resultCache: createDefaultQualityCheckResultCache(
+      fileURLToPath(import.meta.url),
+    ),
+  },
 });
 ```
 
-也可将 `qualityCheckResultCache` 替换为实现 `get` 与 `set` 的自定义存储。缓存只保存 `complete` 和 `not-applicable` 的原始检查结果；失败、未完成、文件损坏或存储故障会重新计算。命中后仍会执行本次候选选择、投影与 schema 校验，并按当前报告关联诊断和应用例外，因此修改或删除 YAML 例外会立即反映在结果中。
+也可将 `quality.resultCache` 替换为实现 `get` 与 `set` 的自定义存储。缓存只保存 `complete` 和 `not-applicable` 的原始检查结果；失败、未完成、文件损坏或存储故障会重新计算。命中后仍会执行本次候选选择、投影与 schema 校验，并按当前报告关联诊断和应用例外，因此修改或删除 YAML 例外会立即反映在结果中。

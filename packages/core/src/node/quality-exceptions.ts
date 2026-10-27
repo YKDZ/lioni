@@ -8,12 +8,12 @@ import {
   QualityExceptionFormatError,
   validateQualityException,
   validateQualityExceptionFile,
-} from "./quality-exceptions.ts";
+} from "../quality/quality-exceptions.ts";
 import type {
   QualityException,
   QualityExceptionFile,
   QualityExceptionStore,
-} from "./quality-exceptions.ts";
+} from "../quality/quality-exceptions.ts";
 
 const EMPTY_QUALITY_EXCEPTION_FILE =
   "format: lioni.qa-exceptions/v1\nexceptions: []\n";

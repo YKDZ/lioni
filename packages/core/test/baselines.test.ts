@@ -12,7 +12,7 @@ import {
   replaceComparisonBaseline,
   type JsonValue,
 } from "../src/index.ts";
-import { createFileComparisonBaselineStore } from "../src/node.ts";
+import { createFileComparisonBaselineStore } from "../src/node/index.ts";
 import {
   jsonValueSchema,
   schemaFromExamples,

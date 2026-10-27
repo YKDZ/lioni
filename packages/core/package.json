@@ -20,9 +20,9 @@
       "default": "./dist/index.js"
     },
     "./node": {
-      "source": "./src/node.ts",
-      "types": "./dist/node.d.ts",
-      "default": "./dist/node.js"
+      "source": "./src/node/index.ts",
+      "types": "./dist/node/index.d.ts",
+      "default": "./dist/node/index.js"
     }
   },
   "scripts": {

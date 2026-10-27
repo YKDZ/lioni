@@ -250,14 +250,13 @@ function configFor(
       }),
       matches: (unit, translation) => unit.id === translation.id,
     },
-    qualityChecks: [qualityChecker],
-    ...(exceptionStore === undefined
-      ? {}
-      : { qualityExceptionStore: exceptionStore }),
-    createQualityRequest: () => ({
-      candidates: [],
-      dependencies: {},
-    }),
+    quality: {
+      prepare: () => ({
+        checks: [qualityChecker],
+        request: { candidates: [], dependencies: {} },
+      }),
+      ...(exceptionStore === undefined ? {} : { exceptionStore }),
+    },
   });
 }
 

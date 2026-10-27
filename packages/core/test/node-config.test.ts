@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { readComparisonSnapshot, readSourceFacts } from "../src/index.ts";
 import { StandardSchemaContractError } from "../src/index.ts";
-import { loadConfig } from "../src/node.ts";
+import { loadConfig } from "../src/node/index.ts";
 
 void describe("动态 Node 配置契约", () => {
   void it("接受独立 core 实例创建的配置，并按操作校验结构", async () => {
@@ -36,7 +36,7 @@ void describe("动态 Node 配置契约", () => {
       await writeFile(invalidPath, `export default { source: {} };\n`);
       await writeFile(
         deferredPath,
-        `export default { source: { schema: { "~standard": { version: 1, vendor: "deferred", validate: (value) => ({ value }) } }, read: () => ({ scopes: [] }) }, keyOf: () => "unused", translations: {} };\n`,
+        `export default { source: { schema: { "~standard": { version: 1, vendor: "deferred", validate: (value) => ({ value }) } }, read: () => ({ scopes: [] }) }, keyOf: () => "unused", translations: {}, quality: { prepare() { throw new Error("加载配置时不能准备质量检查。"); } } };\n`,
       );
       const defaultException = {
         id: "from-default-file",
@@ -74,7 +74,7 @@ void describe("动态 Node 配置契约", () => {
       };
       await writeFile(
         customPath,
-        `import { defineConfig } from ${JSON.stringify(hostCoreUrl)};\nexport default defineConfig({\n  source: { schema: { "~standard": { version: 1, vendor: "custom-store", validate: (value) => ({ value }) } }, read: () => ({ scopes: [] }) },\n  keyOf: () => "unused",\n  qualityExceptionStore: { load: async () => [${JSON.stringify(customException)}], upsert: async () => {} }\n});\n`,
+        `import { defineConfig } from ${JSON.stringify(hostCoreUrl)};\nexport default defineConfig({\n  source: { schema: { "~standard": { version: 1, vendor: "custom-store", validate: (value) => ({ value }) } }, read: () => ({ scopes: [] }) },\n  keyOf: () => "unused",\n  quality: { exceptionStore: { load: async () => [${JSON.stringify(customException)}], upsert: async () => {} } }\n});\n`,
         "utf8",
       );
 
@@ -89,12 +89,12 @@ void describe("动态 Node 配置契约", () => {
 
       assert.deepStrictEqual(observed, { key: "18", source: "Save" });
       const defaultExceptions = await loaded.use((config) =>
-        config.qualityExceptionStore?.load(),
+        config.quality?.exceptionStore?.load(),
       );
       assert.deepEqual(defaultExceptions, [defaultException]);
       const custom = await loadConfig(customPath);
       const customExceptions = await custom.use((config) =>
-        config.qualityExceptionStore?.load(),
+        config.quality?.exceptionStore?.load(),
       );
       assert.deepEqual(customExceptions, [customException]);
       const plain = await loadConfig(unboundPath);

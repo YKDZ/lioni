@@ -41,8 +41,7 @@ void readFacts(config);
 void readFacts(qaConfig);
 void readFacts(deletionConfig);
 void readFacts(planConfig);
-void qaConfig.qualityChecks;
-void qaConfig.createQualityRequest;
+void qaConfig.quality?.prepare;
 void createNumberChecker<
   NumberUnit,
   NumberTranslation,

@@ -468,7 +468,7 @@ function mergeQualityRequests(
 function createInputConfig(
   modules: readonly EntryModule[],
 ): FrameworkConfig<Unit, Translation, TranslationContent> {
-  const qualityChecks = modules.map(createDomainChecker);
+  const checks = modules.map(createDomainChecker);
   return defineConfig({
     source: {
       schema: sourceSchema,
@@ -531,11 +531,14 @@ function createInputConfig(
           : module.resolveCompletion(input);
       },
     },
-    qualityChecks,
-    createQualityRequest: (facts) =>
-      mergeQualityRequests(
-        modules.map(({ domain }) => requestForDomain(facts, domain)),
-      ),
+    quality: {
+      prepare: (facts) => ({
+        checks,
+        request: mergeQualityRequests(
+          modules.map(({ domain }) => requestForDomain(facts, domain)),
+        ),
+      }),
+    },
   });
 }
 

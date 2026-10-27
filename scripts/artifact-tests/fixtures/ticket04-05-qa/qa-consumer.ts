@@ -148,7 +148,7 @@ const project = ({
         } satisfies TermComparisonInput,
       };
 
-const qualityChecks = [
+const checks = [
   createTermChecker<Unit, Translation, string, string>({
     hostVersion: "ticket04-05-consumer-v1",
     terms,
@@ -213,13 +213,17 @@ const config = defineConfig({
     }),
     matches: (unit, translation) => unit.id === translation.id,
   },
-  createQualityRequest: () => ({
-    candidates: [
-      { sourceKey: "catalogue", language: "zh", content: targetText },
-    ],
-    dependencies: {},
-  }),
-  qualityChecks,
+  quality: {
+    prepare: () => ({
+      checks,
+      request: {
+        candidates: [
+          { sourceKey: "catalogue", language: "zh", content: targetText },
+        ],
+        dependencies: {},
+      },
+    }),
+  },
 });
 
 const quality = await analyzeQuality(config);

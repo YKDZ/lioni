@@ -278,18 +278,22 @@ function configFor(
         ],
       }),
     },
-    qualityChecks: [
-      createNumberChecker({
-        hostVersion: "number-test-v1",
-        select: selectNumberSubject,
-        sourceText: (unit) => unit.source,
-        translationText: (content) => content,
-        translationLocation: (translation, _subject, location) =>
-          translation === undefined
-            ? location
-            : { ...location, key: translation.nativeKey },
+    quality: {
+      prepare: () => ({
+        checks: [
+          createNumberChecker({
+            hostVersion: "number-test-v1",
+            select: selectNumberSubject,
+            sourceText: (unit) => unit.source,
+            translationText: (content) => content,
+            translationLocation: (translation, _subject, location) =>
+              translation === undefined
+                ? location
+                : { ...location, key: translation.nativeKey },
+          }),
+        ],
       }),
-    ],
+    },
   });
 }
 
@@ -430,22 +434,26 @@ void describe("阿拉伯数字对应检查", () => {
   void it("通过宿主提供的取值函数检查结构化候选，仅比较正文中的数字", async () => {
     const config = {
       ...configFor("12 seconds", "12 secondes"),
-      qualityChecks: [
-        createNumberChecker({
-          hostVersion: "number-test-v1",
-          select: selectNumberSubject,
-          sourceText: (unit) => unit.source,
-          translationText: (content) => {
-            if (
-              content !== null &&
-              typeof content === "object" &&
-              !Array.isArray(content)
-            )
-              return (content as { readonly text?: JsonValue }).text;
-            return undefined;
-          },
+      quality: {
+        prepare: () => ({
+          checks: [
+            createNumberChecker({
+              hostVersion: "number-test-v1",
+              select: selectNumberSubject,
+              sourceText: (unit) => unit.source,
+              translationText: (content) => {
+                if (
+                  content !== null &&
+                  typeof content === "object" &&
+                  !Array.isArray(content)
+                )
+                  return (content as { readonly text?: JsonValue }).text;
+                return undefined;
+              },
+            }),
+          ],
         }),
-      ],
+      },
     };
     for (const [text, diagnosticCount] of [
       ["12 secondes", 0],
@@ -545,7 +553,7 @@ void describe("阿拉伯数字对应检查", () => {
         }),
         matches: (unit, translation) => unit.identity === translation.nativeKey,
       },
-      qualityChecks: [checker],
+      quality: { prepare: () => ({ checks: [checker] }) },
     });
 
     const result = await analyzeQuality(config);
