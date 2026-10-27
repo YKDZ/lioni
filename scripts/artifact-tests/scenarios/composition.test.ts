@@ -50,6 +50,10 @@ testArtifactConsumer(
         readonly checkId: string;
         readonly handling: { readonly status: string };
       }[];
+      readonly checks: readonly {
+        readonly checkId: string;
+        readonly executions: readonly QaExecution[];
+      }[];
     };
     assert.equal(initialResult.status, "complete");
     assert.equal(initialResult.version, prepared.version);
@@ -58,10 +62,54 @@ testArtifactConsumer(
       initialResult.diagnostics.find(
         ({ checkId }) => checkId === "catalog-numbers",
       )?.handling.status,
-      "excepted",
+      "active",
     );
     assert.equal(
       initialResult.diagnostics.find(
+        ({ checkId }) => checkId === "guide-numbers",
+      )?.handling.status,
+      "active",
+    );
+
+    const catalogExecution = initialResult.checks
+      .find(({ checkId }) => checkId === "catalog-numbers")
+      ?.executions.find(
+        ({ sourceKey, language }) =>
+          sourceKey === "catalog:save" && language === "fr",
+      );
+    assert.ok(catalogExecution?.inputFingerprint);
+    assert.ok(catalogExecution.fingerprintSummary);
+    const exceptionPath = path.join(root, "lioni.exceptions.yaml");
+    await writeFile(
+      exceptionPath,
+      exceptionsYaml([
+        exceptionYaml(
+          "catalog-approved-numbers",
+          "目录中的数字差异由维护者单独确认。",
+          catalogExecution,
+        ),
+      ]),
+      "utf8",
+    );
+
+    const exceptedQa = await runCommand(executable, [
+      "qa",
+      "composition.config.ts",
+    ]);
+    const exceptedResult = JSON.parse(exceptedQa.stdout).data as {
+      readonly diagnostics: readonly {
+        readonly checkId: string;
+        readonly handling: { readonly status: string };
+      }[];
+    };
+    assert.equal(
+      exceptedResult.diagnostics.find(
+        ({ checkId }) => checkId === "catalog-numbers",
+      )?.handling.status,
+      "excepted",
+    );
+    assert.equal(
+      exceptedResult.diagnostics.find(
         ({ checkId }) => checkId === "guide-numbers",
       )?.handling.status,
       "active",
@@ -88,6 +136,10 @@ testArtifactConsumer(
         readonly checkId: string;
         readonly handling: { readonly status: string };
       }[];
+      readonly exceptionApplicability: readonly {
+        readonly exceptionId: string;
+        readonly status: string;
+      }[];
     };
     assert.equal(updatedResult.status, "complete");
     assert.notEqual(updatedResult.version, initialResult.version);
@@ -97,6 +149,16 @@ testArtifactConsumer(
       )?.handling.status,
       "active",
     );
+    assert.equal(
+      updatedResult.diagnostics.find(
+        ({ checkId }) => checkId === "catalog-numbers",
+      )?.handling.status,
+      "active",
+    );
+    const catalogApplicability = updatedResult.exceptionApplicability.find(
+      ({ exceptionId }) => exceptionId === "catalog-approved-numbers",
+    );
+    assert.equal(catalogApplicability?.status, "basis-changed");
 
     const observedProcess = await runNode("composition-host.ts", ["observe"]);
     const observation = JSON.parse(observedProcess.stdout) as {
@@ -109,3 +171,40 @@ testArtifactConsumer(
     assert.equal(observation.guideChange, "changed");
   },
 );
+
+type QaExecution = {
+  readonly checkId: string;
+  readonly sourceKey: string;
+  readonly language: string;
+  readonly inputFingerprint: string;
+  readonly fingerprintSummary: {
+    readonly version: string;
+    readonly configurationFingerprint: string;
+    readonly inputFingerprint: string;
+  };
+};
+
+function exceptionYaml(
+  id: string,
+  reason: string,
+  execution: QaExecution,
+): string {
+  return [
+    `  - id: ${id}`,
+    `    reason: ${JSON.stringify(reason)}`,
+    `    checkId: ${execution.checkId}`,
+    `    sourceKey: ${execution.sourceKey}`,
+    `    language: ${execution.language}`,
+    `    inputFingerprint: ${execution.inputFingerprint}`,
+    "    fingerprintSummary:",
+    `      version: ${JSON.stringify(execution.fingerprintSummary.version)}`,
+    `      configurationFingerprint: ${execution.fingerprintSummary.configurationFingerprint}`,
+    `      inputFingerprint: ${execution.fingerprintSummary.inputFingerprint}`,
+  ].join("\n");
+}
+
+function exceptionsYaml(records: readonly string[]): string {
+  return ["format: lioni.qa-exceptions/v1", "exceptions:", ...records, ""].join(
+    "\n",
+  );
+}

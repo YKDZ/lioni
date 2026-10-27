@@ -12,11 +12,14 @@ import type {
 } from "@lioni/checks";
 import {
   analyzeQuality,
+  createQualityException,
   defineConfig,
   readFacts,
   writeTranslationRequests,
   StandardSchemaContractError,
   type TranslationWriteRequest,
+  type QualityException,
+  type QualityExceptionStore,
 } from "@lioni/core";
 import type {
   QualityCheckInput,
@@ -45,18 +48,7 @@ type CheckerOptions = {
 type ConfigOptions = CheckerOptions & {
   readonly units?: readonly Unit[];
   readonly translations?: readonly Translation[];
-  readonly exceptions?: readonly {
-    readonly id: string;
-    readonly checkId: string;
-    readonly scope: {
-      readonly object: {
-        readonly kind: string;
-        readonly key: string;
-        readonly language?: string;
-      };
-    };
-    readonly reason: string;
-  }[];
+  readonly exceptionStore?: QualityExceptionStore;
 };
 
 const defaultUnits: readonly Unit[] = [
@@ -312,10 +304,12 @@ function createConfig(options: ConfigOptions = {}) {
       },
     },
     qualityChecks: [checker],
+    ...(options.exceptionStore === undefined
+      ? {}
+      : { qualityExceptionStore: options.exceptionStore }),
     createQualityRequest: () => ({
       candidates: [],
       dependencies: {},
-      exceptions: options.exceptions ?? [],
     }),
   });
   return { config, storedTexts };
@@ -473,16 +467,21 @@ assert.deepEqual(
 );
 
 const exceptionConfig = createConfig({
-  exceptions: [
-    {
-      id: "known-family-variation",
-      checkId: "message-family-consistency",
-      scope: {
-        object: { kind: "translation-unit", key: "editing", language: "zh" },
+  exceptionStore: (() => {
+    let exceptions: readonly QualityException[] = [];
+    const store: QualityExceptionStore = {
+      async load() {
+        return exceptions;
       },
-      reason: "保留现有界面用语。",
-    },
-  ],
+      async upsert(exception) {
+        exceptions = [
+          ...exceptions.filter(({ id }) => id !== exception.id),
+          exception,
+        ];
+      },
+    };
+    return store;
+  })(),
   domainSources: new Set(["domain"]),
 });
 const candidate = {
@@ -490,6 +489,26 @@ const candidate = {
   language: "zh",
   content: "错误码 405",
 };
+const initialExceptionQuality = await analyzeQuality(exceptionConfig.config, {
+  candidates: [candidate],
+});
+const exceptionExecution = initialExceptionQuality.checks
+  .find(({ checkId }) => checkId === "message-family-consistency")
+  ?.executions.find(
+    ({ sourceKey, language }) => sourceKey === "editing" && language === "zh",
+  );
+assert.ok(exceptionExecution);
+assert.ok(
+  exceptionConfig.config.qualityExceptionStore,
+  "需要装配质量例外存储。",
+);
+await exceptionConfig.config.qualityExceptionStore.upsert(
+  createQualityException({
+    id: "known-family-variation",
+    reason: "保留现有界面用语。",
+    execution: exceptionExecution,
+  }),
+);
 const exceptedQuality = await analyzeQuality(exceptionConfig.config, {
   candidates: [candidate],
 });

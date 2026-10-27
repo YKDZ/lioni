@@ -35,7 +35,7 @@ async function prepare() {
   assert.equal(
     result.diagnostics.find(({ checkId }) => checkId === "catalog-numbers")
       ?.handling.status,
-    "excepted",
+    "active",
   );
   assert.equal(
     result.diagnostics.find(({ checkId }) => checkId === "guide-numbers")
