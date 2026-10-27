@@ -21,6 +21,7 @@ export function literalContract(
 
 export function createProtectedLiteralsCheck(project: Project) {
   return textRule("kuma/protected-literals", project, literalContract, {
+    version: "kuma/protected-literals/v1",
     appliesTo: (pair, policy) => (policy.literals[pair.key]?.length ?? 0) > 0,
   });
 }

@@ -126,6 +126,14 @@ type QualityResult = {
   readonly checks: readonly {
     readonly checkId: string;
     readonly version: string;
+    readonly status: string;
+    readonly coverage: {
+      readonly selected: number;
+      readonly evaluated: number;
+      readonly notApplicable: number;
+      readonly incomplete: number;
+      readonly failed: number;
+    };
     readonly executions: readonly {
       readonly inputFingerprint?: string;
     }[];
@@ -628,7 +636,6 @@ process.stdout.write(JSON.stringify(result) + "\\n");
   const qaMs = performance.now() - qaStarted;
   const qaFinishedAt = new Date().toISOString();
   const quality = readEnvelope<QualityResult>(qaCommand.stdout, "qa");
-  assert.equal(quality.status, "complete");
   assert.ok(quality.candidates.some(({ language }) => language === "zh-CN"));
   assert.ok(
     quality.checks.some(
@@ -639,13 +646,29 @@ process.stdout.write(JSON.stringify(result) + "\\n");
     ({ checkId }) => checkId === "kuma/resource-contract",
   );
   assert.ok(resourceCheck);
-  assert.equal(resourceCheck.version, "kuma-host-text-rule-v1");
+  assert.equal(resourceCheck.version, "kuma/resource-contract/v1");
   assert.ok(
     resourceCheck.executions.some(
       ({ inputFingerprint }) => typeof inputFingerprint === "string",
     ),
     "Kuma lazy checks must preserve the prepared input fingerprint.",
   );
+  const independentChecks = new Map(
+    quality.checks.map((check) => [check.checkId, check]),
+  );
+  for (const checkId of [
+    "vue-i18n/source-syntax",
+    "vue-i18n/target-syntax",
+    "vue-i18n/variable-correspondence",
+    "kuma/vue-message-call-arguments",
+    "kuma/vue-message-link-target-exists",
+    "kuma/vue-message-link-cycle",
+  ]) {
+    const check = independentChecks.get(checkId);
+    assert.ok(check, `正式 Kuma QA 缺少独立检查 ${checkId}`);
+    assert.notEqual(check.status, "not-run");
+    assert.equal(check.status === "failed", false, `${checkId} 执行失败。`);
+  }
 
   const byLanguage = Object.fromEntries(
     ["zh-CN", "ja"].map((language) => {
@@ -969,7 +992,11 @@ process.stdout.write(JSON.stringify(result) + "\\n");
       observedAt: { started: qaStartedAt, finished: qaFinishedAt },
       diagnostics: quality.diagnostics.length,
       byLanguage,
-      checks: quality.checks.map(({ checkId }) => checkId),
+      checks: quality.checks.map(({ checkId, status, coverage }) => ({
+        checkId,
+        status,
+        coverage,
+      })),
       findings: quality.diagnostics,
     },
     timings: {

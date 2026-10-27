@@ -12,10 +12,14 @@ export { createLazyKumaQualityChecks } from "./lazy-quality.ts";
 export { createKumaQualityChecks } from "./checks/index.ts";
 export {
   createResourceContractCheck,
-  createMessageContractCheck,
+  createSourceSyntaxCheck,
+  createTargetSyntaxCheck,
+  createVariableCorrespondenceCheck,
+  createCallArgumentCheck,
+  createLinkTargetCheck,
+  createLinkCycleCheck,
   createProtectedLiteralsCheck,
   createQuantityCheck,
-  createCriticalCopyReviewCheck,
   createTerminologyChecks,
   createFamilyCheck,
 } from "./checks/index.ts";

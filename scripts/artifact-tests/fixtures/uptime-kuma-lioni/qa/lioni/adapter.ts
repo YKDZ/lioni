@@ -23,6 +23,7 @@ import type {
   LanguageMetadata,
   MessagePolicy,
 } from "./model.ts";
+import { snapshotKumaProject } from "./project-snapshot.ts";
 import { scanUsages } from "./usages.ts";
 
 type InputFile = {
@@ -184,7 +185,6 @@ export async function loadKumaQaProject(files: KumaFiles, facts?: KumaFacts) {
       target: target.texts,
       terms,
       usages,
-      reviews: target.metadata.reviews ?? {},
       targetEquivalences: target.metadata.equivalences ?? [],
       ...(source.metadata.quantityProfile === undefined
         ? {}
@@ -458,34 +458,44 @@ export function createKumaQualityRequest(project: Project, facts: KumaFacts) {
   const sourceTexts = new Map<string, string>(
     facts.source.units.map(({ key, unit }) => [key, unit.source.text]),
   );
-  const targetTexts = new Map<string, string>(
-    facts.translations.records.flatMap((fact) =>
-      fact.bodyAvailability === "available"
-        ? [
-            [
-              `${fact.language}\u0000${fact.translation.key}`,
-              fact.content.text,
-            ] as const,
-          ]
-        : [],
-    ),
-  );
-  return {
-    candidates: project.policies.flatMap((policy) =>
-      [
-        ...new Set<string>([
-          ...sourceTexts.keys(),
-          ...Object.keys(policy.target),
-          ...project.usages.entries.map((usage) => usage.key),
-        ]),
-      ].map((key) => ({
+  const translationStatus = new Map<string, "available" | "unavailable">();
+  const targetTexts = new Map<string, string>();
+  for (const fact of facts.translations.records) {
+    const identity = JSON.stringify([fact.language, fact.translation.key]);
+    if (fact.bodyAvailability === "available") {
+      translationStatus.set(identity, "available");
+      targetTexts.set(identity, fact.content.text);
+    } else {
+      translationStatus.set(identity, "unavailable");
+    }
+  }
+  const candidates = project.policies.flatMap((policy) =>
+    [
+      ...new Set<string>([
+        ...sourceTexts.keys(),
+        ...Object.keys(policy.target),
+        ...project.usages.entries.map((usage) => usage.key),
+      ]),
+    ].map((key) => {
+      const identity = JSON.stringify([policy.targetLanguage, key]);
+      const status = translationStatus.get(identity);
+      return {
         sourceKey: key,
         language: policy.targetLanguage,
         content: {
-          text: targetTexts.get(`${policy.targetLanguage}\u0000${key}`) ?? "",
+          text: targetTexts.get(identity) ?? "",
+          ...(status === undefined
+            ? { resourceStatus: "missing" as const }
+            : {}),
+          ...(status === "unavailable"
+            ? { resourceStatus: "unavailable" as const }
+            : {}),
         },
-      })),
-    ),
-    dependencies: {},
+      };
+    }),
+  );
+  return {
+    candidates,
+    dependencies: { kuma: snapshotKumaProject(project) },
   };
 }

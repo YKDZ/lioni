@@ -1,4 +1,6 @@
-import { parseMessage } from "../message.ts";
+import { parseVueI18nMessage } from "@lioni/checks";
+import type { VueI18nMessage } from "@lioni/checks";
+
 import type { Pair, Policy, Finding, Project } from "../model.ts";
 import { quantityProfile } from "../quantities/index.ts";
 import type { QuantityProfile, QuantityOptions } from "../quantities/index.ts";
@@ -14,22 +16,18 @@ export function quantityCapability(policy: Policy): string | undefined {
 
 function branchFacts(
   profile: QuantityProfile,
-  message: ReturnType<typeof parseMessage>,
+  message: VueI18nMessage,
   text: string,
-  branch: ReturnType<typeof parseMessage>["branches"][number],
+  branch: VueI18nMessage["branches"][number],
   options: QuantityOptions,
-  plural: boolean,
 ): Set<string> {
   const values = profile.facts(branch.text, options);
   for (const token of message.tokens) {
-    if (token.start < branch.start || token.end > branch.end) continue;
+    if (token.start < branch.range.start || token.end > branch.range.end)
+      continue;
     const unit = profile.unitAfter(text.slice(token.end), options);
     if (!unit) continue;
-    const identity =
-      plural && ["named:n", "named:count"].includes(token.identity ?? "")
-        ? "plural"
-        : token.identity;
-    values.add(`变量单位:${identity}:${unit}`);
+    values.add(`变量单位:${token.identity}:${unit}`);
   }
   return values;
 }
@@ -49,8 +47,8 @@ export function quantityContract(
   );
   if (!sourceProfile || !targetProfile)
     throw new Error(quantityCapability(policy));
-  const source = parseMessage(pair.source),
-    target = parseMessage(pair.target);
+  const source = parseVueI18nMessage(pair.source),
+    target = parseVueI18nMessage(pair.target);
   if (source.errors.length || target.errors.length) return [];
   const sourceOptions: QuantityOptions = {
     aliases: policy.quantityUnitAliases?.[pair.key] ?? {},
@@ -67,14 +65,7 @@ export function quantityContract(
       : { defaultUnit: policy.targetQuantityDefaultUnits[pair.key] }),
   };
   const sourceFacts = source.branches.map((branch) =>
-    branchFacts(
-      sourceProfile,
-      source,
-      pair.source,
-      branch,
-      sourceOptions,
-      source.branches.length > 1,
-    ),
+    branchFacts(sourceProfile, source, pair.source, branch, sourceOptions),
   );
   const findings: Finding[] = [];
   for (const [index, branch] of target.branches.entries()) {
@@ -84,7 +75,6 @@ export function quantityContract(
       pair.target,
       branch,
       targetOptions,
-      source.branches.length > 1,
     );
     const candidates = sourceFacts.map((facts) => ({
       missing: [...facts].filter((value) => !targetFacts.has(value)),
@@ -114,6 +104,7 @@ export function quantityContract(
 
 export function createQuantityCheck(project: Project) {
   return textRule("kuma/quantities", project, quantityContract, {
+    version: `kuma/quantities/v2+@intlify/message-compiler@11.2.8`,
     capability: quantityCapability,
   });
 }

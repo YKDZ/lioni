@@ -1,13 +1,13 @@
+import { parseVueI18nMessage } from "@lioni/checks";
+import type { VueI18nMessage } from "@lioni/checks";
 import { createTextAnalysis } from "@lioni/text-analysis";
 
-import { parseMessage } from "./message.ts";
-
 export function createKumaAnalysis() {
-  const cache = new Map<string, ReturnType<typeof parseMessage>>();
+  const cache = new Map<string, VueI18nMessage>();
   const message = (text: string) => {
     let value = cache.get(text);
     if (!value) {
-      value = parseMessage(text);
+      value = parseVueI18nMessage(text);
       cache.set(text, value);
     }
     return value;
@@ -23,9 +23,9 @@ export function createKumaAnalysis() {
             ),
           ),
           complete: result.errors.length === 0,
-          issues: result.errors.map((error) => ({
+          issues: result.errors.map(({ code, message: text }) => ({
             code: "vue-message-syntax",
-            message: error,
+            message: `${code}: ${text}`,
           })),
         };
       },
