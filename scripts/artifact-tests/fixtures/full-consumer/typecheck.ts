@@ -51,6 +51,7 @@ void createNumberChecker<
   string,
   never
 >({
+  hostVersion: "typecheck-v1",
   select: ({ sourceUnit, candidate }) => {
     if (sourceUnit === null || sourceUnit.bodyAvailability !== "available")
       return {
