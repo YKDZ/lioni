@@ -114,20 +114,6 @@ function createQualityRequest(
               content: record.content,
             },
           ],
-    exceptions: [
-      {
-        id: "approved-number-difference",
-        checkId: "number-correspondence",
-        scope: {
-          object: {
-            kind: "translation-unit",
-            key: "sha256:save",
-            language: "fr",
-          },
-        },
-        reason: "数字差异已由维护者确认。",
-      },
-    ],
     dependencies: {},
   };
 }

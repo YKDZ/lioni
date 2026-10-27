@@ -181,6 +181,8 @@ assert.equal(noChecks.status, 0, noChecks.stderr);
 assert.equal(JSON.parse(noChecks.stdout).data.status, "not-run");
 
 const qaResource = path.join(process.cwd(), "qa-messages.json");
+const baselinePath = path.join(process.cwd(), "lioni.baseline.json");
+const baselineSnapshot = Buffer.from('{"sentinel":"preserve during QA"}\n');
 const originalResource = Buffer.from(
   JSON.stringify({
     messages: [
@@ -213,6 +215,34 @@ type QaCliResult = {
     readonly location: { readonly key: string };
     readonly handling: Readonly<Record<string, unknown>>;
   }[];
+  readonly exceptions: readonly unknown[];
+  readonly exceptionApplicability: readonly {
+    readonly exceptionId: string;
+    readonly checkId: string;
+    readonly sourceKey: string;
+    readonly language: string;
+    readonly executionId?: number;
+    readonly candidateIndex?: number;
+    readonly status: string;
+    readonly reasons?: readonly string[];
+  }[];
+  readonly checks: readonly {
+    readonly checkId: string;
+    readonly executions: readonly {
+      readonly executionId: number;
+      readonly candidateIndex: number;
+      readonly checkId: string;
+      readonly sourceKey: string;
+      readonly language: string;
+      readonly status: string;
+      readonly inputFingerprint?: string;
+      readonly fingerprintSummary?: {
+        readonly version: string;
+        readonly configurationFingerprint: string;
+        readonly inputFingerprint: string;
+      };
+    }[];
+  }[];
 };
 const skippedResult = parseJson<{ data: QaCliResult }>(skippedQa.stdout).data;
 assert.equal(skippedResult.status, "not-run");
@@ -235,6 +265,7 @@ assert.equal(readableSkippedQa.status, 0, readableSkippedQa.stderr);
 assert.ok(readableSkippedQa.stdout.includes("质量检查：未执行"));
 assert.ok(readableSkippedQa.stdout.includes("关联 sha256:save → fr：missing"));
 await writeFile(qaResource, originalResource);
+await writeFile(baselinePath, baselineSnapshot);
 const initialQa = spawnSync(executable, ["qa", "qa.config.ts"], {
   encoding: "utf8",
   shell: process.platform === "win32",
@@ -265,11 +296,57 @@ assert.equal(initialDiagnostic.checkId, "number-correspondence");
 assert.equal(initialDiagnostic.evidence.length, 2);
 assert.equal(initialDiagnostic.object.key, "sha256:save");
 assert.equal(initialDiagnostic.location.key, "save_label");
-assert.deepEqual(initialDiagnostic.handling, {
+assert.deepEqual(initialDiagnostic.handling, { status: "active" });
+assert.deepEqual(initialResult.exceptions, []);
+assert.deepEqual(initialResult.exceptionApplicability, []);
+const initialExecution = initialResult.checks.find(
+  ({ checkId }) => checkId === "number-correspondence",
+)?.executions[0];
+assert.ok(initialExecution?.inputFingerprint);
+assert.ok(initialExecution.fingerprintSummary);
+const handwrittenException = [
+  "format: lioni.qa-exceptions/v1",
+  "exceptions:",
+  "  - id: approved-number-difference",
+  "    reason: 数字差异已由维护者确认。",
+  "    checkId: number-correspondence",
+  "    sourceKey: sha256:save",
+  "    language: fr",
+  `    inputFingerprint: ${initialExecution.inputFingerprint}`,
+  "    fingerprintSummary:",
+  `      version: ${JSON.stringify(initialExecution.fingerprintSummary.version)}`,
+  `      configurationFingerprint: ${initialExecution.fingerprintSummary.configurationFingerprint}`,
+  `      inputFingerprint: ${initialExecution.fingerprintSummary.inputFingerprint}`,
+  "",
+].join("\n");
+const exceptionPath = path.join(process.cwd(), "lioni.exceptions.yaml");
+const exceptionSnapshot = Buffer.from(handwrittenException);
+await writeFile(exceptionPath, handwrittenException, "utf8");
+const exceptedQa = spawnSync(executable, ["qa", "qa.config.ts"], {
+  encoding: "utf8",
+  shell: process.platform === "win32",
+});
+assert.equal(exceptedQa.status, 0, exceptedQa.stderr + exceptedQa.stdout);
+const exceptedResult = parseJson<{ data: QaCliResult }>(exceptedQa.stdout).data;
+assert.equal(exceptedResult.diagnostics.length, 1);
+assert.deepEqual(exceptedResult.diagnostics[0]?.handling, {
   status: "excepted",
   exceptionId: "approved-number-difference",
   reason: "数字差异已由维护者确认。",
 });
+assert.deepEqual(exceptedResult.exceptionApplicability, [
+  {
+    exceptionId: "approved-number-difference",
+    checkId: "number-correspondence",
+    sourceKey: "sha256:save",
+    language: "fr",
+    executionId: 0,
+    candidateIndex: 0,
+    status: "applicable",
+  },
+]);
+assert.deepEqual(await readFile(baselinePath), baselineSnapshot);
+assert.deepEqual(await readFile(exceptionPath), exceptionSnapshot);
 assert.deepEqual(await readFile(qaResource), originalResource);
 
 const readableQa = spawnSync(
@@ -282,6 +359,11 @@ assert.ok(readableQa.stdout.includes("位置键 save_label"));
 assert.ok(
   readableQa.stdout.includes(
     "例外 approved-number-difference：数字差异已由维护者确认。",
+  ),
+);
+assert.ok(
+  readableQa.stdout.includes(
+    "QA 例外 approved-number-difference number-correspondence sha256:save → fr（候选 1，执行 0）：适用。",
   ),
 );
 
@@ -317,6 +399,31 @@ const editedResult = JSON.parse(editedQa.stdout).data;
 assert.equal(editedResult.status, "complete");
 assert.notEqual(editedResult.version, initialResult.version);
 assert.deepEqual(editedResult.diagnostics, []);
+assert.deepEqual(editedResult.exceptionApplicability, [
+  {
+    exceptionId: "approved-number-difference",
+    checkId: "number-correspondence",
+    sourceKey: "sha256:save",
+    language: "fr",
+    executionId: 0,
+    candidateIndex: 0,
+    status: "basis-changed",
+    reasons: ["business-input"],
+  },
+]);
+const readableEditedQa = spawnSync(
+  executable,
+  ["qa", "qa.config.ts", "--output-format", "text"],
+  { encoding: "utf8", shell: process.platform === "win32" },
+);
+assert.equal(readableEditedQa.status, 0, readableEditedQa.stderr);
+assert.ok(
+  readableEditedQa.stdout.includes(
+    "QA 例外 approved-number-difference number-correspondence sha256:save → fr（候选 1，执行 0）：依据变化（业务输入变化）。",
+  ),
+);
+assert.deepEqual(await readFile(baselinePath), baselineSnapshot);
+assert.deepEqual(await readFile(exceptionPath), exceptionSnapshot);
 assert.deepEqual(await readFile(qaResource), editedResource);
 
 process.stdout.write(
