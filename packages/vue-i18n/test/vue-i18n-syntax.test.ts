@@ -5,7 +5,7 @@ import {
   createVueI18nSourceSyntaxChecker,
   createVueI18nTargetSyntaxChecker,
   createVueI18nVariableCorrespondenceChecker,
-} from "@lioni/checks";
+} from "@lioni/vue-i18n";
 import {
   analyzeQuality,
   defineConfig,

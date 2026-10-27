@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseVueI18nMessage } from "@lioni/checks";
+import { parseVueI18nMessage } from "@lioni/vue-i18n";
 
 void test("保留 Vue I18n 分支变量次数、范围和关联目标", () => {
   const parsed = parseVueI18nMessage("{name} @:{linked} @:account | {n} {n}");
