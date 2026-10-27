@@ -37,6 +37,7 @@ export function resourceContract(
 
 export function createResourceContractCheck(project: Project) {
   return textRule("kuma/resource-contract", project, resourceContract, {
+    version: "kuma/resource-contract/v1",
     inventory: true,
   });
 }

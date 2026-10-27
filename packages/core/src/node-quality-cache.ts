@@ -2,9 +2,10 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import type {
-  CacheableQualityCheckOutcome,
-  QualityCheckResultCache,
+import {
+  isCacheableQualityCheckOutcome,
+  type CacheableQualityCheckOutcome,
+  type QualityCheckResultCache,
 } from "./quality-cache.ts";
 import { assertJsonValue } from "./standard-schema.ts";
 
@@ -134,94 +135,6 @@ function isCacheDocument(value: unknown): value is QualityCacheDocument {
     keys.add(entry.key);
   }
   return true;
-}
-
-function isCacheableQualityCheckOutcome(
-  value: unknown,
-): value is CacheableQualityCheckOutcome {
-  if (
-    !isRecord(value) ||
-    (value.status !== "complete" && value.status !== "not-applicable") ||
-    !Array.isArray(value.diagnostics) ||
-    !value.diagnostics.every(isQualityFinding) ||
-    !Array.isArray(value.issues) ||
-    !value.issues.every(isQualityIssue) ||
-    !isRecord(value.coverage)
-  )
-    return false;
-
-  for (const key of [
-    "selected",
-    "evaluated",
-    "notApplicable",
-    "incomplete",
-    "failed",
-  ]) {
-    const count = value.coverage[key];
-    if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0)
-      return false;
-  }
-
-  try {
-    assertJsonValue(value, "QA 原始检查结果");
-  } catch {
-    return false;
-  }
-  return true;
-}
-
-function isQualityFinding(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    (value.severity === "error" ||
-      value.severity === "warning" ||
-      value.severity === "info") &&
-    isQualityObject(value.object) &&
-    isQualityLocation(value.location) &&
-    typeof value.message === "string" &&
-    Array.isArray(value.evidence) &&
-    value.evidence.every(isQualityEvidence)
-  );
-}
-
-function isQualityIssue(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    typeof value.code === "string" &&
-    typeof value.message === "string" &&
-    (value.object === undefined || isQualityObject(value.object)) &&
-    (value.location === undefined || isQualityLocation(value.location)) &&
-    (value.evidence === undefined ||
-      (Array.isArray(value.evidence) &&
-        value.evidence.every(isQualityEvidence)))
-  );
-}
-
-function isQualityEvidence(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    typeof value.role === "string" &&
-    isQualityObject(value.object) &&
-    isQualityLocation(value.location) &&
-    Object.hasOwn(value, "value")
-  );
-}
-
-function isQualityObject(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    typeof value.kind === "string" &&
-    typeof value.key === "string"
-  );
-}
-
-function isQualityLocation(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    (typeof value.language === "string" || value.language === null) &&
-    Object.hasOwn(value, "range") &&
-    (value.key === undefined || typeof value.key === "string")
-  );
 }
 
 function isCacheKey(value: unknown): value is string {

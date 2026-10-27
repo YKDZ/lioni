@@ -20,7 +20,7 @@ export function createTerminologyChecks(
   return [requireAllowedTranslation(), rejectForbiddenTranslation()].map(
     (rule) =>
       createTermChecker<Unit, Translation, Pair, Body>({
-        hostVersion: "kuma-terminology-v1",
+        hostVersion: "kuma-terminology/v2+@intlify/message-compiler@11.2.8",
         terms,
         rule,
         select: (input) =>

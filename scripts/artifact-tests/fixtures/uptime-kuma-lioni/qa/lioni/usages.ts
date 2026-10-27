@@ -47,7 +47,7 @@ function supplied(args: readonly unknown[]): {
       continue;
     }
     if (arg.type === "NumericLiteral") {
-      result.push("plural");
+      result.push("plural", "named:n", "named:count");
       continue;
     }
     if (arg.type === "ArrayExpression" && Array.isArray(arg.elements)) {
@@ -91,14 +91,34 @@ function supplied(args: readonly unknown[]): {
         const nested = supplied([property.value]);
         result.push(...nested.supplied);
         known &&= nested.parametersKnown;
-      } else if (key === "plural") result.push("plural");
-      else result.push(`named:${key}`);
+      } else if (key === "plural") {
+        if (numericPlural(property.value))
+          result.push("plural", "named:n", "named:count");
+        else known = false;
+      } else result.push(`named:${key}`);
     }
   }
-  if (result.includes("named:n") || result.includes("named:count"))
-    result.push("plural");
-  if (result.includes("plural")) result.push("named:n", "named:count");
   return { supplied: [...new Set(result)], parametersKnown: known };
+}
+function numericPlural(value: unknown): boolean {
+  if (!node(value)) return false;
+  if (value.type === "NumericLiteral") return true;
+  return value.type === "StringLiteral" && Number.isFinite(Number(value.value));
+}
+function numericPluralExpression(expression: unknown): boolean {
+  return (
+    node(expression) &&
+    typeof expression.content === "string" &&
+    (() => {
+      try {
+        return numericPlural(
+          parseExpression(expression.content, { plugins: ["typescript"] }),
+        );
+      } catch {
+        return false;
+      }
+    })()
+  );
 }
 /** 从真正的 JS/Vue AST 提取静态调用；动态键与解析限制单独留证。 */
 export function extractUsages(text: string, file: string): UsageIndex {
@@ -234,7 +254,21 @@ export function extractUsages(text: string, file: string): UsageIndex {
                 node(p.arg) &&
                 p.arg.content === "plural")),
         );
-        if (plural) params.push("plural");
+        if (plural) {
+          const staticValue =
+            node(plural) && plural.type === 6 && node(plural.value)
+              ? plural.value.content
+              : undefined;
+          const boundExpression =
+            node(plural) && plural.type === 7 ? plural.exp : undefined;
+          if (
+            (typeof staticValue === "string" &&
+              Number.isFinite(Number(staticValue))) ||
+            numericPluralExpression(boundExpression)
+          )
+            params.push("plural", "named:n", "named:count");
+          else known = false;
+        }
         entries.push({
           key,
           file,

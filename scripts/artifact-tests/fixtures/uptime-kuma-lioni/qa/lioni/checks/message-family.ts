@@ -44,7 +44,7 @@ export function createFamilyCheck(
     },
   };
   return createMessageFamilyChecker<Unit, Translation, Unit, Body>({
-    hostVersion: "kuma-message-family-v1",
+    hostVersion: "kuma-message-family/v2+@intlify/message-compiler@11.2.8",
     analysis: familyAnalysis,
     select: (input) =>
       !policies.has(input.candidate.language) ||
