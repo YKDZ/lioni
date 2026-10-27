@@ -56,3 +56,36 @@ const targetSyntax = createVueI18nTargetSyntaxChecker({
 `parseVueI18nMessage(text)` 使用官方 `@intlify/message-compiler`，固定兼容基准为 11.2.8。结果保留语法错误的 code、类别、说明和 UTF-16 半开范围；每个分支包含正文、范围及按原始顺序记录的变量身份。重复变量不会去重，位置变量使用 `list:<index>`、命名变量使用 `named:<name>`。`tokens` 保留对应范围；`links` 和 `linkFacts` 暴露静态关联键及动态关联键变量。
 
 升级编译器可能改变可接受语法或解析事实，必须有意更新依赖版本和相应检查实现版本，再通过正式制品消费验收。共享解析器返回的语法错误不会被例外处理或其他检查的执行顺序改写。
+
+## Vue I18n 变量对应
+
+`createVueI18nVariableCorrespondenceChecker` 使用同样的显式选择和正文投影方式，检查身份为 `vue-i18n/variable-correspondence`。它在每个原始分支内分别统计命名变量和位置变量的身份及次数，然后比较两侧去重后的计数模式集合。变量顺序和分支顺序不参与比较；相同模式的分支可以合并或重复，空变量模式也参与比较。`n` 与 `count` 是不同身份，Literal 不计变量，动态关联键中的直接变量计入，静态关联目标的正文不会展开。
+
+这是静态正文契约检查，不判断运行时会选中哪个复数分支，也不推断函数调用传参或实际渲染行为。原文或译文存在语法错误时，变量检查返回 incomplete，不重复生成语法诊断；请同时装配 source/target syntax 检查器来报告对应语法问题。
+
+```ts
+import { createVueI18nVariableCorrespondenceChecker } from "@lioni/checks";
+
+const variableCorrespondence = createVueI18nVariableCorrespondenceChecker({
+  select: ({ sourceUnit, candidate }) => {
+    if (sourceUnit === null)
+      return {
+        status: "incomplete",
+        issue: { code: "sourceUnavailable", message: "找不到原文。" },
+      };
+    return {
+      status: "selected",
+      subject: {
+        sourceUnit,
+        sourceKey: candidate.sourceKey,
+        language: candidate.language,
+        content: candidate.content,
+      },
+    };
+  },
+  sourceText: (unit) => unit.catalog.message.body,
+  targetText: (content) => content.catalog.message.body,
+});
+```
+
+检查只处理 QA 正式选择的候选。缺译不会隐式成为空字符串候选；宿主显式提供的空字符串候选会正常比较。

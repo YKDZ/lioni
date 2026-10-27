@@ -1,10 +1,13 @@
 import {
   createVueI18nSourceSyntaxChecker,
   createVueI18nTargetSyntaxChecker,
+  createVueI18nVariableCorrespondenceChecker,
 } from "@lioni/checks";
 import {
   defineConfig,
+  type QualityCheckDefinition,
   type QualityCheckInput,
+  type QualityObject,
   type SourceUnitFact,
   type StandardSchemaV1,
 } from "@lioni/core";
@@ -26,7 +29,12 @@ const translationSchema: StandardSchemaV1<Translation, Translation> =
 const contentSchema: StandardSchemaV1<Content, Content> =
   standardSchema(isContent);
 
-const qualityChecks = [
+const syntaxChecks: readonly QualityCheckDefinition<
+  Unit,
+  Translation,
+  QualityObject,
+  Content
+>[] = [
   createVueI18nSourceSyntaxChecker<Unit, Translation, Unit, Content>({
     select: (input: QualityCheckInput<Unit, Translation, unknown, Content>) => {
       if (input.sourceUnit === null)
@@ -63,65 +71,105 @@ const qualityChecks = [
   }),
 ];
 
-const config = defineConfig({
-  source: {
-    schema: unitSchema,
-    read: () => ({
-      scopes: [
-        {
-          range: "source.json",
-          enumeration: "complete" as const,
-          records: [
-            {
-              value: {
-                source: {
-                  id: "message",
-                  catalog: { message: { body: "source } error" } },
-                },
-              },
-              bodyAvailability: "available" as const,
-            },
-          ],
+export function createVariableChecker() {
+  return createVueI18nVariableCorrespondenceChecker<
+    Unit,
+    Translation,
+    Unit,
+    Content,
+    Content
+  >({
+    select: (input) => {
+      if (input.sourceUnit === null)
+        return {
+          status: "incomplete",
+          issue: { code: "sourceUnavailable", message: "找不到对应原文。" },
+        };
+      return {
+        status: "selected",
+        subject: {
+          sourceUnit: input.sourceUnit as SourceUnitFact<Unit>,
+          sourceKey: input.candidate.sourceKey,
+          language: input.candidate.language,
+          content: input.candidate.content,
         },
-      ],
-    }),
-  },
-  keyOf: ({ source }) => source.id,
-  translations: {
-    languages: ["fr"],
-    identityOf: (translation) => ({
-      namespace: "messages",
-      key: translation.nativeKey,
-    }),
-    schema: translationSchema,
-    contentSchema,
-    contentOf: (translation) => translation.content,
-    matches: (unit, translation) => unit.source.id === translation.nativeKey,
-    read: (_language, units) => ({
-      scopes: [
-        {
-          range: "fr.json",
-          enumeration: "complete" as const,
-          covers: units.map(({ key }) => key),
-          records: [
-            {
-              value: {
-                nativeKey: "message",
-                content: {
-                  catalog: { message: { body: "cible } erreur" } },
-                },
-              },
-              bodyAvailability: "available" as const,
-            },
-          ],
-        },
-      ],
-    }),
-  },
-  qualityChecks,
-});
+      };
+    },
+    sourceText: (unit) => unit.source.catalog.message.body,
+    targetText: (content) => content.catalog.message.body,
+  });
+}
 
-export default config;
+export function createConfig(
+  sourceBody: string,
+  targetBody: string,
+  qualityChecks: readonly QualityCheckDefinition<
+    Unit,
+    Translation,
+    QualityObject,
+    Content
+  >[] = syntaxChecks,
+) {
+  return defineConfig({
+    source: {
+      schema: unitSchema,
+      read: () => ({
+        scopes: [
+          {
+            range: "source.json",
+            enumeration: "complete" as const,
+            records: [
+              {
+                value: {
+                  source: {
+                    id: "message",
+                    catalog: { message: { body: sourceBody } },
+                  },
+                },
+                bodyAvailability: "available" as const,
+              },
+            ],
+          },
+        ],
+      }),
+    },
+    keyOf: ({ source }) => source.id,
+    translations: {
+      languages: ["fr"],
+      identityOf: (translation) => ({
+        namespace: "messages",
+        key: translation.nativeKey,
+      }),
+      schema: translationSchema,
+      contentSchema,
+      contentOf: (translation) => translation.content,
+      matches: (unit, translation) => unit.source.id === translation.nativeKey,
+      read: (_language, units) => ({
+        scopes: [
+          {
+            range: "fr.json",
+            enumeration: "complete" as const,
+            covers: units.map(({ key }) => key),
+            records: [
+              {
+                value: {
+                  nativeKey: "message",
+                  content: {
+                    catalog: { message: { body: targetBody } },
+                  },
+                },
+                bodyAvailability: "available" as const,
+              },
+            ],
+          },
+        ],
+      }),
+    },
+    qualityChecks,
+  });
+}
+
+export default createConfig("source } error", "cible } erreur");
 
 function standardSchema<T>(
   isValue: (value: unknown) => value is T,

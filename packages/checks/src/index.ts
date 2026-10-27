@@ -54,3 +54,8 @@ export type {
   VueI18nTargetSyntaxCheckerOptions,
   VueI18nTargetSyntaxSubject,
 } from "./vue-i18n-syntax-checkers.ts";
+export { createVueI18nVariableCorrespondenceChecker } from "./vue-i18n-variable-checker.ts";
+export type {
+  VueI18nVariableCorrespondenceCheckerOptions,
+  VueI18nVariableCorrespondenceSubject,
+} from "./vue-i18n-variable-checker.ts";
