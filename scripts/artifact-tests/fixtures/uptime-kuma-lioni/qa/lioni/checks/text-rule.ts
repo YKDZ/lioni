@@ -44,10 +44,11 @@ export function textRule(
   project: Project,
   evaluate: (pair: Pair, policy: Policy) => readonly Finding[],
   options: {
+    version: string;
     inventory?: boolean;
     appliesTo?: (pair: Pair, policy: Policy) => boolean;
     capability?: (policy: Policy) => string | undefined;
-  } = {},
+  },
 ): QualityCheckDefinition<
   Unit,
   Translation,
@@ -60,7 +61,7 @@ export function textRule(
   );
   return bindQualityCheck({
     id,
-    version: "kuma-host-text-rule-v1",
+    version: options.version,
     configurationSchema: configSchema,
     configuration: { version: 1 },
     inputSchema: pairSchema,

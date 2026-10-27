@@ -15,11 +15,6 @@ export type UsageIndex = {
   unresolved: readonly { file: string; expression: string }[];
   errors: readonly { file: string; message: string }[];
 };
-export type ReviewBaseline = {
-  source: string;
-  approvedTargets: readonly string[];
-  reason: string;
-};
 export type ScopeRule = {
   scope: string;
   keys?: readonly string[];
@@ -29,7 +24,6 @@ export type ScopeRule = {
 export type UsageScopeRule = { scope: string; filePattern: string };
 export type LanguageMetadata = {
   quantityProfile?: string;
-  reviews?: Readonly<Record<string, ReviewBaseline>>;
   equivalences?: readonly (readonly string[])[];
   quantityUnitAliases?: Readonly<
     Record<string, Readonly<Record<string, string>>>
@@ -62,7 +56,6 @@ export type Policy = Resources &
     targetQuantityIgnoredLiterals?: Readonly<Record<string, readonly string[]>>;
     terms: TermbaseData;
     usages: UsageIndex;
-    reviews: Readonly<Record<string, ReviewBaseline>>;
     targetEquivalences: readonly (readonly string[])[];
   };
 export type Project = {
@@ -87,4 +80,7 @@ export type Unit = {
   source: { text: string };
 };
 export type Translation = { key: string; text: string; language: string };
-export type Body = { text: string };
+export type Body = {
+  text: string;
+  resourceStatus?: "missing" | "unavailable";
+};

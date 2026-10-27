@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 
+import { VUE_I18N_MESSAGE_COMPILER_VERSION } from "@lioni/checks";
 import {
   defineQualityCheck,
   type QualityCheckDefinition,
@@ -22,31 +23,61 @@ type Input = Parameters<PreparedCheck["prepareInput"]>[0];
 type Loader = (facts: KumaFacts) => Promise<Project>;
 type Factory = (project: Project) => readonly CheckDefinition[];
 
-const textRuleVersion = "kuma-host-text-rule-v1";
-const terminologyVersion = "checks.terminology-rule/v1+kuma-terminology-v1";
-const messageFamilyVersion =
-  "checks.message-family-consistency/v1+kuma-message-family-v1";
-
 const configurations = [
-  ["kuma/resource-contract", { version: 1 }, textRuleVersion],
-  ["kuma/vue-message-contract", { version: 1 }, textRuleVersion],
-  ["kuma/protected-literals", { version: 1 }, textRuleVersion],
-  ["kuma/quantities", { version: 1 }, textRuleVersion],
-  ["kuma/critical-copy-review", { version: 1 }, textRuleVersion],
+  ["kuma/resource-contract", { version: 1 }, "kuma/resource-contract/v1"],
+  [
+    "vue-i18n/source-syntax",
+    { compilerVersion: VUE_I18N_MESSAGE_COMPILER_VERSION },
+    `checks.vue-i18n/source-syntax/v1+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}+kuma-source-syntax-v1`,
+  ],
+  [
+    "vue-i18n/target-syntax",
+    { compilerVersion: VUE_I18N_MESSAGE_COMPILER_VERSION },
+    `checks.vue-i18n/target-syntax/v1+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}+kuma-target-syntax-v1`,
+  ],
+  [
+    "vue-i18n/variable-correspondence",
+    {
+      compilerVersion: VUE_I18N_MESSAGE_COMPILER_VERSION,
+      comparison: "branch-variable-count-patterns-v1",
+    },
+    `checks.vue-i18n/variable-correspondence/v1+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}+kuma-variable-correspondence-v1`,
+  ],
+  [
+    "kuma/vue-message-call-arguments",
+    { version: 1 },
+    `kuma/vue-message-call-arguments/v1+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}+usage-scan-v1`,
+  ],
+  [
+    "kuma/vue-message-link-target-exists",
+    { version: 1 },
+    `kuma/vue-message-link-target-exists/v1+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
+  ],
+  [
+    "kuma/vue-message-link-cycle",
+    { version: 1 },
+    `kuma/vue-message-link-cycle/v1+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
+  ],
+  ["kuma/protected-literals", { version: 1 }, "kuma/protected-literals/v1"],
+  [
+    "kuma/quantities",
+    { version: 1 },
+    `kuma/quantities/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
+  ],
   [
     "terminology/require-allowed-translation",
     { rules: ["require-allowed-translation"] },
-    terminologyVersion,
+    `checks.terminology-rule/v1+kuma-terminology/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
   ],
   [
     "terminology/reject-forbidden-translation",
     { rules: ["reject-forbidden-translation"] },
-    terminologyVersion,
+    `checks.terminology-rule/v1+kuma-terminology/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
   ],
   [
     "message-family-consistency",
     { limits: { maxCategories: 6, maxSourcesPerCategory: 3 } },
-    messageFamilyVersion,
+    `checks.message-family-consistency/v1+kuma-message-family/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
   ],
 ] as const;
 

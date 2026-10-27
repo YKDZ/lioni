@@ -7,27 +7,11 @@ import {
   type StandardSchemaV1,
 } from "@lioni/core";
 
+import { createKumaQualityRequest, type KumaFacts } from "../adapter.ts";
 import { createKumaAnalysis } from "../analysis.ts";
-import {
-  createResourceContractCheck,
-  createMessageContractCheck,
-  createProtectedLiteralsCheck,
-  createQuantityCheck,
-  createCriticalCopyReviewCheck,
-  createTerminologyChecks,
-  createFamilyCheck,
-} from "../checks/index.ts";
+import { createKumaQualityChecks } from "../checks/index.ts";
 function createKumaChecks(project: Project) {
-  const shared = createKumaAnalysis();
-  return [
-    createResourceContractCheck(project),
-    createMessageContractCheck(project),
-    createProtectedLiteralsCheck(project),
-    createQuantityCheck(project),
-    createCriticalCopyReviewCheck(project),
-    ...createTerminologyChecks(project, shared),
-    createFamilyCheck(project, shared),
-  ];
+  return createKumaQualityChecks(project, createKumaAnalysis());
 }
 
 function createKumaConfig(input: Policy | readonly Policy[]) {
@@ -106,6 +90,8 @@ function createKumaConfig(input: Policy | readonly Policy[]) {
       },
     },
     qualityChecks: createKumaChecks(project),
+    createQualityRequest: (facts) =>
+      createKumaQualityRequest(project, facts as KumaFacts),
   });
 }
 
@@ -166,7 +152,6 @@ const basePolicy: Policy = {
   targetRange: "fixtures/zh-CN.json",
   sourceQuantityProfile: "en",
   targetQuantityProfile: "zh-CN",
-  reviews: {},
   targetEquivalences: targetMetadata.equivalences ?? [],
   quantityUnitAliases: sourceMetadata.quantityUnitAliases ?? {},
   quantityDefaultUnits: sourceMetadata.quantityDefaultUnits ?? {},
@@ -188,7 +173,6 @@ async function run(
     terms: { concepts: [] },
     usages: { entries: [], unresolved: [], errors: [] },
     literals: {},
-    reviews: {},
     ...patch,
   };
   return analyzeQuality(createKumaConfig(policy), {
@@ -203,45 +187,102 @@ async function run(
 }
 const codes = (result: Awaited<ReturnType<typeof run>>) =>
   result.diagnostics.map((d) => d.object.code);
-void test("消息契约允许变量重排并报告丢失变量", async () => {
-  assert.deepEqual(
-    codes(await run("Hello {name}, {0}", "{0}，你好 {name}")),
-    [],
+const diagnosticsFor = (
+  result: Awaited<ReturnType<typeof run>>,
+  checkId: string,
+) => result.diagnostics.filter((diagnostic) => diagnostic.checkId === checkId);
+void test("Kuma 变量对应保留 n 与 count 的身份差异", async () => {
+  const result = await run("{n} item | {count} items", "{count} 项");
+  const diagnostics = result.diagnostics.filter(
+    (diagnostic) => diagnostic.checkId === "vue-i18n/variable-correspondence",
   );
-  assert.ok(
-    codes(await run("Hello {name}, {0}", "你好 {name}")).includes(
-      "missing-message-variable",
-    ),
+  assert.equal(diagnostics.length, 1);
+  assert.equal(
+    result.checks.find(
+      (check) => check.checkId === "vue-i18n/variable-correspondence",
+    )?.status,
+    "complete",
+  );
+});
+void test("变量重排允许但重复次数仍需一致", async () => {
+  assert.equal(
+    diagnosticsFor(
+      await run("Hello {name}, {0}", "{0}，你好 {name}"),
+      "vue-i18n/variable-correspondence",
+    ).length,
+    0,
+  );
+  assert.equal(
+    diagnosticsFor(
+      await run("Hello {name}, {0}", "你好 {name}"),
+      "vue-i18n/variable-correspondence",
+    ).length,
+    1,
+  );
+  assert.equal(
+    diagnosticsFor(
+      await run("{name}{name}", "{name}"),
+      "vue-i18n/variable-correspondence",
+    ).length,
+    1,
   );
 });
 void test("中文可以合并英文复数分支且字面转义不作为变量", async () => {
-  assert.deepEqual(
-    codes(await run("{n} monitor | {n} monitors", "{n} 个监控项")),
-    [],
+  assert.equal(
+    diagnosticsFor(
+      await run("{n} monitor | {n} monitors", "{n} 个监控项"),
+      "vue-i18n/variable-correspondence",
+    ).length,
+    0,
   );
-  assert.deepEqual(
-    codes(await run("Email {'@'} {name}", "邮箱 {'@'} {name}")),
-    [],
+  assert.equal(
+    diagnosticsFor(
+      await run("Email {'@'} {name}", "邮箱 {'@'} {name}"),
+      "vue-i18n/variable-correspondence",
+    ).length,
+    0,
   );
-  assert.ok(
-    codes(await run("{n} monitor | {n} monitors", "监控项")).includes(
-      "missing-message-variable",
-    ),
+  assert.equal(
+    diagnosticsFor(
+      await run("{n} monitor | {n} monitors", "监控项"),
+      "vue-i18n/variable-correspondence",
+    ).length,
+    1,
   );
 });
-void test("语法错误、未知变量与不存在的关联消息能定位", async () => {
-  assert.ok(
-    codes(await run("Hi {name}", "你好 {name")).includes("message-syntax"),
+void test("原译语法独立报告且变量语法无效时不比较", async () => {
+  const result = await run("Hi {name", "你好 {name");
+  assert.equal(diagnosticsFor(result, "vue-i18n/source-syntax").length, 1);
+  assert.equal(diagnosticsFor(result, "vue-i18n/target-syntax").length, 1);
+  assert.equal(
+    diagnosticsFor(result, "vue-i18n/variable-correspondence").length,
+    0,
   );
-  assert.ok(
-    codes(await run("Hi {name}", "你好 {other}")).includes(
-      "unexpected-message-variable",
-    ),
+  assert.equal(
+    result.checks.find(
+      (check) => check.checkId === "vue-i18n/variable-correspondence",
+    )?.status,
+    "incomplete",
   );
-  assert.ok(
-    codes(await run("Hello", "@:missing.key")).includes(
-      "missing-linked-message",
-    ),
+  const sourceFinding = diagnosticsFor(result, "vue-i18n/source-syntax")[0]!;
+  assert.equal(sourceFinding.location.language, null);
+  assert.equal(sourceFinding.location.range, "fixtures/en.json");
+  assert.ok(sourceFinding.location.span);
+});
+void test("译文变量差异与关联目标缺失由独立检查报告", async () => {
+  assert.equal(
+    diagnosticsFor(
+      await run("Hi {name}", "你好 {other}"),
+      "vue-i18n/variable-correspondence",
+    ).length,
+    1,
+  );
+  assert.equal(
+    diagnosticsFor(
+      await run("Hello", "@:missing.key"),
+      "kuma/vue-message-link-target-exists",
+    ).length,
+    1,
   );
 });
 import { extractUsages } from "../usages.ts";
@@ -274,11 +315,27 @@ void test("调用参数和组件槽位从Vue语法树取得并核对", async () 
       "call-argument-missing",
     ),
   );
+  const unknownArguments = extractUsages(`t('label', params)`, "src/demo.ts");
+  const incomplete = await run("Value {0}", "值{0}", {
+    usages: unknownArguments,
+  });
+  assert.equal(
+    incomplete.checks.find(
+      (check) => check.checkId === "kuma/vue-message-call-arguments",
+    )?.status,
+    "incomplete",
+  );
 });
 void test("消息别名循环会阻止运行时无限递归", async () => {
   assert.ok(
     codes(await run("Hello", "@:label")).includes("linked-message-cycle"),
   );
+});
+void test("关联循环使用当前候选正文覆盖已保存正文", async () => {
+  const result = await run("Hello", "@:label", {
+    target: { label: "已保存正文" },
+  });
+  assert.equal(diagnosticsFor(result, "kuma/vue-message-link-cycle").length, 1);
 });
 void test("技术标识符必须保留，不能用含相同子串的新标识符替代", async () => {
   const literals = { label: ["monitor_id"] };
@@ -353,30 +410,61 @@ void test("资源缺译和中文独有键分别报告", async () => {
   );
   assert.ok(codes(await run("Hello", "   ")).includes("empty-translation"));
 });
-void test("高风险文案只接受审定译文，原文变化重新进入复核", async () => {
-  const reviews = {
-    label: {
-      source: "Reject clients without certificate",
-      approvedTargets: ["拒绝无证书的客户端"],
-      reason: "必须说明拒绝而非允许连接",
-    },
-  };
-  assert.deepEqual(
-    codes(await run(reviews.label.source, "拒绝无证书的客户端", { reviews })),
-    [],
+void test("缺译占位不参与变量检查，已保存的空译文仍按真实候选检查", async () => {
+  const missing = await analyzeQuality(
+    createKumaConfig({
+      ...basePolicy,
+      source: { label: "Hello {name}" },
+      target: {},
+    }),
+  );
+  assert.equal(
+    missing.checks.find(
+      (check) => check.checkId === "vue-i18n/variable-correspondence",
+    )?.status,
+    "not-applicable",
   );
   assert.ok(
-    codes(
-      await run(reviews.label.source, "无需证书的客户端", { reviews }),
-    ).includes("critical-review-required"),
+    missing.diagnostics.some(
+      (diagnostic) =>
+        diagnostic.checkId === "kuma/resource-contract" &&
+        diagnostic.object.code === "missing-translation",
+    ),
   );
-  assert.ok(
-    codes(
-      await run("Allow clients without certificate", "拒绝无证书的客户端", {
-        reviews,
-      }),
-    ).includes("critical-source-changed"),
+
+  const empty = await analyzeQuality(
+    createKumaConfig({
+      ...basePolicy,
+      source: { label: "Hello {name}" },
+      target: { label: "" },
+    }),
   );
+  assert.equal(
+    diagnosticsFor(empty, "vue-i18n/variable-correspondence").length,
+    1,
+  );
+
+  const explicitConfig = createKumaConfig({
+    ...basePolicy,
+    source: { label: "Hello {name}" },
+    target: {},
+  });
+  for (const text of ["", "新的实际译文"]) {
+    const explicitCandidate = await analyzeQuality(explicitConfig, {
+      candidates: [
+        {
+          sourceKey: "label",
+          language: "zh-CN",
+          content: { text },
+        },
+      ],
+    });
+    assert.equal(
+      diagnosticsFor(explicitCandidate, "vue-i18n/variable-correspondence")
+        .length,
+      1,
+    );
+  }
 });
 void test("领域禁用词由正式术语规则检查，允许译法保持通过", async () => {
   const terms: Policy["terms"] = {
@@ -414,7 +502,6 @@ void test("不同业务的同形消息不互相约束，同范围差异仍提示
     terms: { concepts: [] },
     usages: { entries: [], unresolved: [], errors: [] },
     literals: {},
-    reviews: {},
   };
   let result = await analyzeQuality(createKumaConfig(policy), {
     candidates: [
@@ -458,7 +545,6 @@ void test("推送URL的明确合法空格差异不产生消息族警告", async 
     terms: { concepts: [] },
     usages: { entries: [], unresolved: [], errors: [] },
     literals: {},
-    reviews: {},
   };
   const result = await analyzeQuality(createKumaConfig(policy), {
     candidates: [
@@ -522,7 +608,6 @@ void test("孤立的非法消息由语法检查报告，不污染其他消息族
     terms: { concepts: [] },
     usages: { entries: [], unresolved: [], errors: [] },
     literals: {},
-    reviews: {},
   };
   const result = await analyzeQuality(createKumaConfig(policy), {
     candidates: Object.entries(policy.target).map(([key, text]) => ({
@@ -531,28 +616,167 @@ void test("孤立的非法消息由语法检查报告，不污染其他消息族
       content: { text },
     })),
   });
-  assert.ok(result.diagnostics.some((d) => d.object.code === "message-syntax"));
+  assert.ok(
+    result.diagnostics.some(
+      (diagnostic) =>
+        diagnostic.checkId === "vue-i18n/target-syntax" &&
+        diagnostic.object.key === "bad",
+    ),
+  );
+  const family = result.checks.find(
+    (check) => check.checkId === "message-family-consistency",
+  );
   assert.equal(
-    result.checks.find((c) => c.checkId === "message-family-consistency")
+    family?.executions.find((execution) => execution.sourceKey === "bad")
       ?.status,
-    "complete",
+    "not-applicable",
   );
 });
 void test("中文独有键仍检查消息语法", async () => {
-  assert.ok(
-    codes(await run("", "错误 @all", { source: {} })).includes(
-      "message-syntax",
-    ),
+  const result = await run("", "错误 @all", { source: {} });
+  assert.ok(diagnosticsFor(result, "vue-i18n/target-syntax").length > 0);
+});
+void test("变量对应和调用参数检查均保留 n 与 count 的身份", async () => {
+  const branchResult = await run("{n} item | {count} items", "项目");
+  assert.equal(
+    diagnosticsFor(branchResult, "vue-i18n/variable-correspondence").length,
+    1,
+  );
+  const usages = extractUsages(`t('label', { n: 2 })`, "src/demo.ts");
+  const callResult = await run("Items", "共{count}项", { usages });
+  assert.equal(
+    diagnosticsFor(callResult, "kuma/vue-message-call-arguments").length,
+    1,
+  );
+  assert.equal(
+    diagnosticsFor(callResult, "vue-i18n/variable-correspondence").length,
+    1,
   );
 });
-void test("复数隐式参数由实际调用提供，分支间n和count可等价", async () => {
-  assert.ok(
-    codes(await run("{n} item | {count} items", "项目")).includes(
-      "missing-message-variable",
-    ),
-  );
+void test("数字 plural 参数按 Vue I18n 运行时供给 n 和 count", async () => {
   const usages = extractUsages(`t('label', 2)`, "src/demo.ts");
-  assert.deepEqual(codes(await run("Items", "共{count}项", { usages })), []);
+  assert.deepEqual(usages.entries[0]?.supplied, [
+    "plural",
+    "named:n",
+    "named:count",
+  ]);
+  const result = await run("{n} items", "{count} 项", { usages });
+  assert.equal(
+    diagnosticsFor(result, "kuma/vue-message-call-arguments").length,
+    0,
+  );
+  assert.equal(
+    diagnosticsFor(result, "vue-i18n/variable-correspondence").length,
+    1,
+  );
+  const componentUsages = extractUsages(
+    `<template><i18n-t keypath="label" plural="2" /></template>`,
+    "src/Message.vue",
+  );
+  assert.deepEqual(componentUsages.entries[0]?.supplied, [
+    "plural",
+    "named:n",
+    "named:count",
+  ]);
+  assert.equal(
+    diagnosticsFor(
+      await run("Items", "{count} 项", { usages: componentUsages }),
+      "kuma/vue-message-call-arguments",
+    ).length,
+    0,
+  );
+});
+void test("Kuma 暴露六项独立 Vue 消息职责并固定编译器版本", async () => {
+  const result = await run("Hello", "你好");
+  const checks = new Map(result.checks.map((check) => [check.checkId, check]));
+  for (const id of [
+    "vue-i18n/source-syntax",
+    "vue-i18n/target-syntax",
+    "vue-i18n/variable-correspondence",
+    "kuma/vue-message-call-arguments",
+    "kuma/vue-message-link-target-exists",
+    "kuma/vue-message-link-cycle",
+  ])
+    assert.ok(checks.has(id), `缺少独立检查 ${id}`);
+  assert.ok(
+    checks
+      .get("vue-i18n/variable-correspondence")
+      ?.version.includes("@intlify/message-compiler@11.2.8"),
+  );
+  const loadedProject = Object.assign(
+    {
+      policies: [basePolicy],
+      terms: basePolicy.terms,
+      usages: basePolicy.usages,
+    },
+    {
+      root: "/fixture",
+      inputs: [{ url: new URL("file:///fixture/messages.json"), raw: "{}" }],
+      catalog: new URL("file:///fixture/languages.json"),
+    },
+  );
+  assert.equal(createKumaChecks(loadedProject).length, 12);
+});
+void test("调用点闭包资料参与对应候选的输入指纹", async () => {
+  const candidate = {
+    candidates: [
+      {
+        sourceKey: "label",
+        language: "zh-CN",
+        content: { text: "你好 {name}" },
+      },
+    ],
+  };
+  const first = await analyzeQuality(
+    createKumaConfig({
+      ...basePolicy,
+      source: { label: "Hello" },
+      target: { label: "你好 {name}" },
+      usages: {
+        entries: [
+          {
+            key: "label",
+            file: "src/first.ts",
+            kind: "call",
+            supplied: ["named:name"],
+            parametersKnown: true,
+          },
+        ],
+        unresolved: [],
+        errors: [],
+      },
+    }),
+    candidate,
+  );
+  const second = await analyzeQuality(
+    createKumaConfig({
+      ...basePolicy,
+      source: { label: "Hello" },
+      target: { label: "你好 {name}" },
+      usages: {
+        entries: [
+          {
+            key: "label",
+            file: "src/second.ts",
+            kind: "call",
+            supplied: ["named:other"],
+            parametersKnown: true,
+          },
+        ],
+        unresolved: [],
+        errors: [],
+      },
+    }),
+    candidate,
+  );
+  const fingerprint = (result: typeof first) =>
+    result.checks
+      .find((check) => check.checkId === "kuma/vue-message-call-arguments")
+      ?.executions.find((execution) => execution.sourceKey === "label")
+      ?.inputFingerprint;
+  assert.ok(fingerprint(first));
+  assert.ok(fingerprint(second));
+  assert.notEqual(fingerprint(first), fingerprint(second));
 });
 void test("技术字面值中的通配符和句点也必须按原值保留", async () => {
   assert.deepEqual(
@@ -688,7 +912,7 @@ void test("同一配置运行多语言，术语、消息族等价与位置互不
   const semantic = (diagnostics: typeof together.diagnostics) =>
     JSON.parse(
       JSON.stringify(diagnostics, (key, value: unknown) =>
-        key === "translationIndex" ? undefined : value,
+        key === "translationIndex" || key === "executionId" ? undefined : value,
       ),
     );
   assert.deepEqual(
@@ -711,15 +935,15 @@ void test("源语言和目标语言交换仍使用各自资源身份", async () 
   };
   const result = await analyzeQuality(createKumaConfig(policy));
   const finding = result.diagnostics.find(
-    (d) => d.object.code === "missing-message-variable",
+    (diagnostic) => diagnostic.checkId === "vue-i18n/variable-correspondence",
   );
   assert.equal(finding?.object.language, "en");
   assert.equal(finding?.location.range, "fixtures/en.json");
   assert.ok(
     finding?.evidence.some(
       (e) =>
-        e.role === "source" &&
-        e.location.language === "ja" &&
+        e.role === "source-variable-patterns" &&
+        e.location.language === null &&
         e.location.range === "fixtures/ja.json",
     ),
   );
@@ -743,7 +967,7 @@ void test("未支持的数值语言明确报告能力不足，其他规则仍执
   );
   assert.ok(
     result.diagnostics.some(
-      (d) => d.object.code === "missing-message-variable",
+      (diagnostic) => diagnostic.checkId === "vue-i18n/variable-correspondence",
     ),
   );
 });
