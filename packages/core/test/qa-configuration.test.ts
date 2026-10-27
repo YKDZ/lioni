@@ -376,7 +376,7 @@ void describe("quality checker configuration contracts", () => {
     );
   });
 
-  void it("rejects non-JSON custom fingerprint inputs as a contract error", async () => {
+  void it("自定义指纹依据含非 JSON 值时作为契约错误拒绝", async () => {
     const checker = defineQualityCheck<Unit, unknown, typeof thresholdSchema>({
       id: "non-json-fingerprint",
       version: "qa-configuration-v1",

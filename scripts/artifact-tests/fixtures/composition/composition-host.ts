@@ -33,12 +33,12 @@ async function prepare() {
   assert.equal(result.status, "complete");
   assert.equal(result.candidates.length, 2);
   assert.equal(
-    result.diagnostics.find(({ ruleId }) => ruleId === "catalog-numbers")
+    result.diagnostics.find(({ checkId }) => checkId === "catalog-numbers")
       ?.handling.status,
     "excepted",
   );
   assert.equal(
-    result.diagnostics.find(({ ruleId }) => ruleId === "guide-numbers")
+    result.diagnostics.find(({ checkId }) => checkId === "guide-numbers")
       ?.handling.status,
     "active",
   );

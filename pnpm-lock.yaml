@@ -275,6 +275,9 @@ importers:
 
   packages/checks:
     dependencies:
+      '@intlify/message-compiler':
+        specifier: 11.2.8
+        version: 11.2.8
       '@lioni/core':
         specifier: workspace:*
         version: link:../core

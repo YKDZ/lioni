@@ -118,12 +118,18 @@ type QualityResult = {
   readonly status: string;
   readonly candidates: readonly { readonly language: string }[];
   readonly diagnostics: readonly {
-    readonly ruleId: string;
+    readonly checkId: string;
     readonly severity: string;
     readonly object: { readonly language?: string };
     readonly location: { readonly language: string | null };
   }[];
-  readonly checks: readonly { readonly id: string }[];
+  readonly checks: readonly {
+    readonly checkId: string;
+    readonly version: string;
+    readonly executions: readonly {
+      readonly inputFingerprint?: string;
+    }[];
+  }[];
 };
 
 const requiredEnvironment = (name: string): string => {
@@ -626,8 +632,19 @@ process.stdout.write(JSON.stringify(result) + "\\n");
   assert.ok(quality.candidates.some(({ language }) => language === "zh-CN"));
   assert.ok(
     quality.checks.some(
-      ({ id }) => id === "terminology/reject-forbidden-translation",
+      ({ checkId }) => checkId === "terminology/reject-forbidden-translation",
     ),
+  );
+  const resourceCheck = quality.checks.find(
+    ({ checkId }) => checkId === "kuma/resource-contract",
+  );
+  assert.ok(resourceCheck);
+  assert.equal(resourceCheck.version, "kuma-host-text-rule-v1");
+  assert.ok(
+    resourceCheck.executions.some(
+      ({ inputFingerprint }) => typeof inputFingerprint === "string",
+    ),
+    "Kuma lazy checks must preserve the prepared input fingerprint.",
   );
 
   const byLanguage = Object.fromEntries(
@@ -952,7 +969,7 @@ process.stdout.write(JSON.stringify(result) + "\\n");
       observedAt: { started: qaStartedAt, finished: qaFinishedAt },
       diagnostics: quality.diagnostics.length,
       byLanguage,
-      checks: quality.checks.map(({ id }) => id),
+      checks: quality.checks.map(({ checkId }) => checkId),
       findings: quality.diagnostics,
     },
     timings: {
