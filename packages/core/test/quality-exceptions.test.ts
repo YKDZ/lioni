@@ -4,10 +4,12 @@ import { describe, it } from "node:test";
 import {
   createQualityException,
   evaluateQualityExceptionApplicability,
+  upsertQualityExceptionFromReport,
   QualityExceptionFormatError,
   validateQualityException,
   validateQualityExceptionFile,
   validateQualityExceptions,
+  type QualityException,
 } from "../src/index.ts";
 
 const execution = {
@@ -48,6 +50,126 @@ void describe("QA 例外", () => {
     });
     assert.equal("candidateIndex" in exception, false);
     assert.equal("executionId" in exception, false);
+  });
+
+  void it("从 SDK 或 CLI 报告按检查和执行身份保存指定候选", async () => {
+    const executions = [
+      { ...execution, executionId: 10, candidateIndex: 0 },
+      {
+        ...execution,
+        executionId: 11,
+        candidateIndex: 1,
+        inputFingerprint: "sha256:second-candidate",
+        fingerprintSummary: {
+          ...execution.fingerprintSummary,
+          inputFingerprint: "sha256:second-business-input",
+        },
+      },
+    ];
+    const sdkReport = {
+      version: "sha256:report",
+      checks: [{ checkId: execution.checkId, executions }],
+    };
+    const writes: QualityException[] = [];
+    let loads = 0;
+    const store = {
+      async load() {
+        loads += 1;
+        return [];
+      },
+      async upsert(exception: QualityException) {
+        writes.push(exception);
+      },
+    };
+
+    const sdkException = await upsertQualityExceptionFromReport({
+      report: sdkReport,
+      checkId: execution.checkId,
+      executionId: 11,
+      id: "second-candidate-approval",
+      reason: "第二个候选已由维护者确认。",
+      store,
+    });
+    const cliException = await upsertQualityExceptionFromReport({
+      report: { schemaVersion: "2", data: sdkReport },
+      checkId: execution.checkId,
+      executionId: 10,
+      id: "first-candidate-approval",
+      reason: "第一个候选已由维护者确认。",
+      store,
+    });
+
+    assert.equal(sdkException.inputFingerprint, "sha256:second-candidate");
+    assert.equal(cliException.inputFingerprint, execution.inputFingerprint);
+    assert.deepEqual(writes, [sdkException, cliException]);
+    assert.equal(loads, 0);
+  });
+
+  void it("报告缺少绑定依据时拒绝写入例外", async () => {
+    let writes = 0;
+    const store = {
+      async load() {
+        return [];
+      },
+      async upsert() {
+        writes += 1;
+      },
+    };
+
+    await assert.rejects(
+      upsertQualityExceptionFromReport({
+        report: {
+          checks: [
+            {
+              checkId: execution.checkId,
+              executions: [
+                {
+                  ...execution,
+                  executionId: 12,
+                  inputFingerprint: undefined,
+                },
+              ],
+            },
+          ],
+        },
+        checkId: execution.checkId,
+        executionId: 12,
+        id: "invalid-report-approval",
+        reason: "依据不可用。",
+        store,
+      }),
+      QualityExceptionFormatError,
+    );
+    assert.equal(writes, 0);
+  });
+
+  void it("报告中的空原文键保持原值", async () => {
+    let saved: QualityException | undefined;
+    const exception = await upsertQualityExceptionFromReport({
+      report: {
+        checks: [
+          {
+            checkId: execution.checkId,
+            executions: [{ ...execution, executionId: 13, sourceKey: "" }],
+          },
+        ],
+      },
+      checkId: execution.checkId,
+      executionId: 13,
+      id: "empty-source-key-approval",
+      reason: "空键资源经审核确认。",
+      store: {
+        async load() {
+          return [];
+        },
+        async upsert(value) {
+          saved = value;
+        },
+      },
+    });
+
+    assert.equal(exception.sourceKey, "");
+    assert.equal(saved?.sourceKey, "");
   });
 
   void it("缺少可比较依据时拒绝创建例外", () => {
