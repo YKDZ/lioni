@@ -489,7 +489,7 @@ export default defineConfig({
     );
     assert.equal(
       check?.executions[0]?.fingerprintSummary?.version,
-      "facts-journey-qa-v1",
+      "lioni.check-input/v1:facts-journey-qa-v1",
     );
     assert.equal(
       qaText?.exitCode,
