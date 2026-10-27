@@ -34,3 +34,7 @@ export type {
   MessageFamilyReferenceProjection,
   MessageFamilySubject,
 } from "./message-family-checker.ts";
+export { compareQuantityBranches } from "./quantities.ts";
+export type { QuantityBranch, QuantityBranchIssue } from "./quantities.ts";
+export { compareProtectedLiterals } from "./protected-literals.ts";
+export type { ProtectedLiteralIssue } from "./protected-literals.ts";

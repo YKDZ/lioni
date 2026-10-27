@@ -37,3 +37,5 @@ export type {
   WordToken,
 } from "./types.ts";
 export { segmentWords } from "./words.ts";
+export { quantityProfile } from "./quantities/index.ts";
+export type { QuantityOptions, QuantityProfile } from "./quantities/index.ts";
