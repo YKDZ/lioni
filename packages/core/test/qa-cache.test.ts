@@ -166,6 +166,15 @@ void describe("QA 结果缓存", () => {
         },
       },
       {
+        name: "质量对象语言不是字符串",
+        outcome: {
+          ...validOutcome,
+          diagnostics: [
+            { ...finding, object: { ...finding.object, language: 42 } },
+          ],
+        },
+      },
+      {
         name: "检查问题缺少必要字段",
         outcome: { ...validOutcome, issues: [{}] },
       },
