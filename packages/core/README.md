@@ -87,6 +87,18 @@ exceptions:
 
 直接向 `analyzeQuality(config)` 传入纯配置对象时，框架不会猜测当前目录；没有配置存储就不使用例外。自定义 `qualityExceptionStore` 会替换 Node 默认 YAML 来源。低层 `runQualityChecks` 仍可接收宿主已读取的例外列表。QA 报告分别给出诊断处理和 `exceptionApplicability`：输入、最终配置或检查版本改变时显示原因，局部未执行时标记为本次未验证；依据恢复后，旧例外会重新适用。即使本次没有诊断，也会报告适用性。
 
+人工编辑 YAML 与命令维护具有同等地位，二者使用相同的例外记录契约。CLI 可以直接使用现有 SDK 报告或 `qa` 命令的 JSON 报告创建或刷新记录：
+
+```sh
+lioni exceptions upsert lioni.config.ts qa-report.json \
+  --check-id catalog-term-policy \
+  --execution-id 3 \
+  --id save-term-choice \
+  --reason '该术语选择已由维护者确认。'
+```
+
+`--execution-id` 用于从同组多个候选中选定一条执行记录。命令只消费给定报告中的指纹，不重新运行 QA 或读取当前资源；给出旧报告时，新记录仍绑定旧依据。配置未指定存储时使用配置文件同目录的 `lioni.exceptions.yaml`，显式设置 `qualityExceptionStore` 时则只使用该自定义存储。SDK 可调用公开的 `upsertQualityExceptionFromReport` 选择并保存同一类型的执行记录。例外只批准一个检查项对指定原文键和语言产生的全部诊断；可独立接受的问题应由不同检查项负责，避免一条批准扩大到其他职责。
+
 例外批准与结果缓存有不同用途。Node QA 默认读取人工维护的例外 YAML；缓存须显式装配，只影响计算成本。普通 QA 不会写入或刷新例外，也不会改写比较基线。调用方可直接组合报告数组：
 
 ```ts

@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -8,6 +9,7 @@ import {
   readCompletion,
   previewUpdate,
   recordComparisonBaseline,
+  upsertQualityExceptionFromReport,
   update,
   type FrameworkConfig,
   type QualityRunResult,
@@ -940,6 +942,124 @@ function createCliContract(identity: CliCommandIdentity) {
                 message: error.message,
               });
             return outcome.failure.readFailed({
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        },
+      }),
+      exceptions: {
+        kind: "commandGroup",
+        parent: "cli",
+        name: "exceptions",
+        description: "从 QA 报告维护例外记录。",
+      },
+      ...define.command("exceptionsUpsert")({
+        kind: "command",
+        parent: "exceptions",
+        name: "upsert",
+        description: "从已有 QA 报告创建或更新一条例外。",
+        fields: {
+          config: { kind: "positional", description: "宿主配置文件路径" },
+          report: {
+            kind: "positional",
+            description: "SDK 或 CLI QA 报告 JSON 文件路径",
+          },
+          checkId: {
+            kind: "valueOption",
+            longOption: "--check-id",
+            description: "报告中的检查项身份",
+          },
+          executionId: {
+            kind: "valueOption",
+            longOption: "--execution-id",
+            description: "报告中的候选执行身份",
+          },
+          id: {
+            kind: "valueOption",
+            longOption: "--id",
+            description: "例外身份",
+          },
+          reason: {
+            kind: "valueOption",
+            longOption: "--reason",
+            description: "例外理由",
+          },
+        },
+        input: toStandardJsonSchema(
+          v.object({
+            config: v.string(),
+            report: v.string(),
+            checkId: v.string(),
+            executionId: v.string(),
+            id: v.string(),
+            reason: v.string(),
+          }),
+        ),
+        success: {
+          kind: "data",
+          variants: {
+            upserted: {
+              description: "例外已写入配置选定的存储",
+              exitCode: 0,
+              schema: toStandardJsonSchema(
+                v.object({
+                  id: v.string(),
+                  checkId: v.string(),
+                  sourceKey: v.string(),
+                  language: v.string(),
+                  executionId: v.number(),
+                }),
+              ),
+              text: ({ id, checkId, sourceKey, language, executionId }) =>
+                text.line(
+                  `例外 ${id} 已更新：${checkId} ${sourceKey} → ${language}（执行 ${executionId}）。`,
+                ),
+            },
+          },
+        },
+        failures: {
+          upsertFailed: {
+            description: "从 QA 报告创建或更新例外失败",
+            exitCode: 1,
+            schema: toStandardJsonSchema(
+              v.object({ path: v.string(), message: v.string() }),
+            ),
+            text: ({ path: reportPath, message }) =>
+              text.line(`根据报告 ${reportPath} 更新 QA 例外失败：${message}`),
+          },
+        },
+        async handler({ input, outcome }) {
+          const reportPath = path.resolve(process.cwd(), input.report);
+          try {
+            const report = JSON.parse(
+              await readFile(reportPath, "utf8"),
+            ) as unknown;
+            const configPath = path.resolve(process.cwd(), input.config);
+            const loaded = await loadConfig(configPath);
+            const executionId = Number(input.executionId);
+            return await loaded.use(async (config) => {
+              const store = config.qualityExceptionStore;
+              if (store === undefined)
+                throw new TypeError("配置未提供 QA 例外存储。");
+              const exception = await upsertQualityExceptionFromReport({
+                report,
+                checkId: input.checkId,
+                executionId,
+                id: input.id,
+                reason: input.reason,
+                store,
+              });
+              return outcome.data.upserted({
+                id: exception.id,
+                checkId: exception.checkId,
+                sourceKey: exception.sourceKey,
+                language: exception.language,
+                executionId,
+              });
+            });
+          } catch (error) {
+            return outcome.failure.upsertFailed({
+              path: reportPath,
               message: error instanceof Error ? error.message : String(error),
             });
           }

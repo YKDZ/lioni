@@ -6,10 +6,13 @@ import { fileURLToPath } from "node:url";
 
 import {
   analyzeQuality,
+  defineConfig,
   DuplicateTranslationUnitKeyError,
   readFacts,
   readSourceFacts,
+  upsertQualityExceptionFromReport,
 } from "@lioni/core";
+import { createFileQualityExceptionStore } from "@lioni/core/node";
 import "@lioni/checks";
 
 import config, { translationReadCount } from "./lioni.config.ts";
@@ -304,8 +307,12 @@ const initialExecution = initialResult.checks.find(
 )?.executions[0];
 assert.ok(initialExecution?.inputFingerprint);
 assert.ok(initialExecution.fingerprintSummary);
+const reportPath = path.join(process.cwd(), "qa-report.json");
+const reportSnapshot = Buffer.from(initialQa.stdout);
+await writeFile(reportPath, reportSnapshot);
 const handwrittenException = [
   "format: lioni.qa-exceptions/v1",
+  "# 手工记录经命令更新后仍应保留。",
   "exceptions:",
   "  - id: approved-number-difference",
   "    reason: 数字差异已由维护者确认。",
@@ -320,7 +327,7 @@ const handwrittenException = [
   "",
 ].join("\n");
 const exceptionPath = path.join(process.cwd(), "lioni.exceptions.yaml");
-const exceptionSnapshot = Buffer.from(handwrittenException);
+let exceptionSnapshot = Buffer.from(handwrittenException);
 await writeFile(exceptionPath, handwrittenException, "utf8");
 const exceptedQa = spawnSync(executable, ["qa", "qa.config.ts"], {
   encoding: "utf8",
@@ -349,6 +356,190 @@ assert.deepEqual(await readFile(baselinePath), baselineSnapshot);
 assert.deepEqual(await readFile(exceptionPath), exceptionSnapshot);
 assert.deepEqual(await readFile(qaResource), originalResource);
 
+const upserted = spawnSync(
+  executable,
+  [
+    "exceptions",
+    "upsert",
+    "qa-no-read.config.ts",
+    "qa-report.json",
+    "--check-id",
+    initialExecution.checkId,
+    "--execution-id",
+    String(initialExecution.executionId),
+    "--id",
+    "approved-number-difference",
+    "--reason",
+    "数字差异已由报告命令重新确认。",
+  ],
+  { encoding: "utf8", shell: process.platform === "win32" },
+);
+assert.equal(upserted.status, 0, upserted.stderr + upserted.stdout);
+assert.equal(upserted.stderr, "");
+assert.deepEqual(parseJson<{ data: unknown }>(upserted.stdout).data, {
+  id: "approved-number-difference",
+  checkId: "number-correspondence",
+  sourceKey: "sha256:save",
+  language: "fr",
+  executionId: initialExecution.executionId,
+});
+const refreshedExceptionContent = await readFile(exceptionPath, "utf8");
+assert.match(refreshedExceptionContent, /手工记录经命令更新后仍应保留/u);
+exceptionSnapshot = Buffer.from(refreshedExceptionContent);
+const invalidReportPath = path.join(process.cwd(), "invalid-qa-report.json");
+await writeFile(invalidReportPath, JSON.stringify({ checks: [] }), "utf8");
+const invalidReportUpsert = spawnSync(
+  executable,
+  [
+    "exceptions",
+    "upsert",
+    "qa-no-read.config.ts",
+    "invalid-qa-report.json",
+    "--check-id",
+    initialExecution.checkId,
+    "--execution-id",
+    String(initialExecution.executionId),
+    "--id",
+    "invalid-report-approval",
+    "--reason",
+    "无效报告不应覆盖现有记录。",
+  ],
+  { encoding: "utf8", shell: process.platform === "win32" },
+);
+assert.equal(invalidReportUpsert.status, 1);
+assert.equal(invalidReportUpsert.stdout, "");
+const invalidReportFailure = parseJson<{
+  kind: string;
+  variant: string;
+  data: { message: string };
+}>(invalidReportUpsert.stderr);
+assert.equal(invalidReportFailure.kind, "failure");
+assert.equal(invalidReportFailure.variant, "upsertFailed");
+assert.match(invalidReportFailure.data.message, /没有检查/u);
+assert.deepEqual(await readFile(exceptionPath), exceptionSnapshot);
+const refreshedQa = spawnSync(executable, ["qa", "qa.config.ts"], {
+  encoding: "utf8",
+  shell: process.platform === "win32",
+});
+assert.equal(refreshedQa.status, 0, refreshedQa.stderr + refreshedQa.stdout);
+const refreshedResult = parseJson<{ data: QaCliResult }>(
+  refreshedQa.stdout,
+).data;
+assert.deepEqual(refreshedResult.diagnostics[0]?.handling, {
+  status: "excepted",
+  exceptionId: "approved-number-difference",
+  reason: "数字差异已由报告命令重新确认。",
+});
+assert.deepEqual(refreshedResult.exceptionApplicability, [
+  {
+    exceptionId: "approved-number-difference",
+    checkId: "number-correspondence",
+    sourceKey: "sha256:save",
+    language: "fr",
+    executionId: initialExecution.executionId,
+    candidateIndex: initialExecution.candidateIndex,
+    status: "applicable",
+  },
+]);
+assert.deepEqual(await readFile(reportPath), reportSnapshot);
+
+const customStoreUpsert = spawnSync(
+  executable,
+  [
+    "exceptions",
+    "upsert",
+    "qa-custom-no-read.config.ts",
+    "qa-report.json",
+    "--check-id",
+    initialExecution.checkId,
+    "--execution-id",
+    String(initialExecution.executionId),
+    "--id",
+    "custom-store-number-approval",
+    "--reason",
+    "自定义存储中的数字差异已确认。",
+  ],
+  { encoding: "utf8", shell: process.platform === "win32" },
+);
+assert.equal(
+  customStoreUpsert.status,
+  0,
+  customStoreUpsert.stderr + customStoreUpsert.stdout,
+);
+assert.deepEqual(await readFile(exceptionPath), exceptionSnapshot);
+const customQa = spawnSync(executable, ["qa", "qa-custom-store.config.ts"], {
+  encoding: "utf8",
+  shell: process.platform === "win32",
+});
+assert.equal(customQa.status, 0, customQa.stderr + customQa.stdout);
+const customResult = parseJson<{ data: QaCliResult }>(customQa.stdout).data;
+assert.deepEqual(customResult.diagnostics[0]?.handling, {
+  status: "excepted",
+  exceptionId: "custom-store-number-approval",
+  reason: "自定义存储中的数字差异已确认。",
+});
+const customExceptionPath = path.join(process.cwd(), "custom.exceptions.yaml");
+const malformedCustomExceptionFile = Buffer.from("format: [错误\n");
+await writeFile(customExceptionPath, malformedCustomExceptionFile);
+const malformedStoreUpsert = spawnSync(
+  executable,
+  [
+    "exceptions",
+    "upsert",
+    "qa-custom-no-read.config.ts",
+    "qa-report.json",
+    "--check-id",
+    initialExecution.checkId,
+    "--execution-id",
+    String(initialExecution.executionId),
+    "--id",
+    "another-custom-approval",
+    "--reason",
+    "损坏的存储不应被覆盖。",
+  ],
+  { encoding: "utf8", shell: process.platform === "win32" },
+);
+assert.equal(malformedStoreUpsert.status, 1);
+assert.equal(malformedStoreUpsert.stdout, "");
+const malformedStoreFailure = parseJson<{
+  kind: string;
+  variant: string;
+  data: { message: string };
+}>(malformedStoreUpsert.stderr);
+assert.equal(malformedStoreFailure.kind, "failure");
+assert.equal(malformedStoreFailure.variant, "upsertFailed");
+assert.match(malformedStoreFailure.data.message, /QA 例外文件/u);
+assert.deepEqual(
+  await readFile(customExceptionPath),
+  malformedCustomExceptionFile,
+);
+
+const sdkReport = await analyzeQuality(qaConfig);
+const sdkExecution = sdkReport.checks.find(
+  ({ checkId }) => checkId === "number-correspondence",
+)?.executions[0];
+assert.ok(sdkExecution);
+const sdkStore = createFileQualityExceptionStore("sdk.exceptions.yaml");
+const sdkException = await upsertQualityExceptionFromReport({
+  report: sdkReport,
+  checkId: sdkExecution.checkId,
+  executionId: sdkExecution.executionId,
+  id: "sdk-number-approval",
+  reason: "SDK 使用相同报告依据保存批准。",
+  store: sdkStore,
+});
+assert.equal(sdkException.inputFingerprint, sdkExecution.inputFingerprint);
+const sdkQa = await analyzeQuality(
+  defineConfig({ ...qaConfig, qualityExceptionStore: sdkStore }),
+);
+assert.deepEqual(sdkQa.diagnostics[0]?.handling, {
+  status: "excepted",
+  exceptionId: "sdk-number-approval",
+  reason: "SDK 使用相同报告依据保存批准。",
+});
+assert.deepEqual(await readFile(baselinePath), baselineSnapshot);
+assert.deepEqual(await readFile(qaResource), originalResource);
+
 const readableQa = spawnSync(
   executable,
   ["qa", "qa.config.ts", "--output-format", "text"],
@@ -358,7 +549,7 @@ assert.equal(readableQa.status, 0, readableQa.stderr);
 assert.ok(readableQa.stdout.includes("位置键 save_label"));
 assert.ok(
   readableQa.stdout.includes(
-    "例外 approved-number-difference：数字差异已由维护者确认。",
+    "例外 approved-number-difference：数字差异已由报告命令重新确认。",
   ),
 );
 assert.ok(
@@ -390,6 +581,39 @@ const editedResource = Buffer.from(
   }),
 );
 await writeFile(qaResource, editedResource);
+const historicalReportUpsert = spawnSync(
+  executable,
+  [
+    "exceptions",
+    "upsert",
+    "qa-no-read.config.ts",
+    "qa-report.json",
+    "--check-id",
+    initialExecution.checkId,
+    "--execution-id",
+    String(initialExecution.executionId),
+    "--id",
+    "approved-number-difference",
+    "--reason",
+    "旧报告只重新确认原始依据。",
+  ],
+  { encoding: "utf8", shell: process.platform === "win32" },
+);
+assert.equal(
+  historicalReportUpsert.status,
+  0,
+  historicalReportUpsert.stderr + historicalReportUpsert.stdout,
+);
+const historicalExceptionContent = await readFile(exceptionPath, "utf8");
+assert.match(historicalExceptionContent, /手工记录经命令更新后仍应保留/u);
+assert.match(historicalExceptionContent, /reason: 旧报告只重新确认原始依据/u);
+assert.ok(
+  historicalExceptionContent.includes(
+    `inputFingerprint: ${initialExecution.inputFingerprint}`,
+  ),
+);
+assert.deepEqual(await readFile(reportPath), reportSnapshot);
+exceptionSnapshot = Buffer.from(historicalExceptionContent);
 const editedQa = spawnSync(executable, ["qa", "qa.config.ts"], {
   encoding: "utf8",
   shell: process.platform === "win32",

@@ -38,6 +38,15 @@ export type CreateQualityExceptionInput = {
   readonly execution: QualityExceptionExecution;
 };
 
+export type UpsertQualityExceptionFromReportInput = {
+  readonly report: unknown;
+  readonly checkId: string;
+  readonly executionId: number;
+  readonly id: string;
+  readonly reason: string;
+  readonly store: QualityExceptionStore;
+};
+
 export type QualityExceptionFormatErrorReason = "unsupported" | "invalid";
 
 export class QualityExceptionFormatError extends TypeError {
@@ -88,7 +97,7 @@ export function createQualityException(
   assertNonEmptyString(id, "例外身份");
   assertNonEmptyString(reason, "例外理由");
   assertNonEmptyString(execution.checkId, "检查项身份");
-  assertNonEmptyString(execution.sourceKey, "原文键");
+  assertString(execution.sourceKey, "原文键");
   assertNonEmptyString(execution.language, "目标语言");
   if (
     execution.inputFingerprint === undefined ||
@@ -117,6 +126,58 @@ export function createQualityException(
   return exception;
 }
 
+/** 从 SDK 报告或 CLI 结构化报告中选择执行记录并写入例外存储。 */
+export async function upsertQualityExceptionFromReport(
+  input: UpsertQualityExceptionFromReportInput,
+): Promise<QualityException> {
+  const { report, checkId, executionId, id, reason, store } = input;
+  assertNonEmptyString(checkId, "检查项身份");
+  if (!Number.isSafeInteger(executionId) || executionId < 0)
+    throw invalid("执行身份必须是非负整数。");
+
+  const reportValue = unwrapQualityReport(report);
+  if (!Array.isArray(reportValue.checks))
+    throw invalid("QA 报告缺少 checks 执行列表。");
+
+  let selectedExecution: Record<string, unknown> | undefined;
+  for (const check of reportValue.checks) {
+    if (
+      !isRecord(check) ||
+      typeof check.checkId !== "string" ||
+      !Array.isArray(check.executions)
+    )
+      throw invalid("QA 报告中的检查执行结构无效。");
+    if (check.checkId !== checkId) continue;
+    for (const execution of check.executions) {
+      if (!isRecord(execution)) throw invalid("QA 报告中的候选执行结构无效。");
+      if (execution.executionId !== executionId) continue;
+      if (execution.checkId !== checkId)
+        throw invalid("候选执行的检查身份与报告分组不一致。");
+      if (selectedExecution !== undefined)
+        throw invalid("QA 报告中存在重复的检查与执行身份。");
+      selectedExecution = execution;
+    }
+  }
+  if (selectedExecution === undefined)
+    throw invalid(`QA 报告中没有检查 ${checkId} 的执行 ${executionId}。`);
+
+  const exception = createQualityException({
+    id,
+    reason,
+    execution: selectedExecution as unknown as QualityExceptionExecution,
+  });
+  await store.upsert(exception);
+  return exception;
+}
+
+function unwrapQualityReport(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) throw invalid("QA 报告必须是对象。");
+  if (!Object.hasOwn(value, "data")) return value;
+  if (!isRecord(value.data))
+    throw invalid("CLI QA 报告的 data 结果必须是对象。");
+  return value.data;
+}
+
 /** 验证单条例外；手写 YAML、SDK 与命令共用此契约。 */
 export function validateQualityException(
   value: unknown,
@@ -138,7 +199,7 @@ export function validateQualityException(
   assertNonEmptyString(value.id, "例外身份");
   assertNonEmptyString(value.reason, "例外理由");
   assertNonEmptyString(value.checkId, "检查项身份");
-  assertNonEmptyString(value.sourceKey, "原文键");
+  assertString(value.sourceKey, "原文键");
   assertNonEmptyString(value.language, "目标语言");
   assertNonEmptyString(value.inputFingerprint, "输入指纹");
   if (!isRecord(value.fingerprintSummary))
@@ -320,6 +381,13 @@ function assertNonEmptyString(
 ): asserts value is string {
   if (typeof value !== "string" || value.trim().length === 0)
     throw invalid(`${description}必须是非空文本。`);
+}
+
+function assertString(
+  value: unknown,
+  description: string,
+): asserts value is string {
+  if (typeof value !== "string") throw invalid(`${description}必须是文本。`);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

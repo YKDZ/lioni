@@ -89,6 +89,7 @@ export {
   createQualityException,
   evaluateQualityExceptionApplicability,
   qualityExceptionMatchesExecution,
+  upsertQualityExceptionFromReport,
   QualityExceptionFormatError,
   validateQualityException,
   validateQualityExceptionFile,
@@ -105,6 +106,7 @@ export type {
   QualityExceptionFormatErrorReason,
   QualityExceptionNotVerifiedReason,
   QualityExceptionStore,
+  UpsertQualityExceptionFromReportInput,
 } from "./quality-exceptions.ts";
 export {
   QualityCheckBindingError,
