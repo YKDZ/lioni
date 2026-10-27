@@ -1,3 +1,6 @@
+import { appendFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+
 import {
   createVueI18nSourceSyntaxChecker,
   createVueI18nTargetSyntaxChecker,
@@ -6,11 +9,13 @@ import {
 import {
   defineConfig,
   type QualityCheckDefinition,
+  type QualityCheckResultCache,
   type QualityCheckInput,
   type QualityObject,
   type SourceUnitFact,
   type StandardSchemaV1,
 } from "@lioni/core";
+import { createDefaultQualityCheckResultCache } from "@lioni/core/node";
 
 type Content = {
   readonly catalog: { readonly message: { readonly body: string } };
@@ -28,6 +33,21 @@ const translationSchema: StandardSchemaV1<Translation, Translation> =
   standardSchema(isTranslation);
 const contentSchema: StandardSchemaV1<Content, Content> =
   standardSchema(isContent);
+const fileCache = createDefaultQualityCheckResultCache(
+  fileURLToPath(import.meta.url),
+);
+const qualityCheckResultCache: QualityCheckResultCache = {
+  async get(key) {
+    const outcome = await fileCache.get(key);
+    await appendFile(
+      "qa-cache-events.txt",
+      `${outcome === undefined ? "miss" : "hit"}\n`,
+      "utf8",
+    );
+    return outcome;
+  },
+  set: (key, outcome) => fileCache.set(key, outcome),
+};
 
 const syntaxChecks: readonly QualityCheckDefinition<
   Unit,
@@ -169,6 +189,7 @@ export function createConfig(
       }),
     },
     qualityChecks,
+    qualityCheckResultCache,
   });
 }
 

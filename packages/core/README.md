@@ -97,3 +97,23 @@ const activeErrors = report.diagnostics.filter(
 ```
 
 将例外作为诊断豁免的首选方式，并为可独立接受的问题划分不同检查项。单位解释等影响检查输入的业务配置应进入配置或指纹依据；例外只表示对特定检查结果的批准。
+
+## QA 结果缓存
+
+缓存通过配置中的 `qualityCheckResultCache` 显式启用。Node 环境可选择官方文件实现；文件位于配置文件同目录的 `.lioni/cache/quality-results.json`。纯配置对象不会猜测当前工作目录，未配置缓存的 SDK 或 CLI 不会读写缓存：
+
+```ts
+import { fileURLToPath } from "node:url";
+
+import { createDefaultQualityCheckResultCache } from "@lioni/core/node";
+import { defineConfig } from "@lioni/core";
+
+export default defineConfig({
+  // 其余宿主配置……
+  qualityCheckResultCache: createDefaultQualityCheckResultCache(
+    fileURLToPath(import.meta.url),
+  ),
+});
+```
+
+也可将 `qualityCheckResultCache` 替换为实现 `get` 与 `set` 的自定义存储。缓存只保存 `complete` 和 `not-applicable` 的原始检查结果；失败、未完成、文件损坏或存储故障会重新计算。命中后仍会执行本次候选选择、投影与 schema 校验，并按当前报告关联诊断和应用例外，因此修改或删除 YAML 例外会立即反映在结果中。

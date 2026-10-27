@@ -16,6 +16,7 @@ import {
   type QualityRunResult,
   type QualityObject,
 } from "./qa.ts";
+import type { QualityCheckResultCache } from "./quality-cache.ts";
 import { validateQualityExceptions } from "./quality-exceptions.ts";
 import type {
   QualityException,
@@ -145,6 +146,10 @@ export type {
   QualityRunResult,
   QualityExecutionOptions,
 } from "./qa.ts";
+export type {
+  CacheableQualityCheckOutcome,
+  QualityCheckResultCache,
+} from "./quality-cache.ts";
 export {
   compareSnapshots,
   defaultCompare,
@@ -325,6 +330,7 @@ export type FrameworkConfig<
     TBody,
     TUnavailable
   >[];
+  readonly qualityCheckResultCache?: QualityCheckResultCache;
   readonly qualityExceptionStore?: QualityExceptionStore;
   readonly createQualityRequest?: (
     facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
@@ -600,6 +606,15 @@ function validateSourceConfig(value: unknown): void {
   if (typeof value.keyOf !== "function")
     invalidFrameworkConfig("defineConfig 的 keyOf 必须是函数。");
   if (
+    value.qualityCheckResultCache !== undefined &&
+    (!isRecord(value.qualityCheckResultCache) ||
+      typeof value.qualityCheckResultCache.get !== "function" ||
+      typeof value.qualityCheckResultCache.set !== "function")
+  )
+    invalidFrameworkConfig(
+      "defineConfig 的 qualityCheckResultCache 必须提供 get 与 set 函数。",
+    );
+  if (
     value.qualityExceptionStore !== undefined &&
     (!isRecord(value.qualityExceptionStore) ||
       typeof value.qualityExceptionStore.load !== "function" ||
@@ -848,7 +863,12 @@ export async function analyzeQuality<
     facts,
     { ...request, candidates, exceptions },
     checks,
-    options,
+    {
+      ...options,
+      ...(config.qualityCheckResultCache === undefined
+        ? {}
+        : { qualityCheckResultCache: config.qualityCheckResultCache }),
+    },
   );
 }
 

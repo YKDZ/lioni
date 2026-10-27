@@ -11,6 +11,10 @@ import type {
   TranslationReadFact,
   TranslationUnitInput,
 } from "./index.ts";
+import type {
+  CacheableQualityCheckOutcome,
+  QualityCheckResultCache,
+} from "./quality-cache.ts";
 import {
   evaluateQualityExceptionApplicability,
   qualityExceptionMatchesExecution,
@@ -739,6 +743,8 @@ export type QualityRunResult<
 export type QualityExecutionOptions = {
   /** 传入的范围由调用方管理；省略时由本次 QA 创建并关闭。 */
   readonly memo?: MemoScope;
+  /** 只复用已完成检查的原始结果；例外仍按本次运行重新处理。 */
+  readonly qualityCheckResultCache?: QualityCheckResultCache;
 };
 
 export async function runQualityChecks<
@@ -848,6 +854,8 @@ export async function runQualityChecks<
         const executionId = nextExecutionId;
         nextExecutionId += 1;
         let fingerprint: QualityInputFingerprint | undefined;
+        let cacheKey: string | undefined;
+        let shouldCacheOutcome = false;
         let outcome: QualityCheckOutcome;
         try {
           const sourceUnit = sourceUnits.get(candidate.sourceKey) ?? null;
@@ -860,7 +868,7 @@ export async function runQualityChecks<
             relationships: boundRequest.relationships,
           });
           if (preparation.status === "ready") {
-            fingerprint = qualityInputFingerprint(
+            const currentFingerprint = qualityInputFingerprint(
               id,
               prepared.version,
               configurationFingerprint,
@@ -869,7 +877,26 @@ export async function runQualityChecks<
                 ? getDefaultInputComponents()
                 : undefined,
             );
-            outcome = await preparation.execute();
+            fingerprint = currentFingerprint;
+            const key = qualityCheckCacheKey(
+              id,
+              candidateIndex,
+              candidate.sourceKey,
+              candidate.language,
+              currentFingerprint.inputFingerprint,
+            );
+            cacheKey = key;
+            const cachedOutcome =
+              options.qualityCheckResultCache === undefined
+                ? undefined
+                : await readCachedQualityOutcome(
+                    options.qualityCheckResultCache,
+                    key,
+                  );
+            if (cachedOutcome === undefined) {
+              outcome = await preparation.execute();
+              shouldCacheOutcome = true;
+            } else outcome = cachedOutcome;
           } else {
             outcome = preparation.outcome;
           }
@@ -900,6 +927,17 @@ export async function runQualityChecks<
         }
 
         const stableOutcome = snapshotQualityData(outcome);
+        if (
+          shouldCacheOutcome &&
+          cacheKey !== undefined &&
+          options.qualityCheckResultCache !== undefined &&
+          isCacheableQualityCheckOutcome(stableOutcome)
+        )
+          await writeCachedQualityOutcome(
+            options.qualityCheckResultCache,
+            cacheKey,
+            stableOutcome,
+          );
         const findings = stableOutcome.diagnostics;
         issues.push(...stableOutcome.issues);
         statuses.push(stableOutcome.status);
@@ -1024,6 +1062,76 @@ function qualityInputFingerprint(
       inputFingerprint: inputBasisFingerprint,
     },
   };
+}
+
+function qualityCheckCacheKey(
+  checkId: string,
+  candidateIndex: number,
+  sourceKey: string,
+  language: string,
+  inputFingerprint: string,
+): string {
+  return fingerprintJsonValue({
+    checkId,
+    candidateIndex,
+    sourceKey,
+    language,
+    inputFingerprint,
+  });
+}
+
+async function readCachedQualityOutcome(
+  cache: QualityCheckResultCache,
+  key: string,
+): Promise<QualityCheckOutcome | undefined> {
+  try {
+    const outcome = await cache.get(key);
+    if (!isCacheableQualityCheckOutcome(outcome)) return undefined;
+    return snapshotQualityData(outcome);
+  } catch {
+    return undefined;
+  }
+}
+
+async function writeCachedQualityOutcome(
+  cache: QualityCheckResultCache,
+  key: string,
+  outcome: CacheableQualityCheckOutcome,
+): Promise<void> {
+  try {
+    await cache.set(key, outcome);
+  } catch {
+    // 缓存写入失败只会增加后续检查成本。
+  }
+}
+
+function isCacheableQualityCheckOutcome(
+  value: unknown,
+): value is CacheableQualityCheckOutcome {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return false;
+  const outcome = value as Partial<QualityCheckOutcome>;
+  if (
+    (outcome.status !== "complete" && outcome.status !== "not-applicable") ||
+    !Array.isArray(outcome.diagnostics) ||
+    !Array.isArray(outcome.issues) ||
+    typeof outcome.coverage !== "object" ||
+    outcome.coverage === null ||
+    Array.isArray(outcome.coverage)
+  )
+    return false;
+  return [
+    "selected",
+    "evaluated",
+    "notApplicable",
+    "incomplete",
+    "failed",
+  ].every((field) => {
+    const count = outcome.coverage?.[field as keyof QualityCoverage];
+    return (
+      typeof count === "number" && Number.isSafeInteger(count) && count >= 0
+    );
+  });
 }
 
 function requiredDefaultComponent(
