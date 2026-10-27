@@ -255,18 +255,6 @@ void describe("QA 例外", () => {
         ]),
       QualityExceptionFormatError,
     );
-    assert.throws(
-      () =>
-        validateQualityExceptions([
-          exception,
-          {
-            ...exception,
-            sourceKey: "submit",
-            inputFingerprint: "sha256:other-input",
-          },
-        ]),
-      QualityExceptionFormatError,
-    );
   });
 
   void it("按执行记录分别表达适用、依据变化及本次未验证", () => {

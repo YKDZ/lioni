@@ -230,27 +230,17 @@ type QaDiagnostic = {
 };
 
 type QaReport = {
-  readonly status?: string;
-  readonly diagnostics?: readonly QaDiagnostic[];
-  readonly checks?: readonly {
+  readonly status: string;
+  readonly diagnostics: readonly QaDiagnostic[];
+  readonly checks: readonly {
     readonly checkId: string;
     readonly executions: readonly QaExecution[];
   }[];
 };
 
-function reportFrom(output: string): {
-  readonly data?: unknown;
-  readonly status?: string;
-  readonly diagnostics?: readonly unknown[];
-} & QaReport {
-  const envelope = JSON.parse(output) as {
-    readonly data?: unknown;
-    readonly status?: string;
-    readonly diagnostics?: readonly unknown[];
-  };
-  return typeof envelope.data === "object" && envelope.data !== null
-    ? (envelope.data as typeof envelope)
-    : envelope;
+function reportFrom(output: string): QaReport {
+  const envelope: QaReport | { readonly data: QaReport } = JSON.parse(output);
+  return "data" in envelope ? envelope.data : envelope;
 }
 
 function executionFor(report: QaReport, checkId: string): QaExecution {

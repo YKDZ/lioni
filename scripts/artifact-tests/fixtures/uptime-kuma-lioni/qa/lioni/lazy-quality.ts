@@ -62,7 +62,7 @@ const configurations = [
   [
     "kuma/quantities",
     { version: 1 },
-    `kuma/quantities/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
+    `kuma/quantities/v3+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
   ],
   [
     "terminology/require-allowed-translation",
