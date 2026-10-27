@@ -230,27 +230,82 @@ type QaDiagnostic = {
 };
 
 type QaReport = {
-  readonly status?: string;
-  readonly diagnostics?: readonly QaDiagnostic[];
-  readonly checks?: readonly {
+  readonly status: string;
+  readonly diagnostics: readonly QaDiagnostic[];
+  readonly checks: readonly {
     readonly checkId: string;
     readonly executions: readonly QaExecution[];
   }[];
 };
 
-function reportFrom(output: string): {
-  readonly data?: unknown;
-  readonly status?: string;
-  readonly diagnostics?: readonly unknown[];
-} & QaReport {
-  const envelope = JSON.parse(output) as {
-    readonly data?: unknown;
-    readonly status?: string;
-    readonly diagnostics?: readonly unknown[];
-  };
-  return typeof envelope.data === "object" && envelope.data !== null
-    ? (envelope.data as typeof envelope)
-    : envelope;
+function reportFrom(output: string): QaReport {
+  const parsed: unknown = JSON.parse(output);
+  assert.ok(isRecord(parsed), "QA 报告必须是对象。");
+  const report = Object.hasOwn(parsed, "data") ? parsed.data : parsed;
+  assert.ok(isQaReport(report), "QA 报告结构无效。");
+  return report;
+}
+
+function isQaReport(value: unknown): value is QaReport {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.status === "string" &&
+    Array.isArray(value.diagnostics) &&
+    value.diagnostics.every(isQaDiagnostic) &&
+    Array.isArray(value.checks) &&
+    value.checks.every(isQaCheck)
+  );
+}
+
+function isQaCheck(
+  value: unknown,
+): value is NonNullable<QaReport["checks"]>[number] {
+  return (
+    isRecord(value) &&
+    typeof value.checkId === "string" &&
+    Array.isArray(value.executions) &&
+    value.executions.every(isQaExecution)
+  );
+}
+
+function isQaExecution(value: unknown): value is QaExecution {
+  if (
+    !isRecord(value) ||
+    typeof value.checkId !== "string" ||
+    typeof value.sourceKey !== "string" ||
+    typeof value.language !== "string"
+  )
+    return false;
+  if (
+    value.inputFingerprint !== undefined &&
+    typeof value.inputFingerprint !== "string"
+  )
+    return false;
+  const summary = value.fingerprintSummary;
+  return (
+    summary === undefined ||
+    (isRecord(summary) &&
+      typeof summary.version === "string" &&
+      typeof summary.configurationFingerprint === "string" &&
+      typeof summary.inputFingerprint === "string")
+  );
+}
+
+function isQaDiagnostic(value: unknown): value is QaDiagnostic {
+  if (!isRecord(value) || typeof value.checkId !== "string") return false;
+  const handling = value.handling;
+  return (
+    handling === undefined ||
+    (isRecord(handling) &&
+      typeof handling.status === "string" &&
+      (handling.exceptionId === undefined ||
+        typeof handling.exceptionId === "string") &&
+      (handling.reason === undefined || typeof handling.reason === "string"))
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function executionFor(report: QaReport, checkId: string): QaExecution {
