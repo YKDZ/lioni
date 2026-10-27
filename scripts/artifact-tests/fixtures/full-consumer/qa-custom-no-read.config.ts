@@ -5,7 +5,8 @@ import qaNoReadConfig from "./qa-no-read.config.ts";
 
 export default defineConfig({
   ...qaNoReadConfig,
-  qualityExceptionStore: createFileQualityExceptionStore(
-    "custom.exceptions.yaml",
-  ),
+  quality: {
+    ...qaNoReadConfig.quality,
+    exceptionStore: createFileQualityExceptionStore("custom.exceptions.yaml"),
+  },
 });

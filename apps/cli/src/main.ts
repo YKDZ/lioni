@@ -1038,7 +1038,7 @@ function createCliContract(identity: CliCommandIdentity) {
             const loaded = await loadConfig(configPath);
             const executionId = Number(input.executionId);
             return await loaded.use(async (config) => {
-              const store = config.qualityExceptionStore;
+              const store = config.quality?.exceptionStore;
               if (store === undefined)
                 throw new TypeError("配置未提供 QA 例外存储。");
               const exception = await upsertQualityExceptionFromReport({

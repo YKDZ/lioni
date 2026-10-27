@@ -10,7 +10,15 @@ import type {
   TranslationAssociationFact,
   TranslationReadFact,
   TranslationUnitInput,
-} from "./index.ts";
+} from "../index.ts";
+import type { JsonValue, SemanticEditCandidate } from "../semantic-edits.ts";
+import { stableStringifyJson } from "../stable-json.ts";
+import {
+  assertJsonValue,
+  StandardSchemaContractError,
+  validateWithStandardSchema,
+} from "../standard-schema.ts";
+import type { StandardSchemaV1 } from "../standard-schema.ts";
 import {
   isCacheableQualityCheckOutcome,
   type CacheableQualityCheckOutcome,
@@ -25,14 +33,6 @@ import type {
   QualityException,
   QualityExceptionApplicability,
 } from "./quality-exceptions.ts";
-import type { JsonValue, SemanticEditCandidate } from "./semantic-edits.ts";
-import { stableStringifyJson } from "./stable-json.ts";
-import {
-  assertJsonValue,
-  StandardSchemaContractError,
-  validateWithStandardSchema,
-} from "./standard-schema.ts";
-import type { StandardSchemaV1 } from "./standard-schema.ts";
 
 export type QualityCheckStatus =
   | "not-run"

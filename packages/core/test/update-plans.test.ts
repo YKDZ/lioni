@@ -102,9 +102,11 @@ function makeConfig(
     ...(options.updatePolicy === undefined
       ? {}
       : { updatePolicy: options.updatePolicy }),
-    createQualityRequest() {
-      options.onQuality?.();
-      throw new Error("预览不应加载 QA 输入。");
+    quality: {
+      prepare() {
+        options.onQuality?.();
+        throw new Error("预览不应加载 QA 输入。");
+      },
     },
   });
 }

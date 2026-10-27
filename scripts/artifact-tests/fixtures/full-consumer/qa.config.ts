@@ -41,7 +41,7 @@ async function readMessageResource() {
   };
 }
 
-const qualityChecks = [
+const checks = [
   createNumberChecker<Unit, Translation, Unit, string, string, never>({
     hostVersion: "full-consumer-v1",
     select: ({ sourceUnit, candidate }) => {
@@ -92,9 +92,7 @@ const qualityChecks = [
   }),
 ];
 
-function createQualityRequest(
-  facts: FrameworkFacts<Unit, Translation, string>,
-) {
+function createRequest(facts: FrameworkFacts<Unit, Translation, string>) {
   const association = facts.associations.find(
     ({ sourceKey, language, status }) =>
       sourceKey === "sha256:save" && language === "fr" && status === "matched",
@@ -176,6 +174,9 @@ export default defineConfig({
     },
     matches: (unit, translation) => unit.nativeId === translation.sourceId,
   },
-  qualityChecks,
-  createQualityRequest,
+  quality: {
+    prepare(facts) {
+      return { checks, request: createRequest(facts) };
+    },
+  },
 });

@@ -129,60 +129,64 @@ export default defineConfig({
     matches: (unit, translation) =>
       translation.context.sourceLines.includes(unit.context.line),
   },
-  qualityChecks: [
-    defineQualityCheck<Unit, Translation, typeof qaConfigurationSchema>({
-      id: "host-review",
-      version: "host-review-v1",
-      configurationSchema: qaConfigurationSchema,
-      configuration: { review: "manual" },
-      check: ({ candidate }) => ({
-        status: "complete",
-        diagnostics: [
-          {
-            severity: "warning",
-            object: {
-              kind: "translation-unit",
-              key: candidate.sourceKey,
-              language: candidate.language,
+  quality: {
+    prepare: () => ({
+      checks: [
+        defineQualityCheck<Unit, Translation, typeof qaConfigurationSchema>({
+          id: "host-review",
+          version: "host-review-v1",
+          configurationSchema: qaConfigurationSchema,
+          configuration: { review: "manual" },
+          check: ({ candidate }) => ({
+            status: "complete",
+            diagnostics: [
+              {
+                severity: "warning",
+                object: {
+                  kind: "translation-unit",
+                  key: candidate.sourceKey,
+                  language: candidate.language,
+                },
+                location: {
+                  language: candidate.language,
+                  range: "edit-catalogue.json",
+                  key: candidate.sourceKey,
+                },
+                message: "待复核",
+                evidence: [],
+              },
+            ],
+            issues: [],
+            coverage: {
+              selected: 1,
+              evaluated: 1,
+              notApplicable: 0,
+              incomplete: 0,
+              failed: 0,
             },
-            location: {
-              language: candidate.language,
-              range: "edit-catalogue.json",
-              key: candidate.sourceKey,
+          }),
+        }),
+        defineQualityCheck<Unit, Translation, typeof qaConfigurationSchema>({
+          id: "unconfigured-check",
+          version: "unconfigured-check-v1",
+          configurationSchema: qaConfigurationSchema,
+          configuration: {},
+          check: () => ({
+            status: "complete",
+            diagnostics: [],
+            issues: [],
+            coverage: {
+              selected: 1,
+              evaluated: 1,
+              notApplicable: 0,
+              incomplete: 0,
+              failed: 0,
             },
-            message: "待复核",
-            evidence: [],
-          },
-        ],
-        issues: [],
-        coverage: {
-          selected: 1,
-          evaluated: 1,
-          notApplicable: 0,
-          incomplete: 0,
-          failed: 0,
-        },
-      }),
+          }),
+        }),
+      ],
     }),
-    defineQualityCheck<Unit, Translation, typeof qaConfigurationSchema>({
-      id: "unconfigured-check",
-      version: "unconfigured-check-v1",
-      configurationSchema: qaConfigurationSchema,
-      configuration: {},
-      check: () => ({
-        status: "complete",
-        diagnostics: [],
-        issues: [],
-        coverage: {
-          selected: 1,
-          evaluated: 1,
-          notApplicable: 0,
-          incomplete: 0,
-          failed: 0,
-        },
-      }),
-    }),
-  ],
+  },
   translationWriteback: {
     locateExistingTarget({ translation }) {
       if (translation.translation.context.readOnly)

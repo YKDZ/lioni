@@ -22,13 +22,14 @@ async function prepare() {
     ["catalog:save", "guide:save"],
   );
 
-  const createRequest = aggregateConfig.createQualityRequest;
-  assert.ok(createRequest);
-  const request = await createRequest(facts);
+  const prepare = aggregateConfig.quality?.prepare;
+  assert.ok(prepare);
+  const prepared = await prepare(facts);
+  assert.ok(prepared.request);
   const result = await runQualityChecks(
     facts,
-    request,
-    aggregateConfig.qualityChecks ?? [],
+    prepared.request,
+    prepared.checks,
   );
   assert.equal(result.status, "complete");
   assert.equal(result.candidates.length, 2);

@@ -36,7 +36,7 @@ const contentSchema: StandardSchemaV1<Content, Content> =
 const fileCache = createDefaultQualityCheckResultCache(
   fileURLToPath(import.meta.url),
 );
-const qualityCheckResultCache: QualityCheckResultCache = {
+const resultCache: QualityCheckResultCache = {
   async get(key) {
     const outcome = await fileCache.get(key);
     await appendFile(
@@ -126,7 +126,7 @@ export function createVariableChecker() {
 export function createConfig(
   sourceBody: string,
   targetBody: string,
-  qualityChecks: readonly QualityCheckDefinition<
+  checks: readonly QualityCheckDefinition<
     Unit,
     Translation,
     QualityObject,
@@ -188,8 +188,10 @@ export function createConfig(
         ],
       }),
     },
-    qualityChecks,
-    qualityCheckResultCache,
+    quality: {
+      prepare: () => ({ checks }),
+      resultCache,
+    },
   });
 }
 
