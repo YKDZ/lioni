@@ -51,6 +51,31 @@ async function waitForProcessExit(pid: number): Promise<void> {
   assert.fail(`中断后的消费者进程仍存活：${pid}`);
 }
 
+void test("子进程保留传入环境并清除 Node 测试上下文", async () => {
+  const parentNodeTestContext = process.env.NODE_TEST_CONTEXT;
+  const environment: NodeJS.ProcessEnv = {
+    ...process.env,
+    NODE_TEST_CONTEXT: "child-v8",
+    LIONI_SUBPROCESS_PROBE: "preserved",
+  };
+  const child = await runSubprocess(
+    process.execPath,
+    [
+      "-e",
+      'process.stdout.write(JSON.stringify({ hasNodeTestContext: Object.hasOwn(process.env, "NODE_TEST_CONTEXT"), inherited: process.env.LIONI_SUBPROCESS_PROBE }))',
+    ],
+    { cwd: repositoryRoot, env: environment, timeoutMs: 5_000 },
+  );
+
+  assert.equal(child.status, 0, child.stderr);
+  assert.deepEqual(JSON.parse(child.stdout), {
+    hasNodeTestContext: false,
+    inherited: "preserved",
+  });
+  assert.equal(environment.NODE_TEST_CONTEXT, "child-v8");
+  assert.equal(process.env.NODE_TEST_CONTEXT, parentNodeTestContext);
+});
+
 async function runNestedAbortProbe(
   mode: "cooperative" | "ignore",
   suiteInterrupt = false,
@@ -89,7 +114,6 @@ async function runNestedAbortProbe(
     LIONI_ABORT_PROBE_MODE: mode,
     LIONI_ABORT_PROBE_PID_FILE: pidPath,
   };
-  delete environment.NODE_TEST_CONTEXT;
   const controller = new AbortController();
   const args = [
     "--conditions=source",
@@ -171,7 +195,6 @@ async function runFailureFixture(
       LIONI_ARTIFACT_RESULTS: resultsRoot,
       LIONI_ARTIFACT_RUN_ROOT: consumerRoot,
     };
-    delete environment.NODE_TEST_CONTEXT;
     const fixture = path.join(
       repositoryRoot,
       "scripts",

@@ -51,7 +51,7 @@ void test("QA 项目保留 Kuma facts 中的自有特殊键且缺译仍保持缺
   const writeJson = (name: string, value: unknown) =>
     writeFile(new URL(name, root), JSON.stringify(value));
   try {
-    await mkdir(new URL("src/lang/lioni/", root), { recursive: true });
+    await mkdir(new URL("src/lang/lioni/termbase/", root), { recursive: true });
     await writeJson(
       "src/lang/en.json",
       JSON.parse('{"__proto__":"Hello","missing":"Goodbye"}'),
@@ -61,6 +61,26 @@ void test("QA 项目保留 Kuma facts 中的自有特殊键且缺译仍保持缺
       source: "en",
       targets: ["zh-CN"],
     });
+    await writeJson("src/lang/lioni/en.json", { quantityProfile: "en" });
+    await writeJson("src/lang/lioni/zh-CN.json", {
+      quantityProfile: "zh-CN",
+    });
+    await writeJson("src/lang/lioni/messages.json", {
+      literals: {},
+      scopes: [],
+      usageScopes: [],
+    });
+    const writeTermbase = (filename: string, value: string) =>
+      writeFile(new URL(`src/lang/lioni/termbase/${filename}`, root), value);
+    await writeTermbase("concepts.yaml", "concepts:\n  monitor: {}\n");
+    await writeTermbase(
+      "en.yaml",
+      "concepts:\n  monitor:\n    expressions:\n      - id: en\n        text: monitor\n        usage: preferred\n",
+    );
+    await writeTermbase(
+      "zh-CN.yaml",
+      "concepts:\n  monitor:\n    expressions:\n      - id: zh-CN\n        text: 显示器\n        usage: preferred\n",
+    );
 
     const facts = await readFacts(
       defineConfig(
@@ -72,15 +92,10 @@ void test("QA 项目保留 Kuma facts 中的自有特殊键且缺译仍保持缺
         }),
       ),
     );
-    const project = await loadKumaQaProject(
-      {
-        root,
-        catalog: await loadKumaCatalog(
-          new URL("../overlay/src/lang/lioni/catalog.json", import.meta.url),
-        ),
-      },
-      facts,
+    const catalog = await loadKumaCatalog(
+      new URL("src/lang/lioni/catalog.json", root),
     );
+    const project = await loadKumaQaProject({ root, catalog }, facts);
 
     const specialFact = facts.translations.records.find(
       (fact) => fact.translation.key === "__proto__",
