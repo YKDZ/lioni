@@ -533,7 +533,8 @@ void test("孤立的非法消息由语法检查报告，不污染其他消息族
   });
   assert.ok(result.diagnostics.some((d) => d.object.code === "message-syntax"));
   assert.equal(
-    result.checks.find((c) => c.id === "message-family-consistency")?.status,
+    result.checks.find((c) => c.checkId === "message-family-consistency")
+      ?.status,
     "complete",
   );
 });
@@ -736,7 +737,8 @@ void test("未支持的数值语言明确报告能力不足，其他规则仍执
   const result = await analyzeQuality(createKumaConfig(policy));
   assert.equal(result.status, "incomplete");
   assert.equal(
-    result.checks.find((c) => c.id === "kuma/quantities")?.coverage.incomplete,
+    result.checks.find((c) => c.checkId === "kuma/quantities")?.coverage
+      .incomplete,
     1,
   );
   assert.ok(

@@ -117,7 +117,7 @@ function createQualityRequest(
     exceptions: [
       {
         id: "approved-number-difference",
-        ruleId: "number-correspondence",
+        checkId: "number-correspondence",
         scope: {
           object: {
             kind: "translation-unit",

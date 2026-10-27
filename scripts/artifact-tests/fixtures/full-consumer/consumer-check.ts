@@ -207,7 +207,7 @@ type QaCliResult = {
     }[];
   };
   readonly diagnostics: readonly {
-    readonly ruleId: string;
+    readonly checkId: string;
     readonly evidence: readonly unknown[];
     readonly object: { readonly key: string };
     readonly location: { readonly key: string };
@@ -261,7 +261,7 @@ assert.deepEqual(
 assert.equal(initialResult.diagnostics.length, 1);
 const initialDiagnostic = initialResult.diagnostics[0];
 assert.ok(initialDiagnostic);
-assert.equal(initialDiagnostic.ruleId, "number-correspondence");
+assert.equal(initialDiagnostic.checkId, "number-correspondence");
 assert.equal(initialDiagnostic.evidence.length, 2);
 assert.equal(initialDiagnostic.object.key, "sha256:save");
 assert.equal(initialDiagnostic.location.key, "save_label");

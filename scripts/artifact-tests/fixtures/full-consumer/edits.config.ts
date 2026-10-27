@@ -132,6 +132,7 @@ export default defineConfig({
   qualityChecks: [
     defineQualityCheck<Unit, Translation, typeof qaConfigurationSchema>({
       id: "host-review",
+      version: "host-review-v1",
       configurationSchema: qaConfigurationSchema,
       configuration: { review: "manual" },
       check: ({ candidate }) => ({
@@ -165,6 +166,7 @@ export default defineConfig({
     }),
     defineQualityCheck<Unit, Translation, typeof qaConfigurationSchema>({
       id: "unconfigured-check",
+      version: "unconfigured-check-v1",
       configurationSchema: qaConfigurationSchema,
       configuration: {},
       check: () => ({
