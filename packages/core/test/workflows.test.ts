@@ -532,7 +532,7 @@ void describe("configured analysis workflow", () => {
     ]);
     assert.equal(result.status, "complete");
     assert.deepEqual(
-      result.checks.map(({ id }) => id),
+      result.checks.map(({ checkId }) => checkId),
       ["translation-present"],
     );
     assert.deepEqual(observed?.configuration, { enabled: true });

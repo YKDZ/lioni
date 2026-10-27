@@ -265,20 +265,44 @@ function qualityText(value: unknown): ReturnType<typeof text.lines> {
           `关联 ${sourceKey} → ${language}：${status}（覆盖${readStatusText(coverageStatus)}；${candidateSelected ? "已选候选" : "未选候选"}）`,
       ),
     ...result.diagnostics.map(
-      ({ ruleId, severity, object, location, message, evidence, handling }) => {
+      ({
+        checkId,
+        executionId,
+        severity,
+        object,
+        location,
+        message,
+        evidence,
+        handling,
+      }) => {
         const locationKey =
           location.key === undefined ? "" : `，位置键 ${location.key}`;
         const exception =
           handling.status === "excepted"
             ? `；例外 ${handling.exceptionId}：${handling.reason}`
             : "";
-        return `[${severity}] ${ruleId} ${object.key}（${location.language ?? "原文"}，${rangeText(location.range)}${locationKey}）：${message}${exception}；证据 ${evidence.length} 项`;
+        return `[${severity}] ${checkId} ${object.key}（${location.language ?? "原文"}，${rangeText(location.range)}${locationKey}，执行 ${executionId}）：${message}${exception}；证据 ${evidence.length} 项`;
       },
     ),
-    ...result.checks.flatMap(({ id, status, issues }) =>
-      issues.map(
-        ({ message }) => `[${qualityStatusText(status)}] ${id}：${message}`,
-      ),
+    ...result.checks.flatMap(
+      ({ checkId, version, executions, issues, status }) => [
+        ...executions.map(
+          ({
+            executionId,
+            candidateIndex,
+            sourceKey,
+            language,
+            status: executionStatus,
+            inputFingerprint,
+            fingerprintSummary,
+          }) =>
+            `检查依据 ${checkId} ${sourceKey} → ${language}（第 ${candidateIndex + 1} 个，执行 ${executionId}，版本 ${version}，${qualityStatusText(executionStatus)}）：${inputFingerprint ?? "本次未形成指纹"}${fingerprintSummary === undefined ? "" : `；配置 ${fingerprintSummary.configurationFingerprint}；输入 ${fingerprintSummary.inputFingerprint}`}`,
+        ),
+        ...issues.map(
+          ({ message }) =>
+            `[${qualityStatusText(status)}] ${checkId}：${message}`,
+        ),
+      ],
     ),
   ]);
 }

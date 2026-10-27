@@ -183,6 +183,7 @@ function createChecks() {
     typeof thresholdSchema
   >({
     id: "minimum-length",
+    version: "qa-configuration-v1",
     configurationSchema: thresholdSchema,
     configuration: {},
     check: (input) => {
@@ -218,6 +219,7 @@ function createChecks() {
   const modeChecker = defineQualityCheck<Unit, unknown, typeof asyncModeSchema>(
     {
       id: "short-candidate-policy",
+      version: "qa-configuration-v1",
       configurationSchema: asyncModeSchema,
       configuration: "skip",
       check: (input) => {
@@ -264,14 +266,17 @@ void describe("quality checker configuration contracts", () => {
 
     assert.equal(result.status, "complete");
     assert.deepEqual(
-      result.checks.map(({ id, configuration }) => ({ id, configuration })),
+      result.checks.map(({ checkId, configuration }) => ({
+        checkId,
+        configuration,
+      })),
       [
         {
-          id: "minimum-length",
+          checkId: "minimum-length",
           configuration: { threshold: 3 },
         },
         {
-          id: "short-candidate-policy",
+          checkId: "short-candidate-policy",
           configuration: { includeShortCandidates: false },
         },
       ],
@@ -285,7 +290,7 @@ void describe("quality checker configuration contracts", () => {
       result.checks[1]?.configuration,
     );
     assert.deepEqual(
-      result.diagnostics.map(({ ruleId, message }) => [ruleId, message]),
+      result.diagnostics.map(({ checkId, message }) => [checkId, message]),
       [
         ["minimum-length", "Candidate is shorter than 3."],
         [
@@ -303,6 +308,7 @@ void describe("quality checker configuration contracts", () => {
       typeof thresholdSchema
     >({
       id: "minimum-length",
+      version: "qa-configuration-v1",
       configurationSchema: thresholdSchema,
       // @ts-expect-error 静态配置值不符合声明的输入类型。
       configuration: { threshold: "three" },
@@ -325,6 +331,7 @@ void describe("quality checker configuration contracts", () => {
       typeof defaultConfigurationSchema
     >({
       id: "default-config",
+      version: "qa-configuration-v1",
       configurationSchema: defaultConfigurationSchema,
       configuration: undefined,
       check: (input) => {
@@ -347,6 +354,7 @@ void describe("quality checker configuration contracts", () => {
       typeof nonJsonOutputSchema
     >({
       id: "non-json-config",
+      version: "qa-configuration-v1",
       configurationSchema: nonJsonOutputSchema,
       configuration: undefined,
       check: () => completeOutcome(),
@@ -368,10 +376,38 @@ void describe("quality checker configuration contracts", () => {
     );
   });
 
+  void it("rejects non-JSON custom fingerprint inputs as a contract error", async () => {
+    const checker = defineQualityCheck<Unit, unknown, typeof thresholdSchema>({
+      id: "non-json-fingerprint",
+      version: "qa-configuration-v1",
+      configurationSchema: thresholdSchema,
+      configuration: {},
+      fingerprintInput: () =>
+        ({ callback: () => "hidden dependency" }) as never,
+      check: () => completeOutcome(),
+    });
+
+    await assert.rejects(
+      analyzeQuality(qualityConfig([checker]), {
+        candidates: [{ sourceKey: "save", language: "fr", content: "Saved" }],
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof StandardSchemaContractError);
+        assert.equal(error.kind, "invalid-json");
+        assert.equal(
+          error.valueDescription,
+          "QA 检查器 non-json-fingerprint 的输入指纹依据.callback",
+        );
+        return true;
+      },
+    );
+  });
+
   void it("rejects candidate bodies that violate the declared content schema", async () => {
     let checkerCalled = false;
     const checker = defineQualityCheck<Unit, unknown, typeof thresholdSchema>({
       id: "candidate-schema",
+      version: "qa-configuration-v1",
       configurationSchema: thresholdSchema,
       configuration: {},
       check: () => {

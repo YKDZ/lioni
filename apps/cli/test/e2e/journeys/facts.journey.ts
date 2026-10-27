@@ -123,12 +123,26 @@ export default defineConfig({
   ...baseConfig,
   qualityChecks: [defineQualityCheck({
     id: "host-rule",
+    version: "facts-journey-qa-v1",
     configurationSchema: enabledConfigurationSchema,
     configuration: { enabled: true },
-    check({ configuration }) {
+    check({ configuration, candidate }) {
       return {
         status: configuration.enabled ? "complete" : "not-applicable",
-        diagnostics: [],
+        diagnostics: configuration.enabled ? [{
+          severity: "warning",
+          object: {
+            kind: "translation-unit",
+            key: candidate.sourceKey,
+            language: candidate.language
+          },
+          location: {
+            language: candidate.language,
+            range: "src/messages.ts:18"
+          },
+          message: "候选需要人工复核。",
+          evidence: []
+        }] : [],
         issues: [],
         coverage: {
           selected: 1,
@@ -362,6 +376,11 @@ export default defineConfig({
     const qaResult = JSON.parse(qa?.stdout ?? "") as {
       data: {
         status: string;
+        diagnostics: readonly {
+          checkId: string;
+          executionId: number;
+          message: string;
+        }[];
         candidates: readonly {
           sourceKey: string;
           language: string;
@@ -376,7 +395,31 @@ export default defineConfig({
             candidateSelected: boolean;
           }[];
         };
-        checks: readonly { id: string; configuration: { enabled: boolean } }[];
+        checks: readonly {
+          checkId: string;
+          version: string;
+          configuration: { enabled: boolean };
+          status: string;
+          diagnostics: readonly {
+            checkId: string;
+            executionId: number;
+            message: string;
+          }[];
+          executions: readonly {
+            executionId: number;
+            candidateIndex: number;
+            checkId: string;
+            sourceKey: string;
+            language: string;
+            status: string;
+            inputFingerprint?: string;
+            fingerprintSummary?: {
+              version: string;
+              configurationFingerprint: string;
+              inputFingerprint: string;
+            };
+          }[];
+        }[];
       };
     };
     assert.equal(qaResult.data.status, "complete");
@@ -401,30 +444,67 @@ export default defineConfig({
         candidateSelected: true,
       },
     ]);
-    assert.deepEqual(qaResult.data.checks, [
-      {
-        id: "host-rule",
-        configuration: { enabled: true },
-        status: "complete",
-        diagnostics: [],
-        issues: [],
-        coverage: {
-          selected: 1,
-          evaluated: 1,
-          notApplicable: 0,
-          incomplete: 0,
-          failed: 0,
+    assert.equal(qaResult.data.checks.length, 1);
+    const check = qaResult.data.checks[0];
+    assert.equal(check?.checkId, "host-rule");
+    assert.equal(check?.version, "facts-journey-qa-v1");
+    assert.deepEqual(check?.configuration, { enabled: true });
+    assert.equal(check?.status, "complete");
+    assert.equal(qaResult.data.diagnostics.length, 1);
+    assert.equal(qaResult.data.diagnostics[0]?.checkId, "host-rule");
+    assert.equal(qaResult.data.diagnostics[0]?.executionId, 0);
+    assert.deepEqual(check?.diagnostics, qaResult.data.diagnostics);
+    assert.deepEqual(
+      check?.executions.map(
+        ({
+          executionId,
+          candidateIndex,
+          checkId,
+          sourceKey,
+          language,
+          status,
+        }) => ({
+          executionId,
+          candidateIndex,
+          checkId,
+          sourceKey,
+          language,
+          status,
+        }),
+      ),
+      [
+        {
+          executionId: 0,
+          candidateIndex: 0,
+          checkId: "host-rule",
+          sourceKey: "src/messages.ts:18",
+          language: "fr",
+          status: "complete",
         },
-      },
-    ]);
+      ],
+    );
+    assert.match(
+      check?.executions[0]?.inputFingerprint ?? "",
+      /^sha256:[a-f0-9]{64}$/u,
+    );
+    assert.equal(
+      check?.executions[0]?.fingerprintSummary?.version,
+      "facts-journey-qa-v1",
+    );
     assert.equal(
       qaText?.exitCode,
       0,
       `${qaText?.stdout ?? ""}${qaText?.stderr ?? ""}`,
     );
     assert.equal(qaText?.stderr, "");
-    assert.match(qaText?.stdout ?? "", /检查候选：1；诊断：0/u);
+    assert.match(qaText?.stdout ?? "", /检查候选：1；诊断：1/u);
     assert.match(qaText?.stdout ?? "", /原文读取：完整；译文读取：fr 完整/u);
+    assert.match(
+      qaText?.stdout ?? "",
+      /检查依据 host-rule src\/messages\.ts:18 → fr/u,
+    );
+    assert.match(qaText?.stdout ?? "", /sha256:[a-f0-9]{64}/u);
+    assert.match(qaText?.stdout ?? "", /host-rule .*执行 0.*候选需要人工复核/u);
     assert.equal(noChecks?.exitCode, 0);
     assert.equal(
       (JSON.parse(noChecks?.stdout ?? "") as { data: { status: string } }).data

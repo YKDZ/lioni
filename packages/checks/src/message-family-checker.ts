@@ -100,6 +100,8 @@ export type MessageFamilyCheckerOptions<
   TBody,
   TUnavailable = never,
 > = {
+  /** 宿主投影、分析配置与等价策略的版本。 */
+  readonly hostVersion: string;
   readonly select: (
     input: QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
   ) => Awaitable<
@@ -443,6 +445,7 @@ export function createMessageFamilyChecker<
     TUnavailable
   >({
     id: "message-family-consistency",
+    version: `checks.message-family-consistency/v1+${options.hostVersion}`,
     configurationSchema,
     configuration: { limits },
     inputSchema,
