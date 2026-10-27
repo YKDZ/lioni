@@ -26,10 +26,8 @@ const target = result.diagnostics.find(
 );
 assert.equal(source?.severity, "error");
 assert.equal(source?.location.language, null);
-assert.deepEqual(source?.location.range, {
-  file: "source.json",
-  span: { start: 7, end: 7 },
-});
+assert.deepEqual(source?.location.range, { file: "source.json" });
+assert.deepEqual(source?.location.span, { start: 7, end: 7 });
 assert.equal(target?.severity, "error");
 assert.equal(target?.location.language, "fr");
 assert.deepEqual(target?.location.span, { start: 6, end: 6 });

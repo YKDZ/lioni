@@ -77,7 +77,10 @@ export type {
   TranslationWriteResult,
   TranslationWriteBatchResult,
 } from "./semantic-edits.ts";
-export { StandardSchemaContractError } from "./standard-schema.ts";
+export {
+  StandardSchemaContractError,
+  snapshotJsonValue,
+} from "./standard-schema.ts";
 export { TranslationIdentityContractError } from "./translation-snapshot.ts";
 export type {
   StandardSchemaFailureKind,
@@ -346,7 +349,12 @@ export type QualityPreparation<
     TBody,
     TUnavailable
   >[];
-  readonly request?: Omit<QualityCheckRequest<TBody>, "exceptions">;
+  readonly request?: Omit<
+    QualityCheckRequest<TBody>,
+    "exceptions" | "candidates"
+  > & {
+    readonly candidates?: readonly SemanticEditCandidate<TBody>[];
+  };
 };
 
 export type QualityConfiguration<
@@ -994,6 +1002,7 @@ async function prepareQuality<
     throw new TypeError(
       "defineConfig 的 quality.prepare 不接受 exceptions；请通过 quality.exceptionStore 配置例外来源。",
     );
+  const defaults = defaultQualityRequest(facts);
   return {
     checks: prepared.checks as QualityCheckDefinition<
       TUnit,
@@ -1002,7 +1011,13 @@ async function prepareQuality<
       TBody,
       TUnavailable
     >[],
-    request: request as Omit<QualityCheckRequest<TBody>, "exceptions">,
+    request: {
+      ...defaults,
+      ...request,
+      candidates:
+        (request as { readonly candidates?: unknown }).candidates ??
+        defaults.candidates,
+    } as Omit<QualityCheckRequest<TBody>, "exceptions">,
   };
 }
 

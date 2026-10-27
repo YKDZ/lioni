@@ -60,9 +60,11 @@ export type MessageFamilySubject<
 export type MessageFamilyCandidateProjection<
   TSelectedUnit extends TranslationUnitInput,
   TBody,
+  TSubject extends MessageFamilySubject<TSelectedUnit, TBody> =
+    MessageFamilySubject<TSelectedUnit, TBody>,
 > = {
   readonly kind: "candidate";
-  readonly subject: MessageFamilySubject<TSelectedUnit, TBody>;
+  readonly subject: TSubject;
 };
 
 export type MessageFamilyReferenceProjection<
@@ -89,8 +91,10 @@ export type MessageFamilyProjection<
   TTranslation,
   TBody,
   TUnavailable,
+  TSubject extends MessageFamilySubject<TSelectedUnit, TBody> =
+    MessageFamilySubject<TSelectedUnit, TBody>,
 > =
-  | MessageFamilyCandidateProjection<TSelectedUnit, TBody>
+  | MessageFamilyCandidateProjection<TSelectedUnit, TBody, TSubject>
   | MessageFamilyReferenceProjection<TUnit, TTranslation, TBody, TUnavailable>;
 
 export type MessageFamilyCheckerOptions<
@@ -99,20 +103,33 @@ export type MessageFamilyCheckerOptions<
   TSelectedUnit extends TUnit,
   TBody,
   TUnavailable = never,
+  TSubject extends MessageFamilySubject<TSelectedUnit, TBody> =
+    MessageFamilySubject<TSelectedUnit, TBody>,
 > = {
+  readonly id?: string;
   /** 宿主投影、分析配置与等价策略的版本。 */
   readonly hostVersion: string;
   readonly select: (
     input: QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
-  ) => Awaitable<
-    QualityCheckSelection<MessageFamilySubject<TSelectedUnit, TBody>>
-  >;
+  ) => Awaitable<QualityCheckSelection<TSubject>>;
   /** 只映射宿主资料，不执行分析；候选与已保存参照共用该映射。 */
   readonly project: (
     input: MessageFamilyProjection<
       TUnit,
       TSelectedUnit,
       TTranslation,
+      TBody,
+      TUnavailable,
+      TSubject
+    >,
+  ) => Awaitable<MessageFamilyInput>;
+  /** 候选可访问完整 QA 输入，以便复用候选共用投影。 */
+  readonly projectCandidate?: (
+    input: QualityCheckProjectionInput<
+      TUnit,
+      TTranslation,
+      unknown,
+      TSubject,
       TBody,
       TUnavailable
     >,
@@ -190,15 +207,19 @@ export function createMessageFamilyChecker<
   TSelectedUnit extends TUnit,
   TBody,
   TUnavailable = never,
+  TSubject extends MessageFamilySubject<TSelectedUnit, TBody> =
+    MessageFamilySubject<TSelectedUnit, TBody>,
 >(
   options: MessageFamilyCheckerOptions<
     TUnit,
     TTranslation,
     TSelectedUnit,
     TBody,
-    TUnavailable
+    TUnavailable,
+    TSubject
   >,
 ) {
+  const checkId = options.id ?? "message-family-consistency";
   const analysis = options.analysis ?? createTextAnalysis();
   const sourceTemplate = options.sourceTemplate ?? defaultTemplate;
   const targetTemplate = options.targetTemplate ?? defaultTemplate;
@@ -342,16 +363,13 @@ export function createMessageFamilyChecker<
         try {
           projected = await options.project(context);
         } catch (error) {
-          throw new QualityCheckBindingError(
-            "message-family-consistency",
-            "projection",
-            error,
-          );
+          throw new QualityCheckBindingError(checkId, "projection", error);
         }
         projected = validateProjection(
           projected,
           association.sourceKey,
           language,
+          checkId,
         );
         if (projected.complete === false) {
           incomplete = true;
@@ -373,7 +391,7 @@ export function createMessageFamilyChecker<
         );
 
         for (const group of projected.groups) {
-          assertProjectedLanguage(group, language);
+          assertProjectedLanguage(group, language, checkId);
           const signed = await signGroup(
             group,
             analysis,
@@ -439,12 +457,12 @@ export function createMessageFamilyChecker<
     TTranslation,
     typeof configurationSchema,
     typeof inputSchema,
-    MessageFamilySubject<TSelectedUnit, TBody>,
+    TSubject,
     QualityObject,
     TBody,
     TUnavailable
   >({
-    id: "message-family-consistency",
+    id: checkId,
     version: `checks.message-family-consistency/v1+${options.hostVersion}`,
     configurationSchema,
     configuration: { limits },
@@ -455,23 +473,26 @@ export function createMessageFamilyChecker<
         TUnit,
         TTranslation,
         Configuration,
-        MessageFamilySubject<TSelectedUnit, TBody>,
+        TSubject,
         TBody,
         TUnavailable
       >,
     ) => ({
       status: "ready",
-      value: await options.project({
-        kind: "candidate",
-        subject: input.subject,
-      }),
+      value:
+        options.projectCandidate === undefined
+          ? await options.project({
+              kind: "candidate",
+              subject: input.subject,
+            })
+          : await options.projectCandidate(input),
     }),
     check: async (
       input: QualityCheckRuleInput<
         TUnit,
         TTranslation,
         Configuration,
-        MessageFamilySubject<TSelectedUnit, TBody>,
+        TSubject,
         MessageFamilyInput,
         TBody,
         TUnavailable
@@ -575,7 +596,7 @@ export function createMessageFamilyChecker<
       let comparable = false;
 
       for (const group of input.projected.groups) {
-        assertProjectedLanguage(group, input.subject.language);
+        assertProjectedLanguage(group, input.subject.language, checkId);
         const signed = await signGroup(
           group,
           analysis,
@@ -1046,10 +1067,11 @@ function issue(
 function assertProjectedLanguage(
   group: MessageFamilyGroup,
   language: string,
+  checkId: string,
 ): void {
   if (group.target.language !== language)
     throw new QualityCheckBindingError(
-      "message-family-consistency",
+      checkId,
       "projection",
       new TypeError(
         `消息族投影的目标语言 ${group.target.language} 与适配器语言 ${language} 不一致。`,
@@ -1061,17 +1083,18 @@ function validateProjection(
   value: unknown,
   sourceKey: string,
   language: string,
+  checkId: string,
 ): MessageFamilyInput {
   const result = inputSchema["~standard"].validate(value);
   if ("then" in result)
     throw new QualityCheckBindingError(
-      "message-family-consistency",
+      checkId,
       "projection",
       new TypeError("消息族投影 schema 必须同步验证。"),
     );
   if (result.issues !== undefined)
     throw new QualityCheckBindingError(
-      "message-family-consistency",
+      checkId,
       "projection",
       new StandardSchemaContractError(
         `消息族投影 ${sourceKey}/${language}`,

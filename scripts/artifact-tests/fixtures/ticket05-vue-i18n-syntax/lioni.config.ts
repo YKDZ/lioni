@@ -2,20 +2,19 @@ import { appendFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import {
-  createVueI18nSourceSyntaxChecker,
-  createVueI18nTargetSyntaxChecker,
-  createVueI18nVariableCorrespondenceChecker,
-} from "@lioni/checks";
-import {
   defineConfig,
   type QualityCheckDefinition,
   type QualityCheckResultCache,
-  type QualityCheckInput,
   type QualityObject,
-  type SourceUnitFact,
   type StandardSchemaV1,
 } from "@lioni/core";
 import { createDefaultQualityCheckResultCache } from "@lioni/core/node";
+import {
+  createVueI18nSourceSyntaxChecker,
+  createVueI18nTargetSyntaxChecker,
+  createVueI18nVariableCorrespondenceChecker,
+  type VueI18nProjector,
+} from "@lioni/vue-i18n";
 
 type Content = {
   readonly catalog: { readonly message: { readonly body: string } };
@@ -27,6 +26,33 @@ type Unit = {
   };
 };
 type Translation = { readonly nativeKey: string; readonly content: Content };
+const project: VueI18nProjector<Unit, Translation, Content> = (input) => {
+  const sourceUnit = input.sourceUnit;
+  const source =
+    sourceUnit?.bodyAvailability === "available"
+      ? sourceUnit.unit.source.catalog.message.body
+      : undefined;
+  const key = input.candidate.sourceKey;
+  const language = input.candidate.language;
+  return {
+    key,
+    language,
+    source:
+      sourceUnit === null
+        ? { status: "absent" }
+        : source === undefined
+          ? { status: "unavailable" }
+          : { status: "available", text: source },
+    target: {
+      status: "available",
+      text: input.candidate.content.catalog.message.body,
+    },
+    locations: {
+      source: { language: null, range: { file: "source.json" }, key },
+      target: { language, range: { file: "fr.json" }, key },
+    },
+  };
+};
 
 const unitSchema: StandardSchemaV1<Unit, Unit> = standardSchema(isUnit);
 const translationSchema: StandardSchemaV1<Translation, Translation> =
@@ -55,72 +81,23 @@ const syntaxChecks: readonly QualityCheckDefinition<
   QualityObject,
   Content
 >[] = [
-  createVueI18nSourceSyntaxChecker<Unit, Translation, Unit, Content>({
+  createVueI18nSourceSyntaxChecker<Unit, Translation, Content>({
     hostVersion: "artifact-fixture-v1",
-    select: (input: QualityCheckInput<Unit, Translation, unknown, Content>) => {
-      if (input.sourceUnit === null)
-        return {
-          status: "incomplete" as const,
-          issue: { code: "sourceUnavailable", message: "找不到对应原文。" },
-        };
-      return {
-        status: "selected" as const,
-        subject: {
-          sourceUnit: input.sourceUnit as SourceUnitFact<Unit>,
-          sourceKey: input.candidate.sourceKey,
-          language: input.candidate.language,
-        },
-      };
-    },
-    sourceText: (unit) => unit.source.catalog.message.body,
-    sourceLocation: (_unit, subject, range) => ({
-      language: null,
-      range: { file: "source.json", span: range },
-      key: subject.key,
-    }),
+    project,
   }),
-  createVueI18nTargetSyntaxChecker<Unit, Translation, Content, Content>({
+  createVueI18nTargetSyntaxChecker<Unit, Translation, Content>({
     hostVersion: "artifact-fixture-v1",
-    select: (input) => ({
-      status: "selected",
-      subject: {
-        sourceKey: input.candidate.sourceKey,
-        language: input.candidate.language,
-        content: input.candidate.content,
-      },
-    }),
-    targetText: (content) => content.catalog.message.body,
+    project,
   }),
 ];
 
 export function createVariableChecker() {
-  return createVueI18nVariableCorrespondenceChecker<
-    Unit,
-    Translation,
-    Unit,
-    Content,
-    Content
-  >({
-    hostVersion: "artifact-fixture-v1",
-    select: (input) => {
-      if (input.sourceUnit === null)
-        return {
-          status: "incomplete",
-          issue: { code: "sourceUnavailable", message: "找不到对应原文。" },
-        };
-      return {
-        status: "selected",
-        subject: {
-          sourceUnit: input.sourceUnit as SourceUnitFact<Unit>,
-          sourceKey: input.candidate.sourceKey,
-          language: input.candidate.language,
-          content: input.candidate.content,
-        },
-      };
+  return createVueI18nVariableCorrespondenceChecker<Unit, Translation, Content>(
+    {
+      hostVersion: "artifact-fixture-v1",
+      project,
     },
-    sourceText: (unit) => unit.source.catalog.message.body,
-    targetText: (content) => content.catalog.message.body,
-  });
+  );
 }
 
 export function createConfig(
