@@ -47,7 +47,7 @@ type ConfigOptions = CheckerOptions & {
   readonly translations?: readonly Translation[];
   readonly exceptions?: readonly {
     readonly id: string;
-    readonly ruleId: string;
+    readonly checkId: string;
     readonly scope: {
       readonly object: {
         readonly kind: string;
@@ -156,6 +156,7 @@ function createChecker(options: CheckerOptions = {}) {
   });
 
   return createMessageFamilyChecker<Unit, Translation, Unit, string>({
+    hostVersion: "message-families-artifact-v1",
     select: (input: QualityCheckInput<Unit, Translation, unknown, string>) => {
       const selectedUnit = input.sourceUnit;
       if (selectedUnit === null)
@@ -386,7 +387,7 @@ assert.equal(
 const physicalDiagnostic = diagnosticFor(baselineQuality, "editing");
 assert.ok(physicalDiagnostic);
 assert.equal(physicalDiagnostic.severity, "warning");
-assert.equal(physicalDiagnostic.ruleId, "message-family-consistency");
+assert.equal(physicalDiagnostic.checkId, "message-family-consistency");
 const physicalReferences = physicalDiagnostic.evidence.filter(
   ({ role }) => role === "saved-reference",
 );
@@ -475,7 +476,7 @@ const exceptionConfig = createConfig({
   exceptions: [
     {
       id: "known-family-variation",
-      ruleId: "message-family-consistency",
+      checkId: "message-family-consistency",
       scope: {
         object: { kind: "translation-unit", key: "editing", language: "zh" },
       },

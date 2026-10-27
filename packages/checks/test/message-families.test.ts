@@ -110,6 +110,7 @@ function checkerFor(
         : undefined,
   };
   return createMessageFamilyChecker<Unit, Translation, Unit, string>({
+    hostVersion: "message-families-test-v1",
     select: (input: QualityCheckInput<Unit, Translation, unknown, string>) => {
       const selectedUnit = input.sourceUnit;
       if (selectedUnit === null)
@@ -205,7 +206,7 @@ function configFor(
   qualityChecker: ReturnType<typeof checkerFor>,
   exceptions: readonly {
     readonly id: string;
-    readonly ruleId: string;
+    readonly checkId: string;
     readonly scope: {
       readonly object: {
         readonly kind: string;
@@ -356,8 +357,12 @@ void test("排除当前替代记录并保留其他内容相同的事实", async 
 
   assert.equal(result.status, "complete");
   assert.equal(result.diagnostics.length, 1);
+  assert.equal(
+    result.checks[0]?.version,
+    "checks.message-family-consistency/v1+message-families-test-v1",
+  );
   assert.equal(result.diagnostics[0]?.severity, "warning");
-  assert.equal(result.diagnostics[0]?.ruleId, "message-family-consistency");
+  assert.equal(result.diagnostics[0]?.checkId, "message-family-consistency");
   const references = result.diagnostics[0]!.evidence.filter(
     ({ role }) => role === "saved-reference",
   );
@@ -737,7 +742,7 @@ void test("例外保留警告发现及处理状态", async () => {
     [
       {
         id: "known-family-variation",
-        ruleId: "message-family-consistency",
+        checkId: "message-family-consistency",
         scope: {
           object: {
             kind: "translation-unit",

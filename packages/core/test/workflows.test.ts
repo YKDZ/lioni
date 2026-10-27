@@ -3,11 +3,13 @@ import { describe, it } from "node:test";
 
 import {
   analyzeQuality,
+  createQualityException,
   defineConfig,
   StandardSchemaContractError,
   writeTranslationRequests,
   type QualityCheckInput,
   type JsonValue,
+  type QualityExceptionStore,
   type TranslationWriteRequest,
 } from "../src/index.ts";
 import { defineTestQualityCheck } from "./quality-check-fixture.ts";
@@ -532,7 +534,7 @@ void describe("configured analysis workflow", () => {
     ]);
     assert.equal(result.status, "complete");
     assert.deepEqual(
-      result.checks.map(({ id }) => id),
+      result.checks.map(({ checkId }) => checkId),
       ["translation-present"],
     );
     assert.deepEqual(observed?.configuration, { enabled: true });
@@ -679,5 +681,98 @@ void describe("configured analysis workflow", () => {
     );
     assert.equal(accepted.results[0]?.status, "written");
     assert.equal(translation.text, "Sauver");
+  });
+
+  void it("applies the single configured exception source after checking", async () => {
+    const { candidate, config } = diagnosedEditScenario();
+    const candidates = [candidate, { ...candidate, content: "Sauvegarder" }];
+    const report = await analyzeQuality(config, { candidates });
+    assert.deepEqual(report.exceptions, []);
+    assert.deepEqual(report.exceptionApplicability, []);
+    const execution = report.checks[0]?.executions[0];
+    assert.ok(execution);
+    const exception = createQualityException({
+      id: "save-needs-review",
+      reason: "该候选的表达已由维护者确认。",
+      execution,
+    });
+    let loadCount = 0;
+    const store: QualityExceptionStore = {
+      async load() {
+        loadCount += 1;
+        return [exception];
+      },
+      async upsert() {},
+    };
+    const configured = defineConfig({
+      ...config,
+      qualityExceptionStore: store,
+    });
+
+    const result = await analyzeQuality(configured, {
+      candidates,
+    });
+
+    assert.equal(loadCount, 1);
+    assert.deepEqual(result.exceptions, [exception]);
+    assert.deepEqual(
+      result.diagnostics.map(({ checkId, handling }) => ({
+        checkId,
+        handling,
+      })),
+      [
+        {
+          checkId: "needs-review",
+          handling: {
+            status: "excepted",
+            exceptionId: "save-needs-review",
+            reason: "该候选的表达已由维护者确认。",
+          },
+        },
+        {
+          checkId: "needs-review",
+          handling: { status: "active" },
+        },
+      ],
+    );
+    assert.deepEqual(result.exceptionApplicability, [
+      {
+        exceptionId: "save-needs-review",
+        checkId: "needs-review",
+        sourceKey: "save",
+        language: "fr",
+        executionId: 0,
+        candidateIndex: 0,
+        status: "applicable",
+      },
+      {
+        exceptionId: "save-needs-review",
+        checkId: "needs-review",
+        sourceKey: "save",
+        language: "fr",
+        executionId: 1,
+        candidateIndex: 1,
+        status: "basis-changed",
+        reasons: ["business-input"],
+      },
+    ]);
+  });
+
+  void it("拒绝从旧质量请求读取例外", async () => {
+    const { candidate, config } = diagnosedEditScenario();
+    const legacyConfig = {
+      ...config,
+      createQualityRequest: () => ({
+        candidates: [candidate],
+        dependencies: {},
+        exceptions: [],
+      }),
+    };
+
+    await assert.rejects(analyzeQuality(legacyConfig as never), {
+      name: "TypeError",
+      message:
+        "defineConfig 的 createQualityRequest 不再接受 exceptions；请通过 qualityExceptionStore 配置例外来源。",
+    });
   });
 });

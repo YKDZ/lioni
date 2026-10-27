@@ -47,7 +47,7 @@ testArtifactConsumer(
       readonly version: string;
       readonly candidates: readonly unknown[];
       readonly diagnostics: readonly {
-        readonly ruleId: string;
+        readonly checkId: string;
         readonly handling: { readonly status: string };
       }[];
     };
@@ -56,13 +56,14 @@ testArtifactConsumer(
     assert.equal(initialResult.candidates.length, 2);
     assert.equal(
       initialResult.diagnostics.find(
-        ({ ruleId }) => ruleId === "catalog-numbers",
+        ({ checkId }) => checkId === "catalog-numbers",
       )?.handling.status,
       "excepted",
     );
     assert.equal(
-      initialResult.diagnostics.find(({ ruleId }) => ruleId === "guide-numbers")
-        ?.handling.status,
+      initialResult.diagnostics.find(
+        ({ checkId }) => checkId === "guide-numbers",
+      )?.handling.status,
       "active",
     );
 
@@ -84,15 +85,16 @@ testArtifactConsumer(
       readonly status: string;
       readonly version: string;
       readonly diagnostics: readonly {
-        readonly ruleId: string;
+        readonly checkId: string;
         readonly handling: { readonly status: string };
       }[];
     };
     assert.equal(updatedResult.status, "complete");
     assert.notEqual(updatedResult.version, initialResult.version);
     assert.equal(
-      updatedResult.diagnostics.find(({ ruleId }) => ruleId === "guide-numbers")
-        ?.handling.status,
+      updatedResult.diagnostics.find(
+        ({ checkId }) => checkId === "guide-numbers",
+      )?.handling.status,
       "active",
     );
 

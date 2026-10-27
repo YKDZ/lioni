@@ -16,6 +16,11 @@ import {
   type QualityRunResult,
   type QualityObject,
 } from "./qa.ts";
+import { validateQualityExceptions } from "./quality-exceptions.ts";
+import type {
+  QualityException,
+  QualityExceptionStore,
+} from "./quality-exceptions.ts";
 import { validateSemanticEditCandidate } from "./semantic-edits.ts";
 import type {
   JsonValue,
@@ -80,7 +85,29 @@ export type {
   StandardSchemaV1Result,
 } from "./standard-schema.ts";
 export {
+  createQualityException,
+  evaluateQualityExceptionApplicability,
+  qualityExceptionMatchesExecution,
+  QualityExceptionFormatError,
+  validateQualityException,
+  validateQualityExceptionFile,
+  validateQualityExceptions,
+} from "./quality-exceptions.ts";
+export type {
+  CreateQualityExceptionInput,
+  QualityException,
+  QualityExceptionApplicability,
+  QualityExceptionChangeReason,
+  QualityExceptionExecution,
+  QualityExceptionFile,
+  QualityExceptionFingerprintSummary,
+  QualityExceptionFormatErrorReason,
+  QualityExceptionNotVerifiedReason,
+  QualityExceptionStore,
+} from "./quality-exceptions.ts";
+export {
   QualityCheckBindingError,
+  createDefaultQualityInputBasis,
   defineQualityCheck,
   bindQualityCheck,
   runQualityChecks,
@@ -91,10 +118,6 @@ export type {
   QualityLocation,
   QualitySubject,
   QualityRelationship,
-  QualityExceptionObjectScope,
-  QualityExceptionLocationScope,
-  QualityExceptionScope,
-  QualityException,
   QualityDiagnosticHandling,
   QualityEvidence,
   QualityDiagnostic,
@@ -102,6 +125,10 @@ export type {
   QualityIssue,
   QualityCoverage,
   QualityCheckOutcome,
+  QualityInputBasis,
+  QualityDefaultInput,
+  QualityInputFingerprintSummary,
+  QualityCheckExecution,
   QualityCheckRequest,
   QualityCheckInput,
   QualityCheckSelection,
@@ -298,9 +325,10 @@ export type FrameworkConfig<
     TBody,
     TUnavailable
   >[];
+  readonly qualityExceptionStore?: QualityExceptionStore;
   readonly createQualityRequest?: (
     facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
-  ) => Awaitable<QualityCheckRequest<TBody>>;
+  ) => Awaitable<Omit<QualityCheckRequest<TBody>, "exceptions">>;
 };
 
 type DefineConfigInput<
@@ -571,6 +599,15 @@ function validateSourceConfig(value: unknown): void {
     );
   if (typeof value.keyOf !== "function")
     invalidFrameworkConfig("defineConfig 的 keyOf 必须是函数。");
+  if (
+    value.qualityExceptionStore !== undefined &&
+    (!isRecord(value.qualityExceptionStore) ||
+      typeof value.qualityExceptionStore.load !== "function" ||
+      typeof value.qualityExceptionStore.upsert !== "function")
+  )
+    invalidFrameworkConfig(
+      "defineConfig 的 qualityExceptionStore 必须提供 load 与 upsert 函数。",
+    );
 }
 
 function invalidFrameworkConfig(message: string): never {
@@ -795,6 +832,8 @@ export async function analyzeQuality<
     readonly memo?: MemoScope;
   } = {},
 ): Promise<QualityRunResult<QualityObject, TBody>> {
+  validateFrameworkConfig(config);
+  const exceptions = await loadQualityExceptions(config);
   const facts = await readFacts(config);
   const checks = configuredQualityChecks(config);
   const configuredRequest = await createConfiguredQualityRequest(config, facts);
@@ -805,7 +844,27 @@ export async function analyzeQuality<
   const candidates: SemanticEditCandidate<TBody>[] = [];
   for (const candidate of request.candidates)
     candidates.push(await validateSemanticEditCandidate(candidate, config));
-  return runQualityChecks(facts, { ...request, candidates }, checks, options);
+  return runQualityChecks(
+    facts,
+    { ...request, candidates, exceptions },
+    checks,
+    options,
+  );
+}
+
+async function loadQualityExceptions<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+): Promise<readonly QualityException[]> {
+  const store = config.qualityExceptionStore;
+  if (store === undefined) return [];
+  const exceptions: unknown = await store.load();
+  validateQualityExceptions(exceptions);
+  return exceptions;
 }
 
 function defaultQualityRequest<
@@ -815,7 +874,7 @@ function defaultQualityRequest<
   TUnavailable,
 >(
   facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
-): QualityCheckRequest<TBody> {
+): Omit<QualityCheckRequest<TBody>, "exceptions"> {
   return {
     candidates: facts.associations.flatMap((association) => {
       if (association.status !== "matched") return [];
@@ -864,12 +923,17 @@ async function createConfiguredQualityRequest<
 >(
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
   facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
-): Promise<QualityCheckRequest<TBody>> {
+): Promise<Omit<QualityCheckRequest<TBody>, "exceptions">> {
   const request = config.createQualityRequest;
   if (request === undefined) return defaultQualityRequest(facts);
   if (typeof request !== "function")
     throw new TypeError("defineConfig 的 createQualityRequest 必须是函数。");
-  return await request(facts);
+  const configured = await request(facts);
+  if (isRecord(configured) && Object.hasOwn(configured, "exceptions"))
+    throw new TypeError(
+      "defineConfig 的 createQualityRequest 不再接受 exceptions；请通过 qualityExceptionStore 配置例外来源。",
+    );
+  return configured;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

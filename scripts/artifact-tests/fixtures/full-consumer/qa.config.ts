@@ -43,6 +43,7 @@ async function readMessageResource() {
 
 const qualityChecks = [
   createNumberChecker<Unit, Translation, Unit, string, string, never>({
+    hostVersion: "full-consumer-v1",
     select: ({ sourceUnit, candidate }) => {
       if (sourceUnit === null)
         return {
@@ -113,20 +114,6 @@ function createQualityRequest(
               content: record.content,
             },
           ],
-    exceptions: [
-      {
-        id: "approved-number-difference",
-        ruleId: "number-correspondence",
-        scope: {
-          object: {
-            kind: "translation-unit",
-            key: "sha256:save",
-            language: "fr",
-          },
-        },
-        reason: "数字差异已由维护者确认。",
-      },
-    ],
     dependencies: {},
   };
 }
