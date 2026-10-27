@@ -156,6 +156,7 @@ function createChecker(options: CheckerOptions = {}) {
   });
 
   return createMessageFamilyChecker<Unit, Translation, Unit, string>({
+    hostVersion: "message-families-artifact-v1",
     select: (input: QualityCheckInput<Unit, Translation, unknown, string>) => {
       const selectedUnit = input.sourceUnit;
       if (selectedUnit === null)

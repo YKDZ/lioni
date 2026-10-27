@@ -150,6 +150,7 @@ const project = ({
 
 const qualityChecks = [
   createTermChecker<Unit, Translation, string, string>({
+    hostVersion: "ticket04-05-consumer-v1",
     terms,
     rule: requireAllowedTranslation(),
     select: ({ candidate }) => ({
@@ -159,6 +160,7 @@ const qualityChecks = [
     project,
   }),
   createTermChecker<Unit, Translation, string, string>({
+    hostVersion: "ticket04-05-consumer-v1",
     terms,
     rule: rejectForbiddenTranslation(),
     select: ({ candidate }) => ({
