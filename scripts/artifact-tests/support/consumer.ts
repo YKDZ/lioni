@@ -143,12 +143,14 @@ export function runSubprocess(
     Number.isFinite(timeoutMs) && timeoutMs > 0,
     "子进程超时必须为正数。",
   );
+  const environment = { ...(options.env ?? process.env) };
+  delete environment.NODE_TEST_CONTEXT;
   const startedAt = Date.now();
 
   return new Promise((resolveResult) => {
     const child = spawn(command, [...args], {
       cwd: options.cwd,
-      env: options.env ?? process.env,
+      env: environment,
       detached: process.platform !== "win32",
       shell: options.shell ?? false,
       stdio: ["ignore", "pipe", "pipe"],

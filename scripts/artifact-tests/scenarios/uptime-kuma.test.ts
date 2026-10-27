@@ -151,6 +151,22 @@ function readEnvelope<TData>(stdout: string, command: string): TData {
   return value.data;
 }
 
+function readNodeTestSummary(output: string) {
+  const summary =
+    /^# tests (\d+)\r?\n# suites (\d+)\r?\n# pass (\d+)\r?\n# fail (\d+)\r?\n# cancelled (\d+)\r?\n# skipped (\d+)\r?\n# todo (\d+)/mu.exec(
+      output,
+    );
+  assert.ok(summary, "已安装宿主测试未输出 Node 原生 TAP 汇总。");
+  return {
+    tests: Number(summary[1]),
+    passed: Number(summary[3]),
+    failed: Number(summary[4]),
+    cancelled: Number(summary[5]),
+    skipped: Number(summary[6]),
+    todo: Number(summary[7]),
+  };
+}
+
 async function readStringMap(
   filename: string,
 ): Promise<Record<string, string>> {
@@ -302,7 +318,7 @@ const runKumaScenario: ConsumerScenario = async ({ root, runCommand }) => {
       {
         ...hostPackage,
         exports: { "./config": hostExports["./config"] },
-        scripts: { test: "node --test" },
+        scripts: { test: "node --test --test-reporter=tap" },
         dependencies: hostArtifactDependencies,
         devDependencies: {
           "@lioni/cli": cliArtifact,
@@ -385,16 +401,26 @@ const runKumaScenario: ConsumerScenario = async ({ root, runCommand }) => {
     "false",
   ]);
   assert.equal(hostTypes.status, 0);
-  await runCommand("pnpm", [
+  const hostTests = await runCommand("pnpm", [
     "--dir",
     hostQaRoot,
     "exec",
     "node",
     "--test",
+    "--test-reporter=tap",
     "test/declarations.test.ts",
     "test/facts.test.ts",
     "test/writer.test.ts",
   ]);
+  const hostTestSummary = readNodeTestSummary(
+    `${hostTests.stdout}\n${hostTests.stderr}`,
+  );
+  assert.ok(hostTestSummary.tests > 0);
+  assert.equal(hostTestSummary.passed, hostTestSummary.tests);
+  assert.equal(hostTestSummary.failed, 0);
+  assert.equal(hostTestSummary.cancelled, 0);
+  assert.equal(hostTestSummary.skipped, 0);
+  assert.equal(hostTestSummary.todo, 0);
 
   const resourcePath = (language: string) =>
     path.join(hostRoot, "src", "lang", `${language}.json`);
@@ -925,6 +951,7 @@ process.stdout.write(JSON.stringify(result) + "\\n");
       commit: expectedCommit,
       applicationBuildStarted: false,
       applicationServerStarted: false,
+      testSummary: hostTestSummary,
     },
     artifacts: selectedArtifacts.map(
       ({ name, version, sha256, cachePath, cacheState }) => ({

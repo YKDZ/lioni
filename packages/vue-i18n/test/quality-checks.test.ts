@@ -525,6 +525,28 @@ void test("消息族目标等价声明仅影响其目标语言", async () => {
   );
 });
 
+void test("无效的已保存译文不使其他消息族变为未完成", async () => {
+  const policy = policyFor({
+    sourceMessages: {
+      first: "Enabled",
+      second: "Enabled",
+      broken: "Enabled",
+    },
+    targetMessages: { first: "A", second: "B", broken: "bad }" },
+    scopes: [{ scope: "ui", keys: ["first", "second", "broken"] }],
+  });
+  const result = await createQualityFixture({ policies: [policy] }).run([
+    candidate("first", "A"),
+    candidate("broken", "bad }"),
+  ]);
+
+  const familyCheck = check(result, checkIds.messageFamilyConsistency);
+  assert.equal(familyCheck?.status, "complete");
+  assert.equal(familyCheck?.coverage.incomplete, 0);
+  assert.equal(findings(result, checkIds.messageFamilyConsistency).length, 1);
+  assert.equal(findings(result, checkIds.targetSyntax).length, 1);
+});
+
 void test("多语言沿用各自资源位置，反向语言对仍标注正确来源", async () => {
   const terms: TermbaseData = {
     concepts: [

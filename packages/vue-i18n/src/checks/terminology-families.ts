@@ -35,7 +35,10 @@ import {
   createVueI18nTargetEquivalence,
 } from "../scope.ts";
 import type { VueI18nUsageIndex } from "../usage-types.ts";
-import { VUE_I18N_MESSAGE_COMPILER_VERSION } from "../vue-i18n-messages.ts";
+import {
+  parseVueI18nMessage,
+  VUE_I18N_MESSAGE_COMPILER_VERSION,
+} from "../vue-i18n-messages.ts";
 
 type TermSubject = {
   readonly key: string;
@@ -367,6 +370,11 @@ function familyInput(
         },
       ],
     };
+  if (
+    parseVueI18nMessage(projection.source.text).errors.length > 0 ||
+    parseVueI18nMessage(projection.target.text).errors.length > 0
+  )
+    return { groups: [] };
 
   const scope = createVueI18nScopeResolver(policy, usages)(projection.key);
   return {
@@ -400,7 +408,7 @@ function terminologyVersion(
 
 function familyVersion(identity: VueI18nCheckIdentity): string {
   return [
-    "vue-i18n-suite/message-family/v2",
+    "vue-i18n-suite/message-family/v3",
     `@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
     identity.hostVersion,
   ].join("+");
