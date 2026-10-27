@@ -247,10 +247,7 @@ export function createQualityFixture(input: {
       contentSchema: bodySchema,
       contentOf: (translation) => ({ text: translation.text }),
       identityOf: (translation) => ({
-        namespace: String(
-          byLanguage.get(translation.language)?.resources.target.range ??
-            "translations",
-        ),
+        namespace: "messages",
         key: translation.key,
       }),
       matches: (unit, translation) => unit.key === translation.key,
