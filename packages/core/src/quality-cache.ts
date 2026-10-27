@@ -94,7 +94,8 @@ function isQualityObject(value: unknown): boolean {
   return (
     isRecord(value) &&
     typeof value.kind === "string" &&
-    typeof value.key === "string"
+    typeof value.key === "string" &&
+    (value.language === undefined || typeof value.language === "string")
   );
 }
 
