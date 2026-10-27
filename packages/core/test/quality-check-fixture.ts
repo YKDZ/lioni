@@ -27,6 +27,7 @@ export function defineTestQualityCheck<
   TUnavailable = never,
 >(definition: {
   readonly id: string;
+  readonly version?: string;
   readonly configuration: JsonValue;
   readonly check: (
     input: QualityCheckInput<
@@ -53,7 +54,7 @@ export function defineTestQualityCheck<
     TUnavailable
   >({
     ...definition,
-    version: "core-test-v1",
+    version: definition.version ?? "core-test-v1",
     configurationSchema: identityConfigurationSchema,
   });
 }

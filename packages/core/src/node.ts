@@ -24,7 +24,13 @@ export {
   createFileQualityExceptionStore,
   resolveDefaultQualityExceptionFilePath,
 } from "./node-quality-exceptions.ts";
+export {
+  createDefaultQualityCheckResultCache,
+  createFileQualityCheckResultCache,
+  resolveDefaultQualityCheckResultCachePath,
+} from "./node-quality-cache.ts";
 export type { QualityExceptionStore } from "./quality-exceptions.ts";
+export type { QualityCheckResultCache } from "./quality-cache.ts";
 
 type RuntimeFrameworkConfig = FrameworkConfig<
   TranslationUnitInput,
