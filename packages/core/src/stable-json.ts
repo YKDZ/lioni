@@ -2,7 +2,11 @@ import { assertJsonValue, type JsonValue } from "./standard-schema.ts";
 
 export function stableStringify(value: unknown): string {
   assertJsonValue(value, "稳定 JSON 值");
-  const serialized = JSON.stringify(sortJsonKeys(value as JsonValue), null, 2);
+  return stableStringifyJson(value as JsonValue);
+}
+
+export function stableStringifyJson(value: JsonValue): string {
+  const serialized = JSON.stringify(sortJsonKeys(value), null, 2);
   if (serialized === undefined) throw new TypeError("值必须可序列化为 JSON。");
   return serialized;
 }
