@@ -142,6 +142,69 @@ void describe("QA 结果缓存", () => {
     }
   });
 
+  void it("把结构损坏的自定义缓存结果视为未命中", async () => {
+    const validOutcome = reviewOutcome();
+    const finding = validOutcome.diagnostics[0];
+    assert.ok(finding);
+    const invalidOutcomes: readonly { name: string; outcome: unknown }[] = [
+      {
+        name: "诊断缺少必要字段",
+        outcome: { ...validOutcome, diagnostics: [{}] },
+      },
+      {
+        name: "诊断证据缺少必要字段",
+        outcome: {
+          ...validOutcome,
+          diagnostics: [{ ...finding, evidence: [{}] }],
+        },
+      },
+      {
+        name: "诊断位置缺少范围",
+        outcome: {
+          ...validOutcome,
+          diagnostics: [{ ...finding, location: { language: "fr" } }],
+        },
+      },
+      {
+        name: "检查问题缺少必要字段",
+        outcome: { ...validOutcome, issues: [{}] },
+      },
+    ];
+
+    for (const scenario of invalidOutcomes) {
+      let checkCount = 0;
+      const cache: QualityCheckResultCache = {
+        async get() {
+          return scenario.outcome as CacheableQualityCheckOutcome;
+        },
+        async set() {},
+      };
+      const result = await analyzeQuality(
+        createTestConfig(
+          reviewCheck(() => {
+            checkCount += 1;
+          }),
+          { cache },
+        ),
+      );
+
+      assert.equal(checkCount, 1, scenario.name);
+      assert.equal(result.diagnostics[0]?.severity, "error", scenario.name);
+      assert.equal(
+        result.diagnostics[0]?.message,
+        "请复核译文。",
+        scenario.name,
+      );
+      assert.deepEqual(
+        result.diagnostics[0]?.location,
+        { language: "fr", range: "fr.json" },
+        scenario.name,
+      );
+      assert.deepEqual(result.diagnostics[0]?.evidence, [], scenario.name);
+      assert.deepEqual(result.checks[0]?.issues, [], scenario.name);
+    }
+  });
+
   void it("命中时仍重新选择、投影并校验，契约错误不会被缓存吞掉", async () => {
     const counts = { select: 0, project: 0, schema: 0, check: 0 };
     let rejectProjectedInput = false;
