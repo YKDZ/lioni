@@ -325,24 +325,27 @@ void test("术语与受保护字面值接受声明形式并拒绝不允许的译
   };
   const policy = policyFor({
     sourceMessages: {
-      monitor: "Use monitor_id",
+      monitor: "monitor",
+      identifier: "Use monitor_id",
       header: "Trust X-Forwarded-*",
     },
     targetMessages: {
-      monitor: "使用 monitor_id",
+      monitor: "监控项",
+      identifier: "使用 monitor_id",
       header: "信任 X-Forwarded-*",
     },
     protectedLiterals: {
-      monitor: ["monitor_id"],
+      identifier: ["monitor_id"],
       header: ["X-Forwarded-*"],
     },
   });
   const fixture = createQualityFixture({ policies: [policy], terms });
   const allowed = await fixture.run([
-    candidate("monitor", "使用 monitor_id"),
+    candidate("monitor", "监控项"),
+    candidate("identifier", "使用 monitor_id"),
     candidate("header", "信任 X-Forwarded-*"),
   ]);
-  const forbidden = await fixture.run([candidate("monitor", "改用显示器")]);
+  const forbidden = await fixture.run([candidate("monitor", "显示器")]);
   const alteredLiteral = await fixture.run([
     candidate("header", "信任 X-Forwarded-"),
   ]);
