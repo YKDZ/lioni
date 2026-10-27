@@ -60,6 +60,8 @@ export type VueI18nVariableCorrespondenceCheckerOptions<
   TBody = unknown,
   TUnavailable = never,
 > = {
+  /** 宿主选择、正文投影和位置映射的版本。 */
+  readonly hostVersion: string;
   readonly select: (
     input: QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
   ) => Awaitable<
@@ -151,6 +153,7 @@ export function createVueI18nVariableCorrespondenceChecker<
     TUnavailable
   >({
     id: "vue-i18n/variable-correspondence",
+    version: `checks.vue-i18n/variable-correspondence/v1+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}+${options.hostVersion}`,
     configurationSchema,
     configuration,
     inputSchema,

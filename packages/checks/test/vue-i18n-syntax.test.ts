@@ -111,6 +111,7 @@ function variableChecker() {
     Content,
     Content
   >({
+    hostVersion: "checks-test-v1",
     select: (input) => {
       if (input.sourceUnit === null)
         return {

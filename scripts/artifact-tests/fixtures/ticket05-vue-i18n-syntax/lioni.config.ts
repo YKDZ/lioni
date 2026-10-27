@@ -81,6 +81,7 @@ export function createVariableChecker() {
     Content,
     Content
   >({
+    hostVersion: "artifact-fixture-v1",
     select: (input) => {
       if (input.sourceUnit === null)
         return {

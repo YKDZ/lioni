@@ -6,7 +6,7 @@
 
 原文与译文语法有独立检查身份：`vue-i18n/source-syntax` 和 `vue-i18n/target-syntax`。宿主分别选择所需检查器，并通过 `sourceText`、`targetText` 指定正文投影。译文检查只依赖候选投影，所以目标独有键也能检查；显式空字符串会作为正文检查。
 
-两个工厂都要求填写 `hostVersion`，用来标记宿主的候选选择、正文投影和位置映射。最终版本始终合入内置检查算法及 `@intlify/message-compiler` 11.2.8 基准；调整宿主行为时也应更新 `hostVersion`。
+原文与译文语法工厂都要求填写 `hostVersion`，用来标记宿主的候选选择、正文投影和位置映射。最终版本始终合入内置检查算法及 `@intlify/message-compiler` 11.2.8 基准；调整宿主行为时也应更新 `hostVersion`。
 
 ```ts
 import {
@@ -65,12 +65,15 @@ const targetSyntax = createVueI18nTargetSyntaxChecker({
 
 `createVueI18nVariableCorrespondenceChecker` 使用同样的显式选择和正文投影方式，检查身份为 `vue-i18n/variable-correspondence`。它在每个原始分支内分别统计命名变量和位置变量的身份及次数，然后比较两侧去重后的计数模式集合。变量顺序和分支顺序不参与比较；相同模式的分支可以合并或重复，空变量模式也参与比较。`n` 与 `count` 是不同身份，Literal 不计变量，动态关联键中的直接变量计入，静态关联目标的正文不会展开。
 
+变量工厂也要求 `hostVersion`，与固定的变量算法及 11.2.8 编译器基准合成检查版本。
+
 这是静态正文契约检查，不判断运行时会选中哪个复数分支，也不推断函数调用传参或实际渲染行为。原文或译文存在语法错误时，变量检查返回 incomplete，不重复生成语法诊断；请同时装配 source/target syntax 检查器来报告对应语法问题。
 
 ```ts
 import { createVueI18nVariableCorrespondenceChecker } from "@lioni/checks";
 
 const variableCorrespondence = createVueI18nVariableCorrespondenceChecker({
+  hostVersion: "catalog-projection-v1",
   select: ({ sourceUnit, candidate }) => {
     if (sourceUnit === null)
       return {
