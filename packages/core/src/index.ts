@@ -81,6 +81,7 @@ export type {
 } from "./standard-schema.ts";
 export {
   QualityCheckBindingError,
+  createDefaultQualityInputBasis,
   defineQualityCheck,
   bindQualityCheck,
   runQualityChecks,
@@ -102,6 +103,10 @@ export type {
   QualityIssue,
   QualityCoverage,
   QualityCheckOutcome,
+  QualityInputBasis,
+  QualityDefaultInput,
+  QualityInputFingerprintSummary,
+  QualityCheckExecution,
   QualityCheckRequest,
   QualityCheckInput,
   QualityCheckSelection,

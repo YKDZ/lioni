@@ -53,6 +53,7 @@ export function defineTestQualityCheck<
     TUnavailable
   >({
     ...definition,
+    version: "core-test-v1",
     configurationSchema: identityConfigurationSchema,
   });
 }

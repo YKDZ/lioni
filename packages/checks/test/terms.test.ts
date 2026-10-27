@@ -213,6 +213,7 @@ function createScenario(
 
   const checks = [
     createTermChecker<Unit, Translation, string, Body>({
+      hostVersion: "terms-test-v1",
       terms,
       rule: requireAllowedTranslation(),
       select: ({ candidate }) => ({
@@ -227,6 +228,7 @@ function createScenario(
       }),
     }),
     createTermChecker<Unit, Translation, string, Body>({
+      hostVersion: "terms-test-v1",
       terms,
       rule: rejectForbiddenTranslation(),
       select: ({ candidate }) => ({
@@ -476,13 +478,13 @@ void test("QA 例外保留术语发现，宿主条件控制语义编辑", async 
   scenario.setExceptions([
     {
       id: "allow-missing-term-review",
-      ruleId: "terminology/require-allowed-translation",
+      checkId: "terminology/require-allowed-translation",
       scope: { object },
       reason: "本地化审校接受此项候选。",
     },
     {
       id: "allow-forbidden-term-review",
-      ruleId: "terminology/reject-forbidden-translation",
+      checkId: "terminology/reject-forbidden-translation",
       scope: { object },
       reason: "本地化审校接受此项候选。",
     },
@@ -490,6 +492,13 @@ void test("QA 例外保留术语发现，宿主条件控制语义编辑", async 
   const passedQuality = await analyzeQuality(scenario.config, {
     candidates: [candidate],
   });
+  assert.deepEqual(
+    passedQuality.checks.map(({ version }) => version),
+    [
+      "checks.terminology-rule/v1+terms-test-v1",
+      "checks.terminology-rule/v1+terms-test-v1",
+    ],
+  );
   assert.deepEqual(
     passedQuality.diagnostics.map((diagnostic) => diagnostic.object.code),
     ["missing-allowed-translation", "forbidden-translation"],

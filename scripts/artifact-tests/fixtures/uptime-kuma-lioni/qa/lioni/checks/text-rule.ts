@@ -60,6 +60,7 @@ export function textRule(
   );
   return bindQualityCheck({
     id,
+    version: "kuma-host-text-rule-v1",
     configurationSchema: configSchema,
     configuration: { version: 1 },
     inputSchema: pairSchema,
