@@ -18,6 +18,7 @@ import {
   rejectForbiddenTranslation,
   requireAllowedTranslation,
 } from "@lioni/terminology";
+import { signatureKey } from "@lioni/text-analysis";
 import type { TemplateOptions, TextAnalysis } from "@lioni/text-analysis";
 
 import { memoizedVueI18nMessage } from "../message-memo.ts";
@@ -209,10 +210,11 @@ export function createVueI18nMessageFamilyCheck<
   readonly analysis: TextAnalysis;
   readonly identity: VueI18nCheckIdentity;
 }) {
-  const equivalences = createVueI18nTargetEquivalence(
-    [...options.policies.values()].flatMap(
-      (policy) => policy.messageFamilies.targetEquivalences,
-    ),
+  const equivalences = new Map(
+    [...options.policies].map(([language, policy]) => [
+      language,
+      createVueI18nTargetEquivalence(policy.messageFamilies.targetEquivalences),
+    ]),
   );
   const sourceTemplate: TemplateOptions = {
     abstract: (token) =>
@@ -235,7 +237,8 @@ export function createVueI18nMessageFamilyCheck<
     analysis: options.analysis,
     sourceTemplate,
     targetTemplate,
-    targetEquivalence: equivalences,
+    targetEquivalence: (signature, language) =>
+      equivalences.get(language)?.(signature) ?? signatureKey(signature),
     select: async (
       input: QualityCheckInput<
         TUnit,
@@ -397,7 +400,7 @@ function terminologyVersion(
 
 function familyVersion(identity: VueI18nCheckIdentity): string {
   return [
-    "vue-i18n-suite/message-family/v1",
+    "vue-i18n-suite/message-family/v2",
     `@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
     identity.hostVersion,
   ].join("+");
