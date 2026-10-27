@@ -14,6 +14,26 @@ export function quantityCapability(policy: Policy): string | undefined {
   return undefined;
 }
 
+function quantityPrecondition(pair: Pair, policy: Policy) {
+  const source = parseVueI18nMessage(pair.source);
+  const target = parseVueI18nMessage(pair.target);
+  if (!source.errors.length && !target.errors.length) return undefined;
+  return {
+    code: "invalid-message-syntax",
+    message: "原文或译文消息语法无效，数量检查未执行。",
+    object: {
+      kind: "translation-unit",
+      key: pair.key,
+      language: policy.targetLanguage,
+    },
+    location: {
+      language: policy.targetLanguage,
+      range: policy.targetRange,
+      key: pair.key,
+    },
+  };
+}
+
 function branchFacts(
   profile: QuantityProfile,
   message: VueI18nMessage,
@@ -104,7 +124,8 @@ export function quantityContract(
 
 export function createQuantityCheck(project: Project) {
   return textRule("kuma/quantities", project, quantityContract, {
-    version: `kuma/quantities/v2+@intlify/message-compiler@11.2.8`,
+    version: `kuma/quantities/v3+@intlify/message-compiler@11.2.8`,
     capability: quantityCapability,
+    precondition: quantityPrecondition,
   });
 }

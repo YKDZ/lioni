@@ -269,6 +269,36 @@ void test("原译语法独立报告且变量语法无效时不比较", async () 
   assert.equal(sourceFinding.location.range, "fixtures/en.json");
   assert.ok(sourceFinding.location.span);
 });
+void test("源消息语法无效时数量检查不报告已完成", async () => {
+  const result = await run("Wait {n", "Wait");
+  const quantity = result.checks.find(
+    (check) => check.checkId === "kuma/quantities",
+  );
+  assert.ok(quantity);
+  assert.deepEqual(
+    {
+      status: quantity.status,
+      coverage: quantity.coverage,
+      issueCodes: quantity.issues.map(({ code }) => code),
+      syntaxDiagnosticCount: diagnosticsFor(result, "vue-i18n/source-syntax")
+        .length,
+      quantityDiagnosticCount: diagnosticsFor(result, "kuma/quantities").length,
+    },
+    {
+      status: "incomplete",
+      coverage: {
+        selected: 1,
+        evaluated: 0,
+        notApplicable: 0,
+        incomplete: 1,
+        failed: 0,
+      },
+      issueCodes: ["invalid-message-syntax"],
+      syntaxDiagnosticCount: 1,
+      quantityDiagnosticCount: 0,
+    },
+  );
+});
 void test("译文变量差异与关联目标缺失由独立检查报告", async () => {
   assert.equal(
     diagnosticsFor(

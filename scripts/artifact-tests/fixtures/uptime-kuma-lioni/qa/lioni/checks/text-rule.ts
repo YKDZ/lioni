@@ -2,6 +2,7 @@ import { bindQualityCheck } from "@lioni/core";
 import type {
   QualityFinding,
   QualityCheckDefinition,
+  QualityIssue,
   StandardSchemaV1,
 } from "@lioni/core";
 
@@ -48,6 +49,7 @@ export function textRule(
     inventory?: boolean;
     appliesTo?: (pair: Pair, policy: Policy) => boolean;
     capability?: (policy: Policy) => string | undefined;
+    precondition?: (pair: Pair, policy: Policy) => QualityIssue | undefined;
   },
 ): QualityCheckDefinition<
   Unit,
@@ -86,27 +88,30 @@ export function textRule(
     project: (input) => {
       const policy = policies.get(input.subject.language)!;
       const reason = options.capability?.(policy);
-      return reason === undefined
-        ? { status: "ready", value: input.subject }
-        : {
-            status: "incomplete",
-            issue: {
-              code: "unsupported-language-profile",
-              message: reason,
-              object: {
-                kind: "translation-unit",
-                key: input.subject.key,
-                language: policy.targetLanguage,
-                sourceLanguage: policy.sourceLanguage,
-                targetLanguage: policy.targetLanguage,
-              },
-              location: {
-                language: policy.targetLanguage,
-                range: policy.targetRange,
-                key: input.subject.key,
-              },
+      if (reason !== undefined)
+        return {
+          status: "incomplete",
+          issue: {
+            code: "unsupported-language-profile",
+            message: reason,
+            object: {
+              kind: "translation-unit",
+              key: input.subject.key,
+              language: policy.targetLanguage,
+              sourceLanguage: policy.sourceLanguage,
+              targetLanguage: policy.targetLanguage,
             },
-          };
+            location: {
+              language: policy.targetLanguage,
+              range: policy.targetRange,
+              key: input.subject.key,
+            },
+          },
+        };
+      const issue = options.precondition?.(input.subject, policy);
+      return issue === undefined
+        ? { status: "ready", value: input.subject }
+        : { status: "incomplete", issue };
     },
     check: (input) => {
       const policy = policies.get(input.projected.language)!;
