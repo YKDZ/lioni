@@ -266,7 +266,7 @@ const mixedTranslations = {
 };
 
 function qualityConfig(
-  qualityChecks: readonly QualityCheckDefinition<
+  checks: readonly QualityCheckDefinition<
     MixedUnit,
     MixedTranslation,
     QualityObject,
@@ -282,8 +282,12 @@ function qualityConfig(
     source: readMixedSource(unrelatedSource),
     keyOf: ({ key }) => key,
     translations: mixedTranslations,
-    qualityChecks,
-    createQualityRequest: () => ({ candidates, dependencies, relationships }),
+    quality: {
+      prepare: () => ({
+        checks,
+        request: { candidates, dependencies, relationships },
+      }),
+    },
   });
 }
 
@@ -998,8 +1002,10 @@ void describe("quality check bindings", () => {
     const config = defineConfig<MixedUnit>({
       source: readMixedSource(),
       keyOf: ({ key }) => key,
-      // @ts-expect-error 窄类型检查器必须先显式绑定到混合项目
-      qualityChecks: [narrowChecker],
+      quality: {
+        // @ts-expect-error 窄类型检查器必须先显式绑定到混合项目
+        prepare: () => ({ checks: [narrowChecker] }),
+      },
     });
 
     assert.ok(config);

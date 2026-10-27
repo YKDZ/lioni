@@ -530,7 +530,10 @@ const sdkException = await upsertQualityExceptionFromReport({
 });
 assert.equal(sdkException.inputFingerprint, sdkExecution.inputFingerprint);
 const sdkQa = await analyzeQuality(
-  defineConfig({ ...qaConfig, qualityExceptionStore: sdkStore }),
+  defineConfig({
+    ...qaConfig,
+    quality: { ...qaConfig.quality, exceptionStore: sdkStore },
+  }),
 );
 assert.deepEqual(sdkQa.diagnostics[0]?.handling, {
   status: "excepted",

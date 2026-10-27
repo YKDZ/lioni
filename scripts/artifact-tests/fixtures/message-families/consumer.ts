@@ -303,14 +303,15 @@ function createConfig(options: ConfigOptions = {}) {
         storedTexts.set(locator.id, request.content);
       },
     },
-    qualityChecks: [checker],
-    ...(options.exceptionStore === undefined
-      ? {}
-      : { qualityExceptionStore: options.exceptionStore }),
-    createQualityRequest: () => ({
-      candidates: [],
-      dependencies: {},
-    }),
+    quality: {
+      prepare: () => ({
+        checks: [checker],
+        request: { candidates: [], dependencies: {} },
+      }),
+      ...(options.exceptionStore === undefined
+        ? {}
+        : { exceptionStore: options.exceptionStore }),
+    },
   });
   return { config, storedTexts };
 }
@@ -499,10 +500,10 @@ const exceptionExecution = initialExceptionQuality.checks
   );
 assert.ok(exceptionExecution);
 assert.ok(
-  exceptionConfig.config.qualityExceptionStore,
+  exceptionConfig.config.quality?.exceptionStore,
   "需要装配质量例外存储。",
 );
-await exceptionConfig.config.qualityExceptionStore.upsert(
+await exceptionConfig.config.quality.exceptionStore.upsert(
   createQualityException({
     id: "known-family-variation",
     reason: "保留现有界面用语。",

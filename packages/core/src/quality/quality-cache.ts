@@ -1,5 +1,5 @@
+import { assertJsonValue } from "../standard-schema.ts";
 import type { QualityCheckOutcome, QualityObject } from "./qa.ts";
-import { assertJsonValue } from "./standard-schema.ts";
 
 export type CacheableQualityCheckOutcome<
   TObject extends QualityObject = QualityObject,

@@ -8,29 +8,29 @@ import {
   validateComparisonBaseline,
   type ComparisonBaseline,
   type ComparisonBaselineStore,
-} from "./baselines.ts";
+} from "../baselines.ts";
 import {
   validateFrameworkConfig,
   type FrameworkConfig,
   type TranslationUnitInput,
-} from "./index.ts";
-import { createDefaultQualityExceptionStore } from "./node-quality-exceptions.ts";
-import { validateUpdatePlan, type UpdatePlanStore } from "./plans.ts";
-import type { JsonValue } from "./semantic-edits.ts";
-import { StandardSchemaContractError } from "./standard-schema.ts";
+} from "../index.ts";
+import { validateUpdatePlan, type UpdatePlanStore } from "../plans.ts";
+import type { JsonValue } from "../semantic-edits.ts";
+import { StandardSchemaContractError } from "../standard-schema.ts";
+import { createDefaultQualityExceptionStore } from "./quality-exceptions.ts";
 
 export {
   createDefaultQualityExceptionStore,
   createFileQualityExceptionStore,
   resolveDefaultQualityExceptionFilePath,
-} from "./node-quality-exceptions.ts";
+} from "./quality-exceptions.ts";
 export {
   createDefaultQualityCheckResultCache,
   createFileQualityCheckResultCache,
   resolveDefaultQualityCheckResultCachePath,
-} from "./node-quality-cache.ts";
-export type { QualityExceptionStore } from "./quality-exceptions.ts";
-export type { QualityCheckResultCache } from "./quality-cache.ts";
+} from "./quality-cache.ts";
+export type { QualityExceptionStore } from "../quality/quality-exceptions.ts";
+export type { QualityCheckResultCache } from "../quality/quality-cache.ts";
 
 type RuntimeFrameworkConfig = FrameworkConfig<
   TranslationUnitInput,
@@ -57,11 +57,14 @@ export async function loadConfig(configPath: string): Promise<LoadedConfig> {
   const loadedConfig = configModule.default as RuntimeFrameworkConfig;
   validateFrameworkConfig(loadedConfig);
   const config =
-    loadedConfig.qualityExceptionStore === undefined
+    loadedConfig.quality?.exceptionStore === undefined
       ? {
           ...loadedConfig,
-          qualityExceptionStore:
-            createDefaultQualityExceptionStore(absoluteConfigPath),
+          quality: {
+            ...loadedConfig.quality,
+            exceptionStore:
+              createDefaultQualityExceptionStore(absoluteConfigPath),
+          },
         }
       : loadedConfig;
   return { use: (consumer) => consumer(config) };

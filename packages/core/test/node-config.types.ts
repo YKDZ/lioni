@@ -1,5 +1,5 @@
 import { readSourceFacts } from "../src/index.ts";
-import { loadConfig } from "../src/node.ts";
+import { loadConfig } from "../src/node/index.ts";
 
 const dynamicFacts = loadConfig("host.config.ts").then((loaded) =>
   loaded.use(async (config) => {

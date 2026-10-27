@@ -177,11 +177,15 @@ const config = defineConfig({
       if (request.operation === "write") storedText = request.content;
     },
   },
-  createQualityRequest: () => ({
-    candidates: [{ sourceKey: "save", language: "fr", content: "Sauver" }],
-    dependencies: {},
-  }),
-  qualityChecks: [createCheck("first"), createCheck("second")],
+  quality: {
+    prepare: () => ({
+      request: {
+        candidates: [{ sourceKey: "save", language: "fr", content: "Sauver" }],
+        dependencies: {},
+      },
+      checks: [createCheck("first"), createCheck("second")],
+    }),
+  },
 });
 
 const owned = await analyzeQuality(config);

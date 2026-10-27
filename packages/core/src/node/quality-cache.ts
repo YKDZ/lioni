@@ -6,9 +6,9 @@ import {
   isCacheableQualityCheckOutcome,
   type CacheableQualityCheckOutcome,
   type QualityCheckResultCache,
-} from "./quality-cache.ts";
-import { stableStringify } from "./stable-json.ts";
-import { assertJsonValue } from "./standard-schema.ts";
+} from "../quality/quality-cache.ts";
+import { stableStringify } from "../stable-json.ts";
+import { assertJsonValue } from "../standard-schema.ts";
 
 const QUALITY_CACHE_FORMAT = "lioni.qa-cache/v2" as const;
 

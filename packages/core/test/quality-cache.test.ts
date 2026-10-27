@@ -7,8 +7,8 @@ import { describe, it } from "node:test";
 import {
   createFileQualityCheckResultCache,
   resolveDefaultQualityCheckResultCachePath,
-} from "../src/node-quality-cache.ts";
-import type { CacheableQualityCheckOutcome } from "../src/quality-cache.ts";
+} from "../src/node/quality-cache.ts";
+import type { CacheableQualityCheckOutcome } from "../src/quality/quality-cache.ts";
 
 const completeOutcome: CacheableQualityCheckOutcome = {
   status: "complete",

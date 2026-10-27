@@ -5,7 +5,8 @@ import qaConfig from "./qa.config.ts";
 
 export default defineConfig({
   ...qaConfig,
-  qualityExceptionStore: createFileQualityExceptionStore(
-    "custom.exceptions.yaml",
-  ),
+  quality: {
+    ...qaConfig.quality,
+    exceptionStore: createFileQualityExceptionStore("custom.exceptions.yaml"),
+  },
 });

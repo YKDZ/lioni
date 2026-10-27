@@ -130,7 +130,7 @@ function completeOutcome(
 }
 
 function qualityConfig(
-  qualityChecks: readonly QualityCheckDefinition<Unit, unknown>[],
+  checks: readonly QualityCheckDefinition<Unit, unknown>[],
 ) {
   return defineConfig({
     source: {
@@ -171,7 +171,7 @@ function qualityConfig(
       matches: (unit, translation) => unit.id === translation.id,
       contentOf: (translation) => translation.source,
     },
-    qualityChecks,
+    quality: { prepare: () => ({ checks }) },
   });
 }
 
