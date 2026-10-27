@@ -129,7 +129,10 @@ void describe("QA 结果缓存", () => {
       const incompatiblePath = path.join(directory, "old-cache.json");
       await writeFile(
         incompatiblePath,
-        JSON.stringify({ format: "lioni.qa-cache/v0", entries: [] }),
+        JSON.stringify({
+          format: "lioni.qa-cache/v1",
+          entries: [{ key: "key", outcome: completeOutcome }],
+        }),
         "utf8",
       );
       const incompatible = createFileQualityCheckResultCache(incompatiblePath);

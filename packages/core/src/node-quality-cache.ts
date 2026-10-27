@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -7,9 +7,10 @@ import {
   type CacheableQualityCheckOutcome,
   type QualityCheckResultCache,
 } from "./quality-cache.ts";
+import { stableStringify } from "./stable-json.ts";
 import { assertJsonValue } from "./standard-schema.ts";
 
-const QUALITY_CACHE_FORMAT = "lioni.qa-cache/v1" as const;
+const QUALITY_CACHE_FORMAT = "lioni.qa-cache/v2" as const;
 
 type QualityCacheDocument = {
   readonly format: typeof QUALITY_CACHE_FORMAT;
@@ -19,6 +20,7 @@ type QualityCacheDocument = {
 type QualityCacheEntry = {
   readonly key: string;
   readonly outcome: CacheableQualityCheckOutcome;
+  readonly contentDigest: string;
 };
 
 /** 创建尽力而为的 Node.js 文件检查结果缓存。 */
@@ -39,7 +41,11 @@ export function createFileQualityCheckResultCache(
       const document = await readCacheDocument(resolvedFilePath);
       const entries = [...(document?.entries ?? [])];
       const index = entries.findIndex((entry) => entry.key === key);
-      const nextEntry = { key, outcome };
+      const nextEntry = {
+        key,
+        outcome,
+        contentDigest: contentDigest(key, outcome),
+      };
       if (index === -1) entries.push(nextEntry);
       else entries[index] = nextEntry;
 
@@ -132,9 +138,26 @@ function isCacheDocument(value: unknown): value is QualityCacheDocument {
     if (!isRecord(entry) || !isCacheKey(entry.key)) return false;
     if (keys.has(entry.key)) return false;
     if (!isCacheableQualityCheckOutcome(entry.outcome)) return false;
+    if (
+      !isContentDigest(entry.contentDigest) ||
+      entry.contentDigest !== contentDigest(entry.key, entry.outcome)
+    )
+      return false;
     keys.add(entry.key);
   }
   return true;
+}
+
+function contentDigest(
+  key: string,
+  outcome: CacheableQualityCheckOutcome,
+): string {
+  const content = stableStringify({ key, outcome });
+  return `sha256:${createHash("sha256").update(content).digest("hex")}`;
+}
+
+function isContentDigest(value: unknown): value is string {
+  return typeof value === "string" && /^sha256:[a-f0-9]{64}$/u.test(value);
 }
 
 function isCacheKey(value: unknown): value is string {

@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, it } from "node:test";
 
 import {
@@ -18,6 +21,7 @@ import {
   type StandardSchemaV1,
   StandardSchemaContractError,
 } from "../src/index.ts";
+import { createFileQualityCheckResultCache } from "../src/node.ts";
 import { defineTestQualityCheck } from "./quality-check-fixture.ts";
 import {
   jsonValueSchema,
@@ -107,6 +111,63 @@ void describe("QA 结果缓存", () => {
     assert.equal(removedDiagnostic?.executionId, 1);
     assert.deepEqual(removedDiagnostic?.handling, { status: "active" });
     assert.equal(checkCount, 1);
+  });
+
+  void it("合法 JSON 缓存内容被改写时重新计算", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "lioni-qa-cache-"));
+    try {
+      const filePath = path.join(directory, "quality-cache.json");
+      const cache = createFileQualityCheckResultCache(filePath);
+      let checkCount = 0;
+      const config = createTestConfig(
+        reviewCheck(() => {
+          checkCount += 1;
+        }),
+        { cache },
+      );
+
+      const first = await analyzeQuality(config);
+      assert.deepEqual(
+        first.diagnostics.map(({ checkId, message }) => [checkId, message]),
+        [["message-review", "请复核译文。"]],
+      );
+      const document = JSON.parse(await readFile(filePath, "utf8")) as {
+        readonly format: string;
+        readonly entries: readonly {
+          readonly key: string;
+          readonly outcome: Record<string, unknown>;
+        }[];
+      };
+      assert.equal(document.entries.length, 1);
+      await writeFile(
+        filePath,
+        JSON.stringify({
+          ...document,
+          entries: document.entries.map((entry) => ({
+            ...entry,
+            outcome: { ...entry.outcome, diagnostics: [] },
+          })),
+        }),
+        "utf8",
+      );
+
+      const second = await analyzeQuality(config);
+      assert.deepEqual(
+        {
+          checkCount,
+          diagnostics: second.diagnostics.map(({ checkId, message }) => [
+            checkId,
+            message,
+          ]),
+        },
+        {
+          checkCount: 2,
+          diagnostics: [["message-review", "请复核译文。"]],
+        },
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   void it("只缓存 complete 与 not-applicable 原始结果", async () => {
