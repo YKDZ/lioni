@@ -426,7 +426,7 @@ void test("不同业务的同形消息不互相约束，同范围差异仍提示
     ],
   });
   assert.equal(
-    result.diagnostics.filter((d) => d.ruleId === "message-family-consistency")
+    result.diagnostics.filter((d) => d.checkId === "message-family-consistency")
       .length,
     0,
   );
@@ -445,7 +445,7 @@ void test("不同业务的同形消息不互相约束，同范围差异仍提示
     ],
   });
   assert.equal(
-    result.diagnostics.filter((d) => d.ruleId === "message-family-consistency")
+    result.diagnostics.filter((d) => d.checkId === "message-family-consistency")
       .length,
     1,
   );
@@ -672,12 +672,14 @@ void test("同一配置运行多语言，术语、消息族等价与位置互不
   assert.ok(together.diagnostics.length > 0);
   assert.ok(together.diagnostics.every((d) => d.object.language === "ja"));
   assert.ok(
-    together.diagnostics.some((d) => d.ruleId === "message-family-consistency"),
+    together.diagnostics.some(
+      (d) => d.checkId === "message-family-consistency",
+    ),
   );
   assert.ok(
     together.diagnostics.some(
       (d) =>
-        d.ruleId === "terminology/require-allowed-translation" &&
+        d.checkId === "terminology/require-allowed-translation" &&
         d.location.range === "fixtures/ja.json",
     ),
   );

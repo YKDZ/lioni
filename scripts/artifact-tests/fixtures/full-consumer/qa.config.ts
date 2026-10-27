@@ -43,6 +43,7 @@ async function readMessageResource() {
 
 const qualityChecks = [
   createNumberChecker<Unit, Translation, Unit, string, string, never>({
+    hostVersion: "full-consumer-v1",
     select: ({ sourceUnit, candidate }) => {
       if (sourceUnit === null)
         return {

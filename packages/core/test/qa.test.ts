@@ -244,7 +244,8 @@ void describe("quality checks", () => {
     assert.deepEqual(result.candidates, candidates);
     assert.deepEqual(result.diagnostics, [
       {
-        ruleId: "placeholders",
+        checkId: "placeholders",
+        executionId: 0,
         severity: "error",
         handling: { status: "active" },
         object: { kind: "translation-unit", key: "message:save" },
@@ -359,6 +360,42 @@ void describe("quality checks", () => {
     assert.equal(notApplicable.status, "not-applicable");
     assert.deepEqual(notRun.dependencies, request.dependencies);
     assert.deepEqual(noCandidateRun.candidates, request.candidates);
+  });
+
+  void it("rejects duplicate quality check identities", async () => {
+    const facts = await readFacts(
+      defineConfig({
+        source: {
+          schema: emptySourceSchema,
+          read: () => ({ scopes: [] }),
+        },
+        keyOf: () => "unused",
+      }),
+    );
+    const check = defineTestQualityCheck({
+      id: "same-check",
+      configuration: {},
+      check: () => ({
+        status: "complete",
+        diagnostics: [],
+        issues: [],
+        coverage: {
+          selected: 1,
+          evaluated: 1,
+          notApplicable: 0,
+          incomplete: 0,
+          failed: 0,
+        },
+      }),
+    });
+
+    await assert.rejects(
+      runQualityChecks(facts, { candidates: [], dependencies: {} }, [
+        check,
+        check,
+      ]),
+      { message: "QA 检查项 id same-check 重复。" },
+    );
   });
 
   void it("calls each configured checker once for each candidate", async () => {
@@ -485,7 +522,7 @@ void describe("quality checks", () => {
       exceptions: [
         {
           id: "allow-a",
-          ruleId: "example-rule",
+          checkId: "example-rule",
           scope: {
             object: { kind: "translation-unit", key: "A", language: "fr" },
           },
@@ -495,7 +532,7 @@ void describe("quality checks", () => {
     } as QualityCheckRequest & {
       readonly exceptions: readonly {
         readonly id: string;
-        readonly ruleId: string;
+        readonly checkId: string;
         readonly scope: {
           readonly object: {
             readonly kind: string;
@@ -518,30 +555,58 @@ void describe("quality checks", () => {
         failed: 0,
       },
     };
+    let checkerReceivedExceptions = true;
 
-    const result = await runQualityChecks(facts, request, [
+    const checks = [
       defineTestQualityCheck({
         id: "example-rule",
         configuration: {},
-        check: () => outcome,
+        check: (input) => {
+          checkerReceivedExceptions = Object.hasOwn(input, "exceptions");
+          return outcome;
+        },
       }),
       defineTestQualityCheck({
         id: "other-rule",
         configuration: {},
         check: () => ({ ...outcome, diagnostics: [makeFinding("A")] }),
       }),
-    ]);
+    ];
+    const result = await runQualityChecks(facts, request, checks);
+    const changedExceptionRequest = {
+      ...request,
+      exceptions: [
+        {
+          id: "allow-a",
+          checkId: "example-rule",
+          scope: {
+            object: { kind: "translation-unit", key: "A", language: "fr" },
+          },
+          reason: "例外记录的理由已修改。",
+        },
+      ],
+    };
+    const changedExceptionResult = await runQualityChecks(
+      facts,
+      changedExceptionRequest,
+      checks,
+    );
 
     assert.equal(result.status, "complete");
+    assert.equal(checkerReceivedExceptions, false);
+    assert.equal(
+      changedExceptionResult.checks[0]?.executions[0]?.inputFingerprint,
+      result.checks[0]?.executions[0]?.inputFingerprint,
+    );
     assert.deepEqual(
-      result.diagnostics.map(({ ruleId, object, handling }) => ({
-        ruleId,
+      result.diagnostics.map(({ checkId, object, handling }) => ({
+        checkId,
         object,
         handling,
       })),
       [
         {
-          ruleId: "example-rule",
+          checkId: "example-rule",
           object: { kind: "translation-unit", key: "A", language: "fr" },
           handling: {
             status: "excepted",
@@ -550,12 +615,12 @@ void describe("quality checks", () => {
           },
         },
         {
-          ruleId: "example-rule",
+          checkId: "example-rule",
           object: { kind: "translation-unit", key: "B", language: "fr" },
           handling: { status: "active" },
         },
         {
-          ruleId: "other-rule",
+          checkId: "other-rule",
           object: { kind: "translation-unit", key: "A", language: "fr" },
           handling: { status: "active" },
         },

@@ -280,6 +280,7 @@ function configFor(
     },
     qualityChecks: [
       createNumberChecker({
+        hostVersion: "number-test-v1",
         select: selectNumberSubject,
         sourceText: (unit) => unit.source,
         translationText: (content) => content,
@@ -385,7 +386,11 @@ void describe("阿拉伯数字对应检查", () => {
       ],
     });
     const diagnostic = result.diagnostics[0]!;
-    assert.equal(diagnostic.ruleId, "number-correspondence");
+    assert.equal(
+      result.checks[0]?.version,
+      "checks.number-correspondence/v1+number-test-v1",
+    );
+    assert.equal(diagnostic.checkId, "number-correspondence");
     assert.deepEqual(diagnostic.location, {
       language: "fr",
       range: "fr.json",
@@ -427,6 +432,7 @@ void describe("阿拉伯数字对应检查", () => {
       ...configFor("12 seconds", "12 secondes"),
       qualityChecks: [
         createNumberChecker({
+          hostVersion: "number-test-v1",
           select: selectNumberSubject,
           sourceText: (unit) => unit.source,
           translationText: (content) => {
@@ -492,6 +498,7 @@ void describe("阿拉伯数字对应检查", () => {
       { nativeKey: "rows", text: ["Version 2024"] },
     ];
     const checker = createNumberChecker({
+      hostVersion: "number-test-v1",
       select: selectMixedText,
       sourceText: (unit) => unit.source,
       translationText: (content) =>

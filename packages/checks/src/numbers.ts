@@ -115,6 +115,8 @@ export type NumberCheckerOptions<
   TBody = unknown,
   TUnavailable = never,
 > = {
+  /** 宿主选择与文本提取逻辑的版本。 */
+  readonly hostVersion: string;
   readonly select: (
     input: QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
   ) => Awaitable<
@@ -164,6 +166,7 @@ export function createNumberChecker<
     TUnavailable
   >({
     id: "number-correspondence",
+    version: `checks.number-correspondence/v1+${options.hostVersion}`,
     configurationSchema: numberCheckerConfigurationSchema,
     configuration: numberCheckerConfiguration,
     inputSchema: numberTextInputSchema,

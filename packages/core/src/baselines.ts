@@ -15,7 +15,10 @@ import type {
 } from "./index.ts";
 import { readComparisonSnapshot } from "./index.ts";
 import type { JsonValue } from "./semantic-edits.ts";
+import { stableStringify } from "./stable-json.ts";
 import { assertJsonValue } from "./standard-schema.ts";
+
+export { stableStringify } from "./stable-json.ts";
 
 const COMPARISON_BASELINE_FORMAT = "lioni.comparison-baseline/v1" as const;
 
@@ -850,23 +853,6 @@ function hashJson(value: unknown): string {
   if (serialized === undefined)
     throw new TypeError("比较基线及事实必须可序列化为 JSON。");
   return `sha256:${createHash("sha256").update(serialized).digest("hex")}`;
-}
-
-export function stableStringify(value: unknown): string {
-  assertJsonValue(value, "稳定 JSON 值");
-  const serialized = JSON.stringify(sortJsonKeys(value), null, 2);
-  if (serialized === undefined) throw new TypeError("值必须可序列化为 JSON。");
-  return serialized;
-}
-
-function sortJsonKeys(value: JsonValue): JsonValue {
-  if (Array.isArray(value)) return value.map(sortJsonKeys);
-  if (value === null || typeof value !== "object") return value;
-  return Object.fromEntries(
-    Object.entries(value)
-      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-      .map(([key, item]) => [key, sortJsonKeys(item)]),
-  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
