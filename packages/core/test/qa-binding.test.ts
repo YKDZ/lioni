@@ -11,8 +11,10 @@ import {
   StandardSchemaContractError,
   type QualityCheckDefinition,
   type QualityCheckInput,
+  type QualityInputBasis,
   type QualityCheckOutcome,
   type QualityObject,
+  type QualityRelationship,
   type SemanticEditCandidate,
   type StandardSchemaV1,
   type TranslationUnitInput,
@@ -200,10 +202,10 @@ function isMixedBody(value: unknown): value is MixedBody {
   );
 }
 
-function readMixedSource() {
+function readMixedSource(unrelatedSource = "Reference 7") {
   const units: readonly MixedUnit[] = [
     { kind: "text", key: "message", source: "Total 12" },
-    { kind: "list", key: "rows", source: ["Reference 7"] },
+    { kind: "list", key: "rows", source: [unrelatedSource] },
   ];
   return {
     schema: mixedUnitSchema,
@@ -273,13 +275,15 @@ function qualityConfig(
   >[],
   candidates: readonly SemanticEditCandidate<MixedBody>[],
   dependencies: unknown = {},
+  unrelatedSource = "Reference 7",
+  relationships: readonly QualityRelationship[] = [],
 ) {
   return defineConfig({
-    source: readMixedSource(),
+    source: readMixedSource(unrelatedSource),
     keyOf: ({ key }) => key,
     translations: mixedTranslations,
     qualityChecks,
-    createQualityRequest: () => ({ candidates, dependencies }),
+    createQualityRequest: () => ({ candidates, dependencies, relationships }),
   });
 }
 
@@ -330,6 +334,10 @@ void describe("quality check bindings", () => {
       configuration: { readonly includeListEvidence: boolean },
       dependencies: unknown,
       checkId = "fingerprint-check",
+      unrelatedSource = "Reference 7",
+      relationships: readonly QualityRelationship[] = [],
+      useDefaultBasisHelper = false,
+      customBasis?: QualityInputBasis,
     ) => {
       const checker = defineQualityCheck<
         MixedUnit,
@@ -343,6 +351,14 @@ void describe("quality check bindings", () => {
         version,
         configurationSchema: checkerConfigurationSchema,
         configuration,
+        ...(customBasis !== undefined
+          ? { fingerprintInput: () => customBasis }
+          : useDefaultBasisHelper
+            ? {
+                fingerprintInput: (input) =>
+                  createDefaultQualityInputBasis(input),
+              }
+            : {}),
         check: ({ candidate }) =>
           completeOutcome([
             {
@@ -358,7 +374,15 @@ void describe("quality check bindings", () => {
             },
           ]),
       });
-      return analyzeQuality(qualityConfig([checker], candidates, dependencies));
+      return analyzeQuality(
+        qualityConfig(
+          [checker],
+          candidates,
+          dependencies,
+          unrelatedSource,
+          relationships,
+        ),
+      );
     };
 
     const first = await createResult(
@@ -392,6 +416,39 @@ void describe("quality check bindings", () => {
       { policy: { strict: true }, modes: ["short", "full"] },
       "different-check",
     );
+    const changedUnrelatedFact = await createResult(
+      "algorithm-v1",
+      { includeListEvidence: true },
+      { policy: { strict: true }, modes: ["short", "full"] },
+      "fingerprint-check",
+      "Reference 8",
+    );
+    const changedRelationships = await createResult(
+      "algorithm-v1",
+      { includeListEvidence: true },
+      { policy: { strict: true }, modes: ["short", "full"] },
+      "fingerprint-check",
+      "Reference 7",
+      [
+        {
+          kind: "related-message",
+          key: "message",
+          members: [
+            { key: "message", language: "fr" },
+            { key: "rows", language: "fr" },
+          ],
+        },
+      ],
+    );
+    const explicitDefaultBasis = await createResult(
+      "algorithm-v1",
+      { includeListEvidence: true },
+      { policy: { strict: true }, modes: ["short", "full"] },
+      "fingerprint-check",
+      "Reference 7",
+      [],
+      true,
+    );
     const specialKeys = JSON.parse(
       '{"__proto__":{"strict":true},"constructor":"policy"}',
     ) as unknown;
@@ -401,6 +458,8 @@ void describe("quality check bindings", () => {
     const changedSpecialKey = JSON.parse(
       '{"constructor":"changed","__proto__":{"strict":true}}',
     ) as unknown;
+    const surrogateKeyA = JSON.parse('{"\\ud800":1}') as QualityInputBasis;
+    const surrogateKeyB = JSON.parse('{"\\ud801":1}') as QualityInputBasis;
     const specialKeyResult = await createResult(
       "algorithm-v1",
       { includeListEvidence: true },
@@ -416,6 +475,26 @@ void describe("quality check bindings", () => {
       { includeListEvidence: true },
       changedSpecialKey,
     );
+    const surrogateKeyResultA = await createResult(
+      "algorithm-v1",
+      { includeListEvidence: true },
+      {},
+      "fingerprint-check",
+      "Reference 7",
+      [],
+      false,
+      surrogateKeyA,
+    );
+    const surrogateKeyResultB = await createResult(
+      "algorithm-v1",
+      { includeListEvidence: true },
+      {},
+      "fingerprint-check",
+      "Reference 7",
+      [],
+      false,
+      surrogateKeyB,
+    );
     const execution = first.checks[0]?.executions[0];
     const secondExecution = first.checks[0]?.executions[1];
 
@@ -430,7 +509,10 @@ void describe("quality check bindings", () => {
       execution.inputFingerprint,
     );
     assert.match(execution.inputFingerprint ?? "", /^sha256:[a-f0-9]{64}$/u);
-    assert.equal(execution.fingerprintSummary?.version, "algorithm-v1");
+    assert.equal(
+      execution.fingerprintSummary?.version,
+      "lioni.check-input/v1:algorithm-v1",
+    );
     assert.match(
       execution.fingerprintSummary?.configurationFingerprint ?? "",
       /^sha256:[a-f0-9]{64}$/u,
@@ -459,6 +541,23 @@ void describe("quality check bindings", () => {
       changedIdentity.checks[0]?.executions[0]?.inputFingerprint,
       execution.inputFingerprint,
     );
+    assert.notEqual(
+      changedUnrelatedFact.checks[0]?.executions[0]?.inputFingerprint,
+      execution.inputFingerprint,
+    );
+    assert.notEqual(
+      changedRelationships.checks[0]?.executions[0]?.inputFingerprint,
+      execution.inputFingerprint,
+    );
+    assert.equal(
+      explicitDefaultBasis.checks[0]?.executions[0]?.inputFingerprint,
+      execution.inputFingerprint,
+    );
+    assert.equal(
+      explicitDefaultBasis.checks[0]?.executions[0]?.fingerprintSummary
+        ?.inputFingerprint,
+      execution.fingerprintSummary?.inputFingerprint,
+    );
     assert.equal(
       reorderedSpecialKeyResult.checks[0]?.executions[0]?.inputFingerprint,
       specialKeyResult.checks[0]?.executions[0]?.inputFingerprint,
@@ -466,6 +565,10 @@ void describe("quality check bindings", () => {
     assert.notEqual(
       changedSpecialKeyResult.checks[0]?.executions[0]?.inputFingerprint,
       specialKeyResult.checks[0]?.executions[0]?.inputFingerprint,
+    );
+    assert.notEqual(
+      surrogateKeyResultA.checks[0]?.executions[0]?.inputFingerprint,
+      surrogateKeyResultB.checks[0]?.executions[0]?.inputFingerprint,
     );
     assert.equal(first.diagnostics[0]?.checkId, "fingerprint-check");
     assert.equal(first.diagnostics[0]?.executionId, execution.executionId);

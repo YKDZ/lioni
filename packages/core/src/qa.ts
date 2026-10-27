@@ -1,5 +1,4 @@
-import { createHash } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
+import { createHash, type Hash } from "node:crypto";
 
 import { createMemoScope, type MemoScope } from "@lioni/memo";
 
@@ -12,8 +11,17 @@ import type {
   TranslationReadFact,
   TranslationUnitInput,
 } from "./index.ts";
+import {
+  evaluateQualityExceptionApplicability,
+  qualityExceptionMatchesExecution,
+  validateQualityExceptions,
+} from "./quality-exceptions.ts";
+import type {
+  QualityException,
+  QualityExceptionApplicability,
+} from "./quality-exceptions.ts";
 import type { JsonValue, SemanticEditCandidate } from "./semantic-edits.ts";
-import { stableStringify } from "./stable-json.ts";
+import { stableStringifyJson } from "./stable-json.ts";
 import {
   assertJsonValue,
   StandardSchemaContractError,
@@ -54,37 +62,6 @@ export type QualityRelationship = {
   readonly key: string;
   readonly members: readonly QualitySubject[];
   readonly [field: string]: unknown;
-};
-
-export type QualityExceptionObjectScope = Pick<
-  QualityObject,
-  "kind" | "key"
-> & {
-  readonly language?: string;
-};
-
-export type QualityExceptionLocationScope = Pick<
-  QualityLocation,
-  "language" | "range"
-> & {
-  readonly key?: string;
-};
-
-export type QualityExceptionScope =
-  | {
-      readonly object: QualityExceptionObjectScope;
-      readonly location?: QualityExceptionLocationScope;
-    }
-  | {
-      readonly location: QualityExceptionLocationScope;
-      readonly object?: QualityExceptionObjectScope;
-    };
-
-export type QualityException = {
-  readonly id: string;
-  readonly checkId: string;
-  readonly scope: QualityExceptionScope;
-  readonly reason: string;
 };
 
 export type QualityDiagnosticHandling =
@@ -167,6 +144,8 @@ export type QualityCheckInput<
 };
 
 export type QualityInputBasis = JsonValue;
+
+const qualityInputFingerprintFormat = "lioni.check-input/v1";
 
 export type QualityDefaultInput = {
   readonly facts: unknown;
@@ -326,9 +305,23 @@ type QualityCheckExecutionPreparation<TObject extends QualityObject> =
     }
   | {
       readonly status: "ready";
-      readonly fingerprintInput: QualityInputBasis;
+      readonly fingerprintInput: PreparedQualityInputFingerprintBasis;
       readonly execute: () => Awaitable<QualityCheckOutcome<TObject>>;
     };
+
+type PreparedQualityInputFingerprintBasis =
+  | {
+      readonly kind: "default";
+      readonly candidateFingerprint: string;
+      readonly sourceUnitFingerprint: string;
+    }
+  | { readonly kind: "custom"; readonly value: QualityInputBasis };
+
+type DefaultQualityInputFingerprintComponents = {
+  readonly facts: string;
+  readonly dependencies: string;
+  readonly relationships: string;
+};
 
 const qualityCheckDefinitionBrand: unique symbol = Symbol(
   "qualityCheckDefinition",
@@ -689,13 +682,22 @@ function prepareFingerprintInput<TInput extends QualityDefaultInput>(
   id: string,
   fingerprintInput: ((input: TInput) => QualityInputBasis) | undefined,
   input: TInput,
-): QualityInputBasis {
-  const basis =
-    fingerprintInput === undefined
-      ? createDefaultQualityInputBasis(input)
-      : fingerprintInput(input);
+): PreparedQualityInputFingerprintBasis {
+  if (fingerprintInput === undefined) {
+    assertJsonValue(input.candidate, `QA 检查器 ${id} 的候选依据`);
+    assertJsonValue(input.sourceUnit, `QA 检查器 ${id} 的原文依据`);
+    return {
+      kind: "default",
+      candidateFingerprint: fingerprintJsonValue(input.candidate as JsonValue),
+      sourceUnitFingerprint: fingerprintJsonValue(
+        input.sourceUnit as JsonValue,
+      ),
+    };
+  }
+
+  const basis = fingerprintInput(input);
   assertJsonValue(basis, `QA 检查器 ${id} 的输入指纹依据`);
-  return structuredClone(basis);
+  return { kind: "custom", value: structuredClone(basis) };
 }
 
 export type QualityCheckResult<TObject extends QualityObject = QualityObject> =
@@ -728,6 +730,7 @@ export type QualityRunResult<
   readonly dependencies: unknown;
   readonly relationships: readonly QualityRelationship[];
   readonly exceptions: readonly QualityException[];
+  readonly exceptionApplicability: readonly QualityExceptionApplicability[];
   readonly status: QualityCheckStatus;
   readonly diagnostics: readonly QualityDiagnostic<TObject>[];
   readonly checks: readonly QualityCheckResult<TObject>[];
@@ -762,7 +765,9 @@ export async function runQualityChecks<
       dependencies: request.dependencies,
       relationships: request.relationships ?? [],
     });
-    const exceptions = snapshotQualityData(request.exceptions ?? []);
+    const exceptionInput = request.exceptions ?? [];
+    validateQualityExceptions(exceptionInput);
+    const exceptions = snapshotQualityData(exceptionInput);
     const preparedChecks: {
       readonly id: string;
       readonly prepared: PreparedQualityCheck<
@@ -788,6 +793,30 @@ export async function runQualityChecks<
     const sourceUnits = new Map(
       facts.source.units.map((unit) => [unit.key, unit]),
     );
+    let defaultInputComponents:
+      | DefaultQualityInputFingerprintComponents
+      | undefined;
+    const getDefaultInputComponents =
+      (): DefaultQualityInputFingerprintComponents => {
+        if (defaultInputComponents === undefined) {
+          const fixedBasis = {
+            facts,
+            dependencies: boundRequest.dependencies,
+            relationships: boundRequest.relationships,
+          };
+          assertJsonValue(fixedBasis, "QA 默认输入指纹依据");
+          defaultInputComponents = {
+            facts: fingerprintJsonValue(facts as JsonValue),
+            dependencies: fingerprintJsonValue(
+              boundRequest.dependencies as JsonValue,
+            ),
+            relationships: fingerprintJsonValue(
+              boundRequest.relationships as JsonValue,
+            ),
+          };
+        }
+        return defaultInputComponents;
+      };
     const selectedLanguages = new Map<string, Set<string>>();
     for (const { sourceKey, language } of boundRequest.candidates) {
       const languages = selectedLanguages.get(sourceKey) ?? new Set<string>();
@@ -797,6 +826,9 @@ export async function runQualityChecks<
     let nextExecutionId = 0;
     for (const { id, prepared } of preparedChecks) {
       const configuration = snapshotQualityData(prepared.configuration);
+      const configurationFingerprint = fingerprintQualityInputBasis(
+        configuration as JsonValue,
+      );
       const diagnostics: QualityDiagnostic[] = [];
       const issues: QualityIssue[] = [];
       const executions: QualityCheckExecution[] = [];
@@ -818,10 +850,11 @@ export async function runQualityChecks<
         let fingerprint: QualityInputFingerprint | undefined;
         let outcome: QualityCheckOutcome;
         try {
+          const sourceUnit = sourceUnits.get(candidate.sourceKey) ?? null;
           const preparation = await prepared.prepareInput({
             facts,
             candidate,
-            sourceUnit: sourceUnits.get(candidate.sourceKey) ?? null,
+            sourceUnit,
             memo,
             dependencies: boundRequest.dependencies,
             relationships: boundRequest.relationships,
@@ -830,8 +863,11 @@ export async function runQualityChecks<
             fingerprint = qualityInputFingerprint(
               id,
               prepared.version,
-              configuration,
+              configurationFingerprint,
               preparation.fingerprintInput,
+              preparation.fingerprintInput.kind === "default"
+                ? getDefaultInputComponents()
+                : undefined,
             );
             outcome = await preparation.execute();
           } else {
@@ -865,18 +901,10 @@ export async function runQualityChecks<
 
         const stableOutcome = snapshotQualityData(outcome);
         const findings = stableOutcome.diagnostics;
-        diagnostics.push(
-          ...findings.map((diagnostic) => ({
-            ...diagnostic,
-            checkId: id,
-            executionId,
-            handling: handlingFor(id, diagnostic, exceptions),
-          })),
-        );
         issues.push(...stableOutcome.issues);
         statuses.push(stableOutcome.status);
         addCoverage(coverage, stableOutcome.coverage);
-        const execution: QualityCheckExecution = {
+        const executionWithoutFingerprint: QualityCheckExecution = {
           executionId,
           candidateIndex,
           checkId: id,
@@ -884,10 +912,18 @@ export async function runQualityChecks<
           language: candidate.language,
           status: stableOutcome.status,
         };
-        executions.push(
+        const execution: QualityCheckExecution =
           fingerprint === undefined
-            ? execution
-            : { ...execution, ...fingerprint },
+            ? executionWithoutFingerprint
+            : { ...executionWithoutFingerprint, ...fingerprint };
+        executions.push(execution);
+        diagnostics.push(
+          ...findings.map((diagnostic) => ({
+            ...diagnostic,
+            checkId: id,
+            executionId,
+            handling: handlingFor(execution, exceptions),
+          })),
         );
       }
 
@@ -907,6 +943,10 @@ export async function runQualityChecks<
       version: facts.version,
       ...boundRequest,
       exceptions,
+      exceptionApplicability: evaluateQualityExceptionApplicability(
+        exceptions,
+        results.flatMap(({ executions }) => executions),
+      ),
       factCoverage: snapshotQualityData({
         source: facts.source.read,
         translations: facts.translations.reads,
@@ -946,38 +986,121 @@ function snapshotQualityData<TValue>(value: TValue): TValue {
 function qualityInputFingerprint(
   checkId: string,
   version: string,
-  configuration: unknown,
-  inputBasis: QualityInputBasis,
+  configurationFingerprint: string,
+  inputBasis: PreparedQualityInputFingerprintBasis,
+  defaultComponents?: DefaultQualityInputFingerprintComponents,
 ): Required<QualityInputFingerprint> {
-  const jsonConfiguration = configuration as JsonValue;
+  const inputBasisFingerprint =
+    inputBasis.kind === "default"
+      ? fingerprintJsonObjectComponents([
+          ["candidate", inputBasis.candidateFingerprint],
+          [
+            "dependencies",
+            requiredDefaultComponent(defaultComponents, "dependencies"),
+          ],
+          ["facts", requiredDefaultComponent(defaultComponents, "facts")],
+          [
+            "relationships",
+            requiredDefaultComponent(defaultComponents, "relationships"),
+          ],
+          ["sourceUnit", inputBasis.sourceUnitFingerprint],
+        ])
+      : fingerprintQualityInputBasis(inputBasis.value);
+  const summaryVersion = `${qualityInputFingerprintFormat}:${version}`;
   return {
-    inputFingerprint: fingerprintJson({
-      checkId,
-      version,
-      configuration: jsonConfiguration,
-      inputBasis,
-    }),
+    inputFingerprint: fingerprintJsonObjectComponents([
+      ["checkId", fingerprintJsonValue(checkId)],
+      ["configurationFingerprint", configurationFingerprint],
+      [
+        "fingerprintFormat",
+        fingerprintJsonValue(qualityInputFingerprintFormat),
+      ],
+      ["inputFingerprint", inputBasisFingerprint],
+      ["version", fingerprintJsonValue(version)],
+    ]),
     fingerprintSummary: {
-      version,
-      configurationFingerprint: fingerprintJson(jsonConfiguration),
-      inputFingerprint: fingerprintJson(inputBasis),
+      version: summaryVersion,
+      configurationFingerprint,
+      inputFingerprint: inputBasisFingerprint,
     },
   };
 }
 
-function fingerprintJson(value: JsonValue): string {
-  return `sha256:${createHash("sha256").update(stableStringify(value)).digest("hex")}`;
+function requiredDefaultComponent(
+  components: DefaultQualityInputFingerprintComponents | undefined,
+  key: keyof DefaultQualityInputFingerprintComponents,
+): string {
+  if (components === undefined)
+    throw new TypeError("默认 QA 输入指纹缺少固定组件摘要。");
+  return components[key];
+}
+
+function fingerprintQualityInputBasis(value: JsonValue): string {
+  if (Array.isArray(value))
+    return fingerprintJsonArrayComponents(
+      value.map((item, index) => [String(index), fingerprintJsonValue(item)]),
+    );
+  if (isRecord(value))
+    return fingerprintJsonObjectComponents(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        fingerprintJsonValue(item as JsonValue),
+      ]),
+    );
+  return fingerprintJsonValue(value);
+}
+
+function fingerprintJsonValue(value: JsonValue): string {
+  const type =
+    value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
+  return fingerprintComponents(`json-value:${type}`, [
+    ["value", stableStringifyJson(value)],
+  ]);
+}
+
+function fingerprintJsonObjectComponents(
+  components: readonly (readonly [key: string, fingerprint: string])[],
+): string {
+  return fingerprintComponents(
+    "json-object",
+    [...components]
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .map(([key, fingerprint]) => [JSON.stringify(key), fingerprint]),
+  );
+}
+
+function fingerprintJsonArrayComponents(
+  components: readonly (readonly [index: string, fingerprint: string])[],
+): string {
+  return fingerprintComponents("json-array", components);
+}
+
+function fingerprintComponents(
+  domain: string,
+  components: readonly (readonly [key: string, fingerprint: string])[],
+): string {
+  const hash = createHash("sha256");
+  updateFingerprintHash(hash, qualityInputFingerprintFormat);
+  updateFingerprintHash(hash, domain);
+  for (const [key, fingerprint] of components) {
+    updateFingerprintHash(hash, key);
+    updateFingerprintHash(hash, fingerprint);
+  }
+  return `sha256:${hash.digest("hex")}`;
+}
+
+function updateFingerprintHash(hash: Hash, value: string): void {
+  hash.update(Buffer.byteLength(value).toString(10));
+  hash.update(":");
+  hash.update(value);
 }
 
 function handlingFor(
-  checkId: string,
-  diagnostic: QualityFinding,
+  execution: QualityCheckExecution,
   exceptions: readonly QualityException[],
 ): QualityDiagnosticHandling {
-  const exception = exceptions.find(
-    (candidate) =>
-      candidate.checkId === checkId &&
-      exceptionScopeMatches(candidate.scope, diagnostic),
+  const exception = exceptions.find((candidate) =>
+    qualityExceptionMatchesExecution(candidate, execution),
   );
   return exception === undefined
     ? { status: "active" }
@@ -986,25 +1109,6 @@ function handlingFor(
         exceptionId: exception.id,
         reason: exception.reason,
       };
-}
-
-function exceptionScopeMatches(
-  scope: QualityExceptionScope,
-  diagnostic: QualityFinding,
-): boolean {
-  const objectMatches =
-    scope.object === undefined ||
-    (scope.object.kind === diagnostic.object.kind &&
-      scope.object.key === diagnostic.object.key &&
-      (scope.object.language === undefined ||
-        scope.object.language === diagnostic.object.language));
-  const locationMatches =
-    scope.location === undefined ||
-    (scope.location.language === diagnostic.location.language &&
-      isDeepStrictEqual(scope.location.range, diagnostic.location.range) &&
-      (scope.location.key === undefined ||
-        scope.location.key === diagnostic.location.key));
-  return objectMatches && locationMatches;
 }
 
 function aggregateStatus(

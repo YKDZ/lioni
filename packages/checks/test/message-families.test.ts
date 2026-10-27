@@ -9,8 +9,11 @@ import {
 import type { MessageFamilyLimits } from "@lioni/checks";
 import {
   analyzeQuality,
+  createQualityException,
   defineConfig,
   type QualityCheckInput,
+  type QualityException,
+  type QualityExceptionStore,
   type SourceUnitFact,
   StandardSchemaContractError,
   type StandardSchemaV1,
@@ -204,18 +207,7 @@ function configFor(
   units: readonly Unit[],
   translations: readonly Translation[],
   qualityChecker: ReturnType<typeof checkerFor>,
-  exceptions: readonly {
-    readonly id: string;
-    readonly checkId: string;
-    readonly scope: {
-      readonly object: {
-        readonly kind: string;
-        readonly key: string;
-        readonly language?: string;
-      };
-    };
-    readonly reason: string;
-  }[] = [],
+  exceptionStore?: QualityExceptionStore,
 ) {
   return defineConfig({
     source: {
@@ -259,10 +251,12 @@ function configFor(
       matches: (unit, translation) => unit.id === translation.id,
     },
     qualityChecks: [qualityChecker],
+    ...(exceptionStore === undefined
+      ? {}
+      : { qualityExceptionStore: exceptionStore }),
     createQualityRequest: () => ({
       candidates: [],
       dependencies: {},
-      exceptions,
     }),
   });
 }
@@ -729,6 +723,18 @@ void test("目标结构分析不完整时保留已知参照差异并标记不完
 });
 
 void test("例外保留警告发现及处理状态", async () => {
+  let exceptions: readonly QualityException[] = [];
+  const exceptionStore: QualityExceptionStore = {
+    async load() {
+      return exceptions;
+    },
+    async upsert(exception) {
+      exceptions = [
+        ...exceptions.filter(({ id }) => id !== exception.id),
+        exception,
+      ];
+    },
+  };
   const exceptionConfig = configFor(
     [
       { id: "editing", source: "Error Code 404" },
@@ -739,25 +745,28 @@ void test("例外保留警告发现及处理状态", async () => {
       { id: "different", text: "错误 504" },
     ],
     checkerFor(),
-    [
-      {
-        id: "known-family-variation",
-        checkId: "message-family-consistency",
-        scope: {
-          object: {
-            kind: "translation-unit",
-            key: "editing",
-            language: "zh",
-          },
-        },
-        reason: "保留现有界面用语。",
-      },
-    ],
+    exceptionStore,
   );
+  const candidates = [
+    { sourceKey: "editing", language: "zh", content: "错误码 404" },
+  ];
+  const initial = await analyzeQuality(exceptionConfig, { candidates });
+  const execution = initial.checks
+    .find(({ checkId }) => checkId === "message-family-consistency")
+    ?.executions.find(
+      ({ sourceKey, language }) => sourceKey === "editing" && language === "zh",
+    );
+  assert.ok(execution);
+  await exceptionStore.upsert(
+    createQualityException({
+      id: "known-family-variation",
+      reason: "保留现有界面用语。",
+      execution,
+    }),
+  );
+
   const result = await analyzeQuality(exceptionConfig, {
-    candidates: [
-      { sourceKey: "editing", language: "zh", content: "错误码 404" },
-    ],
+    candidates,
   });
 
   assert.equal(result.diagnostics.length, 1);

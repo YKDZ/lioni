@@ -2,6 +2,7 @@ import {
   defineConfig,
   validateUpdatePlan,
   type FrameworkConfig,
+  type QualityCheckRequest,
   type SemanticEditCandidate,
   type StandardSchemaV1,
   type TranslationUnitInput,
@@ -146,6 +147,14 @@ const config = defineConfig<
 
 const frameworkConfig: FrameworkConfig<Unit, Translation, Body> = config;
 void frameworkConfig;
+
+const oldExceptionRequest: Omit<QualityCheckRequest<Body>, "exceptions"> = {
+  candidates: [],
+  dependencies: {},
+  // @ts-expect-error 例外来源由 qualityExceptionStore 唯一装配。
+  exceptions: [],
+};
+void oldExceptionRequest;
 
 declare const typedPlan: UpdatePlan<Unit, Translation, Body>;
 void typedPlan;
