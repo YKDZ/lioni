@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, type Hash } from "node:crypto";
 
 import { createMemoScope, type MemoScope } from "@lioni/memo";
 
@@ -25,7 +25,7 @@ import type {
   QualityExceptionApplicability,
 } from "./quality-exceptions.ts";
 import type { JsonValue, SemanticEditCandidate } from "./semantic-edits.ts";
-import { stableStringify } from "./stable-json.ts";
+import { stableStringifyJson } from "./stable-json.ts";
 import {
   assertJsonValue,
   StandardSchemaContractError,
@@ -148,6 +148,8 @@ export type QualityCheckInput<
 };
 
 export type QualityInputBasis = JsonValue;
+
+const qualityInputFingerprintFormat = "lioni.check-input/v1";
 
 export type QualityDefaultInput = {
   readonly facts: unknown;
@@ -307,9 +309,23 @@ type QualityCheckExecutionPreparation<TObject extends QualityObject> =
     }
   | {
       readonly status: "ready";
-      readonly fingerprintInput: QualityInputBasis;
+      readonly fingerprintInput: PreparedQualityInputFingerprintBasis;
       readonly execute: () => Awaitable<QualityCheckOutcome<TObject>>;
     };
+
+type PreparedQualityInputFingerprintBasis =
+  | {
+      readonly kind: "default";
+      readonly candidateFingerprint: string;
+      readonly sourceUnitFingerprint: string;
+    }
+  | { readonly kind: "custom"; readonly value: QualityInputBasis };
+
+type DefaultQualityInputFingerprintComponents = {
+  readonly facts: string;
+  readonly dependencies: string;
+  readonly relationships: string;
+};
 
 const qualityCheckDefinitionBrand: unique symbol = Symbol(
   "qualityCheckDefinition",
@@ -670,13 +686,22 @@ function prepareFingerprintInput<TInput extends QualityDefaultInput>(
   id: string,
   fingerprintInput: ((input: TInput) => QualityInputBasis) | undefined,
   input: TInput,
-): QualityInputBasis {
-  const basis =
-    fingerprintInput === undefined
-      ? createDefaultQualityInputBasis(input)
-      : fingerprintInput(input);
+): PreparedQualityInputFingerprintBasis {
+  if (fingerprintInput === undefined) {
+    assertJsonValue(input.candidate, `QA 检查器 ${id} 的候选依据`);
+    assertJsonValue(input.sourceUnit, `QA 检查器 ${id} 的原文依据`);
+    return {
+      kind: "default",
+      candidateFingerprint: fingerprintJsonValue(input.candidate as JsonValue),
+      sourceUnitFingerprint: fingerprintJsonValue(
+        input.sourceUnit as JsonValue,
+      ),
+    };
+  }
+
+  const basis = fingerprintInput(input);
   assertJsonValue(basis, `QA 检查器 ${id} 的输入指纹依据`);
-  return structuredClone(basis);
+  return { kind: "custom", value: structuredClone(basis) };
 }
 
 export type QualityCheckResult<TObject extends QualityObject = QualityObject> =
@@ -774,6 +799,30 @@ export async function runQualityChecks<
     const sourceUnits = new Map(
       facts.source.units.map((unit) => [unit.key, unit]),
     );
+    let defaultInputComponents:
+      | DefaultQualityInputFingerprintComponents
+      | undefined;
+    const getDefaultInputComponents =
+      (): DefaultQualityInputFingerprintComponents => {
+        if (defaultInputComponents === undefined) {
+          const fixedBasis = {
+            facts,
+            dependencies: boundRequest.dependencies,
+            relationships: boundRequest.relationships,
+          };
+          assertJsonValue(fixedBasis, "QA 默认输入指纹依据");
+          defaultInputComponents = {
+            facts: fingerprintJsonValue(facts as JsonValue),
+            dependencies: fingerprintJsonValue(
+              boundRequest.dependencies as JsonValue,
+            ),
+            relationships: fingerprintJsonValue(
+              boundRequest.relationships as JsonValue,
+            ),
+          };
+        }
+        return defaultInputComponents;
+      };
     const selectedLanguages = new Map<string, Set<string>>();
     for (const { sourceKey, language } of boundRequest.candidates) {
       const languages = selectedLanguages.get(sourceKey) ?? new Set<string>();
@@ -783,6 +832,9 @@ export async function runQualityChecks<
     let nextExecutionId = 0;
     for (const { id, prepared } of preparedChecks) {
       const configuration = snapshotQualityData(prepared.configuration);
+      const configurationFingerprint = fingerprintQualityInputBasis(
+        configuration as JsonValue,
+      );
       const diagnostics: QualityDiagnostic[] = [];
       const issues: QualityIssue[] = [];
       const executions: QualityCheckExecution[] = [];
@@ -806,10 +858,11 @@ export async function runQualityChecks<
         let shouldCacheOutcome = false;
         let outcome: QualityCheckOutcome;
         try {
+          const sourceUnit = sourceUnits.get(candidate.sourceKey) ?? null;
           const preparation = await prepared.prepareInput({
             facts,
             candidate,
-            sourceUnit: sourceUnits.get(candidate.sourceKey) ?? null,
+            sourceUnit,
             memo,
             dependencies: boundRequest.dependencies,
             relationships: boundRequest.relationships,
@@ -818,8 +871,11 @@ export async function runQualityChecks<
             const currentFingerprint = qualityInputFingerprint(
               id,
               prepared.version,
-              configuration,
+              configurationFingerprint,
               preparation.fingerprintInput,
+              preparation.fingerprintInput.kind === "default"
+                ? getDefaultInputComponents()
+                : undefined,
             );
             fingerprint = currentFingerprint;
             const key = qualityCheckCacheKey(
@@ -968,21 +1024,42 @@ function snapshotQualityData<TValue>(value: TValue): TValue {
 function qualityInputFingerprint(
   checkId: string,
   version: string,
-  configuration: unknown,
-  inputBasis: QualityInputBasis,
+  configurationFingerprint: string,
+  inputBasis: PreparedQualityInputFingerprintBasis,
+  defaultComponents?: DefaultQualityInputFingerprintComponents,
 ): Required<QualityInputFingerprint> {
-  const jsonConfiguration = configuration as JsonValue;
+  const inputBasisFingerprint =
+    inputBasis.kind === "default"
+      ? fingerprintJsonObjectComponents([
+          ["candidate", inputBasis.candidateFingerprint],
+          [
+            "dependencies",
+            requiredDefaultComponent(defaultComponents, "dependencies"),
+          ],
+          ["facts", requiredDefaultComponent(defaultComponents, "facts")],
+          [
+            "relationships",
+            requiredDefaultComponent(defaultComponents, "relationships"),
+          ],
+          ["sourceUnit", inputBasis.sourceUnitFingerprint],
+        ])
+      : fingerprintQualityInputBasis(inputBasis.value);
+  const summaryVersion = `${qualityInputFingerprintFormat}:${version}`;
   return {
-    inputFingerprint: fingerprintJson({
-      checkId,
-      version,
-      configuration: jsonConfiguration,
-      inputBasis,
-    }),
+    inputFingerprint: fingerprintJsonObjectComponents([
+      ["checkId", fingerprintJsonValue(checkId)],
+      ["configurationFingerprint", configurationFingerprint],
+      [
+        "fingerprintFormat",
+        fingerprintJsonValue(qualityInputFingerprintFormat),
+      ],
+      ["inputFingerprint", inputBasisFingerprint],
+      ["version", fingerprintJsonValue(version)],
+    ]),
     fingerprintSummary: {
-      version,
-      configurationFingerprint: fingerprintJson(jsonConfiguration),
-      inputFingerprint: fingerprintJson(inputBasis),
+      version: summaryVersion,
+      configurationFingerprint,
+      inputFingerprint: inputBasisFingerprint,
     },
   };
 }
@@ -994,7 +1071,7 @@ function qualityCheckCacheKey(
   language: string,
   inputFingerprint: string,
 ): string {
-  return fingerprintJson({
+  return fingerprintJsonValue({
     checkId,
     candidateIndex,
     sourceKey,
@@ -1057,8 +1134,73 @@ function isCacheableQualityCheckOutcome(
   });
 }
 
-function fingerprintJson(value: JsonValue): string {
-  return `sha256:${createHash("sha256").update(stableStringify(value)).digest("hex")}`;
+function requiredDefaultComponent(
+  components: DefaultQualityInputFingerprintComponents | undefined,
+  key: keyof DefaultQualityInputFingerprintComponents,
+): string {
+  if (components === undefined)
+    throw new TypeError("默认 QA 输入指纹缺少固定组件摘要。");
+  return components[key];
+}
+
+function fingerprintQualityInputBasis(value: JsonValue): string {
+  if (Array.isArray(value))
+    return fingerprintJsonArrayComponents(
+      value.map((item, index) => [String(index), fingerprintJsonValue(item)]),
+    );
+  if (isRecord(value))
+    return fingerprintJsonObjectComponents(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        fingerprintJsonValue(item as JsonValue),
+      ]),
+    );
+  return fingerprintJsonValue(value);
+}
+
+function fingerprintJsonValue(value: JsonValue): string {
+  const type =
+    value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
+  return fingerprintComponents(`json-value:${type}`, [
+    ["value", stableStringifyJson(value)],
+  ]);
+}
+
+function fingerprintJsonObjectComponents(
+  components: readonly (readonly [key: string, fingerprint: string])[],
+): string {
+  return fingerprintComponents(
+    "json-object",
+    [...components]
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .map(([key, fingerprint]) => [JSON.stringify(key), fingerprint]),
+  );
+}
+
+function fingerprintJsonArrayComponents(
+  components: readonly (readonly [index: string, fingerprint: string])[],
+): string {
+  return fingerprintComponents("json-array", components);
+}
+
+function fingerprintComponents(
+  domain: string,
+  components: readonly (readonly [key: string, fingerprint: string])[],
+): string {
+  const hash = createHash("sha256");
+  updateFingerprintHash(hash, qualityInputFingerprintFormat);
+  updateFingerprintHash(hash, domain);
+  for (const [key, fingerprint] of components) {
+    updateFingerprintHash(hash, key);
+    updateFingerprintHash(hash, fingerprint);
+  }
+  return `sha256:${hash.digest("hex")}`;
+}
+
+function updateFingerprintHash(hash: Hash, value: string): void {
+  hash.update(Buffer.byteLength(value).toString(10));
+  hash.update(":");
+  hash.update(value);
 }
 
 function handlingFor(

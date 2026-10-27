@@ -2,7 +2,7 @@
 
 质量检查通过 `defineQualityCheck`、`bindQualityCheck` 和 `analyzeQuality` 接入。每项检查都要提供稳定的 `id` 和显式 `version`。版本表示检查算法与宿主组合逻辑；算法或宿主选择、投影、位置映射及策略发生语义变化时，应更新对应版本。
 
-每条候选检查执行都会在 `checks[].executions[]` 中报告 `checkId`、原文键、目标语言、状态和可比较的 `inputFingerprint`。摘要分别给出检查版本、最终配置摘要和业务输入摘要。诊断带有 `checkId` 与 `executionId`，可关联到产生它的候选执行。同键同语言的多个候选会分别保留记录。
+每条候选检查执行都会在 `checks[].executions[]` 中报告 `checkId`、原文键、目标语言、状态和可比较的 `inputFingerprint`。摘要分别给出带指纹格式的检查版本（`lioni.check-input/v1:<checkVersion>`）、最终配置摘要和业务输入摘要；`checks[].version` 仍是检查器显式提供的版本。诊断带有 `checkId` 与 `executionId`，可关联到产生它的候选执行。同键同语言的多个候选会分别保留记录。
 
 使用 `@lioni/checks` 的内置工厂时，另提供 `hostVersion` 描述宿主的选择、投影和组合逻辑。工厂会将它与固定的内置算法版本合并。
 
@@ -80,7 +80,7 @@ exceptions:
     language: fr
     inputFingerprint: sha256:复制报告中的完整指纹
     fingerprintSummary:
-      version: "catalog-term-policy-v1"
+      version: "lioni.check-input/v1:catalog-term-policy-v1"
       configurationFingerprint: sha256:复制报告中的配置摘要
       inputFingerprint: sha256:复制报告中的业务输入摘要
 ```
