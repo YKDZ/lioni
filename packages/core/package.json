@@ -35,7 +35,8 @@
     "typecheck": "tsc -p tsconfig.node.json --noEmit --pretty false"
   },
   "dependencies": {
-    "@lioni/memo": "workspace:*"
+    "@lioni/memo": "workspace:*",
+    "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@lioni/tooling-config": "workspace:*",

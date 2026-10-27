@@ -18,6 +18,13 @@ import { validateUpdatePlan, type UpdatePlanStore } from "./plans.ts";
 import type { JsonValue } from "./semantic-edits.ts";
 import { StandardSchemaContractError } from "./standard-schema.ts";
 
+export {
+  createDefaultQualityExceptionStore,
+  createFileQualityExceptionStore,
+  resolveDefaultQualityExceptionFilePath,
+} from "./node-quality-exceptions.ts";
+export type { QualityExceptionStore } from "./quality-exceptions.ts";
+
 type RuntimeFrameworkConfig = FrameworkConfig<
   TranslationUnitInput,
   unknown,
