@@ -20,7 +20,6 @@ import {
   type QualityCheckRuleInput,
   type QualityCheckSelection,
   type QualityCheckRequest,
-  type QualityException,
   type QualityObject,
   type SourceUnitFact,
   type StandardSchemaV1,
@@ -132,7 +131,6 @@ type EntryModule = {
   readonly translationRange: string;
   readonly readUnits: () => readonly Unit[];
   readonly readTargets: (language: string) => TargetResource;
-  readonly exception?: QualityException;
   readonly checkConfiguration: JsonValue;
   readonly resolveCompletion: (
     input: CompletionResolverInput<Unit, Translation>,
@@ -228,22 +226,12 @@ function readGuideTargets(): TargetResource {
   };
 }
 
-const catalogException: QualityException = {
-  id: "catalog-approved-numbers",
-  checkId: "catalog-numbers",
-  scope: {
-    object: { kind: "translation-unit", key: "catalog:save", language: "fr" },
-  },
-  reason: "目录中的数字差异由维护者单独确认。",
-};
-
 const catalogModule: EntryModule = {
   domain: "catalog",
   sourceRange: "composition/catalog-source.json",
   translationRange: "composition/catalog-fr.json",
   readUnits: readCatalogUnits,
   readTargets: () => readCatalogTargets(),
-  exception: catalogException,
   checkConfiguration: { domain: "catalog" },
   resolveCompletion: ({ translations }) => {
     const target = translations[0]?.translation;
@@ -437,7 +425,7 @@ function createDomainChecker(
 function requestForDomain(
   facts: FrameworkFacts<Unit, Translation, TranslationContent, never>,
   domain: Domain,
-): QualityCheckRequest<TranslationContent> {
+): Omit<QualityCheckRequest<TranslationContent>, "exceptions"> {
   const candidates = facts.associations.flatMap((association) => {
     if (
       !association.sourceKey.startsWith(domain + ":") ||
@@ -458,18 +446,19 @@ function requestForDomain(
   return {
     candidates,
     relationships: [],
-    exceptions: domain === "catalog" ? [catalogException] : [],
     dependencies: { domain },
   };
 }
 
 function mergeQualityRequests(
-  requests: readonly QualityCheckRequest<TranslationContent>[],
-): QualityCheckRequest<TranslationContent> {
+  requests: readonly Omit<
+    QualityCheckRequest<TranslationContent>,
+    "exceptions"
+  >[],
+): Omit<QualityCheckRequest<TranslationContent>, "exceptions"> {
   return {
     candidates: requests.flatMap(({ candidates }) => candidates),
     relationships: requests.flatMap(({ relationships }) => relationships ?? []),
-    exceptions: requests.flatMap(({ exceptions }) => exceptions ?? []),
     dependencies: {
       inputs: requests.map(({ dependencies }) => dependencies),
     },

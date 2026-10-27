@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   analyzeQuality,
+  createQualityException,
   defineConfig,
   readFacts,
   StandardSchemaContractError,
@@ -308,6 +309,17 @@ function createScenario(
         if (request.operation === "write") storedBody = request.content;
       },
     },
+    qualityExceptionStore: {
+      async load() {
+        return exceptions;
+      },
+      async upsert(exception) {
+        exceptions = [
+          ...exceptions.filter(({ id }) => id !== exception.id),
+          exception,
+        ];
+      },
+    },
     createQualityRequest: () => ({
       candidates: [
         {
@@ -317,7 +329,6 @@ function createScenario(
         },
       ],
       dependencies: {},
-      exceptions,
     }),
     qualityChecks: checks,
   });
@@ -474,20 +485,35 @@ void test("QA 例外保留术语发现，宿主条件控制语义编辑", async 
   );
   assert.equal(scenario.storedBody().visible, "工作区");
 
-  const object = { kind: "translation", key: "workspace", language: "zh" };
+  const missingAllowedExecution = rejectedQuality.checks
+    .find(
+      ({ checkId }) => checkId === "terminology/require-allowed-translation",
+    )
+    ?.executions.find(
+      ({ sourceKey, language }) =>
+        sourceKey === "workspace" && language === "zh",
+    );
+  const forbiddenExecution = rejectedQuality.checks
+    .find(
+      ({ checkId }) => checkId === "terminology/reject-forbidden-translation",
+    )
+    ?.executions.find(
+      ({ sourceKey, language }) =>
+        sourceKey === "workspace" && language === "zh",
+    );
+  assert.ok(missingAllowedExecution);
+  assert.ok(forbiddenExecution);
   scenario.setExceptions([
-    {
+    createQualityException({
       id: "allow-missing-term-review",
-      checkId: "terminology/require-allowed-translation",
-      scope: { object },
       reason: "本地化审校接受此项候选。",
-    },
-    {
+      execution: missingAllowedExecution,
+    }),
+    createQualityException({
       id: "allow-forbidden-term-review",
-      checkId: "terminology/reject-forbidden-translation",
-      scope: { object },
       reason: "本地化审校接受此项候选。",
-    },
+      execution: forbiddenExecution,
+    }),
   ]);
   const passedQuality = await analyzeQuality(scenario.config, {
     candidates: [candidate],
