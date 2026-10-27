@@ -284,6 +284,18 @@ function qualityText(value: unknown): ReturnType<typeof text.lines> {
         return `[${severity}] ${checkId} ${object.key}（${location.language ?? "原文"}，${rangeText(location.range)}${locationKey}，执行 ${executionId}）：${message}${exception}；证据 ${evidence.length} 项`;
       },
     ),
+    ...result.exceptionApplicability.map((applicability) => {
+      const candidate =
+        applicability.candidateIndex === undefined
+          ? ""
+          : `（候选 ${applicability.candidateIndex + 1}，执行 ${applicability.executionId ?? "未编号"}）`;
+      const binding = `${applicability.checkId} ${applicability.sourceKey} → ${applicability.language}${candidate}`;
+      if (applicability.status === "applicable")
+        return `QA 例外 ${applicability.exceptionId} ${binding}：适用。`;
+      if (applicability.status === "basis-changed")
+        return `QA 例外 ${applicability.exceptionId} ${binding}：依据变化（${applicability.reasons?.map(qualityExceptionChangeReasonText).join("、") ?? "原因未知"}）。`;
+      return `QA 例外 ${applicability.exceptionId} ${binding}：本次未验证（${qualityExceptionNotVerifiedReasonText(applicability.reason)}）。`;
+    }),
     ...result.checks.flatMap(
       ({ checkId, version, executions, issues, status }) => [
         ...executions.map(
@@ -305,6 +317,21 @@ function qualityText(value: unknown): ReturnType<typeof text.lines> {
       ],
     ),
   ]);
+}
+
+function qualityExceptionChangeReasonText(reason: string): string {
+  if (reason === "business-input") return "业务输入变化";
+  if (reason === "configuration") return "最终配置变化";
+  if (reason === "check-implementation") return "检查版本变化";
+  return reason;
+}
+
+function qualityExceptionNotVerifiedReasonText(
+  reason: string | undefined,
+): string {
+  if (reason === "not-run") return "对应检查未运行";
+  if (reason === "no-comparable-basis") return "没有可比较依据";
+  return "原因未知";
 }
 
 function comparisonStatusText(status: string): string {

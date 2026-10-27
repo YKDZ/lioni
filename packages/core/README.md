@@ -45,3 +45,55 @@ const check = defineQualityCheck({
 `config.source.read()` 读取宿主定义的原文记录，`source.schema` 校验记录结构。框架保留完整原文单元；`sourceUnit.unit.source` 的业务含义由宿主定义，框架不会从任意 JSON 字段猜测正文。
 
 译文适配器的 `translations.contentOf()` 明确地从译文记录取出正文。候选的 `content` 使用该正文类型，也可以是宿主提供的结构化内容。检查作者通过 `select` 决定候选范围，再通过 `project` 映射检查实际需要的文本或结构；投影结果经 `inputSchema` 校验后交给检查函数。原文适配器、译文正文与检查投影因此分别负责读取、内容提取和检查输入。
+
+## QA 例外
+
+例外由检查报告中的执行记录创建，绑定检查项、原文键、目标语言和完整输入指纹，并覆盖该次候选检查的全部诊断：
+
+```ts
+import { createQualityException } from "@lioni/core";
+
+const execution = report.checks
+  .find(({ checkId }) => checkId === "catalog-term-policy")
+  ?.executions.find(
+    ({ sourceKey, language }) =>
+      sourceKey === "toolbar.save" && language === "fr",
+  );
+
+if (execution === undefined) throw new Error("报告中没有对应执行记录。");
+const exception = createQualityException({
+  id: "save-term-choice",
+  reason: "该术语选择已由维护者确认。",
+  execution,
+});
+```
+
+手工 YAML 使用同一结构。Node 的 `loadConfig(configPath)` 默认读取配置文件同目录的 `lioni.exceptions.yaml`；文件缺失表示没有例外，格式错误、身份重复或读取失败会使 QA 明确失败。手工维护时复制执行记录中的指纹和摘要，例如：
+
+```yaml
+format: lioni.qa-exceptions/v1
+exceptions:
+  - id: save-term-choice
+    reason: 该术语选择已由维护者确认。
+    checkId: catalog-term-policy
+    sourceKey: toolbar.save
+    language: fr
+    inputFingerprint: sha256:复制报告中的完整指纹
+    fingerprintSummary:
+      version: "catalog-term-policy-v1"
+      configurationFingerprint: sha256:复制报告中的配置摘要
+      inputFingerprint: sha256:复制报告中的业务输入摘要
+```
+
+直接向 `analyzeQuality(config)` 传入纯配置对象时，框架不会猜测当前目录；没有配置存储就不使用例外。自定义 `qualityExceptionStore` 会替换 Node 默认 YAML 来源。低层 `runQualityChecks` 仍可接收宿主已读取的例外列表。QA 报告分别给出诊断处理和 `exceptionApplicability`：输入、最终配置或检查版本改变时显示原因，局部未执行时标记为本次未验证；依据恢复后，旧例外会重新适用。即使本次没有诊断，也会报告适用性。
+
+例外批准与结果缓存有不同用途。Node QA 默认读取人工维护的例外 YAML；缓存须显式装配，只影响计算成本。普通 QA 不会写入或刷新例外，也不会改写比较基线。调用方可直接组合报告数组：
+
+```ts
+const activeErrors = report.diagnostics.filter(
+  ({ severity, handling }) =>
+    severity === "error" && handling.status === "active",
+);
+```
+
+将例外作为诊断豁免的首选方式，并为可独立接受的问题划分不同检查项。单位解释等影响检查输入的业务配置应进入配置或指纹依据；例外只表示对特定检查结果的批准。

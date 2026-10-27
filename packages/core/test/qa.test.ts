@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import {
   analyzeQuality,
+  createQualityException,
   defineConfig,
   readFacts,
   runQualityChecks,
@@ -481,7 +482,7 @@ void describe("quality checks", () => {
     assert.equal(result.checks[0]?.issues[0]?.message, "checker crashed");
   });
 
-  void it("applies an exception only to its rule and object without hiding evidence", async () => {
+  void it("按完整绑定豁免对应执行的全部诊断并保留证据", async () => {
     const facts = await readFacts(
       defineConfig({
         source: {
@@ -516,32 +517,9 @@ void describe("quality checks", () => {
         },
       ],
     });
-    const request = {
+    const request: QualityCheckRequest = {
       candidates: [{ sourceKey: "A", language: "fr", content: "value:A" }],
       dependencies: {},
-      exceptions: [
-        {
-          id: "allow-a",
-          checkId: "example-rule",
-          scope: {
-            object: { kind: "translation-unit", key: "A", language: "fr" },
-          },
-          reason: "宿主允许此消息使用不同表达。",
-        },
-      ],
-    } as QualityCheckRequest & {
-      readonly exceptions: readonly {
-        readonly id: string;
-        readonly checkId: string;
-        readonly scope: {
-          readonly object: {
-            readonly kind: string;
-            readonly key: string;
-            readonly language: string;
-          };
-        };
-        readonly reason: string;
-      }[];
     };
     const outcome = {
       status: "complete" as const,
@@ -572,16 +550,24 @@ void describe("quality checks", () => {
         check: () => ({ ...outcome, diagnostics: [makeFinding("A")] }),
       }),
     ];
-    const result = await runQualityChecks(facts, request, checks);
+    const unexcepted = await runQualityChecks(facts, request, checks);
+    const execution = unexcepted.checks[0]?.executions[0];
+    assert.ok(execution);
+    const exception = createQualityException({
+      id: "allow-a",
+      reason: "宿主允许此消息使用不同表达。",
+      execution,
+    });
+    const result = await runQualityChecks(
+      facts,
+      { ...request, exceptions: [exception] },
+      checks,
+    );
     const changedExceptionRequest = {
       ...request,
       exceptions: [
         {
-          id: "allow-a",
-          checkId: "example-rule",
-          scope: {
-            object: { kind: "translation-unit", key: "A", language: "fr" },
-          },
+          ...exception,
           reason: "例外记录的理由已修改。",
         },
       ],
@@ -617,7 +603,11 @@ void describe("quality checks", () => {
         {
           checkId: "example-rule",
           object: { kind: "translation-unit", key: "B", language: "fr" },
-          handling: { status: "active" },
+          handling: {
+            status: "excepted",
+            exceptionId: "allow-a",
+            reason: "宿主允许此消息使用不同表达。",
+          },
         },
         {
           checkId: "other-rule",
@@ -626,8 +616,78 @@ void describe("quality checks", () => {
         },
       ],
     );
+    assert.deepEqual(result.exceptionApplicability, [
+      {
+        exceptionId: "allow-a",
+        checkId: "example-rule",
+        sourceKey: "A",
+        language: "fr",
+        executionId: 0,
+        candidateIndex: 0,
+        status: "applicable",
+      },
+    ]);
     assert.equal(result.diagnostics[0]?.evidence[0]?.value, "value:A");
     assert.equal(result.checks[0]?.coverage.evaluated, 1);
     assert.equal(result.version, facts.version);
+  });
+
+  void it("无诊断的 not-applicable 执行仍按可靠依据报告例外适用", async () => {
+    const facts = await readFacts(
+      defineConfig({
+        source: {
+          schema: sourceSchemaFromExamples({ source: "A" }),
+          read: () => ({ scopes: [] }),
+        },
+        keyOf: (unit) => unit.source,
+      }),
+    );
+    const request: QualityCheckRequest = {
+      candidates: [{ sourceKey: "A", language: "fr", content: "value:A" }],
+      dependencies: {},
+    };
+    const check = defineTestQualityCheck({
+      id: "scope-specific-check",
+      configuration: {},
+      check: () => ({
+        status: "not-applicable",
+        diagnostics: [],
+        issues: [],
+        coverage: {
+          selected: 1,
+          evaluated: 0,
+          notApplicable: 1,
+          incomplete: 0,
+          failed: 0,
+        },
+      }),
+    });
+    const report = await runQualityChecks(facts, request, [check]);
+    const execution = report.checks[0]?.executions[0];
+    assert.ok(execution?.inputFingerprint);
+    const exception = createQualityException({
+      id: "allow-scope-specific",
+      reason: "该检查结果不适用于此候选。",
+      execution,
+    });
+
+    const result = await runQualityChecks(
+      facts,
+      { ...request, exceptions: [exception] },
+      [check],
+    );
+
+    assert.deepEqual(result.diagnostics, []);
+    assert.deepEqual(result.exceptionApplicability, [
+      {
+        exceptionId: "allow-scope-specific",
+        checkId: "scope-specific-check",
+        sourceKey: "A",
+        language: "fr",
+        executionId: 0,
+        candidateIndex: 0,
+        status: "applicable",
+      },
+    ]);
   });
 });

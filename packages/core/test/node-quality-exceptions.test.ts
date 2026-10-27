@@ -4,11 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 
+import { createQualityException } from "../src/index.ts";
 import {
   createFileQualityExceptionStore,
   resolveDefaultQualityExceptionFilePath,
 } from "../src/node.ts";
-import { createQualityException } from "../src/quality-exceptions.ts";
 
 const execution = {
   executionId: 0,

@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
 
 import { createMemoScope, type MemoScope } from "@lioni/memo";
 
@@ -12,6 +11,15 @@ import type {
   TranslationReadFact,
   TranslationUnitInput,
 } from "./index.ts";
+import {
+  evaluateQualityExceptionApplicability,
+  qualityExceptionMatchesExecution,
+  validateQualityExceptions,
+} from "./quality-exceptions.ts";
+import type {
+  QualityException,
+  QualityExceptionApplicability,
+} from "./quality-exceptions.ts";
 import type { JsonValue, SemanticEditCandidate } from "./semantic-edits.ts";
 import { stableStringify } from "./stable-json.ts";
 import {
@@ -54,37 +62,6 @@ export type QualityRelationship = {
   readonly key: string;
   readonly members: readonly QualitySubject[];
   readonly [field: string]: unknown;
-};
-
-export type QualityExceptionObjectScope = Pick<
-  QualityObject,
-  "kind" | "key"
-> & {
-  readonly language?: string;
-};
-
-export type QualityExceptionLocationScope = Pick<
-  QualityLocation,
-  "language" | "range"
-> & {
-  readonly key?: string;
-};
-
-export type QualityExceptionScope =
-  | {
-      readonly object: QualityExceptionObjectScope;
-      readonly location?: QualityExceptionLocationScope;
-    }
-  | {
-      readonly location: QualityExceptionLocationScope;
-      readonly object?: QualityExceptionObjectScope;
-    };
-
-export type QualityException = {
-  readonly id: string;
-  readonly checkId: string;
-  readonly scope: QualityExceptionScope;
-  readonly reason: string;
 };
 
 export type QualityDiagnosticHandling =
@@ -728,6 +705,7 @@ export type QualityRunResult<
   readonly dependencies: unknown;
   readonly relationships: readonly QualityRelationship[];
   readonly exceptions: readonly QualityException[];
+  readonly exceptionApplicability: readonly QualityExceptionApplicability[];
   readonly status: QualityCheckStatus;
   readonly diagnostics: readonly QualityDiagnostic<TObject>[];
   readonly checks: readonly QualityCheckResult<TObject>[];
@@ -762,7 +740,9 @@ export async function runQualityChecks<
       dependencies: request.dependencies,
       relationships: request.relationships ?? [],
     });
-    const exceptions = snapshotQualityData(request.exceptions ?? []);
+    const exceptionInput = request.exceptions ?? [];
+    validateQualityExceptions(exceptionInput);
+    const exceptions = snapshotQualityData(exceptionInput);
     const preparedChecks: {
       readonly id: string;
       readonly prepared: PreparedQualityCheck<
@@ -865,18 +845,10 @@ export async function runQualityChecks<
 
         const stableOutcome = snapshotQualityData(outcome);
         const findings = stableOutcome.diagnostics;
-        diagnostics.push(
-          ...findings.map((diagnostic) => ({
-            ...diagnostic,
-            checkId: id,
-            executionId,
-            handling: handlingFor(id, diagnostic, exceptions),
-          })),
-        );
         issues.push(...stableOutcome.issues);
         statuses.push(stableOutcome.status);
         addCoverage(coverage, stableOutcome.coverage);
-        const execution: QualityCheckExecution = {
+        const executionWithoutFingerprint: QualityCheckExecution = {
           executionId,
           candidateIndex,
           checkId: id,
@@ -884,10 +856,18 @@ export async function runQualityChecks<
           language: candidate.language,
           status: stableOutcome.status,
         };
-        executions.push(
+        const execution: QualityCheckExecution =
           fingerprint === undefined
-            ? execution
-            : { ...execution, ...fingerprint },
+            ? executionWithoutFingerprint
+            : { ...executionWithoutFingerprint, ...fingerprint };
+        executions.push(execution);
+        diagnostics.push(
+          ...findings.map((diagnostic) => ({
+            ...diagnostic,
+            checkId: id,
+            executionId,
+            handling: handlingFor(execution, exceptions),
+          })),
         );
       }
 
@@ -907,6 +887,10 @@ export async function runQualityChecks<
       version: facts.version,
       ...boundRequest,
       exceptions,
+      exceptionApplicability: evaluateQualityExceptionApplicability(
+        exceptions,
+        results.flatMap(({ executions }) => executions),
+      ),
       factCoverage: snapshotQualityData({
         source: facts.source.read,
         translations: facts.translations.reads,
@@ -970,14 +954,11 @@ function fingerprintJson(value: JsonValue): string {
 }
 
 function handlingFor(
-  checkId: string,
-  diagnostic: QualityFinding,
+  execution: QualityCheckExecution,
   exceptions: readonly QualityException[],
 ): QualityDiagnosticHandling {
-  const exception = exceptions.find(
-    (candidate) =>
-      candidate.checkId === checkId &&
-      exceptionScopeMatches(candidate.scope, diagnostic),
+  const exception = exceptions.find((candidate) =>
+    qualityExceptionMatchesExecution(candidate, execution),
   );
   return exception === undefined
     ? { status: "active" }
@@ -986,25 +967,6 @@ function handlingFor(
         exceptionId: exception.id,
         reason: exception.reason,
       };
-}
-
-function exceptionScopeMatches(
-  scope: QualityExceptionScope,
-  diagnostic: QualityFinding,
-): boolean {
-  const objectMatches =
-    scope.object === undefined ||
-    (scope.object.kind === diagnostic.object.kind &&
-      scope.object.key === diagnostic.object.key &&
-      (scope.object.language === undefined ||
-        scope.object.language === diagnostic.object.language));
-  const locationMatches =
-    scope.location === undefined ||
-    (scope.location.language === diagnostic.location.language &&
-      isDeepStrictEqual(scope.location.range, diagnostic.location.range) &&
-      (scope.location.key === undefined ||
-        scope.location.key === diagnostic.location.key));
-  return objectMatches && locationMatches;
 }
 
 function aggregateStatus(

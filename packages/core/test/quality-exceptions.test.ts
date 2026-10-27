@@ -8,7 +8,7 @@ import {
   validateQualityException,
   validateQualityExceptionFile,
   validateQualityExceptions,
-} from "../src/quality-exceptions.ts";
+} from "../src/index.ts";
 
 const execution = {
   executionId: 4,

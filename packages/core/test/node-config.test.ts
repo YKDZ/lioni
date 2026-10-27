@@ -18,6 +18,7 @@ void describe("动态 Node 配置契约", () => {
     const unboundPath = path.join(directory, "unbound.config.mjs");
     const invalidPath = path.join(directory, "invalid.config.mjs");
     const deferredPath = path.join(directory, "deferred.config.mjs");
+    const customPath = path.join(directory, "custom.config.mjs");
     const coreUrl = pathToFileURL(
       fileURLToPath(new URL("../src/index.ts", import.meta.url)),
     ).href;
@@ -37,6 +38,45 @@ void describe("动态 Node 配置契约", () => {
         deferredPath,
         `export default { source: { schema: { "~standard": { version: 1, vendor: "deferred", validate: (value) => ({ value }) } }, read: () => ({ scopes: [] }) }, keyOf: () => "unused", translations: {} };\n`,
       );
+      const defaultException = {
+        id: "from-default-file",
+        reason: "来自默认 YAML 文件。",
+        checkId: "example/check",
+        sourceKey: "save",
+        language: "fr",
+        inputFingerprint: "sha256:input",
+        fingerprintSummary: {
+          version: "1",
+          configurationFingerprint: "sha256:configuration",
+          inputFingerprint: "sha256:basis",
+        },
+      };
+      await writeFile(
+        path.join(directory, "lioni.exceptions.yaml"),
+        [
+          "format: lioni.qa-exceptions/v1",
+          "exceptions:",
+          "  - id: from-default-file",
+          "    reason: 来自默认 YAML 文件。",
+          "    checkId: example/check",
+          "    sourceKey: save",
+          "    language: fr",
+          "    inputFingerprint: sha256:input",
+          '    fingerprintSummary: { version: "1", configurationFingerprint: sha256:configuration, inputFingerprint: sha256:basis }',
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const customException = {
+        ...defaultException,
+        id: "from-custom-store",
+        reason: "来自显式自定义存储。",
+      };
+      await writeFile(
+        customPath,
+        `import { defineConfig } from ${JSON.stringify(hostCoreUrl)};\nexport default defineConfig({\n  source: { schema: { "~standard": { version: 1, vendor: "custom-store", validate: (value) => ({ value }) } }, read: () => ({ scopes: [] }) },\n  keyOf: () => "unused",\n  qualityExceptionStore: { load: async () => [${JSON.stringify(customException)}], upsert: async () => {} }\n});\n`,
+        "utf8",
+      );
 
       const loaded = await loadConfig(configPath);
       const observed = await loaded.use(async (config) => {
@@ -48,6 +88,15 @@ void describe("动态 Node 配置契约", () => {
       });
 
       assert.deepStrictEqual(observed, { key: "18", source: "Save" });
+      const defaultExceptions = await loaded.use((config) =>
+        config.qualityExceptionStore?.load(),
+      );
+      assert.deepEqual(defaultExceptions, [defaultException]);
+      const custom = await loadConfig(customPath);
+      const customExceptions = await custom.use((config) =>
+        config.qualityExceptionStore?.load(),
+      );
+      assert.deepEqual(customExceptions, [customException]);
       const plain = await loadConfig(unboundPath);
       const plainFacts = await plain.use(readSourceFacts);
       assert.equal(plainFacts.units.length, 0);

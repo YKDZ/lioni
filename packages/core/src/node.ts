@@ -14,6 +14,7 @@ import {
   type FrameworkConfig,
   type TranslationUnitInput,
 } from "./index.ts";
+import { createDefaultQualityExceptionStore } from "./node-quality-exceptions.ts";
 import { validateUpdatePlan, type UpdatePlanStore } from "./plans.ts";
 import type { JsonValue } from "./semantic-edits.ts";
 import { StandardSchemaContractError } from "./standard-schema.ts";
@@ -40,14 +41,23 @@ export type LoadedConfig = {
 
 /** 从 Node.js 配置模块加载并验证默认导出的宿主配置。 */
 export async function loadConfig(configPath: string): Promise<LoadedConfig> {
-  const configUrl = pathToFileURL(path.resolve(process.cwd(), configPath));
+  const absoluteConfigPath = path.resolve(process.cwd(), configPath);
+  const configUrl = pathToFileURL(absoluteConfigPath);
   const configModule = (await import(configUrl.href)) as {
     readonly default?: unknown;
   };
   if (configModule.default === undefined)
     throw new TypeError("宿主配置必须默认导出配置对象。");
-  validateFrameworkConfig(configModule.default);
-  const config = configModule.default as RuntimeFrameworkConfig;
+  const loadedConfig = configModule.default as RuntimeFrameworkConfig;
+  validateFrameworkConfig(loadedConfig);
+  const config =
+    loadedConfig.qualityExceptionStore === undefined
+      ? {
+          ...loadedConfig,
+          qualityExceptionStore:
+            createDefaultQualityExceptionStore(absoluteConfigPath),
+        }
+      : loadedConfig;
   return { use: (consumer) => consumer(config) };
 }
 
