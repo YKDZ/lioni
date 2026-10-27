@@ -11,9 +11,10 @@ import type {
   TranslationReadFact,
   TranslationUnitInput,
 } from "./index.ts";
-import type {
-  CacheableQualityCheckOutcome,
-  QualityCheckResultCache,
+import {
+  isCacheableQualityCheckOutcome,
+  type CacheableQualityCheckOutcome,
+  type QualityCheckResultCache,
 } from "./quality-cache.ts";
 import {
   evaluateQualityExceptionApplicability,
@@ -1103,35 +1104,6 @@ async function writeCachedQualityOutcome(
   } catch {
     // 缓存写入失败只会增加后续检查成本。
   }
-}
-
-function isCacheableQualityCheckOutcome(
-  value: unknown,
-): value is CacheableQualityCheckOutcome {
-  if (typeof value !== "object" || value === null || Array.isArray(value))
-    return false;
-  const outcome = value as Partial<QualityCheckOutcome>;
-  if (
-    (outcome.status !== "complete" && outcome.status !== "not-applicable") ||
-    !Array.isArray(outcome.diagnostics) ||
-    !Array.isArray(outcome.issues) ||
-    typeof outcome.coverage !== "object" ||
-    outcome.coverage === null ||
-    Array.isArray(outcome.coverage)
-  )
-    return false;
-  return [
-    "selected",
-    "evaluated",
-    "notApplicable",
-    "incomplete",
-    "failed",
-  ].every((field) => {
-    const count = outcome.coverage?.[field as keyof QualityCoverage];
-    return (
-      typeof count === "number" && Number.isSafeInteger(count) && count >= 0
-    );
-  });
 }
 
 function requiredDefaultComponent(
