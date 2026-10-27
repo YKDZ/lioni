@@ -1,35 +1,31 @@
 import type {
-  Awaitable,
-  QualityCheckInput,
   QualityCheckOutcome,
   QualityCheckProjectionInput,
-  QualityCheckRuleInput,
-  QualityCheckSelection,
   QualityEvidence,
-  QualityLocation,
+  QualityIssue,
   QualityObject,
-  QualitySubject,
-  SourceUnitFact,
   StandardSchemaV1,
   TranslationUnitInput,
 } from "@lioni/core";
 import { bindQualityCheck } from "@lioni/core";
-import type { TextRange } from "@lioni/text-analysis";
+import type { MemoScope } from "@lioni/memo";
 
+import { memoizedVueI18nMessage } from "./message-memo.ts";
 import {
-  parseVueI18nMessage,
-  VUE_I18N_MESSAGE_COMPILER_VERSION,
-} from "./vue-i18n-messages.ts";
+  memoizedVueI18nProjection,
+  vueI18nMessageProjectionSchema,
+} from "./quality-projection.ts";
+import type {
+  VueI18nMessageProjection,
+  VueI18nPolicy,
+  VueI18nProjector,
+} from "./quality-types.ts";
 import type { VueI18nMessage } from "./vue-i18n-messages.ts";
+import { VUE_I18N_MESSAGE_COMPILER_VERSION } from "./vue-i18n-messages.ts";
 
 type Configuration = {
   readonly compilerVersion: typeof VUE_I18N_MESSAGE_COMPILER_VERSION;
   readonly comparison: "branch-variable-count-patterns-v1";
-};
-
-type Input = {
-  readonly source: string;
-  readonly target: string;
 };
 
 type VariableCount = {
@@ -42,47 +38,16 @@ type VariablePattern = {
   readonly variables: readonly VariableCount[];
 };
 
-export type VueI18nVariableCorrespondenceSubject<
-  TSelectedUnit extends TranslationUnitInput,
-  TContent,
-> = {
-  readonly sourceUnit: SourceUnitFact<TSelectedUnit>;
-  readonly sourceKey: string;
-  readonly language: string;
-  readonly content: TContent;
-};
-
 export type VueI18nVariableCorrespondenceCheckerOptions<
   TUnit extends TranslationUnitInput,
   TTranslation,
-  TSelectedUnit extends TUnit,
-  TContent,
-  TBody = unknown,
+  TBody,
   TUnavailable = never,
 > = {
-  /** 宿主选择、正文投影和位置映射的版本。 */
+  readonly id?: string;
   readonly hostVersion: string;
-  readonly select: (
-    input: QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
-  ) => Awaitable<
-    QualityCheckSelection<
-      VueI18nVariableCorrespondenceSubject<TSelectedUnit, TContent>
-    >
-  >;
-  readonly sourceText: (unit: TSelectedUnit) => unknown;
-  readonly targetText: (content: TContent) => unknown;
-  readonly sourceLocation?: (
-    unit: TSelectedUnit,
-    subject: QualitySubject,
-    range: TextRange,
-    defaultLocation: QualityLocation,
-  ) => QualityLocation;
-  readonly targetLocation?: (
-    translation: TTranslation | undefined,
-    subject: QualitySubject,
-    range: TextRange,
-    defaultLocation: QualityLocation,
-  ) => QualityLocation;
+  readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
+  readonly policies?: ReadonlyMap<string, VueI18nPolicy>;
 };
 
 const configurationSchema: StandardSchemaV1<Configuration, Configuration> = {
@@ -104,20 +69,6 @@ const configurationSchema: StandardSchemaV1<Configuration, Configuration> = {
   },
 };
 
-const inputSchema: StandardSchemaV1<Input, Input> = {
-  "~standard": {
-    version: 1,
-    vendor: "lioni-vue-i18n-variable-checker",
-    validate(value) {
-      return isRecord(value) &&
-        typeof value.source === "string" &&
-        typeof value.target === "string"
-        ? { value: { source: value.source, target: value.target } }
-        : { issues: [{ message: "变量对应检查输入必须包含原文和译文正文。" }] };
-    },
-  },
-};
-
 const configuration: Configuration = {
   compilerVersion: VUE_I18N_MESSAGE_COMPILER_VERSION,
   comparison: "branch-variable-count-patterns-v1",
@@ -127,37 +78,58 @@ const configuration: Configuration = {
 export function createVueI18nVariableCorrespondenceChecker<
   TUnit extends TranslationUnitInput,
   TTranslation,
-  TSelectedUnit extends TUnit,
-  TContent,
-  TBody = unknown,
+  TBody,
   TUnavailable = never,
 >(
   options: VueI18nVariableCorrespondenceCheckerOptions<
     TUnit,
     TTranslation,
-    TSelectedUnit,
-    TContent,
     TBody,
     TUnavailable
   >,
 ) {
-  type Subject = VueI18nVariableCorrespondenceSubject<TSelectedUnit, TContent>;
+  type Subject = VueI18nMessageProjection;
   return bindQualityCheck<
     TUnit,
     TTranslation,
     typeof configurationSchema,
-    typeof inputSchema,
+    typeof vueI18nMessageProjectionSchema,
     Subject,
     QualityObject,
     TBody,
     TUnavailable
   >({
-    id: "vue-i18n/variable-correspondence",
+    id: options.id ?? "vue-i18n/variable-correspondence",
     version: `checks.vue-i18n/variable-correspondence/v1+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}+${options.hostVersion}`,
     configurationSchema,
     configuration,
-    inputSchema,
-    select: options.select,
+    inputSchema: vueI18nMessageProjectionSchema,
+    select: async (input) => {
+      if (
+        options.policies !== undefined &&
+        !options.policies.has(input.candidate.language)
+      )
+        return { status: "not-applicable" };
+      const projection = await memoizedVueI18nProjection(
+        input,
+        options.project,
+      );
+      if (projection.target.status === "missing")
+        return { status: "not-applicable" };
+      if (projection.target.status === "unavailable")
+        return incompleteSelection(
+          "candidateBodyUnavailable",
+          "目标消息正文不可用，Vue I18n 检查未执行。",
+        );
+      if (projection.source.status === "absent")
+        return { status: "not-applicable" };
+      if (projection.source.status === "unavailable")
+        return incompleteSelection(
+          "sourceUnavailable",
+          "原文正文不可用，无法检查变量对应。",
+        );
+      return { status: "selected", subject: projection };
+    },
     project: (
       input: QualityCheckProjectionInput<
         TUnit,
@@ -167,148 +139,82 @@ export function createVueI18nVariableCorrespondenceChecker<
         TBody,
         TUnavailable
       >,
-    ) => {
-      if (input.subject.sourceUnit.bodyAvailability !== "available")
-        return {
-          status: "incomplete",
-          issue: {
-            code: "sourceUnavailable",
-            message: "原文正文不可用，无法检查变量对应。",
-          },
-        };
-      const source = options.sourceText(input.subject.sourceUnit.unit);
-      const target = options.targetText(input.subject.content);
-      if (typeof source !== "string" || typeof target !== "string")
-        return {
-          status: "incomplete",
-          issue: {
-            code: "textUnavailable",
-            message: "无法取得变量对应所需的原文或译文正文。",
-          },
-        };
-      return { status: "ready", value: { source, target } };
-    },
-    check: (
-      input: QualityCheckRuleInput<
-        TUnit,
-        TTranslation,
-        Configuration,
-        Subject,
-        Input,
-        TBody,
-        TUnavailable
-      >,
-    ) => {
-      const subject = {
-        key: input.subject.sourceKey,
-        language: input.subject.language,
-      };
-      const source = parseVueI18nMessage(input.projected.source);
-      const target = parseVueI18nMessage(input.projected.target);
-      const sourceRange = fullRange(input.projected.source);
-      const targetRange = fullRange(input.projected.target);
-      const sourceDefaultLocation: QualityLocation = {
-        language: null,
-        range: sourceRange,
-        key: subject.key,
-      };
-      const sourceLocation =
-        options.sourceLocation?.(
-          input.subject.sourceUnit.unit,
-          subject,
-          sourceRange,
-          sourceDefaultLocation,
-        ) ?? sourceDefaultLocation;
-
-      const association = input.facts.associations.find(
-        ({ sourceKey, language }) =>
-          sourceKey === subject.key && language === subject.language,
-      );
-      const record =
-        association?.status === "matched" &&
-        association.translationIndexes.length === 1
-          ? input.facts.translations.records[association.translationIndexes[0]!]
-          : undefined;
-      const translation =
-        record?.bodyAvailability === "available"
-          ? record.translation
-          : undefined;
-      const targetDefaultLocation: QualityLocation = {
-        language: subject.language,
-        range: record?.range ?? targetRange,
-        span: targetRange,
-        key: subject.key,
-      };
-      const targetLocation =
-        options.targetLocation?.(
-          translation,
-          subject,
-          targetRange,
-          targetDefaultLocation,
-        ) ?? targetDefaultLocation;
-
-      const syntaxIssues = invalidSyntaxIssues(
-        subject,
-        source,
-        target,
-        sourceLocation,
-        targetLocation,
-      );
-      if (syntaxIssues.length > 0) return incompleteOutcome(syntaxIssues);
-
-      const sourcePatterns = variablePatterns(source);
-      const targetPatterns = variablePatterns(target);
-      const sourcePatternKeys = new Set(sourcePatterns.map(({ key }) => key));
-      const targetPatternKeys = new Set(targetPatterns.map(({ key }) => key));
-      const missing = sourcePatterns.filter(
-        ({ key }) => !targetPatternKeys.has(key),
-      );
-      const extra = targetPatterns.filter(
-        ({ key }) => !sourcePatternKeys.has(key),
-      );
-      if (missing.length === 0 && extra.length === 0)
-        return completeOutcome([]);
-
-      const sourceObject: QualityObject = {
-        kind: "source-unit",
-        key: subject.key,
-      };
-      const targetObject: QualityObject = {
-        kind: "translation-unit",
-        key: subject.key,
-        language: subject.language,
-      };
-      const evidence: readonly QualityEvidence[] = [
-        {
-          role: "source-variable-patterns",
-          object: sourceObject,
-          location: sourceLocation,
-          value: { text: input.projected.source, patterns: sourcePatterns },
-        },
-        {
-          role: "target-variable-patterns",
-          object: targetObject,
-          location: targetLocation,
-          value: { text: input.projected.target, patterns: targetPatterns },
-        },
-        {
-          role: "variable-pattern-difference",
-          object: targetObject,
-          location: targetLocation,
-          value: { missing, extra },
-        },
-      ];
-      return completeOutcome([
-        {
-          severity: "error",
-          object: targetObject,
-          location: targetLocation,
-          message: describeDifference(missing, extra),
-          evidence,
-        },
-      ]);
-    },
+    ) => ({ status: "ready", value: input.subject }),
+    check: (input) => compareVariables(input.projected, input.memo),
   });
+}
+
+function compareVariables(
+  projection: VueI18nMessageProjection,
+  memo: MemoScope,
+): QualityCheckOutcome {
+  if (
+    projection.source.status !== "available" ||
+    projection.target.status !== "available"
+  )
+    return incompleteOutcome([
+      issue(
+        "messageBodyUnavailable",
+        "变量对应检查所需的原文或译文正文不可用。",
+        projection,
+      ),
+    ]);
+
+  const source = memoizedVueI18nMessage(projection.source.text, memo);
+  const target = memoizedVueI18nMessage(projection.target.text, memo);
+  const syntaxIssues = invalidSyntaxIssues(projection, source, target);
+  if (syntaxIssues.length > 0) return incompleteOutcome(syntaxIssues);
+
+  const sourcePatterns = variablePatterns(source);
+  const targetPatterns = variablePatterns(target);
+  const sourcePatternKeys = new Set(sourcePatterns.map(({ key }) => key));
+  const targetPatternKeys = new Set(targetPatterns.map(({ key }) => key));
+  const missing = sourcePatterns.filter(
+    ({ key }) => !targetPatternKeys.has(key),
+  );
+  const extra = targetPatterns.filter(({ key }) => !sourcePatternKeys.has(key));
+  if (missing.length === 0 && extra.length === 0) return completeOutcome([]);
+
+  const sourceObject: QualityObject = {
+    kind: "source-unit",
+    key: projection.key,
+  };
+  const targetObject: QualityObject = {
+    kind: "translation-unit",
+    key: projection.key,
+    language: projection.language,
+  };
+  const sourceLocation = { ...projection.locations.source };
+  const targetLocation = { ...projection.locations.target };
+  const evidence: readonly QualityEvidence[] = [
+    {
+      role: "source-variable-patterns",
+      object: sourceObject,
+      location: sourceLocation,
+      value: { text: projection.source.text, patterns: sourcePatterns },
+    },
+    {
+      role: "target-variable-patterns",
+      object: targetObject,
+      location: targetLocation,
+      value: { text: projection.target.text, patterns: targetPatterns },
+    },
+    {
+      role: "variable-pattern-difference",
+      object: targetObject,
+      location: targetLocation,
+      value: { missing, extra },
+    },
+  ];
+  return completeOutcome([
+    {
+      severity: "error",
+      object: targetObject,
+      location: targetLocation,
+      message: describeDifference(missing, extra),
+      evidence,
+    },
+  ]);
 }
 
 function variablePatterns(message: VueI18nMessage): readonly VariablePattern[] {
@@ -329,19 +235,17 @@ function variablePatterns(message: VueI18nMessage): readonly VariablePattern[] {
 }
 
 function invalidSyntaxIssues(
-  subject: QualitySubject,
+  projection: VueI18nMessageProjection,
   source: VueI18nMessage,
   target: VueI18nMessage,
-  sourceLocation: QualityLocation,
-  targetLocation: QualityLocation,
 ) {
-  const issues = [];
+  const issues: QualityIssue[] = [];
   if (source.errors.length > 0)
     issues.push({
       code: "sourceMessageSyntaxInvalid",
       message: "原文语法无效，变量对应检查未执行。",
-      object: { kind: "source-unit", key: subject.key },
-      location: sourceLocation,
+      object: { kind: "source-unit", key: projection.key },
+      location: projection.locations.source,
     });
   if (target.errors.length > 0)
     issues.push({
@@ -349,10 +253,10 @@ function invalidSyntaxIssues(
       message: "译文语法无效，变量对应检查未执行。",
       object: {
         kind: "translation-unit",
-        key: subject.key,
-        language: subject.language,
+        key: projection.key,
+        language: projection.language,
       },
-      location: targetLocation,
+      location: projection.locations.target,
     });
   return issues;
 }
@@ -377,10 +281,6 @@ function describePattern(pattern: VariablePattern): string {
     : pattern.variables
         .map(({ identity, count }) => `${identity} × ${count}`)
         .join("、");
-}
-
-function fullRange(text: string): TextRange {
-  return { start: 0, end: text.length };
 }
 
 function completeOutcome(
@@ -415,6 +315,27 @@ function incompleteOutcome(
       failed: 0,
     },
   };
+}
+
+function issue(
+  code: string,
+  message: string,
+  projection: VueI18nMessageProjection,
+): QualityIssue {
+  return {
+    code,
+    message,
+    object: {
+      kind: "translation-unit",
+      key: projection.key,
+      language: projection.language,
+    },
+    location: projection.locations.target,
+  };
+}
+
+function incompleteSelection(code: string, message: string) {
+  return { status: "incomplete" as const, issue: { code, message } };
 }
 
 function compareText(left: string, right: string): number {

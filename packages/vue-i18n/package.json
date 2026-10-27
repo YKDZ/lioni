@@ -2,7 +2,9 @@
   "name": "@lioni/vue-i18n",
   "version": "0.0.0",
   "private": true,
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "type": "module",
   "imports": {
     "#/*": {
@@ -44,6 +46,7 @@
     "oxfmt": "catalog:",
     "oxlint": "catalog:",
     "oxlint-tsgolint": "catalog:",
+    "typescript": "npm:typescript@^7.0.2",
     "typescript-7": "catalog:"
   },
   "engines": {

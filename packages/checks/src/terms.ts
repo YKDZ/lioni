@@ -28,6 +28,7 @@ export type TermCheckerOptions<
   TBody = unknown,
   TUnavailable = never,
 > = {
+  readonly id?: string;
   /** 宿主提供的术语资料、选择、投影和位置映射的版本。 */
   readonly hostVersion: string;
   readonly terms: CompiledTerms;
@@ -88,7 +89,7 @@ export function createTermChecker<
     TBody,
     TUnavailable
   >({
-    id: `terminology/${rule.id}`,
+    id: options.id ?? `terminology/${rule.id}`,
     version: `checks.terminology-rule/v1+${options.hostVersion}`,
     configurationSchema: termRulesConfigurationSchema,
     configuration: { rules: [rule.id] },

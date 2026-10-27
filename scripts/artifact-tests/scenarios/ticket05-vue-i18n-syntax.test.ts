@@ -14,6 +14,7 @@ testArtifactConsumer(
       "@lioni/memo",
       "@lioni/terminology",
       "@lioni/text-analysis",
+      "@lioni/vue-i18n",
     ],
     fixtures: new URL("../fixtures/ticket05-vue-i18n-syntax/", import.meta.url),
   },

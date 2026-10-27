@@ -112,7 +112,7 @@ void test("配置不执行计算，同次 QA 共享范围，运行结束关闭�
   assert.equal(calls, 2);
 });
 
-void test("quality.prepare 每次运行调用一次，外部候选只覆盖准备结果中的候选", async () => {
+void test("quality.prepare 可只提供依赖并沿用默认候选，显式空候选仍为空", async () => {
   const source = { source: "Save" };
   const translation = { id: "save", text: "保存" };
   let prepareCalls = 0;
@@ -176,9 +176,7 @@ void test("quality.prepare 每次运行调用一次，外部候选只覆盖准�
             }),
           ],
           request: {
-            candidates: [
-              { sourceKey: "save", language: "zh-CN", content: "准备候选" },
-            ],
+            ...(prepareCalls === 3 ? { candidates: [] } : {}),
             dependencies: { run: prepareCalls },
           },
         };
@@ -191,7 +189,7 @@ void test("quality.prepare 每次运行调用一次，外部候选只覆盖准�
   assert.equal(first.status, "complete");
   assert.equal(prepareCalls, 1);
   assert.deepEqual(first.candidates, [
-    { sourceKey: "save", language: "zh-CN", content: "准备候选" },
+    { sourceKey: "save", language: "zh-CN", content: "保存" },
   ]);
   assert.deepEqual(first.dependencies, { run: 1 });
 
@@ -203,8 +201,12 @@ void test("quality.prepare 每次运行调用一次，外部候选只覆盖准�
     { sourceKey: "save", language: "zh-CN", content: "外部候选" },
   ]);
   assert.deepEqual(second.dependencies, { run: 2 });
-  assert.deepEqual(observed, ["准备候选", "外部候选"]);
-  assert.deepEqual(preparedSourceKeys, [["save"], ["save"]]);
+  const third = await analyzeQuality(config);
+  assert.equal(prepareCalls, 3);
+  assert.deepEqual(third.candidates, []);
+  assert.deepEqual(third.dependencies, { run: 3 });
+  assert.deepEqual(observed, ["保存", "外部候选"]);
+  assert.deepEqual(preparedSourceKeys, [["save"], ["save"], ["save"]]);
 });
 
 void test("调用方范围可以跨运行复用，core 不取得关闭权", async () => {

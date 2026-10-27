@@ -1,12 +1,17 @@
+import type { MessageFamilyReferenceProjection } from "@lioni/checks";
 import type {
   ActualTranslationFact,
+  JsonValue,
   QualityCheckInput,
+  QualityCheckRequest,
   QualityLocation,
+  QualityPreparation,
+  SemanticEditCandidate,
   SourceUnitFact,
   TranslationAssociationFact,
   TranslationUnitInput,
 } from "@lioni/core";
-import type { MessageFamilyReferenceProjection } from "@lioni/checks";
+import type { TermbaseData } from "@lioni/terminology";
 import type { QuantityOptions } from "@lioni/text-analysis";
 
 import type { VueI18nUsageIndex } from "./usage-types.ts";
@@ -38,7 +43,7 @@ export type VueI18nProjectionInput<
   TUnit extends TranslationUnitInput,
   TTranslation,
   TBody,
-  TUnavailable,
+  TUnavailable = never,
 > = Omit<
   QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
   "configuration"
@@ -48,7 +53,7 @@ export type VueI18nProjector<
   TUnit extends TranslationUnitInput,
   TTranslation,
   TBody,
-  TUnavailable,
+  TUnavailable = never,
 > = (
   input: VueI18nProjectionInput<TUnit, TTranslation, TBody, TUnavailable>,
 ) => VueI18nMessageProjection;
@@ -76,11 +81,11 @@ export type VueI18nPolicy = {
   readonly resources: {
     readonly source: {
       readonly messages: Readonly<Record<string, string>>;
-      readonly range: unknown;
+      readonly range: JsonValue;
     };
     readonly target: {
       readonly messages: Readonly<Record<string, string>>;
-      readonly range: unknown;
+      readonly range: JsonValue;
     };
   };
   readonly quantities?: {
@@ -111,18 +116,18 @@ export type VueI18nCheckName =
 export type VueI18nCheckIdentity = {
   readonly id: string;
   /** 宿主资料投影或业务声明的版本；Vue 算法与解析器版本由包加入。 */
-  readonly hostVersion?: string;
+  readonly hostVersion: string;
 };
 
-export type VueI18nCheckIdentities = Partial<
-  Readonly<Record<VueI18nCheckName, VueI18nCheckIdentity>>
+export type VueI18nCheckIdentities = Readonly<
+  Record<VueI18nCheckName, VueI18nCheckIdentity>
 >;
 
 export type VueI18nMessageReference<
   TUnit extends TranslationUnitInput,
   TTranslation,
   TBody,
-  TUnavailable,
+  TUnavailable = never,
 > = MessageFamilyReferenceProjection<
   TUnit,
   TTranslation,
@@ -131,21 +136,20 @@ export type VueI18nMessageReference<
 > & {
   readonly sourceUnit: SourceUnitFact<TUnit>;
   readonly association: TranslationAssociationFact;
-  readonly translation: ActualTranslationFact<TTranslation, TBody, TUnavailable>;
+  readonly translation: ActualTranslationFact<
+    TTranslation,
+    TBody,
+    TUnavailable
+  >;
 };
 
 export type VueI18nReferenceProjector<
   TUnit extends TranslationUnitInput,
   TTranslation,
   TBody,
-  TUnavailable,
+  TUnavailable = never,
 > = (
-  reference: VueI18nMessageReference<
-    TUnit,
-    TTranslation,
-    TBody,
-    TUnavailable
-  >,
+  reference: VueI18nMessageReference<TUnit, TTranslation, TBody, TUnavailable>,
 ) => VueI18nMessageProjection;
 
 export type VueI18nQualityOptions<
@@ -162,7 +166,33 @@ export type VueI18nQualityOptions<
     TUnavailable
   >;
   readonly policies: readonly VueI18nPolicy[];
-  readonly terms: import("@lioni/terminology").TermbaseData;
+  readonly terms: TermbaseData;
   readonly usages: VueI18nUsageIndex;
-  readonly identities?: VueI18nCheckIdentities;
+  readonly identities: VueI18nCheckIdentities;
+};
+
+export type VueI18nQualityDependencies = {
+  readonly policies: readonly VueI18nPolicy[];
+  readonly terms: TermbaseData;
+  readonly usages: VueI18nUsageIndex;
+};
+
+export type VueI18nQualityPreparation<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable = never,
+> = Omit<
+  QualityPreparation<TUnit, TTranslation, TBody, TUnavailable>,
+  "request"
+> & {
+  readonly request: Omit<
+    QualityCheckRequest<TBody>,
+    "exceptions" | "candidates" | "dependencies"
+  > & {
+    readonly candidates?: readonly SemanticEditCandidate<TBody>[];
+    readonly dependencies: {
+      readonly vueI18n: VueI18nQualityDependencies;
+    };
+  };
 };

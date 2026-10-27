@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { StandardSchemaContractError } from "@lioni/core";
 import type { TermbaseData } from "@lioni/terminology";
 import { extractVueI18nUsages } from "@lioni/vue-i18n";
 
@@ -177,7 +178,15 @@ void test("非法语法使变量比较未完成，缺译、不可用和真实空
     "incomplete",
   );
   assert.equal(
+    check(targetUnavailable, checkIds.sourceSyntax)?.status,
+    "incomplete",
+  );
+  assert.equal(
     check(targetMissing, checkIds.targetSyntax)?.status,
+    "not-applicable",
+  );
+  assert.equal(
+    check(targetMissing, checkIds.sourceSyntax)?.status,
     "not-applicable",
   );
   assert.equal(
@@ -187,6 +196,8 @@ void test("非法语法使变量比较未完成，缺译、不可用和真实空
   assert.deepEqual(findings(targetMissing, checkIds.targetSyntax), []);
   assert.equal(check(empty, checkIds.targetSyntax)?.status, "complete");
   assert.equal(findings(empty, checkIds.variableCorrespondence).length, 1);
+  const emptySource = await fixture.run([candidate("absent", "")]);
+  assert.equal(check(emptySource, checkIds.sourceSyntax)?.status, "complete");
   assert.equal(
     check(targetOnly, checkIds.sourceSyntax)?.status,
     "not-applicable",
@@ -586,6 +597,26 @@ void test("公开准备结果将 Vue 策略、术语和调用资料作为嵌套 
     vueI18n: { policies: [policy], terms, usages },
   });
   assert.deepEqual(findings(result, checkIds.callArguments), []);
+});
+
+void test("质量规则依赖不是 JSON 时在准备阶段拒绝", async () => {
+  const policy = policyFor({ sourceMessages: { label: "Hello" } });
+  const metadata: Record<string, unknown> = {};
+  metadata.self = metadata;
+  const fixture = createQualityFixture({
+    policies: [policy],
+    terms: {
+      concepts: [],
+      metadata: metadata as Exclude<TermbaseData["metadata"], undefined>,
+    },
+  });
+
+  await assert.rejects(
+    fixture.run([candidate("label", "你好")]),
+    (error: unknown) =>
+      error instanceof StandardSchemaContractError &&
+      error.kind === "invalid-json",
+  );
 });
 
 void test("调用点参数变化会改变对应执行的输入指纹", async () => {
