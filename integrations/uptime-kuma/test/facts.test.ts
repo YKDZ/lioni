@@ -7,11 +7,8 @@ import { pathToFileURL } from "node:url";
 
 import { readFacts, defineConfig } from "@lioni/core";
 
-import {
-  createKumaAdapter,
-  loadKumaCatalog,
-  loadKumaQaProject,
-} from "../adapter.ts";
+import { createKumaAdapter, loadKumaCatalog } from "../src/adapter.ts";
+import { loadKumaQaProject } from "../src/quality.ts";
 
 void test("每次读取当前源译资源且无需 QA 术语与 usage 文件", async () => {
   const rootDirectory = await mkdtemp(path.join(tmpdir(), "kuma-facts-"));
@@ -79,7 +76,7 @@ void test("QA 项目保留 Kuma facts 中的自有特殊键且缺译仍保持缺
       {
         root,
         catalog: await loadKumaCatalog(
-          new URL("../../../src/lang/lioni/catalog.json", import.meta.url),
+          new URL("../overlay/src/lang/lioni/catalog.json", import.meta.url),
         ),
       },
       facts,
@@ -89,7 +86,7 @@ void test("QA 项目保留 Kuma facts 中的自有特殊键且缺译仍保持缺
       (fact) => fact.translation.key === "__proto__",
     );
     assert.equal(specialFact?.content?.text, "你好");
-    const target = project.policies[0]!.target;
+    const target = project.policies[0]!.resources.target.messages;
     assert.equal(Object.hasOwn(target, "__proto__"), true);
     assert.equal(target["__proto__"], "你好");
     assert.equal(Object.hasOwn(target, "missing"), false);

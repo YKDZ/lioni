@@ -13,6 +13,8 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { test } from "node:test";
 
+import { uptimeKumaOverlay } from "lioni-uptime-kuma-host/overlay";
+
 import { testArtifactConsumer } from "../support/consumer.ts";
 import type { ConsumerScenario } from "../support/consumer.ts";
 
@@ -24,14 +26,8 @@ const packageNames = [
   "@lioni/memo",
   "@lioni/terminology",
   "@lioni/text-analysis",
+  "@lioni/vue-i18n",
 ] as const;
-const hostDependencies = {
-  "@babel/parser": "7.29.9",
-  "@intlify/message-compiler": "11.2.8",
-  typescript: "5.9.3",
-  "@vue/compiler-dom": "3.4.38",
-  "@vue/compiler-sfc": "3.4.38",
-};
 
 type Artifact = {
   readonly name: string;
@@ -180,19 +176,11 @@ async function writeStringMap(
 const scenarioOptions = {
   name: "固定 Uptime Kuma 使用同批正式 CLI 和 SDK 完成基线、更新及 QA",
   packages: packageNames,
-  additionalDependencies: hostDependencies,
-  fixtures: new URL("../fixtures/uptime-kuma-lioni/", import.meta.url),
   timeoutMs: 15 * 60 * 1000,
 };
 
-const runKumaScenario: ConsumerScenario = async ({
-  root,
-  runCommand,
-  typecheck,
-}) => {
+const runKumaScenario: ConsumerScenario = async ({ root, runCommand }) => {
   const wholeRunStarted = performance.now();
-  const fixtureTypes = await typecheck();
-  assert.equal(fixtureTypes.status, 0);
 
   const source = requiredEnvironment("LIONI_KUMA_SOURCE");
   const sourceHead = await runCommand("git", [
@@ -245,17 +233,27 @@ const runKumaScenario: ConsumerScenario = async ({
 
   const hostQaRoot = path.join(hostRoot, "qa", "lioni");
   await mkdir(hostQaRoot, { recursive: true });
-  await cp(path.join(root, "qa", "lioni"), hostQaRoot, { recursive: true });
+  await cp(uptimeKumaOverlay.runtime, path.join(hostQaRoot, "src"), {
+    recursive: true,
+  });
+  await cp(uptimeKumaOverlay.tests, path.join(hostQaRoot, "test"), {
+    recursive: true,
+  });
   await cp(
-    path.join(root, "lioni.config.ts"),
+    uptimeKumaOverlay.packageManifest,
+    path.join(hostQaRoot, "package.json"),
+  );
+  await cp(uptimeKumaOverlay.tsconfig, path.join(hostQaRoot, "tsconfig.json"));
+  await cp(
+    uptimeKumaOverlay.rootConfig,
     path.join(hostRoot, "lioni.config.ts"),
   );
   await cp(
-    path.join(root, "lioni.zh-CN.config.ts"),
+    uptimeKumaOverlay.chineseConfig,
     path.join(hostRoot, "lioni.zh-CN.config.ts"),
   );
   await cp(
-    path.join(root, "src", "lang", "lioni"),
+    uptimeKumaOverlay.resources,
     path.join(hostRoot, "src", "lang", "lioni"),
     { recursive: true },
   );
@@ -280,17 +278,36 @@ const runKumaScenario: ConsumerScenario = async ({
     await cp(artifact.filename, path.join(artifactDirectory, filename));
     artifactDependencies[artifact.name] = `file:artifacts/${filename}`;
   }
-  const dependencies = { ...artifactDependencies, ...hostDependencies };
+  const hostPackage = JSON.parse(
+    await readFile(path.join(hostQaRoot, "package.json"), "utf8"),
+  ) as Record<string, unknown>;
+  const hostExports = hostPackage.exports as Record<string, unknown>;
+  const declaredHostDependencies = hostPackage.dependencies as Record<
+    string,
+    unknown
+  >;
+  const hostArtifactDependencies: Record<string, string> = {};
+  for (const name of Object.keys(declaredHostDependencies)) {
+    const dependency = artifactDependencies[name];
+    if (typeof dependency !== "string")
+      throw new Error(`宿主直接依赖 ${name} 必须来自本批正式制品。`);
+    hostArtifactDependencies[name] = dependency;
+  }
+  const cliArtifact = artifactDependencies["@lioni/cli"];
+  if (typeof cliArtifact !== "string")
+    throw new Error("Kuma QA 必须通过本批正式制品安装 CLI。");
   await writeFile(
     path.join(hostQaRoot, "package.json"),
     `${JSON.stringify(
       {
-        name: "uptime-kuma-lioni-qa-consumer",
-        private: true,
-        packageManager: "pnpm@12.9.1",
-        type: "module",
-        dependencies,
-        devDependencies: { "@types/node": "24.19.2" },
+        ...hostPackage,
+        exports: { "./config": hostExports["./config"] },
+        scripts: { test: "node --test" },
+        dependencies: hostArtifactDependencies,
+        devDependencies: {
+          "@lioni/cli": cliArtifact,
+          "@types/node": "24.19.2",
+        },
       },
       null,
       2,
@@ -330,6 +347,35 @@ const runKumaScenario: ConsumerScenario = async ({
     "--offline",
     "--frozen-lockfile",
   ]);
+  const rootPackageManifestPath = path.join(hostRoot, "package.json");
+  const rootPackageManifest = JSON.parse(
+    await readFile(rootPackageManifestPath, "utf8"),
+  ) as Record<string, unknown>;
+  const existingDevDependencies = rootPackageManifest.devDependencies;
+  const rootDevDependencies =
+    existingDevDependencies !== null &&
+    typeof existingDevDependencies === "object" &&
+    !Array.isArray(existingDevDependencies)
+      ? (existingDevDependencies as Record<string, unknown>)
+      : {};
+  rootPackageManifest.devDependencies = {
+    ...rootDevDependencies,
+    "lioni-uptime-kuma-host": "link:./qa/lioni",
+  };
+  await writeFile(
+    rootPackageManifestPath,
+    `${JSON.stringify(rootPackageManifest, null, 2)}\n`,
+  );
+  const rootNodeModules = path.join(hostRoot, "node_modules");
+  await mkdir(rootNodeModules, { recursive: true });
+  const packageLink = path.join(rootNodeModules, "lioni-uptime-kuma-host");
+  await symlink(
+    process.platform === "win32"
+      ? hostQaRoot
+      : path.relative(rootNodeModules, hostQaRoot),
+    packageLink,
+    process.platform === "win32" ? "junction" : "dir",
+  );
 
   const tscExecutable = requiredEnvironment("LIONI_TSC_EXECUTABLE");
   const hostTypes = await runCommand(tscExecutable, [
@@ -345,10 +391,8 @@ const runKumaScenario: ConsumerScenario = async ({
     "exec",
     "node",
     "--test",
-    "test/checks.test.ts",
     "test/declarations.test.ts",
     "test/facts.test.ts",
-    "test/quantity-profiles.test.ts",
     "test/writer.test.ts",
   ]);
 
@@ -651,7 +695,7 @@ process.stdout.write(JSON.stringify(result) + "\\n");
     resourceCheck.executions.some(
       ({ inputFingerprint }) => typeof inputFingerprint === "string",
     ),
-    "Kuma lazy checks must preserve the prepared input fingerprint.",
+    "Kuma quality.prepare must preserve the prepared input fingerprint.",
   );
   const independentChecks = new Map(
     quality.checks.map((check) => [check.checkId, check]),
@@ -895,7 +939,7 @@ process.stdout.write(JSON.stringify(result) + "\\n");
       consumer: "固定 Uptime Kuma 副本 / qa/lioni",
       packageManager: "pnpm",
       packages: packageNames,
-      externalHostDependencies: hostDependencies,
+      externalHostDependencies: [],
       artifactSources: "同一正式制品清单中散列已校验的 tgz",
     },
     facts: {

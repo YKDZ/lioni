@@ -7,16 +7,9 @@ import { pathToFileURL } from "node:url";
 
 import { analyzeQuality } from "@lioni/core";
 
-import {
-  defineConfig,
-  loadKumaCatalog,
-  loadKumaQaProject,
-  createKumaAdapter,
-  createKumaAnalysis,
-  createTerminologyChecks,
-} from "../index.ts";
+import { createKumaConfig, loadKumaCatalog } from "../src/config.ts";
 
-void test("修改相邻语言声明即可改变术语政策，元数据不会成为翻译候选", async () => {
+void test("正式质量准备读取当前术语声明并检查 Kuma 资源契约", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "kuma-declarations-"));
   const root = pathToFileURL(directory + path.sep);
   const write = async (filename: string, data: unknown) =>
@@ -30,13 +23,13 @@ void test("修改相邻语言声明即可改变术语政策，元数据不会成
       source: "en",
       targets: ["ja"],
     });
+    await write("src/lang/lioni/en.json", { quantityProfile: "en" });
+    await write("src/lang/lioni/ja.json", { quantityProfile: "ja" });
     await write("src/lang/lioni/messages.json", {
       literals: {},
       scopes: [],
       usageScopes: [],
     });
-    await write("src/lang/lioni/en.json", {});
-    await write("src/lang/lioni/ja.json", {});
     const writeTermbase = (file: string, value: string) =>
       writeFile(new URL(`src/lang/lioni/termbase/${file}`, root), value);
     await writeTermbase("concepts.yaml", "concepts:\n  monitor: {}\n");
@@ -46,21 +39,14 @@ void test("修改相邻语言声明即可改变术语政策，元数据不会成
     );
     const target = (usage: "allowed" | "forbidden") =>
       `concepts:\n  monitor:\n    expressions:\n      - id: ja\n        text: モニター\n        usage: preferred\n      - id: variant\n        text: 表示器\n        usage: ${usage}\n`;
-    const run = async () => {
-      const files = {
-        root,
-        catalog: await loadKumaCatalog(
-          new URL("src/lang/lioni/catalog.json", root),
-        ),
-      };
-      const project = await loadKumaQaProject(files);
-      return analyzeQuality(
-        defineConfig({
-          ...createKumaAdapter(files),
-          qualityChecks: createTerminologyChecks(project, createKumaAnalysis()),
-        }),
-      );
+    const files = {
+      root,
+      catalog: await loadKumaCatalog(
+        new URL("src/lang/lioni/catalog.json", root),
+      ),
     };
+    const config = createKumaConfig(files);
+    const run = () => analyzeQuality(config);
     await writeTermbase("ja.yaml", target("forbidden"));
     const before = await run();
     assert.equal(before.candidates.length, 1);
@@ -78,6 +64,24 @@ void test("修改相邻语言声明即可改变术语政策，元数据不会成
     const after = await run();
     assert.equal(after.status, "complete");
     assert.equal(after.diagnostics.length, 0);
+
+    await write("src/lang/ja.json", {});
+    const missing = await run();
+    assert.ok(
+      missing.diagnostics.some(
+        (diagnostic) =>
+          diagnostic.checkId === "kuma/resource-contract" &&
+          diagnostic.object.code === "missing-translation",
+      ),
+    );
+
+    await write("src/lang/ja.json", { label: "", legacy: "旧键" });
+    const invalid = await run();
+    const resourceCodes = invalid.diagnostics
+      .filter((diagnostic) => diagnostic.checkId === "kuma/resource-contract")
+      .map((diagnostic) => diagnostic.object.code);
+    assert.ok(resourceCodes.includes("empty-translation"));
+    assert.ok(resourceCodes.includes("target-only-key"));
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

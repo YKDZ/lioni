@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { evaluateCompletion, readFacts, runQualityChecks } from "@lioni/core";
+import { analyzeQuality, evaluateCompletion, readFacts } from "@lioni/core";
 
 import aggregateConfig, {
   catalogConfig,
@@ -22,15 +22,7 @@ async function prepare() {
     ["catalog:save", "guide:save"],
   );
 
-  const prepare = aggregateConfig.quality?.prepare;
-  assert.ok(prepare);
-  const prepared = await prepare(facts);
-  assert.ok(prepared.request);
-  const result = await runQualityChecks(
-    facts,
-    prepared.request,
-    prepared.checks,
-  );
+  const result = await analyzeQuality(aggregateConfig);
   assert.equal(result.status, "complete");
   assert.equal(result.candidates.length, 2);
   assert.equal(

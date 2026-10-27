@@ -30,7 +30,8 @@
         "@lioni/core#build",
         "@lioni/memo#build",
         "@lioni/terminology#build",
-        "@lioni/text-analysis#build"
+        "@lioni/text-analysis#build",
+        "@lioni/vue-i18n#build"
       ],
       "outputs": [],
       "tags": ["quality:light"]
@@ -42,7 +43,8 @@
         "@lioni/core#build",
         "@lioni/memo#build",
         "@lioni/terminology#build",
-        "@lioni/text-analysis#build"
+        "@lioni/text-analysis#build",
+        "@lioni/vue-i18n#build"
       ],
       "tags": ["work:repair"]
     },
@@ -53,7 +55,8 @@
         "@lioni/core#build",
         "@lioni/memo#build",
         "@lioni/terminology#build",
-        "@lioni/text-analysis#build"
+        "@lioni/text-analysis#build",
+        "@lioni/vue-i18n#build"
       ],
       "tags": ["quality:light"]
     },
@@ -74,7 +77,8 @@
         "@lioni/core#build",
         "@lioni/memo#build",
         "@lioni/text-analysis#build",
-        "@lioni/terminology#build"
+        "@lioni/terminology#build",
+        "@lioni/vue-i18n#build"
       ],
       "outputs": [],
       "tags": ["quality:heavy"],
