@@ -63,6 +63,7 @@ const contentSchema: StandardSchemaV1<Content, Content> = {
 
 function sourceChecker() {
   return createVueI18nSourceSyntaxChecker<Unit, Translation, Unit, Content>({
+    hostVersion: "checks-test-v1",
     select: (input: QualityCheckInput<Unit, Translation, unknown, Content>) => {
       if (input.sourceUnit === null)
         return {
@@ -89,6 +90,7 @@ function sourceChecker() {
 
 function targetChecker() {
   return createVueI18nTargetSyntaxChecker<Unit, Translation, Content, Content>({
+    hostVersion: "checks-test-v1",
     select: (input) => ({
       status: "selected",
       subject: {

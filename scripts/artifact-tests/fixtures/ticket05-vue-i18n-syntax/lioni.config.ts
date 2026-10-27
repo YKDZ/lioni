@@ -36,6 +36,7 @@ const syntaxChecks: readonly QualityCheckDefinition<
   Content
 >[] = [
   createVueI18nSourceSyntaxChecker<Unit, Translation, Unit, Content>({
+    hostVersion: "artifact-fixture-v1",
     select: (input: QualityCheckInput<Unit, Translation, unknown, Content>) => {
       if (input.sourceUnit === null)
         return {
@@ -59,6 +60,7 @@ const syntaxChecks: readonly QualityCheckDefinition<
     }),
   }),
   createVueI18nTargetSyntaxChecker<Unit, Translation, Content, Content>({
+    hostVersion: "artifact-fixture-v1",
     select: (input) => ({
       status: "selected",
       subject: {
