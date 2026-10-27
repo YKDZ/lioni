@@ -226,6 +226,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 24.19.2
+      lioni-uptime-kuma-host:
+        specifier: link:./integrations/uptime-kuma
+        version: link:integrations/uptime-kuma
       oxfmt:
         specifier: 'catalog:'
         version: 0.71.0
@@ -260,6 +263,34 @@ importers:
       '@lioni/tooling-config':
         specifier: workspace:*
         version: link:../../packages/tooling-config
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.19.2
+      oxfmt:
+        specifier: 'catalog:'
+        version: 0.71.0
+      oxlint:
+        specifier: 'catalog:'
+        version: 1.89.0(oxlint-tsgolint@7.0.2004)
+      oxlint-tsgolint:
+        specifier: 'catalog:'
+        version: 7.0.2004
+      typescript-7:
+        specifier: 'catalog:'
+        version: typescript@7.0.2
+
+  integrations/uptime-kuma:
+    dependencies:
+      '@lioni/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@lioni/terminology':
+        specifier: workspace:*
+        version: link:../../packages/terminology
+      '@lioni/vue-i18n':
+        specifier: workspace:*
+        version: link:../../packages/vue-i18n
+    devDependencies:
       '@types/node':
         specifier: 'catalog:'
         version: 24.19.2
@@ -484,46 +515,6 @@ importers:
       typescript-7:
         specifier: 'catalog:'
         version: typescript@7.0.2
-
-  scripts/artifact-tests/fixtures/uptime-kuma-lioni/qa/lioni:
-    dependencies:
-      '@babel/parser':
-        specifier: 7.29.9
-        version: 7.29.9
-      '@intlify/message-compiler':
-        specifier: 11.2.8
-        version: 11.2.8
-      '@lioni/checks':
-        specifier: workspace:*
-        version: link:../../../../../../packages/checks
-      '@lioni/core':
-        specifier: workspace:*
-        version: link:../../../../../../packages/core
-      '@lioni/terminology':
-        specifier: workspace:*
-        version: link:../../../../../../packages/terminology
-      '@lioni/text-analysis':
-        specifier: workspace:*
-        version: link:../../../../../../packages/text-analysis
-      '@vue/compiler-dom':
-        specifier: 3.4.38
-        version: 3.4.38
-      '@vue/compiler-sfc':
-        specifier: 3.4.38
-        version: 3.4.38
-    devDependencies:
-      '@types/node':
-        specifier: 'catalog:'
-        version: 24.19.2
-      oxfmt:
-        specifier: 'catalog:'
-        version: 0.71.0
-      oxlint:
-        specifier: 'catalog:'
-        version: 1.89.0(oxlint-tsgolint@7.0.2004)
-      typescript:
-        specifier: 5.9.3
-        version: 5.9.3
 
 packages:
 
@@ -1223,11 +1214,6 @@ packages:
     resolution: {integrity: sha512-3GJYwig8ygEI89oaOZdduJX8/aw6O9eRPYHoIt6T3FZl9hkKjiyIspufJoVgqXihPoJu8M5CSV0DlZvzfohBCw==}
     hasBin: true
 
-  typescript@5.9.3:
-    resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
-    engines: {node: '>=14.17'}
-    hasBin: true
-
   typescript@7.0.2:
     resolution: {integrity: sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA==}
     engines: {node: '>=16.20.0'}
@@ -1795,8 +1781,6 @@ snapshots:
       '@turbo/linux-arm64': 2.11.10
       '@turbo/windows-64': 2.11.10
       '@turbo/windows-arm64': 2.11.10
-
-  typescript@5.9.3: {}
 
   typescript@7.0.2:
     optionalDependencies:

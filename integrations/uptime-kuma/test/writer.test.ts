@@ -19,8 +19,8 @@ import {
   type TranslationWriteRequest,
 } from "@lioni/core";
 
-import { createKumaAdapter, loadKumaCatalog } from "../adapter.ts";
-import type { Body } from "../model.ts";
+import { createKumaAdapter, loadKumaCatalog } from "../src/adapter.ts";
+import type { Body } from "../src/model.ts";
 
 const identity = (key: string): TranslationIdentity => ({
   language: "zh-CN",

@@ -3,30 +3,31 @@
   "tags": ["app"],
   "tasks": {
     "format:check": {
-      "inputs": [],
       "outputs": [],
       "tags": ["quality:light"]
     },
     "format:write": {
-      "inputs": [],
+      "dependsOn": ["lint:fix"],
       "outputs": [],
       "cache": false,
       "tags": ["work:repair"]
     },
     "lint": {
-      "inputs": [],
       "outputs": [],
       "tags": ["quality:light"]
     },
+    "lint:fix": {
+      "outputs": [],
+      "cache": false,
+      "tags": ["work:repair"]
+    },
     "test": {
       "dependsOn": [],
-      "inputs": [],
       "outputs": [],
       "tags": ["quality:light"]
     },
     "typecheck": {
-      "dependsOn": ["^typecheck"],
-      "inputs": [],
+      "dependsOn": ["^build", "^typecheck"],
       "outputs": [],
       "tags": ["quality:light"]
     }

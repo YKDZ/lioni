@@ -13,12 +13,10 @@
     "noUncheckedIndexedAccess": true
   },
   "include": [
-    "../../lioni.config.ts",
-    "../../lioni.zh-CN.config.ts",
-    "*.ts",
-    "checks/**/*.ts",
-    "scripts/**/*.ts",
+    "src/**/*.ts",
     "test/**/*.ts",
-    "quantities/**/*.ts"
+    "overlay/**/*.ts",
+    "../../lioni.config.ts",
+    "../../lioni.zh-CN.config.ts"
   ]
 }

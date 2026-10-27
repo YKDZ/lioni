@@ -5,42 +5,20 @@ import { fileURLToPath } from "node:url";
 
 import type {
   FrameworkConfig,
-  FrameworkFacts,
   StandardSchemaV1,
   TranslationIdentity,
   TranslationIdentityParts,
   TranslationWriteRequest,
   TranslationWritebackResolution,
 } from "@lioni/core";
-import { loadTermbaseYaml } from "@lioni/terminology/node";
 
 import type {
+  KumaCatalog,
+  KumaFiles,
   Unit,
   Translation,
   Body,
-  Policy,
-  Project,
-  LanguageMetadata,
-  MessagePolicy,
 } from "./model.ts";
-import { snapshotKumaProject } from "./project-snapshot.ts";
-import { scanUsages } from "./usages.ts";
-
-type InputFile = {
-  url: URL;
-  range: string;
-  kind: "catalog" | "messages" | "metadata" | "policy";
-  language?: string;
-  raw: string;
-};
-export type KumaCatalog = {
-  url: URL;
-  raw: string;
-  source: string;
-  targets: readonly string[];
-};
-export type KumaFiles = { root: URL; catalog: KumaCatalog };
-export type KumaFacts = FrameworkFacts<Unit, Translation, Body, never>;
 
 function parseCatalog(value: unknown): Pick<KumaCatalog, "source" | "targets"> {
   if (
@@ -58,20 +36,19 @@ function parseCatalog(value: unknown): Pick<KumaCatalog, "source" | "targets"> {
 }
 
 export async function loadKumaCatalog(url: URL): Promise<KumaCatalog> {
-  const raw = await readFile(url, "utf8");
-  const parsed: unknown = JSON.parse(raw);
-  return { url, raw, ...parseCatalog(parsed) };
+  const parsed: unknown = JSON.parse(await readFile(url, "utf8"));
+  return { url, ...parseCatalog(parsed) };
 }
 
-function resourceUrl(catalog: KumaCatalog, language: string): URL {
+export function resourceUrl(catalog: KumaCatalog, language: string): URL {
   return new URL(`../${language}.json`, catalog.url);
 }
 
-function resourceRange(root: string, url: URL): string {
+export function resourceRange(root: string, url: URL): string {
   return path.relative(root, fileURLToPath(url)).split(path.sep).join("/");
 }
 
-async function readResource(
+export async function readKumaMessages(
   url: URL,
   language: string,
 ): Promise<Record<string, string>> {
@@ -82,138 +59,6 @@ async function readResource(
   )
     throw new Error(`${language} 的消息资源必须是字符串映射。`);
   return value as Record<string, string>;
-}
-
-/** 术语、元数据和调用点只在 QA 准备时加载；快照事实可直接作为本次资源输入。 */
-export async function loadKumaQaProject(files: KumaFiles, facts?: KumaFacts) {
-  const root = fileURLToPath(files.root);
-  const inputs: InputFile[] = [];
-  async function read(
-    url: URL,
-    kind: InputFile["kind"],
-    language?: string,
-  ): Promise<unknown> {
-    const raw = await readFile(url, "utf8");
-    inputs.push({
-      url,
-      range: path.relative(root, fileURLToPath(url)),
-      kind,
-      raw,
-      ...(language === undefined ? {} : { language }),
-    });
-    return JSON.parse(raw);
-  }
-  inputs.push({
-    url: files.catalog.url,
-    range: resourceRange(root, files.catalog.url),
-    kind: "catalog",
-    raw: files.catalog.raw,
-  });
-  const { source: sourceLanguage, targets: targetLanguages } = files.catalog;
-  const languages = [sourceLanguage, ...targetLanguages];
-  const factTexts = new Map<string, Record<string, string>>();
-  if (facts !== undefined) {
-    const sourceTexts = Object.fromEntries(
-      facts.source.units.map(({ key, unit }) => [key, unit.source.text]),
-    );
-    factTexts.set(sourceLanguage, sourceTexts);
-    for (const language of targetLanguages) factTexts.set(language, {});
-    for (const fact of facts.translations.records) {
-      if (fact.bodyAvailability !== "available") continue;
-      const texts = factTexts.get(fact.language);
-      if (texts !== undefined)
-        Object.defineProperty(texts, fact.translation.key, {
-          configurable: true,
-          enumerable: true,
-          value: fact.content.text,
-          writable: true,
-        });
-    }
-  }
-  const resources = new Map<
-    string,
-    { texts: Record<string, string>; range: string; metadata: LanguageMetadata }
-  >();
-  for (const language of languages) {
-    const url = resourceUrl(files.catalog, language);
-    const value =
-      factTexts.get(language) ?? (await read(url, "messages", language));
-    if (
-      !record(value) ||
-      !Object.values(value).every((entry) => typeof entry === "string")
-    )
-      throw new Error(`${language} 的消息资源必须是字符串映射。`);
-    const texts = value as Record<string, string>;
-    const metadata = await read(
-      new URL(`./${language}.json`, files.catalog.url),
-      "metadata",
-      language,
-    );
-    if (!record(metadata))
-      throw new Error(`${language} 的语言声明必须是对象。`);
-    resources.set(language, {
-      texts,
-      range: resourceRange(root, url),
-      metadata: metadata as LanguageMetadata,
-    });
-  }
-  const shared = (await read(
-    new URL("./messages.json", files.catalog.url),
-    "policy",
-  )) as MessagePolicy;
-  if (
-    !shared ||
-    !record(shared.literals) ||
-    !Array.isArray(shared.scopes) ||
-    !Array.isArray(shared.usageScopes)
-  )
-    throw new Error("消息策略必须声明技术字面值、消息范围和调用点范围。");
-  const terms = (
-    await loadTermbaseYaml(new URL("./termbase/", files.catalog.url))
-  ).data;
-  const usages = await scanUsages(root);
-  const source = resources.get(sourceLanguage)!;
-  const policies: Policy[] = targetLanguages.map((targetLanguage) => {
-    const target = resources.get(targetLanguage)!;
-    return {
-      ...shared,
-      sourceLanguage,
-      targetLanguage,
-      sourceRange: source.range,
-      targetRange: target.range,
-      source: source.texts,
-      target: target.texts,
-      terms,
-      usages,
-      targetEquivalences: target.metadata.equivalences ?? [],
-      ...(source.metadata.quantityProfile === undefined
-        ? {}
-        : { sourceQuantityProfile: source.metadata.quantityProfile }),
-      ...(target.metadata.quantityProfile === undefined
-        ? {}
-        : { targetQuantityProfile: target.metadata.quantityProfile }),
-      quantityUnitAliases: source.metadata.quantityUnitAliases ?? {},
-      targetQuantityUnitAliases: target.metadata.quantityUnitAliases ?? {},
-      quantityDefaultUnits: source.metadata.quantityDefaultUnits ?? {},
-      targetQuantityDefaultUnits: target.metadata.quantityDefaultUnits ?? {},
-      sourceQuantityIgnoredLiterals:
-        source.metadata.quantityIgnoredLiterals ?? {},
-      targetQuantityIgnoredLiterals:
-        target.metadata.quantityIgnoredLiterals ?? {},
-    };
-  });
-  return {
-    policies,
-    terms,
-    usages,
-    root,
-    inputs,
-    catalog: files.catalog.url,
-  } satisfies Project & {
-    root: string;
-    inputs: InputFile[];
-    catalog: URL;
-  };
 }
 
 const record = (v: unknown): v is Record<string, unknown> =>
@@ -278,7 +123,7 @@ export function createKumaAdapter(files: KumaFiles) {
   ): Promise<void> {
     const locator = writerLocator(target.locator);
     const url = resourceUrl(files.catalog, locator.language);
-    const current = await readResource(url, locator.language);
+    const current = await readKumaMessages(url, locator.language);
     if (request.operation === "write") {
       if ("sourceKey" in request.target) {
         if (
@@ -344,7 +189,7 @@ export function createKumaAdapter(files: KumaFiles) {
     source: {
       schema: sourceSchema,
       read: async () => {
-        const source = await readResource(sourceUrl, files.catalog.source);
+        const source = await readKumaMessages(sourceUrl, files.catalog.source);
         return {
           scopes: [
             {
@@ -379,7 +224,7 @@ export function createKumaAdapter(files: KumaFiles) {
         if (!files.catalog.targets.includes(language))
           throw new Error(`未配置目标语言 ${language}。`);
         const url = resourceUrl(files.catalog, language);
-        const target = await readResource(url, language);
+        const target = await readKumaMessages(url, language);
         return {
           scopes: [
             {
@@ -452,50 +297,4 @@ async function writeJsonAtomically(
   } finally {
     await rm(temporary, { force: true });
   }
-}
-
-export function createKumaQualityRequest(project: Project, facts: KumaFacts) {
-  const sourceTexts = new Map<string, string>(
-    facts.source.units.map(({ key, unit }) => [key, unit.source.text]),
-  );
-  const translationStatus = new Map<string, "available" | "unavailable">();
-  const targetTexts = new Map<string, string>();
-  for (const fact of facts.translations.records) {
-    const identity = JSON.stringify([fact.language, fact.translation.key]);
-    if (fact.bodyAvailability === "available") {
-      translationStatus.set(identity, "available");
-      targetTexts.set(identity, fact.content.text);
-    } else {
-      translationStatus.set(identity, "unavailable");
-    }
-  }
-  const candidates = project.policies.flatMap((policy) =>
-    [
-      ...new Set<string>([
-        ...sourceTexts.keys(),
-        ...Object.keys(policy.target),
-        ...project.usages.entries.map((usage) => usage.key),
-      ]),
-    ].map((key) => {
-      const identity = JSON.stringify([policy.targetLanguage, key]);
-      const status = translationStatus.get(identity);
-      return {
-        sourceKey: key,
-        language: policy.targetLanguage,
-        content: {
-          text: targetTexts.get(identity) ?? "",
-          ...(status === undefined
-            ? { resourceStatus: "missing" as const }
-            : {}),
-          ...(status === "unavailable"
-            ? { resourceStatus: "unavailable" as const }
-            : {}),
-        },
-      };
-    }),
-  );
-  return {
-    candidates,
-    dependencies: { kuma: snapshotKumaProject(project) },
-  };
 }
