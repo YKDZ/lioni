@@ -47,6 +47,7 @@ import {
   compareMessageFamily,
   indexMessageFamilies,
 } from "./message-families.ts";
+import { isRecord } from "./object-guards.ts";
 
 const configurationSchema = v.pipe(
   v.custom<Record<string, unknown>>(isRecord, "消息族展示配置无效。"),
@@ -1090,8 +1091,4 @@ function validateProjection(
       ),
     );
   return result.value;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

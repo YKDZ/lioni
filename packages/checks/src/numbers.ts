@@ -17,6 +17,8 @@ import type {
 import { bindQualityCheck } from "@lioni/core";
 import * as v from "valibot";
 
+import { isRecord } from "./object-guards.ts";
+
 const numberCheckerConfigurationShapeSchema = v.object(
   {
     format: v.literal("ascii-decimal-v1", "数字检查器配置无效。"),
@@ -305,10 +307,6 @@ function numbersIn(text: string): Map<string, number> {
   for (const [number] of text.matchAll(/[+-]?[0-9]+(?:\.[0-9]+)?/gu))
     counts.set(number, (counts.get(number) ?? 0) + 1);
   return counts;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function difference(
