@@ -4,7 +4,6 @@ import type {
   TermbaseData,
 } from "@lioni/terminology";
 
-import type { CfpaPreparedInput } from "../corpora/convert.ts";
 import { canonicalJson, sha256 } from "../support/json.ts";
 
 export type PerformanceWorkloadFacts = {
@@ -21,11 +20,11 @@ export type PerformanceWorkloadFacts = {
   readonly hardShapes: Readonly<Record<string, number>>;
 };
 
-export type PerformanceMemoMode = "no-memo" | "empty-scope" | "reused-scope";
+export type PerformanceMemoMode = "no-memo" | "new-scope" | "reused-scope";
 
 export type PerformancePreparedInput = {
   readonly schemaVersion: 1;
-  readonly id: "controlled-scale" | "cfpa";
+  readonly id: "controlled-scale";
   readonly termbase: TermbaseData;
   readonly comparison: TermComparisonInput;
   readonly discovery: TermDiscoveryCorpus;
@@ -38,12 +37,6 @@ export type PerformancePreparedInput = {
     readonly conceptCount: number;
     readonly expressionsPerConcept: number;
     readonly shapeCounts: Readonly<Record<string, number>>;
-  };
-  readonly external?: {
-    readonly id: "cfpa";
-    readonly source: Omit<CfpaPreparedInput["source"], "root">;
-    readonly transformedInputSha256: string;
-    readonly selections: CfpaPreparedInput["selections"];
   };
 };
 
@@ -311,55 +304,6 @@ export function createControlledPerformanceWorkload(
     }),
   });
   return Object.freeze({ input, inputSha256: sha256(canonicalJson(input)) });
-}
-
-export function createCfpaPerformanceWorkload(
-  prepared: CfpaPreparedInput,
-  transformedInputSha256: string,
-): PreparedPerformanceWorkload {
-  const corpus = prepared.corpora.en;
-  if (!corpus) throw new Error("CFPA 固定输入缺少英语候选发现语料。");
-  const { root: _sourceRoot, ...stableSource } = prepared.source;
-  const hardShapes = Object.freeze({
-    "source-has-protected-ranges": prepared.comparison.groups.filter(
-      ({ source }) =>
-        source.fragments.some(
-          ({ protectedRanges }) => (protectedRanges?.length ?? 0) > 0,
-        ),
-    ).length,
-    "source-is-incomplete": prepared.comparison.groups.filter(
-      ({ source }) => source.complete === false,
-    ).length,
-    "target-is-incomplete": prepared.comparison.groups.filter(
-      ({ target }) => target.complete === false,
-    ).length,
-  });
-  const input: PerformancePreparedInput = Object.freeze({
-    schemaVersion: 1,
-    id: "cfpa",
-    termbase: prepared.referenceTermbase,
-    comparison: prepared.comparison,
-    discovery: corpus,
-    facts: workloadFacts(
-      prepared.referenceTermbase,
-      prepared.comparison,
-      hardShapes,
-    ),
-    external: Object.freeze({
-      id: "cfpa",
-      source: Object.freeze(stableSource),
-      transformedInputSha256,
-      selections: prepared.selections,
-    }),
-  });
-  const serialized = JSON.stringify(input);
-  if (serialized === undefined)
-    throw new TypeError("CFPA 性能输入必须是可序列化 JSON。");
-  const serializableInput = JSON.parse(serialized) as PerformancePreparedInput;
-  return Object.freeze({
-    input: serializableInput,
-    inputSha256: sha256(canonicalJson(serializableInput)),
-  });
 }
 
 export const performanceDiscoveryPolicy = discoveryPolicy;

@@ -9,12 +9,6 @@
       "cache": false,
       "tags": ["work:preparation"]
     },
-    "evaluation:clean": {
-      "inputs": [],
-      "outputs": [],
-      "cache": false,
-      "tags": ["work:lifecycle"]
-    },
     "evaluation:quality": {
       "inputs": [],
       "outputs": [],
@@ -22,12 +16,6 @@
       "tags": ["quality:conditional"]
     },
     "evaluation:performance": {
-      "inputs": [],
-      "outputs": [],
-      "cache": false,
-      "tags": ["work:on-demand"]
-    },
-    "evaluation:compare": {
       "inputs": [],
       "outputs": [],
       "cache": false,

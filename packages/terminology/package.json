@@ -34,9 +34,7 @@
     "build": "rm -rf dist && tsc -p tsconfig.build.json --pretty false",
     "test": "node --conditions=source --test --test-reporter=spec 'test/**/*.test.ts'",
     "evaluation:quality": "node --conditions=source scripts/evaluation/quality.ts",
-    "evaluation:performance": "node --conditions=source scripts/evaluation/cli.ts performance",
-    "evaluation:compare": "node --conditions=source scripts/evaluation/cli.ts compare",
-    "evaluation:clean": "node --conditions=source scripts/evaluation/cli.ts clean"
+    "evaluation:performance": "node --conditions=source scripts/evaluation/performance.ts"
   },
   "dependencies": {
     "@lioni/memo": "workspace:*",
