@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "dataset": {
+    "id": "self-authored-discovery-sample",
+    "version": "1.0.0",
+    "reviewStatus": "pending"
+  },
+  "task": "discovery",
+  "input": {
+    "language": "en",
+    "entries": [
+      {
+        "ref": "settings-page",
+        "fragments": [
+          {
+            "ref": "body",
+            "text": "Open project workspace settings to review the project snapshot."
+          }
+        ]
+      },
+      {
+        "ref": "snapshot-dialog",
+        "fragments": [
+          {
+            "ref": "body",
+            "text": "The project workspace stores a snapshot. Review the snapshot before changing workspace settings."
+          }
+        ]
+      },
+      {
+        "ref": "review-dialog",
+        "fragments": [
+          {
+            "ref": "body",
+            "text": "Review the project snapshot before saving a workspace."
+          }
+        ]
+      }
+    ]
+  },
+  "options": {
+    "maxWords": 2,
+    "maxCharacters": 40,
+    "minOccurrences": 2,
+    "limit": 100
+  },
+  "references": [
+    {
+      "id": "draft-annotator-a",
+      "terms": ["project workspace", "project snapshot", "workspace settings"]
+    },
+    {
+      "id": "draft-annotator-b",
+      "terms": ["project snapshot", "workspace settings", "review dialog"]
+    }
+  ]
+}

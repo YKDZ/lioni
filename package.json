@@ -16,6 +16,7 @@
     "publication:pack": "turbo run build && changeset pack --out-dir .changeset/packed",
     "publication:publish": "changeset publish --from-pack-dir .changeset/packed",
     "verify:artifacts": "node --conditions=source scripts/run-artifact-tests.ts",
+    "terminology:evaluation:quality": "pnpm --filter @lioni/terminology evaluation:quality",
     "terminology:evaluation:performance": "node --conditions=source scripts/evaluate-terminology-performance.ts"
   },
   "devDependencies": {

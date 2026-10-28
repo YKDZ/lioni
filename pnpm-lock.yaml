@@ -290,6 +290,9 @@ importers:
       '@lioni/text-analysis':
         specifier: workspace:*
         version: link:../text-analysis
+      valibot:
+        specifier: 'catalog:'
+        version: 1.5.0(typescript@7.0.2)
     devDependencies:
       '@lioni/tooling-config':
         specifier: workspace:*
