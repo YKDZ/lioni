@@ -788,7 +788,7 @@ void describe("术语质量评测入口", () => {
     assert.match(help.stdout, /--input <数据\.json 或目录>/u);
   });
 
-  void it("拒绝把目录报告写回输入目录", async () => {
+  void it("拒绝相同或相互包含的输入与报告目录", async () => {
     const directory = await mkdtemp(
       path.join(os.tmpdir(), "lioni-quality-nested-output-"),
     );
@@ -805,17 +805,20 @@ void describe("术语质量评测入口", () => {
     });
 
     try {
-      const result = runQuality([
-        "--input",
+      for (const outputDirectory of [
         directory,
-        "--output",
         path.join(directory, "reports"),
-      ]);
-      assert.equal(result.status, 1);
-      assert.match(
-        result.stderr,
-        /报告目录不能与输入目录相同或位于输入目录内/u,
-      );
+        path.dirname(directory),
+      ]) {
+        const result = runQuality([
+          "--input",
+          directory,
+          "--output",
+          outputDirectory,
+        ]);
+        assert.equal(result.status, 1);
+        assert.match(result.stderr, /输入目录与报告目录不能相同或相互包含/u);
+      }
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

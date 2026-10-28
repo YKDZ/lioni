@@ -1324,8 +1324,11 @@ async function runQuality(options: QualityCliOptions): Promise<void> {
     if (options.outputPath === undefined)
       throw new Error("--input 为目录时，必须通过 --output 显式指定报告目录。");
     const outputDirectory = resolvePath(process.cwd(), options.outputPath);
-    if (isSameOrInsideDirectory(inputPath, outputDirectory))
-      throw new Error("报告目录不能与输入目录相同或位于输入目录内。");
+    if (
+      isSameOrInsideDirectory(inputPath, outputDirectory) ||
+      isSameOrInsideDirectory(outputDirectory, inputPath)
+    )
+      throw new Error("输入目录与报告目录不能相同或相互包含。");
     const inputFiles = await collectJsonInputs(inputPath);
     for (const filename of inputFiles) {
       const relativeInputPath = path.relative(inputPath, filename);
