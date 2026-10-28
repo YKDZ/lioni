@@ -13,6 +13,166 @@ import type {
 import { discoverTerms, TermContractError } from "../src/index.ts";
 
 void describe("受限单语候选发现", () => {
+  void it("保留连接符内的完整候选，功能词只限制候选两端", async () => {
+    const text =
+      "The state-of-the-art parser uses a bag of words and drag & drop.";
+    const result = await discoverTerms(
+      { language: "en", entries: [{ ref: 0, fragments: [{ ref: 0, text }] }] },
+      { maxWords: 5, limit: 200 },
+    );
+    for (const term of ["state-of-the-art", "bag of words", "drag & drop"]) {
+      const candidate = result.candidates.find(
+        ({ text: value }) => value === term,
+      );
+      assert.ok(candidate, term);
+      const example = candidate.examples[0]!;
+      assert.equal(text.slice(example.range.start, example.range.end), term);
+    }
+    for (const term of [
+      "The",
+      "a",
+      "and",
+      "The state",
+      "of words",
+      "words and",
+    ])
+      assert.ok(
+        !result.candidates.some(({ text: value }) => value === term),
+        term,
+      );
+  });
+
+  void it("语言规则互不替代，自定义分词仍可接入其他语言", async () => {
+    const analysis = createTextAnalysis({
+      segmenter: (input) => ({
+        words: [{ start: 0, end: input.text.length, text: input.text }],
+        boundaries: [0, input.text.length],
+        complete: true,
+        issues: [],
+      }),
+    });
+    const result = await discoverTerms(
+      {
+        language: "xx",
+        entries: [{ ref: 0, fragments: [{ ref: 0, text: "the" }] }],
+      },
+      { analysis },
+    );
+    assert.equal(result.status, "complete");
+    assert.deepEqual(
+      result.candidates.map(({ text }) => text),
+      ["the"],
+    );
+    const explicit = await discoverTerms(
+      {
+        language: "en",
+        entries: [{ ref: 0, fragments: [{ ref: 0, text: "the" }] }],
+      },
+      {
+        candidateGenerator: ({ words }) =>
+          words.map(({ start, end }) => ({ start, end })),
+      },
+    );
+    assert.deepEqual(
+      explicit.candidates.map(({ text }) => text),
+      ["the"],
+    );
+  });
+
+  void it("紧连复合词中的功能词保留，纯功能词组合仍不成为候选", async () => {
+    const result = await discoverTerms({
+      language: "en",
+      entries: [
+        {
+          ref: 0,
+          fragments: [
+            {
+              ref: 0,
+              text: "in-memory storage; built-in support; in-the parser; to/from",
+            },
+          ],
+        },
+      ],
+    });
+    for (const term of [
+      "in-memory",
+      "in-memory storage",
+      "built-in",
+      "built-in support",
+    ])
+      assert.ok(
+        result.candidates.some(({ text }) => text === term),
+        term,
+      );
+    for (const term of [
+      "in",
+      "to",
+      "from",
+      "in-the",
+      "in-the parser",
+      "to/from",
+    ])
+      assert.ok(!result.candidates.some(({ text }) => text === term), term);
+  });
+
+  void it("中文和日文在各自词界上过滤功能词，保留无空格术语", async () => {
+    for (const [language, text, expected, excluded] of [
+      [
+        "zh",
+        "这是文件系统和内存管理。",
+        ["文件系统", "内存管理"],
+        ["这", "是", "和", "和内存"],
+      ],
+      [
+        "ja",
+        "これは検索機能と保存機能です。",
+        ["検索機能", "保存機能"],
+        ["これ", "は", "と", "です", "と保存"],
+      ],
+    ] as const) {
+      const result = await discoverTerms(
+        { language, entries: [{ ref: 0, fragments: [{ ref: 0, text }] }] },
+        { maxWords: 2 },
+      );
+      assert.equal(result.status, "complete");
+      for (const term of expected)
+        assert.ok(
+          result.candidates.some(({ text }) => text === term),
+          term,
+        );
+      for (const term of excluded)
+        assert.ok(!result.candidates.some(({ text }) => text === term), term);
+    }
+  });
+
+  void it("连接符不绕过词数、字符数或保护区间限制", async () => {
+    const text = "𐐀-𐐁";
+    const corpus = {
+      language: "en",
+      entries: [{ ref: 0, fragments: [{ ref: 0, text }] }],
+    };
+    const full = await discoverTerms(corpus, { maxCharacters: 3 });
+    assert.ok(full.candidates.some(({ text: value }) => value === text));
+    for (const options of [{ maxWords: 1 }, { maxCharacters: 2 }]) {
+      const result = await discoverTerms(corpus, options);
+      assert.ok(!result.candidates.some(({ text: value }) => value === text));
+    }
+    const protectedResult = await discoverTerms({
+      ...corpus,
+      entries: [
+        {
+          ref: 0,
+          fragments: [
+            { ref: 0, text, protectedRanges: [{ start: 2, end: 3 }] },
+          ],
+        },
+      ],
+    });
+    assert.ok(
+      !protectedResult.candidates.some(({ text: value }) => value === text),
+    );
+  });
+
   void it("频次、条目覆盖和原文上下文来自完整输入，输出预算不改统计", async () => {
     const corpus = {
       language: "en",

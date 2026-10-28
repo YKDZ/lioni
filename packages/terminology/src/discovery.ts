@@ -11,6 +11,7 @@ import {
   TermContractError,
   type JsonValue,
 } from "./data.ts";
+import { createDefaultCandidateGenerator } from "./discovery-generation.ts";
 import {
   splitsSurrogatePair,
   validateTextInput,
@@ -94,6 +95,7 @@ export type DiscoverTermsOptions = TermRuntime & {
   readonly limit?: number;
   readonly maxExamples?: number;
   readonly analysis?: TextAnalysis;
+  /** 替换默认词组生成，包括语言相关的首尾过滤；词界与预算验证仍由发现入口执行。 */
   readonly candidateGenerator?: TermCandidateGenerator;
   readonly candidateRanker?: TermCandidateRanker;
   readonly include?: (candidate: TermCandidate) => boolean;
@@ -115,42 +117,10 @@ function intersects(left: TermRange, right: TermRange): boolean {
   return left.start < right.end && right.start < left.end;
 }
 
-function defaultCandidateRanges(
-  input: TermCandidateGenerationInput,
-): readonly TermRange[] {
-  const ranges: TermRange[] = [];
-  for (let start = 0; start < input.words.length; start += 1) {
-    for (
-      let end = start;
-      end < Math.min(input.words.length, start + input.maxWords);
-      end += 1
-    ) {
-      const first = input.words[start]!;
-      const last = input.words[end]!;
-      if (
-        end > start &&
-        !/^\s*$/u.test(input.text.slice(input.words[end - 1]!.end, last.start))
-      )
-        break;
-      const range = { start: first.start, end: last.end };
-      if (
-        input.protectedRanges.some((protectedRange) =>
-          intersects(range, protectedRange),
-        )
-      )
-        break;
-      if (
-        Array.from(input.text.slice(range.start, range.end)).length >
-        input.maxCharacters
-      )
-        break;
-      ranges.push(Object.freeze(range));
-    }
-  }
-  return Object.freeze(ranges);
-}
-
-/** 有界相邻词组基线；排名只表示审阅顺序，不证明候选是术语。 */
+/**
+ * 有界词组发现，默认允许词间连接符并按语言过滤功能词首尾。
+ * 低频候选仍由 minOccurrences 决定，排名只表示审阅顺序，不证明候选是术语。
+ */
 export async function discoverTerms(
   corpus: TermDiscoveryCorpus,
   options: DiscoverTermsOptions = {},
@@ -231,6 +201,9 @@ export async function discoverTerms(
     }
   >();
   const textAnalysis = options.analysis ?? basicTermTextAnalysis;
+  const generateCandidates =
+    options.candidateGenerator ??
+    createDefaultCandidateGenerator(input.language);
   for (const [entryIndex, entry] of input.entries.entries()) {
     if (
       entry === null ||
@@ -313,10 +286,7 @@ export async function discoverTerms(
         maxWords,
         maxCharacters,
       });
-      const generatedRanges =
-        options.candidateGenerator === undefined
-          ? defaultCandidateRanges(generationInput)
-          : options.candidateGenerator(generationInput);
+      const generatedRanges = generateCandidates(generationInput);
       if (!Array.isArray(generatedRanges))
         throw new TermContractError("input", [
           contractIssue(
