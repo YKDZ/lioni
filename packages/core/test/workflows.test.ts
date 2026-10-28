@@ -89,46 +89,41 @@ function diagnosedEditScenario() {
       },
     },
     quality: {
-      prepare: () => ({
-        checks: [
-          defineTestQualityCheck({
-            id: "needs-review",
-            configuration: {},
-            check: ({ candidate }) => ({
-              status: "complete",
-              diagnostics: [
-                {
-                  severity: "error",
-                  object: {
-                    kind: "translation-unit",
-                    key: candidate.sourceKey,
-                    language: candidate.language,
-                  },
-                  location: {
-                    language: candidate.language,
-                    range: "fr.json",
-                    key: candidate.sourceKey,
-                  },
-                  message: "需要人工复核。",
-                  evidence: [],
+      checks: [
+        defineTestQualityCheck({
+          id: "needs-review",
+          configuration: {},
+          check: ({ candidate }) => ({
+            status: "complete",
+            diagnostics: [
+              {
+                severity: "error",
+                object: {
+                  kind: "translation-unit",
+                  key: candidate.sourceKey,
+                  language: candidate.language,
                 },
-              ],
-              issues: [],
-              coverage: {
-                selected: 1,
-                evaluated: 1,
-                notApplicable: 0,
-                incomplete: 0,
-                failed: 0,
+                location: {
+                  language: candidate.language,
+                  range: "fr.json",
+                  key: candidate.sourceKey,
+                },
+                message: "需要人工复核。",
+                evidence: [],
               },
-            }),
+            ],
+            issues: [],
+            coverage: {
+              selected: 1,
+              evaluated: 1,
+              notApplicable: 0,
+              incomplete: 0,
+              failed: 0,
+            },
           }),
-        ],
-        request: {
-          candidates: [],
-          dependencies: { requestVersion },
-        },
-      }),
+        }),
+      ],
+      loadDependencies: () => ({ requestVersion }),
     },
   });
   const candidate = {
@@ -203,34 +198,32 @@ void describe("configured analysis workflow", () => {
         contentOf: ({ text }) => ({ text }),
       },
       quality: {
-        prepare: () => ({
-          checks: [
-            defineTestQualityCheck({
-              id: "candidate-observer",
-              configuration: {},
-              check(input) {
-                observed.push({
-                  candidate: input.candidate,
-                  context: input.facts.translations.records.map(
-                    ({ content }) => content,
-                  ),
-                });
-                return {
-                  status: "complete",
-                  diagnostics: [],
-                  issues: [],
-                  coverage: {
-                    selected: 1,
-                    evaluated: 1,
-                    notApplicable: 0,
-                    incomplete: 0,
-                    failed: 0,
-                  },
-                };
-              },
-            }),
-          ],
-        }),
+        checks: [
+          defineTestQualityCheck({
+            id: "candidate-observer",
+            configuration: {},
+            check(input) {
+              observed.push({
+                candidate: input.candidate,
+                context: input.facts.translations.records.map(
+                  ({ content }) => content,
+                ),
+              });
+              return {
+                status: "complete",
+                diagnostics: [],
+                issues: [],
+                coverage: {
+                  selected: 1,
+                  evaluated: 1,
+                  notApplicable: 0,
+                  incomplete: 0,
+                  failed: 0,
+                },
+              };
+            },
+          }),
+        ],
       },
     });
 
@@ -361,34 +354,32 @@ void describe("configured analysis workflow", () => {
         },
       },
       quality: {
-        prepare: () => ({
-          checks: [
-            defineTestQualityCheck<
-              Unit,
-              Translation,
-              JsonValue,
-              { readonly id: string }
-            >({
-              id: "must-not-run",
-              configuration: {},
-              check() {
-                invoked = true;
-                return {
-                  status: "complete",
-                  diagnostics: [],
-                  issues: [],
-                  coverage: {
-                    selected: 1,
-                    evaluated: 1,
-                    notApplicable: 0,
-                    incomplete: 0,
-                    failed: 0,
-                  },
-                };
-              },
-            }),
-          ],
-        }),
+        checks: [
+          defineTestQualityCheck<
+            Unit,
+            Translation,
+            JsonValue,
+            { readonly id: string }
+          >({
+            id: "must-not-run",
+            configuration: {},
+            check() {
+              invoked = true;
+              return {
+                status: "complete",
+                diagnostics: [],
+                issues: [],
+                coverage: {
+                  selected: 1,
+                  evaluated: 1,
+                  notApplicable: 0,
+                  incomplete: 0,
+                  failed: 0,
+                },
+              };
+            },
+          }),
+        ],
       },
     });
 
@@ -517,29 +508,27 @@ void describe("configured analysis workflow", () => {
         contentOf: ({ text }) => text,
       },
       quality: {
-        prepare: () => ({
-          checks: [
-            defineTestQualityCheck<Unit, Translation>({
-              id: "translation-present",
-              configuration: { enabled: true },
-              check: (input) => {
-                observed = input;
-                return {
-                  status: "complete",
-                  diagnostics: [],
-                  issues: [],
-                  coverage: {
-                    selected: 1,
-                    evaluated: 1,
-                    notApplicable: 0,
-                    incomplete: 0,
-                    failed: 0,
-                  },
-                };
-              },
-            }),
-          ],
-        }),
+        checks: [
+          defineTestQualityCheck<Unit, Translation>({
+            id: "translation-present",
+            configuration: { enabled: true },
+            check: (input) => {
+              observed = input;
+              return {
+                status: "complete",
+                diagnostics: [],
+                issues: [],
+                coverage: {
+                  selected: 1,
+                  evaluated: 1,
+                  notApplicable: 0,
+                  incomplete: 0,
+                  failed: 0,
+                },
+              };
+            },
+          }),
+        ],
       },
     });
 
@@ -557,12 +546,13 @@ void describe("configured analysis workflow", () => {
     assert.equal(observed?.facts.associations[0]?.status, "matched");
   });
 
-  void it("uses a configured request and rejects malformed check configuration", async () => {
+  void it("builds external candidates and rejects malformed check configuration", async () => {
     let observedCandidates: readonly {
       sourceKey: string;
       language: string;
       content: string;
     }[] = [];
+    let candidateBuilds = 0;
     const config = defineConfig({
       source: {
         schema: sourceSchemaFromExamples<Unit>({
@@ -594,18 +584,17 @@ void describe("configured analysis workflow", () => {
         matches: (unit, translation) => unit.id === translation.id,
       },
       quality: {
-        prepare: () => {
+        buildCandidates: ({ defaultCandidates, dependencies, facts }) => {
+          candidateBuilds += 1;
+          assert.deepEqual(defaultCandidates, []);
+          assert.deepEqual(facts.source.units, []);
+          assert.deepEqual(dependencies, { glossaryVersion: "v1" });
           observedCandidates = [
             { sourceKey: "external", language: "ja", content: "外部" },
           ];
-          return {
-            checks: [],
-            request: {
-              candidates: observedCandidates,
-              dependencies: { glossaryVersion: "v1" },
-            },
-          };
+          return observedCandidates;
         },
+        loadDependencies: () => ({ glossaryVersion: "v1" }),
       },
     });
 
@@ -614,6 +603,7 @@ void describe("configured analysis workflow", () => {
     assert.deepEqual(result.candidates, [
       { sourceKey: "external", language: "ja", content: "外部" },
     ]);
+    assert.equal(candidateBuilds, 1);
     assert.deepEqual(result.dependencies, { glossaryVersion: "v1" });
     assert.equal(result.status, "not-run");
 
@@ -627,13 +617,12 @@ void describe("configured analysis workflow", () => {
       },
       keyOf: ({ id }) => id,
       quality: {
-        prepare: () => ({ checks: "invalid" as unknown as readonly [] }),
+        checks: "invalid" as unknown as readonly [],
       },
     });
     await assert.rejects(analyzeQuality(invalidConfig), {
-      name: "TypeError",
-      message:
-        "defineConfig 的 quality.prepare 必须返回包含 checks 数组的对象。",
+      name: "StandardSchemaContractError",
+      message: "defineConfig 的 quality.checks 必须是检查器数组。",
     });
 
     const invalidSourceConfig = defineConfig({
@@ -663,14 +652,15 @@ void describe("configured analysis workflow", () => {
         read: () => ({ scopes: [] }),
       },
       keyOf: ({ id }) => id,
-      quality: { prepare: "invalid" as never },
+      quality: { loadDependencies: "invalid" as never },
     });
     await assert.rejects(
       analyzeQuality(invalidRequestConfig),
       (error: unknown) =>
         error instanceof StandardSchemaContractError &&
         error.kind === "schema-mismatch" &&
-        error.message === "defineConfig 的 quality.prepare 必须是函数。",
+        error.message ===
+          "defineConfig 的 quality.loadDependencies 必须是函数。",
     );
   });
 
@@ -782,28 +772,5 @@ void describe("configured analysis workflow", () => {
         reasons: ["business-input"],
       },
     ]);
-  });
-
-  void it("拒绝从准备请求读取例外", async () => {
-    const { candidate, config } = diagnosedEditScenario();
-    const legacyConfig = {
-      ...config,
-      quality: {
-        prepare: () => ({
-          checks: [],
-          request: {
-            candidates: [candidate],
-            dependencies: {},
-            exceptions: [],
-          },
-        }),
-      },
-    };
-
-    await assert.rejects(analyzeQuality(legacyConfig as never), {
-      name: "TypeError",
-      message:
-        "defineConfig 的 quality.prepare 不接受 exceptions；请通过 quality.exceptionStore 配置例外来源。",
-    });
   });
 });

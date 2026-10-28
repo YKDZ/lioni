@@ -172,7 +172,7 @@ function qualityConfig(
       matches: (unit, translation) => unit.id === translation.id,
       contentOf: (translation) => translation.source,
     },
-    quality: { prepare: () => ({ checks }) },
+    quality: { checks },
   });
 }
 

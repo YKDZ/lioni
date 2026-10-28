@@ -110,5 +110,5 @@ export default defineConfig({
         ({ bodyAvailability }) => bodyAvailability === "available",
       ),
   },
-  quality: { prepare: () => ({ checks: [numbers] }) },
+  quality: { checks: [numbers] },
 });

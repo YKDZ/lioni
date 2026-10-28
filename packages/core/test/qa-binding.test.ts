@@ -283,10 +283,10 @@ function qualityConfig(
     keyOf: ({ key }) => key,
     translations: mixedTranslations,
     quality: {
-      prepare: () => ({
-        checks,
-        request: { candidates, dependencies, relationships },
-      }),
+      checks,
+      buildCandidates: () => candidates,
+      loadDependencies: () => dependencies,
+      relationships,
     },
   });
 }
@@ -1004,7 +1004,7 @@ void describe("quality check bindings", () => {
       keyOf: ({ key }) => key,
       quality: {
         // @ts-expect-error 窄类型检查器必须先显式绑定到混合项目
-        prepare: () => ({ checks: [narrowChecker] }),
+        checks: [narrowChecker],
       },
     });
 
