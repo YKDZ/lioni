@@ -1,10 +1,6 @@
-import type { MessageFamilyReferenceProjection } from "@lioni/checks";
 import type {
   ActualTranslationFact,
   JsonValue,
-  QualityCheckRequest,
-  QualityPreparation,
-  SemanticEditCandidate,
   SourceUnitFact,
   TranslationAssociationFact,
   TranslationUnitInput,
@@ -12,11 +8,12 @@ import type {
 import type { TermbaseData } from "@lioni/terminology";
 import type { QuantityOptions } from "@lioni/text-analysis";
 
+import type { MessageFamilyReferenceProjection } from "../message-family-checker.ts";
 import type {
   VueI18nMessageProjection,
+  VueI18nProjectionInput,
   VueI18nProjector,
 } from "./quality-projection.ts";
-import type { VueI18nUsageIndex } from "./usage-types.ts";
 
 export type {
   VueI18nMessageProjection,
@@ -38,9 +35,15 @@ export type VueI18nScopeRule = {
   readonly flags?: string;
 };
 
-export type VueI18nUsageScopeRule = {
-  readonly scope: string;
-  readonly filePattern: string;
+/** 每次质量检查读取的 Vue 规则、消息资料与术语库。 */
+export type VueI18nCheckData = {
+  readonly policies: readonly VueI18nPolicy[];
+  readonly terms: TermbaseData;
+};
+
+/** 放入 quality.loadDependencies 返回值的 Vue 检查资料。 */
+export type VueI18nCheckDependencies = {
+  readonly vueI18n: VueI18nCheckData;
 };
 
 export type VueI18nPolicy = {
@@ -63,33 +66,14 @@ export type VueI18nPolicy = {
   readonly protectedLiterals: Readonly<Record<string, readonly string[]>>;
   readonly messageFamilies: {
     readonly scopes: readonly VueI18nScopeRule[];
-    readonly usageScopes: readonly VueI18nUsageScopeRule[];
     readonly targetEquivalences: readonly (readonly string[])[];
   };
 };
 
-export type VueI18nCheckName =
-  | "sourceSyntax"
-  | "targetSyntax"
-  | "variableCorrespondence"
-  | "callArguments"
-  | "linkTargetExists"
-  | "linkCycle"
-  | "protectedLiterals"
-  | "quantities"
-  | "allowedTerminology"
-  | "forbiddenTerminology"
-  | "messageFamilyConsistency";
-
 export type VueI18nCheckIdentity = {
   readonly id: string;
-  /** 宿主资料投影或业务声明的版本；Vue 算法与解析器版本由包加入。 */
   readonly hostVersion: string;
 };
-
-export type VueI18nCheckIdentities = Readonly<
-  Record<VueI18nCheckName, VueI18nCheckIdentity>
->;
 
 export type VueI18nMessageReference<
   TUnit extends TranslationUnitInput,
@@ -118,49 +102,24 @@ export type VueI18nReferenceProjector<
   TUnavailable = never,
 > = (
   reference: VueI18nMessageReference<TUnit, TTranslation, TBody, TUnavailable>,
+  input: VueI18nProjectionInput<TUnit, TTranslation, TBody, TUnavailable>,
 ) => VueI18nMessageProjection;
 
-export type VueI18nQualityOptions<
+export type VueI18nChecksOptions<
   TUnit extends TranslationUnitInput,
   TTranslation,
   TBody,
   TUnavailable = never,
 > = {
+  /** 宿主投影、位置映射和策略语义变化时更新，用于使缓存失效。 */
+  readonly hostVersion: string;
+  /** 将本次候选、事实和依赖映射为 Vue I18n 消息。 */
   readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
+  /** 将已保存译文映射为 Vue I18n 消息，供消息族参照检查使用。 */
   readonly reference: VueI18nReferenceProjector<
     TUnit,
     TTranslation,
     TBody,
     TUnavailable
   >;
-  readonly policies: readonly VueI18nPolicy[];
-  readonly terms: TermbaseData;
-  readonly usages: VueI18nUsageIndex;
-  readonly identities: VueI18nCheckIdentities;
-};
-
-export type VueI18nQualityDependencies = {
-  readonly policies: readonly VueI18nPolicy[];
-  readonly terms: TermbaseData;
-  readonly usages: VueI18nUsageIndex;
-};
-
-export type VueI18nQualityPreparation<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TBody,
-  TUnavailable = never,
-> = Omit<
-  QualityPreparation<TUnit, TTranslation, TBody, TUnavailable>,
-  "request"
-> & {
-  readonly request: Omit<
-    QualityCheckRequest<TBody>,
-    "exceptions" | "candidates" | "dependencies"
-  > & {
-    readonly candidates?: readonly SemanticEditCandidate<TBody>[];
-    readonly dependencies: {
-      readonly vueI18n: VueI18nQualityDependencies;
-    };
-  };
 };

@@ -31,7 +31,17 @@ export type TermCheckerOptions<
   readonly id?: string;
   /** 宿主提供的术语资料、选择、投影和位置映射的版本。 */
   readonly hostVersion: string;
-  readonly terms: CompiledTerms;
+  readonly terms:
+    | CompiledTerms
+    | ((
+        input: QualityCheckInput<
+          TUnit,
+          TTranslation,
+          TermRulesConfiguration,
+          TBody,
+          TUnavailable
+        >,
+      ) => Awaitable<CompiledTerms>);
   readonly rule: TermRule;
   readonly select: (
     input: QualityCheckInput<
@@ -58,6 +68,7 @@ export type TermCheckerOptions<
     readonly language: string;
     readonly sourceKey: string;
     readonly side: "source" | "target";
+    readonly subject: TSubject;
   }) => QualityLocation;
 };
 
@@ -78,7 +89,6 @@ export function createTermChecker<
   >,
 ) {
   const rule = options.rule;
-  const terms = options.terms;
   return bindQualityCheck<
     TUnit,
     TTranslation,
@@ -97,6 +107,10 @@ export function createTermChecker<
     select: options.select,
     project: options.project,
     async check(input) {
+      const terms =
+        typeof options.terms === "function"
+          ? await options.terms(input)
+          : options.terms;
       const report = await evaluateTerms(terms, input.projected, {
         rules: [rule],
         memo: input.memo,
@@ -117,6 +131,7 @@ export function createTermChecker<
             language,
             side,
             sourceKey: object.key,
+            subject: input.subject,
           }) ?? {
             language,
             range: ref,
