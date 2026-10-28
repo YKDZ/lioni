@@ -14,7 +14,10 @@ import { fileURLToPath } from "node:url";
 import { productPackageName } from "./artifact-tests/product.ts";
 import type { Artifact } from "./artifact-tests/support/consumer.ts";
 import { externalInterruptSignal } from "./artifact-tests/support/external-interrupt.ts";
-import { runCommand } from "./artifact-tests/support/process.ts";
+import {
+  runCommand,
+  type ProcessOptions,
+} from "./artifact-tests/support/process.ts";
 
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const scenarios = new URL("./artifact-tests/scenarios/", import.meta.url);
@@ -57,7 +60,65 @@ async function artifactFromPublishPlan(planPath: string): Promise<Artifact> {
   return { name: productPackageName, filename };
 }
 
-/** 消费已构建的正式包；Turbo 负责前置构建，失败时保留临时目录供复现。 */
+/** 使用 Changesets 原生 pack 打包当前公开 workspace 版本，且只在验收临时目录写计划和制品。 */
+async function artifactFromWorkspaceProduct(
+  root: string,
+  commandOptions: ProcessOptions,
+): Promise<Artifact> {
+  const listed = await runCommand(
+    "pnpm",
+    ["--filter", productPackageName, "list", "--depth", "-1", "--json"],
+    commandOptions,
+  );
+  const parsed: unknown = JSON.parse(listed.stdout);
+  assert.ok(Array.isArray(parsed), "pnpm workspace 查询必须返回包列表。");
+  assert.equal(parsed.length, 1, "pnpm workspace 查询必须只返回产品包。");
+  const product = parsed[0];
+  assert.ok(isRecord(product), "pnpm workspace 产品记录必须是对象。");
+  assert.equal(product.name, productPackageName);
+  assert.equal(product.private, false, "制品验收只接受公开产品包。");
+  assert.ok(
+    typeof product.version === "string",
+    "pnpm workspace 产品记录缺少版本号。",
+  );
+
+  const inputPlanPath = path.join(root, "publish-input.json");
+  const outputDirectory = path.join(root, "packed");
+  // 正式 Changesets 计划会省略已发布版本；这里仅让原生 pack 消费本地声明版本。
+  await writeFile(
+    inputPlanPath,
+    JSON.stringify({
+      version: 1,
+      plan: [
+        [
+          {
+            kind: "publish",
+            name: product.name,
+            version: product.version,
+          },
+        ],
+      ],
+    }),
+  );
+  await runCommand(
+    "pnpm",
+    [
+      "exec",
+      "changeset",
+      "pack",
+      "--from-publish-plan",
+      inputPlanPath,
+      "--out-dir",
+      outputDirectory,
+    ],
+    commandOptions,
+  );
+  return await artifactFromPublishPlan(
+    path.join(outputDirectory, "publish-plan.json"),
+  );
+}
+
+/** 消费已构建的产品包；根任务负责前置构建，失败时保留临时目录供复现。 */
 async function main(): Promise<void> {
   const available = (await readdir(scenarios))
     .filter((name) => name.endsWith(".test.ts"))
@@ -65,7 +126,7 @@ async function main(): Promise<void> {
     .sort();
   const args = process.argv.slice(2).filter((arg) => arg !== "--");
   const planOption = args.indexOf("--from-publish-plan");
-  let publishPlanPath = ".changeset/packed/publish-plan.json";
+  let publishPlanPath: string | undefined;
   if (planOption !== -1) {
     const providedPlanPath = args[planOption + 1];
     assert.ok(providedPlanPath, "--from-publish-plan 后必须提供文件路径。");
@@ -92,7 +153,10 @@ async function main(): Promise<void> {
   };
   let passed = false;
   try {
-    const artifact = await artifactFromPublishPlan(publishPlanPath);
+    const artifact =
+      publishPlanPath === undefined
+        ? await artifactFromWorkspaceProduct(root, commandOptions)
+        : await artifactFromPublishPlan(publishPlanPath);
     assert.equal(artifact.name, productPackageName);
     const artifacts = [artifact];
     await writeFile(
