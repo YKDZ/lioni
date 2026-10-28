@@ -11,11 +11,11 @@ import {
   writeTranslationRequests,
   type TranslationWriteRequest,
   type UpdatePlan,
-} from "@lioni/core";
+} from "lioni";
 import {
   createFileComparisonBaselineStore,
   createFileUpdatePlanStore,
-} from "@lioni/core/node";
+} from "lioni/node";
 
 import config, { type Translation, type Unit } from "./lioni.config.ts";
 

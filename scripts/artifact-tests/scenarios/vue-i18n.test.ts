@@ -7,7 +7,6 @@ import { testArtifactConsumer } from "../support/consumer.ts";
 testArtifactConsumer(
   {
     name: "Vue I18n 消息检查集合通过 SDK 和 CLI 运行",
-    packages: ["@lioni/cli", "@lioni/core", "@lioni/checks"],
     fixtures: new URL("../fixtures/vue-i18n/", import.meta.url),
   },
   async ({ root, typecheck, runNode, runProcess }) => {

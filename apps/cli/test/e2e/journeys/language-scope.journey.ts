@@ -13,11 +13,12 @@ function dataOf(result: CliJourneyResult | undefined) {
 const journey: CliJourney = {
   name: "language-scope",
   modes: ["source", "distribution"],
-  async setup({ workDir }) {
+  async setup({ workDir, mode }) {
+    const sdkImport = mode === "source" ? "@lioni/core" : "lioni";
     await writeFile(
       path.join(workDir, "lioni.config.ts"),
       `import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
-import { defineConfig, defineQualityCheck } from "@lioni/core";
+import { defineConfig, defineQualityCheck } from "${sdkImport}";
 
 const schema = { "~standard": { version: 1, vendor: "language-scope-journey", validate: (value) => ({ value }) } };
 const resource = (language) => new URL("./" + language + ".json", import.meta.url);

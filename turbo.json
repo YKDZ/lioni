@@ -1,5 +1,10 @@
 {
   "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**"],
+      "tags": ["quality:light"]
+    },
     "//#boundaries": {
       "tags": ["quality:light"]
     },
@@ -42,7 +47,8 @@
         "@lioni/core#build",
         "@lioni/memo#build",
         "@lioni/terminology#build",
-        "@lioni/text-analysis#build"
+        "@lioni/text-analysis#build",
+        "lioni#build"
       ],
       "tags": ["work:repair"]
     },
@@ -67,15 +73,7 @@
     },
     "//#verify:artifacts": {
       "cache": false,
-      "dependsOn": [
-        "@lioni/cli#test:e2e",
-        "@lioni/cli#build",
-        "@lioni/checks#build",
-        "@lioni/core#build",
-        "@lioni/memo#build",
-        "@lioni/text-analysis#build",
-        "@lioni/terminology#build"
-      ],
+      "dependsOn": ["lioni#test:e2e", "lioni#build"],
       "outputs": [],
       "tags": ["quality:heavy"],
       "passThroughEnv": ["LIONI_KEEP_ARTIFACT_TESTS"]

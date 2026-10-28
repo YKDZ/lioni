@@ -2,17 +2,16 @@ import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { QualityRunResult } from "@lioni/core";
+import type { QualityRunResult } from "lioni";
 
 import { testArtifactConsumer } from "../support/consumer.ts";
 
 testArtifactConsumer(
   {
-    name: "安装后的 SDK、CLI 与配置准备链",
-    packages: ["@lioni/cli", "@lioni/core", "@lioni/checks"],
+    name: "安装后的 SDK 配置与 CLI 质量报告",
     fixtures: new URL("../fixtures/sdk-cli/", import.meta.url),
   },
-  async ({ root, runNode, runCommand, typecheck }) => {
+  async ({ root, runNode, runCommand, runProcess, typecheck }) => {
     await typecheck();
     const sdk = await runNode("consumer.ts");
     const executable = path.join(
@@ -42,17 +41,35 @@ testArtifactConsumer(
       { schemaVersion: "2", variant: "previewed" },
     );
 
-    const report = await cli("qa", "lioni.config.ts");
+    const textReport = await runProcess(executable, ["qa", "lioni.config.ts"]);
+    assert.equal(textReport.status, 1);
+    assert.match(textReport.stdout, /质量结论：未通过/u);
+    assert.match(
+      textReport.stdout,
+      /语言范围：读取 fr、de；所选候选语言 fr、de/u,
+    );
+    assert.match(textReport.stdout, /检查范围：已选候选 4 条，检查项 1 项/u);
+
+    const report = await runProcess(executable, [
+      "qa",
+      "lioni.config.ts",
+      "--output-format",
+      "structured",
+    ]);
+    assert.equal(report.status, 1);
     const quality = (JSON.parse(report.stdout) as { data: QualityRunResult })
       .data;
     assert.equal(quality.status, "complete");
     assert.equal(quality.diagnostics.length, 1);
-    const selectedReport = await cli(
+    const selectedReport = await runProcess(executable, [
       "qa",
       "lioni.config.ts",
       "--language",
       "de",
-    );
+      "--output-format",
+      "structured",
+    ]);
+    assert.equal(selectedReport.status, 0);
     const selectedQuality = (
       JSON.parse(selectedReport.stdout) as { data: QualityRunResult }
     ).data;
@@ -79,7 +96,13 @@ testArtifactConsumer(
       "--reason",
       "已确认的数字差异。",
     );
-    const excepted = await cli("qa", "lioni.config.ts");
+    const excepted = await runProcess(executable, [
+      "qa",
+      "lioni.config.ts",
+      "--output-format",
+      "structured",
+    ]);
+    assert.equal(excepted.status, 0);
     assert.partialDeepStrictEqual(JSON.parse(excepted.stdout), {
       data: {
         diagnostics: [

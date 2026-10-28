@@ -31,6 +31,7 @@ export {
 } from "./quality-cache.ts";
 export type { QualityExceptionStore } from "../quality/quality-exceptions.ts";
 export type { QualityCheckResultCache } from "../quality/quality-cache.ts";
+export type { UpdatePlanStore } from "../plans.ts";
 
 type RuntimeFrameworkConfig = FrameworkConfig<
   TranslationUnitInput,
@@ -39,14 +40,10 @@ type RuntimeFrameworkConfig = FrameworkConfig<
   unknown
 >;
 
-export type LoadedConfig = {
-  readonly use: <TResult>(
-    consumer: (config: RuntimeFrameworkConfig) => TResult,
-  ) => TResult;
-};
-
 /** 从 Node.js 配置模块加载并验证默认导出的宿主配置。 */
-export async function loadConfig(configPath: string): Promise<LoadedConfig> {
+export async function loadConfig(
+  configPath: string,
+): Promise<RuntimeFrameworkConfig> {
   const absoluteConfigPath = path.resolve(process.cwd(), configPath);
   const configUrl = pathToFileURL(absoluteConfigPath);
   const configModule = (await import(configUrl.href)) as {
@@ -67,7 +64,7 @@ export async function loadConfig(configPath: string): Promise<LoadedConfig> {
           },
         }
       : loadedConfig;
-  return { use: (consumer) => consumer(config) };
+  return config;
 }
 
 /** 为 Node.js 宿主创建文件比较基线存储。 */

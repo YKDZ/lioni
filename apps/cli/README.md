@@ -1,10 +1,36 @@
-# 质量检查输入指纹
+# lioni
 
-质量检查通过 `defineQualityCheck`、`bindQualityCheck` 和 `analyzeQuality` 接入。每项检查都要提供稳定的 `id` 和显式 `version`。版本表示检查算法与宿主组合逻辑；算法或宿主选择、投影、位置映射及策略发生语义变化时，应更新对应版本。
+lioni 提供 `lioni` 命令行、TypeScript SDK 和 Node.js 文件适配器。Node.js 24.21 及以上版本可安装单一产品包：
+
+```sh
+pnpm add lioni
+```
+
+`lioni` 命令从配置文件读取宿主适配器，`lioni qa lioni.config.ts` 默认输出简洁中文报告；追加 `--output-format structured` 可取得完整结构化结果。SDK 的纯函数与类型从 `lioni` 导入，文件配置、Node 存储和术语目录读取从 `lioni/node` 导入：
+
+```ts
+import { analyzeQuality, defineConfig, parseTermbaseYaml } from "lioni";
+import { loadConfig, loadTermbaseYaml } from "lioni/node";
+
+const config = await loadConfig("lioni.config.ts");
+const result = await analyzeQuality(config);
+const inMemoryTerms = parseTermbaseYaml({ concepts, languages });
+const directoryTerms = await loadTermbaseYaml(
+  new URL("./terms/", import.meta.url),
+);
+```
+
+`parseTermbaseYaml` 在内存中完成解析、组装和领域校验，直接返回 `Termbase`。`loadTermbaseYaml` 对目录执行相同处理；`loadConfig` 直接返回已验证的配置。
+
+SDK 保留自定义正文与适配器、检查器、存储，以及独立的预览与应用流程。以下示例说明检查输入指纹、质量例外和结果缓存的使用方式。
+
+## 质量检查输入指纹
+
+自定义检查通过 `defineQualityCheck` 创建，再放入 `quality.checks`。每项检查都要提供稳定的 `id` 和显式 `version`。版本表示检查算法与宿主组合逻辑；算法、宿主选择、位置映射及策略发生语义变化时，应更新对应版本。`QualityCheckInput`、`QualityFinding`、`QualityIssue` 和 `QualityCoverage` 可用于标注宿主自己的检查函数。
 
 每条候选检查执行都会在 `checks[].executions[]` 中报告 `checkId`、原文键、目标语言、状态和可比较的 `inputFingerprint`。摘要分别给出带指纹格式的检查版本（`lioni.check-input/v1:<checkVersion>`）、最终配置摘要和业务输入摘要；`checks[].version` 仍是检查器显式提供的版本。诊断带有 `checkId` 与 `executionId`，可关联到产生它的候选执行。同键同语言的多个候选会分别保留记录。
 
-使用 `@lioni/checks` 的内置工厂时，另提供 `hostVersion` 描述宿主的选择、投影和组合逻辑。工厂会将它与固定的内置算法版本合并。
+使用 `lioni` 提供的检查器工厂时，另提供 `hostVersion` 描述宿主的选择、投影和组合逻辑。工厂会将它与固定的内置算法版本合并。
 
 质量设置集中在 `defineConfig` 的 `quality` 对象中。检查器直接放入 `quality.checks`，其配置 schema 由 SDK 在每次运行时校验。需要动态规则资料时，用 `quality.loadDependencies({ facts, memo })` 按本次已读取事实加载一次；返回值会提供给每条检查器，并进入默认输入指纹。
 
@@ -17,11 +43,8 @@
 闭包依赖不会自动纳入指纹。通过 `quality.loadDependencies` 返回的宿主资料、外部策略和其他会影响诊断内容、位置或证据的数据会纳入默认指纹；检查作者也可在自定义依据中组合默认构造能力：
 
 ```ts
-import {
-  createDefaultQualityInputBasis,
-  defineQualityCheck,
-} from "@lioni/core";
-import type { JsonValue } from "@lioni/core";
+import { createDefaultQualityInputBasis, defineQualityCheck } from "lioni";
+import type { JsonValue } from "lioni";
 
 const glossarySnapshot: JsonValue = { version: "2026-10", terms: [] };
 
@@ -42,20 +65,24 @@ const check = defineQualityCheck({
 });
 ```
 
-绑定检查的 `fingerprintInput` 在适用范围选择完成、投影结果通过 `inputSchema` 校验后调用，可使用同次执行的 `subject` 和 `projected`。如果选择结果不适用，或选择/投影无法完成，框架不会生成可比较指纹。检查不依赖其他检查的执行顺序。
+`fingerprintInput` 与 `check` 接收同一次候选检查的事实、候选、依赖和已校验配置。它可以将 `createDefaultQualityInputBasis(input)` 与宿主额外资料组合；框架会把检查身份、版本和配置纳入指纹。检查不依赖其他检查的执行顺序。
 
-## 原文、译文与文本投影
+## 自定义正文、适配器与检查器
 
-`config.source.read()` 读取宿主定义的原文记录，`source.schema` 校验记录结构。框架保留完整原文单元；`sourceUnit.unit.source` 的业务含义由宿主定义，框架不会从任意 JSON 字段猜测正文。
+`config.source.read()` 读取宿主定义的原文记录，`source.schema` 校验记录结构。框架保留完整原文单元；`sourceUnit.unit.source` 的业务含义由宿主定义，框架不会从任意 JSON 字段猜测正文。原文与译文正文可使用字符串、对象或宿主的其他类型，由 schema 和适配器定义。
 
-译文适配器的 `translations.contentOf()` 明确地从译文记录取出正文。候选的 `content` 使用该正文类型，也可以是宿主提供的结构化内容。检查作者通过 `select` 决定候选范围，再通过 `project` 映射检查实际需要的文本或结构；投影结果经 `inputSchema` 校验后交给检查函数。原文适配器、译文正文与检查投影因此分别负责读取、内容提取和检查输入。
+译文适配器的 `translations.contentOf()` 从译文记录取出正文，`identityOf()` 提供稳定目标身份。`analyzeQuality` 将本次事实、候选、动态依赖和复用范围提供给检查器；自定义逻辑可以在 `check(input)` 中按宿主规则解释正文，并返回诊断、问题与覆盖情况。`createVueI18nChecks`、`createNumberChecker`、`createTermChecker` 等工厂为常见规则提供可复用检查器。
+
+自定义存储可实现 `QualityExceptionStore` 或 `QualityCheckResultCache`，也可实现比较基线和更新计划存储。Node 文件实现从 `lioni/node` 导入；纯 SDK 流程可将自定义存储直接放入配置或函数参数。
+
+独立计划流程仍可单独使用：`previewUpdate(config, baselineStore)` 返回可保存的计划，之后由 `applyUpdatePlan(plan, config, confirm)` 校验计划并执行写入。两步可以运行在不同进程中，也可分别接入审批流程。
 
 ## QA 例外
 
 例外由检查报告中的执行记录创建，绑定检查项、原文键、目标语言和完整输入指纹，并覆盖该次候选检查的全部诊断：
 
 ```ts
-import { createQualityException } from "@lioni/core";
+import { createQualityException } from "lioni";
 
 const execution = report.checks
   .find(({ checkId }) => checkId === "catalog-term-policy")
@@ -89,7 +116,7 @@ exceptions:
       inputFingerprint: sha256:复制报告中的业务输入摘要
 ```
 
-直接向 `analyzeQuality(config)` 传入纯配置对象时，框架不会猜测当前目录；没有配置存储就不使用例外。自定义 `quality.exceptionStore` 会替换 Node 默认 YAML 来源。低层 `runQualityChecks` 仍可接收宿主已读取的例外列表。QA 报告分别给出诊断处理和 `exceptionApplicability`：输入、最终配置或检查版本改变时显示原因，局部未执行时标记为本次未验证；依据恢复后，旧例外会重新适用。即使本次没有诊断，也会报告适用性。
+直接向 `analyzeQuality(config)` 传入纯配置对象时，框架不会猜测当前目录；没有配置存储就不使用例外。自定义 `quality.exceptionStore` 会替换 Node 默认 YAML 来源。QA 报告分别给出诊断处理和 `exceptionApplicability`：输入、最终配置或检查版本改变时显示原因，局部未执行时标记为本次未验证；依据恢复后，旧例外会重新适用。即使本次没有诊断，也会报告适用性。
 
 人工编辑 YAML 与命令维护具有同等地位，二者使用相同的例外记录契约。CLI 可以直接使用现有 SDK 报告或 `qa` 命令的 JSON 报告创建或刷新记录：
 
@@ -121,8 +148,8 @@ const activeErrors = report.diagnostics.filter(
 ```ts
 import { fileURLToPath } from "node:url";
 
-import { createDefaultQualityCheckResultCache } from "@lioni/core/node";
-import { defineConfig } from "@lioni/core";
+import { createDefaultQualityCheckResultCache } from "lioni/node";
+import { defineConfig } from "lioni";
 
 export default defineConfig({
   // 其余宿主配置……

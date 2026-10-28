@@ -73,10 +73,8 @@ export {
   type TermDiscovery,
 } from "./discovery.ts";
 export {
-  assembleTermbaseYaml,
   parseTermbaseYaml,
   TermbaseYamlError,
-  type ParsedTermbaseYaml,
   type TermbaseYamlIssue,
   type TermbaseYamlFiles,
 } from "./yaml.ts";
