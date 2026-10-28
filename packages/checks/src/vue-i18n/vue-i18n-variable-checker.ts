@@ -10,6 +10,7 @@ import { bindQualityCheck } from "@lioni/core";
 import type { MemoScope } from "@lioni/memo";
 import * as v from "valibot";
 
+import { vueI18nDependencies } from "./dependencies.ts";
 import { memoizedVueI18nMessage } from "./message-memo.ts";
 import {
   memoizedVueI18nProjection,
@@ -17,7 +18,6 @@ import {
 } from "./quality-projection.ts";
 import type {
   VueI18nMessageProjection,
-  VueI18nPolicy,
   VueI18nProjector,
 } from "./quality-types.ts";
 import type { VueI18nMessage } from "./vue-i18n-messages.ts";
@@ -42,7 +42,6 @@ export type VueI18nVariableCorrespondenceCheckerOptions<
   readonly id?: string;
   readonly hostVersion: string;
   readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
-  readonly policies?: ReadonlyMap<string, VueI18nPolicy>;
 };
 
 const configurationSchema = v.object({
@@ -87,10 +86,7 @@ export function createVueI18nVariableCorrespondenceChecker<
     configuration,
     inputSchema: vueI18nMessageProjectionSchema,
     select: async (input) => {
-      if (
-        options.policies !== undefined &&
-        !options.policies.has(input.candidate.language)
-      )
+      if (!vueI18nDependencies(input).policies.has(input.candidate.language))
         return { status: "not-applicable" };
       const projection = await memoizedVueI18nProjection(
         input,

@@ -1,4 +1,10 @@
 import {
+  createVueI18nChecks,
+  type VueI18nMessageProjection,
+  type VueI18nPolicy,
+  type VueI18nChecksOptions,
+} from "@lioni/checks";
+import {
   analyzeQuality,
   defineConfig,
   type JsonValue,
@@ -8,14 +14,6 @@ import {
   type StandardSchemaV1,
 } from "@lioni/core";
 import type { TermbaseData } from "@lioni/terminology";
-import {
-  prepareVueI18nQuality,
-  type VueI18nCheckIdentities,
-  type VueI18nMessageProjection,
-  type VueI18nPolicy,
-  type VueI18nQualityOptions,
-  type VueI18nUsageIndex,
-} from "@lioni/vue-i18n";
 
 export type Unit = {
   readonly key: string;
@@ -37,7 +35,6 @@ export const checkIds = {
   sourceSyntax: "vue-i18n/source-syntax",
   targetSyntax: "vue-i18n/target-syntax",
   variableCorrespondence: "vue-i18n/variable-correspondence",
-  callArguments: "vue-i18n/call-arguments",
   linkTargetExists: "vue-i18n/link-target-exists",
   linkCycle: "vue-i18n/link-cycle",
   protectedLiterals: "vue-i18n/protected-literals",
@@ -46,30 +43,6 @@ export const checkIds = {
   forbiddenTerminology: "terminology/reject-forbidden-translation",
   messageFamilyConsistency: "message-family-consistency",
 } as const;
-
-const testIdentity = (id: string) => ({
-  id,
-  hostVersion: "vue-i18n-quality-test-v1",
-});
-const identities = {
-  sourceSyntax: testIdentity(checkIds.sourceSyntax),
-  targetSyntax: testIdentity(checkIds.targetSyntax),
-  variableCorrespondence: testIdentity(checkIds.variableCorrespondence),
-  callArguments: testIdentity(checkIds.callArguments),
-  linkTargetExists: testIdentity(checkIds.linkTargetExists),
-  linkCycle: testIdentity(checkIds.linkCycle),
-  protectedLiterals: testIdentity(checkIds.protectedLiterals),
-  quantities: testIdentity(checkIds.quantities),
-  allowedTerminology: testIdentity(checkIds.allowedTerminology),
-  forbiddenTerminology: testIdentity(checkIds.forbiddenTerminology),
-  messageFamilyConsistency: testIdentity(checkIds.messageFamilyConsistency),
-} satisfies VueI18nCheckIdentities;
-
-const usageIndex: VueI18nUsageIndex = {
-  entries: [],
-  unresolved: [],
-  errors: [],
-};
 
 export function policyFor(
   input: {
@@ -91,7 +64,6 @@ export function policyFor(
       : never;
     readonly protectedLiterals?: Readonly<Record<string, readonly string[]>>;
     readonly scopes?: VueI18nPolicy["messageFamilies"]["scopes"];
-    readonly usageScopes?: VueI18nPolicy["messageFamilies"]["usageScopes"];
     readonly targetEquivalences?: VueI18nPolicy["messageFamilies"]["targetEquivalences"];
   } = {},
 ): VueI18nPolicy {
@@ -117,7 +89,6 @@ export function policyFor(
     protectedLiterals: input.protectedLiterals ?? {},
     messageFamilies: {
       scopes: input.scopes ?? [],
-      usageScopes: input.usageScopes ?? [],
       targetEquivalences: input.targetEquivalences ?? [],
     },
   };
@@ -126,7 +97,7 @@ export function policyFor(
 export function createQualityFixture(input: {
   readonly policies: readonly VueI18nPolicy[];
   readonly terms?: TermbaseData;
-  readonly usages?: VueI18nUsageIndex;
+  readonly loadTerms?: () => TermbaseData;
   readonly unavailableSourceKeys?: readonly string[];
   readonly onProject?: () => void;
   readonly alterProjection?: (
@@ -172,7 +143,7 @@ export function createQualityFixture(input: {
 
   const reference = (
     value: Parameters<
-      VueI18nQualityOptions<Unit, Translation, Body>["reference"]
+      VueI18nChecksOptions<Unit, Translation, Body>["reference"]
     >[0],
   ): VueI18nMessageProjection => {
     const policy = byLanguage.get(value.language);
@@ -191,15 +162,6 @@ export function createQualityFixture(input: {
           ? { status: "available", text: value.translation.content.text }
           : { status: "unavailable" },
     });
-  };
-
-  const qualityOptions = {
-    project,
-    reference,
-    policies,
-    terms: input.terms ?? { concepts: [] },
-    usages: input.usages ?? usageIndex,
-    identities,
   };
 
   const sourceSchema = schema<Unit>(
@@ -277,8 +239,17 @@ export function createQualityFixture(input: {
       },
     },
     quality: {
-      prepare: () =>
-        prepareVueI18nQuality<Unit, Translation, Body>(qualityOptions),
+      checks: createVueI18nChecks<Unit, Translation, Body>({
+        hostVersion: "vue-i18n-quality-test-v1",
+        project,
+        reference,
+      }),
+      loadDependencies: () => ({
+        vueI18n: {
+          policies,
+          terms: input.loadTerms?.() ?? input.terms ?? { concepts: [] },
+        },
+      }),
     },
   });
 

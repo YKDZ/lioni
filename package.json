@@ -27,7 +27,6 @@
     "@lioni/terminology": "workspace:*",
     "@lioni/text-analysis": "workspace:*",
     "@lioni/tooling-config": "workspace:./packages/tooling-config",
-    "@lioni/vue-i18n": "workspace:*",
     "@types/node": "catalog:",
     "oxfmt": "catalog:",
     "oxlint": "catalog:",
