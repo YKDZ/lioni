@@ -17,7 +17,7 @@
     "publication:publish": "changeset publish --from-pack-dir .changeset/packed",
     "verify:artifacts": "node --conditions=source scripts/run-artifact-tests.ts",
     "terminology:evaluation:quality": "pnpm --filter @lioni/terminology evaluation:quality",
-    "terminology:evaluation:performance": "node --conditions=source scripts/evaluate-terminology-performance.ts"
+    "terminology:evaluation:performance": "pnpm exec turbo run build --filter=@lioni/terminology... && pnpm --filter @lioni/terminology run evaluation:performance"
   },
   "devDependencies": {
     "@changesets/cli": "catalog:",
