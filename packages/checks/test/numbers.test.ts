@@ -11,6 +11,7 @@ import {
   type SourceUnitFact,
   type StandardSchemaV1,
 } from "@lioni/core";
+import { safeParse } from "valibot";
 
 import { createNumberChecker } from "../src/index.ts";
 
@@ -576,6 +577,74 @@ void describe("阿拉伯数字对应检查", () => {
     assert.equal(
       result.diagnostics[0]?.message,
       "译文缺少数字：12。译文多出数字：21。",
+    );
+  });
+});
+
+void describe("阿拉伯数字检查 schema", () => {
+  const checker = createNumberChecker({
+    hostVersion: "number-schema-test-v1",
+    select: selectNumberSubject,
+    sourceText: (unit) => unit.source,
+    translationText: (content) => content,
+  });
+
+  void it("接受配置与投影输入，并沿用未知字段处理", () => {
+    assert.deepEqual(checker.configuration, {
+      format: "ascii-decimal-v1",
+      comparison: "exact-multiset",
+    });
+    const configuration = safeParse(checker.configurationSchema, {
+      format: "ascii-decimal-v1",
+      comparison: "exact-multiset",
+      ignored: true,
+    });
+    const input = safeParse(checker.inputSchema, {
+      source: "Total 12",
+      target: "合计 12",
+      ignored: true,
+    });
+
+    assert.equal(configuration.success, true);
+    assert.equal(input.success, true);
+    if (configuration.success && input.success) {
+      assert.deepEqual(configuration.output, {
+        format: "ascii-decimal-v1",
+        comparison: "exact-multiset",
+      });
+      assert.deepEqual(input.output, { source: "Total 12", target: "合计 12" });
+    }
+  });
+
+  void it("拒绝无效配置和不完整的投影输入", () => {
+    assert.equal(
+      safeParse(checker.configurationSchema, {
+        format: "locale-number",
+        comparison: "exact-multiset",
+      }).success,
+      false,
+    );
+    assert.equal(
+      safeParse(checker.inputSchema, { source: "Total 12", target: 12 })
+        .success,
+      false,
+    );
+    assert.equal(
+      safeParse(
+        checker.configurationSchema,
+        Object.assign([], {
+          format: "ascii-decimal-v1",
+          comparison: "exact-multiset",
+        }),
+      ).success,
+      false,
+    );
+    assert.equal(
+      safeParse(
+        checker.inputSchema,
+        Object.assign([], { source: "Total 12", target: "合计 12" }),
+      ).success,
+      false,
     );
   });
 });

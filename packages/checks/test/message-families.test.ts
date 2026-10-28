@@ -24,6 +24,7 @@ import type {
   TextAnalysis,
   TextRange,
 } from "@lioni/text-analysis";
+import { safeParse } from "valibot";
 
 type Unit = { readonly id: string; readonly source: string };
 type Translation = {
@@ -202,6 +203,104 @@ function checkerFor(
     ...(options.limits === undefined ? {} : { limits: options.limits }),
   });
 }
+
+void test("消息族检查 schema 保留配置语义与投影值", () => {
+  const checker = checkerFor();
+  assert.deepEqual(checker.configuration, {
+    limits: { maxCategories: 6, maxSourcesPerCategory: 3 },
+  });
+  const configuration = safeParse(checker.configurationSchema, {
+    limits: {
+      maxCategories: 4,
+      maxSourcesPerCategory: 2,
+      ignored: "nested",
+    },
+    ignored: "root",
+  });
+  assert.equal(configuration.success, true);
+  if (configuration.success)
+    assert.deepEqual(configuration.output, {
+      limits: { maxCategories: 4, maxSourcesPerCategory: 2 },
+    });
+  assert.equal(
+    safeParse(checker.configurationSchema, {
+      limits: { maxCategories: 0, maxSourcesPerCategory: 2 },
+    }).success,
+    false,
+  );
+  assert.throws(
+    () =>
+      compareMessageFamily(
+        indexMessageFamilies([]),
+        { familyKey: "ui|en|zh|Save", targetKey: "保存" },
+        new Set(),
+        { maxCategories: 1.5, maxSourcesPerCategory: 2 },
+      ),
+    (error: unknown) =>
+      error instanceof TypeError &&
+      error.message === "消息族展示上限必须为正整数。",
+  );
+
+  const specialReference = JSON.parse('{"__proto__":{"retained":true}}');
+  const projection = {
+    groups: [
+      {
+        ref: specialReference,
+        scope: "ui",
+        source: {
+          language: "en",
+          fragments: [{ ref: "source", text: "Save", extra: "fragment" }],
+          extra: "text",
+        },
+        target: {
+          language: "zh",
+          fragments: [{ ref: "target", text: "保存" }],
+        },
+        extra: "group",
+      },
+    ],
+    complete: false,
+    issues: [],
+    extra: "input",
+  };
+  Object.defineProperty(projection, "__proto__", {
+    configurable: true,
+    enumerable: true,
+    value: { retained: true },
+  });
+  const parsedProjection = safeParse(checker.inputSchema, projection);
+  assert.equal(parsedProjection.success, true);
+  if (parsedProjection.success) {
+    assert.equal(parsedProjection.output, projection);
+    assert.equal(Object.hasOwn(parsedProjection.output, "__proto__"), true);
+    assert.equal(parsedProjection.output.groups[0]?.extra, "group");
+    assert.equal(parsedProjection.output.groups[0]?.source.extra, "text");
+    assert.equal(parsedProjection.output.groups[0]?.ref, specialReference);
+  }
+
+  assert.equal(
+    safeParse(checker.inputSchema, {
+      groups: [
+        {
+          ref: "candidate",
+          scope: "ui",
+          source: { language: "en", fragments: [] },
+          target: {
+            language: "zh",
+            fragments: [
+              {
+                ref: "target",
+                text: "😀",
+                protectedRanges: [{ start: 0, end: 1 }],
+              },
+            ],
+          },
+        },
+      ],
+    }).success,
+    false,
+  );
+});
 
 function configFor(
   units: readonly Unit[],

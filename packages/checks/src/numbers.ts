@@ -12,20 +12,42 @@ import type {
   QualityObject,
   QualitySubject,
   SourceUnitFact,
-  StandardSchemaV1,
   TranslationUnitInput,
 } from "@lioni/core";
 import { bindQualityCheck } from "@lioni/core";
+import * as v from "valibot";
 
-type NumberCheckerConfiguration = {
-  readonly format: "ascii-decimal-v1";
-  readonly comparison: "exact-multiset";
-};
+const numberCheckerConfigurationShapeSchema = v.object(
+  {
+    format: v.literal("ascii-decimal-v1", "数字检查器配置无效。"),
+    comparison: v.literal("exact-multiset", "数字检查器配置无效。"),
+  },
+  "数字检查器配置无效。",
+);
 
-export type NumberTextInput = {
-  readonly source: string;
-  readonly target: string;
-};
+type NumberCheckerConfiguration = v.InferOutput<
+  typeof numberCheckerConfigurationShapeSchema
+>;
+
+const numberTextInputShapeSchema = v.object(
+  {
+    source: v.string("数字检查输入必须包含两段文本。"),
+    target: v.string("数字检查输入必须包含两段文本。"),
+  },
+  "数字检查输入必须包含两段文本。",
+);
+
+export type NumberTextInput = v.InferOutput<typeof numberTextInputShapeSchema>;
+
+const numberCheckerConfigurationSchema = v.pipe(
+  v.custom<NumberCheckerConfiguration>(isRecord, "数字检查器配置无效。"),
+  numberCheckerConfigurationShapeSchema,
+);
+
+export const numberTextInputSchema = v.pipe(
+  v.custom<NumberTextInput>(isRecord, "数字检查输入必须包含两段文本。"),
+  numberTextInputShapeSchema,
+);
 
 export type NumberCheckerSubject<
   TUnit extends TranslationUnitInput,
@@ -40,54 +62,6 @@ export type NumberCheckerSubject<
 const numberCheckerConfiguration: NumberCheckerConfiguration = {
   format: "ascii-decimal-v1",
   comparison: "exact-multiset",
-};
-
-const numberCheckerConfigurationSchema: StandardSchemaV1<
-  NumberCheckerConfiguration,
-  NumberCheckerConfiguration
-> = {
-  "~standard": {
-    version: 1,
-    vendor: "lioni-number-checker",
-    validate(value) {
-      if (
-        typeof value !== "object" ||
-        value === null ||
-        Array.isArray(value) ||
-        !("format" in value) ||
-        value.format !== "ascii-decimal-v1" ||
-        !("comparison" in value) ||
-        value.comparison !== "exact-multiset"
-      )
-        return {
-          issues: [{ message: "数字检查器配置无效。" }],
-        };
-      return { value: numberCheckerConfiguration };
-    },
-  },
-};
-
-export const numberTextInputSchema: StandardSchemaV1<
-  NumberTextInput,
-  NumberTextInput
-> = {
-  "~standard": {
-    version: 1,
-    vendor: "lioni-number-checker",
-    validate(value) {
-      if (
-        typeof value !== "object" ||
-        value === null ||
-        Array.isArray(value) ||
-        !("source" in value) ||
-        typeof value.source !== "string" ||
-        !("target" in value) ||
-        typeof value.target !== "string"
-      )
-        return { issues: [{ message: "数字检查输入必须包含两段文本。" }] };
-      return { value: { source: value.source, target: value.target } };
-    },
-  },
 };
 
 type NumberCheckerDefinition<
@@ -331,6 +305,10 @@ function numbersIn(text: string): Map<string, number> {
   for (const [number] of text.matchAll(/[+-]?[0-9]+(?:\.[0-9]+)?/gu))
     counts.set(number, (counts.get(number) ?? 0) + 1);
   return counts;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function difference(
