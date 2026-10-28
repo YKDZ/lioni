@@ -3,112 +3,11 @@ import {
   type PerformanceScenarioName,
 } from "./performance.ts";
 import { runPerformanceComparison } from "./performance/compare.ts";
-import { runQualityEvaluation } from "./quality.ts";
 import { resolvePath } from "./support/json.ts";
 import { cleanupRunDirectory } from "./support/run-directory.ts";
 
-type ParsedArguments = {
-  readonly outputDirectory?: string;
-  readonly scenarios?: readonly ("controlled" | "cfpa")[];
-  readonly external: readonly "cfpa"[];
-  readonly cfpaRoot?: string;
-  readonly retries: number;
-  readonly timeoutMs: number | undefined;
-  readonly generatedEntryCount: number;
-  readonly rebuild: boolean;
-};
-
-function parseArguments(args: readonly string[]): ParsedArguments {
-  let outputDirectory: string | undefined;
-  let scenarios: ("controlled" | "cfpa")[] | undefined;
-  let cfpaRoot: string | undefined;
-  let external: "cfpa"[] = [];
-  let retries = 0;
-  let timeoutMs: number | undefined;
-  let generatedEntryCount = 64;
-  let rebuild = false;
-  for (let index = 0; index < args.length; index += 1) {
-    const argument = args[index];
-    if (argument === "--output") outputDirectory = args[++index];
-    else if (argument === "--scenarios") {
-      const value = args[++index];
-      if (value === undefined) throw new Error("--scenarios 需要场景名称。");
-      scenarios = value.split(",").map((name) => {
-        if (name !== "controlled" && name !== "cfpa")
-          throw new Error(`不支持的评估场景：${name}`);
-        return name;
-      });
-    } else if (argument === "--external") {
-      const value = args[++index];
-      if (value === undefined) throw new Error("--external 需要语料名称。");
-      external = value.split(",").map((name) => {
-        if (name !== "cfpa") throw new Error(`不支持的外部语料：${name}`);
-        return name;
-      });
-    } else if (argument === "--cfpa-root") cfpaRoot = args[++index];
-    else if (argument === "--retries") {
-      const value = Number(args[++index]);
-      if (!Number.isSafeInteger(value)) throw new Error("--retries 需要整数。");
-      retries = value;
-    } else if (argument === "--timeout-ms") {
-      const value = Number(args[++index]);
-      if (!Number.isSafeInteger(value))
-        throw new Error("--timeout-ms 需要整数。");
-      timeoutMs = value;
-    } else if (argument === "--generated-count") {
-      const value = Number(args[++index]);
-      if (!Number.isSafeInteger(value))
-        throw new Error("--generated-count 需要整数。");
-      generatedEntryCount = value;
-    } else if (argument === "--rebuild") rebuild = true;
-    else throw new Error(`未知参数：${String(argument)}`);
-  }
-  if (outputDirectory === "" || cfpaRoot === "")
-    throw new Error("路径参数必须有值。");
-  return {
-    ...(outputDirectory === undefined ? {} : { outputDirectory }),
-    ...(scenarios === undefined
-      ? {}
-      : { scenarios: Object.freeze([...new Set(scenarios)]) }),
-    external: Object.freeze([...new Set(external)]),
-    ...(cfpaRoot === undefined ? {} : { cfpaRoot }),
-    retries,
-    timeoutMs,
-    generatedEntryCount,
-    rebuild,
-  };
-}
-
 function absolutePath(value: string | undefined): string | undefined {
   return value === undefined ? undefined : resolvePath(process.cwd(), value);
-}
-
-async function runQuality(args: readonly string[]): Promise<void> {
-  const options = parseArguments(args);
-  const outputDirectory = absolutePath(options.outputDirectory);
-  const cfpaRoot = absolutePath(options.cfpaRoot);
-  const { timeoutMs, ...definedOptions } = options;
-  const abortController = new AbortController();
-  const interrupt = () => abortController.abort();
-  process.on("SIGINT", interrupt);
-  process.on("SIGTERM", interrupt);
-  try {
-    const { report, outputDirectory: resultDirectory } =
-      await runQualityEvaluation({
-        ...definedOptions,
-        ...(outputDirectory === undefined ? {} : { outputDirectory }),
-        ...(cfpaRoot === undefined ? {} : { cfpaRoot }),
-        ...(timeoutMs === undefined ? {} : { timeoutMs }),
-        signal: abortController.signal,
-      });
-    process.stdout.write(
-      `评估报告：${resultDirectory}/report.json\n执行状态：${report.status}\n`,
-    );
-    if (report.status === "failed") process.exitCode = 1;
-  } finally {
-    process.off("SIGINT", interrupt);
-    process.off("SIGTERM", interrupt);
-  }
 }
 
 type PerformanceArguments = {
@@ -294,27 +193,29 @@ async function runComparison(args: readonly string[]): Promise<void> {
     process.exitCode = 1;
 }
 
+function parseCleanOutput(args: readonly string[]): string {
+  if (args.length !== 2 || args[0] !== "--output" || args[1] === "")
+    throw new Error("clean 需要 --output 运行目录。");
+  return resolvePath(process.cwd(), args[1]!);
+}
+
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
-  if (command === "quality") await runQuality(args);
-  else if (command === "performance") await runPerformance(args);
+  if (command === "performance") await runPerformance(args);
   else if (command === "compare") await runComparison(args);
   else if (command === "clean") {
-    const options = parseArguments(args);
-    if (options.outputDirectory === undefined)
-      throw new Error("clean 需要 --output 运行目录。");
-    const directory = absolutePath(options.outputDirectory)!;
+    const directory = parseCleanOutput(args);
     await cleanupRunDirectory(directory);
     process.stdout.write(`已清理临时运行资料，保留报告：${directory}\n`);
   } else
     throw new Error(
-      "用法：quality [--scenarios controlled,cfpa] [--external cfpa] [--cfpa-root 目录] [--generated-count N] [--retries N] [--timeout-ms N] [--rebuild] [--output 目录]；performance [--scenarios controlled-scale,cfpa] [--external cfpa] [--cfpa-root 目录] [--samples N] [--retries N] [--timeout-ms N] [--group-count N] [--concept-count N] [--seed N] [--rebuild] [--output 目录]；compare --baseline report.json --candidate report.json [--intent equivalent-output|quality-adjustment] [--output 目录]；clean --output 目录",
+      "用法：performance [--scenarios controlled-scale,cfpa] [--external cfpa] [--cfpa-root 目录] [--samples N] [--retries N] [--timeout-ms N] [--group-count N] [--concept-count N] [--seed N] [--rebuild] [--output 目录]；compare --baseline report.json --candidate report.json [--intent equivalent-output|quality-adjustment] [--output 目录]；clean --output 目录",
     );
 }
 
 main().catch((error: unknown) => {
   process.stderr.write(
-    `术语质量评估执行失败：${error instanceof Error ? error.message : String(error)}\n`,
+    `术语性能或报告管理执行失败：${error instanceof Error ? error.message : String(error)}\n`,
   );
   process.exitCode = 1;
 });
