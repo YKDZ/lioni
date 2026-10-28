@@ -32,6 +32,7 @@ const check = defineQualityCheck({
       diagnostics: [{
         severity: "warning",
         object: { kind: "translation-unit", key: candidate.sourceKey, language: candidate.language },
+        location: { language: candidate.language, range: candidate.language + ".json" },
         message: "已检查所选语言。",
         evidence: [],
       }],
@@ -75,7 +76,7 @@ export default defineConfig({
     criterion: "存在实际译文",
     resolveCompletion: ({ translations }) => translations.length > 0,
   },
-  quality: { prepare: () => ({ checks: [check] }) },
+  quality: { checks: [check] },
   translationWriteback: {
     locateExistingTarget: ({ translation }) => ({ status: "located", locator: translation.identity }),
     locateNewTarget: ({ sourceKey, language }) => ({ status: "located", locator: { key: sourceKey, language } }),
@@ -139,7 +140,14 @@ export default defineConfig({
       },
       {
         name: "QA 只检查所选语言的候选",
-        args: ["qa", "lioni.config.ts", "--language", "de"],
+        args: [
+          "qa",
+          "lioni.config.ts",
+          "--language",
+          "de",
+          "--output-format",
+          "structured",
+        ],
         env: { READ_LOG: "qa.log" },
       },
       {

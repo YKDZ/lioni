@@ -321,19 +321,14 @@ function createScenario(
           ];
         },
       },
-      prepare: () => ({
-        checks,
-        request: {
-          candidates: [
-            {
-              sourceKey: "workspace",
-              language: "zh",
-              content: { visible: "工作区", hidden: "作业区" },
-            },
-          ],
-          dependencies: {},
+      checks,
+      buildCandidates: () => [
+        {
+          sourceKey: "workspace",
+          language: "zh",
+          content: { visible: "工作区", hidden: "作业区" },
         },
-      }),
+      ],
     },
   });
 

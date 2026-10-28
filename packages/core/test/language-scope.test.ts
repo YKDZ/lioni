@@ -20,9 +20,7 @@ import {
 type Unit = { readonly key: string; readonly source: string };
 type Translation = { readonly key: string; readonly text: string };
 
-function fixture(
-  prepare?: QualityConfiguration<Unit, Translation, string>["prepare"],
-) {
+function fixture(quality?: QualityConfiguration<Unit, Translation, string>) {
   const reads: string[] = [];
   const unit: Unit = { key: "save", source: "Save" };
   const config: FrameworkConfig<Unit, Translation, string> = defineConfig({
@@ -78,7 +76,7 @@ function fixture(
       criterion: "存在译文",
       resolveCompletion: ({ translations }) => translations.length > 0,
     },
-    ...(prepare === undefined ? {} : { quality: { prepare } }),
+    ...(quality === undefined ? {} : { quality }),
   });
   return { config, reads };
 }
@@ -148,36 +146,37 @@ void describe("本次执行的语言范围", () => {
     }
   });
 
-  void it("QA 准备与检查都只收到本次语言，默认候选使用相同范围", async () => {
+  void it("动态资料与检查都只收到本次语言，默认候选使用相同范围", async () => {
     const preparedLanguages: string[][] = [];
     const checkedLanguages: string[] = [];
-    const { config, reads } = fixture((facts) => {
-      preparedLanguages.push(
-        facts.translations.reads.map(({ language }) => language),
-      );
-      return {
-        checks: [
-          defineTestQualityCheck<Unit, Translation, string>({
-            id: "language-observer",
-            configuration: {},
-            check({ candidate }) {
-              checkedLanguages.push(candidate.language);
-              return {
-                status: "complete",
-                diagnostics: [],
-                issues: [],
-                coverage: {
-                  selected: 1,
-                  evaluated: 1,
-                  notApplicable: 0,
-                  incomplete: 0,
-                  failed: 0,
-                },
-              };
-            },
-          }),
-        ],
-      };
+    const { config, reads } = fixture({
+      checks: [
+        defineTestQualityCheck<Unit, Translation, string>({
+          id: "language-observer",
+          configuration: {},
+          check({ candidate }) {
+            checkedLanguages.push(candidate.language);
+            return {
+              status: "complete",
+              diagnostics: [],
+              issues: [],
+              coverage: {
+                selected: 1,
+                evaluated: 1,
+                notApplicable: 0,
+                incomplete: 0,
+                failed: 0,
+              },
+            };
+          },
+        }),
+      ],
+      loadDependencies: ({ facts }) => {
+        preparedLanguages.push(
+          facts.translations.reads.map(({ language }) => language),
+        );
+        return {};
+      },
     });
     const result = await analyzeQuality(config, { languages: ["ja"] });
     assert.deepStrictEqual(reads, ["source", "ja"]);
@@ -204,10 +203,7 @@ void describe("本次执行的语言范围", () => {
       /译文候选语言 "ja" 不在本次执行范围内/,
     );
 
-    const prepared = fixture(() => ({
-      checks: [],
-      request: { candidates: [outside], dependencies: {} },
-    }));
+    const prepared = fixture({ buildCandidates: () => [outside] });
     await assert.rejects(
       analyzeQuality(prepared.config, { languages: ["fr"] }),
       /译文候选语言 "ja" 不在本次执行范围内/,
