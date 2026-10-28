@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import {
-  mkdir,
   mkdtemp,
   readFile,
   readdir,
@@ -12,6 +11,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { productPackageName } from "./artifact-tests/product.ts";
 import type { Artifact } from "./artifact-tests/support/consumer.ts";
 import { externalInterruptSignal } from "./artifact-tests/support/external-interrupt.ts";
 import { runCommand } from "./artifact-tests/support/process.ts";
@@ -36,10 +36,15 @@ async function artifactFromPublishPlan(planPath: string): Promise<Artifact> {
   );
   const release = releases.find(
     (entry: unknown) =>
-      isRecord(entry) && entry.kind === "publish" && entry.name === "lioni",
+      isRecord(entry) &&
+      entry.kind === "publish" &&
+      entry.name === productPackageName,
   );
-  assert.ok(isRecord(release), "发布计划中没有 lioni 产品。");
-  assert.ok(isRecord(release.tarball), "lioni 发布项缺少 tarball。");
+  assert.ok(isRecord(release), `发布计划中没有 ${productPackageName} 产品。`);
+  assert.ok(
+    isRecord(release.tarball),
+    `${productPackageName} 发布项缺少 tarball。`,
+  );
   const tarballPath = release.tarball.path;
   assert.ok(
     typeof tarballPath === "string",
@@ -49,7 +54,7 @@ async function artifactFromPublishPlan(planPath: string): Promise<Artifact> {
   const filename = path.resolve(path.dirname(absolutePlanPath), tarballPath);
   const file = await stat(filename);
   assert.ok(file.isFile(), `Changesets tarball 不存在：${filename}`);
-  return { name: "lioni", filename };
+  return { name: productPackageName, filename };
 }
 
 /** 消费已构建的正式包；Turbo 负责前置构建，失败时保留临时目录供复现。 */
@@ -60,10 +65,11 @@ async function main(): Promise<void> {
     .sort();
   const args = process.argv.slice(2).filter((arg) => arg !== "--");
   const planOption = args.indexOf("--from-publish-plan");
-  let publishPlanPath: string | undefined;
+  let publishPlanPath = ".changeset/packed/publish-plan.json";
   if (planOption !== -1) {
-    publishPlanPath = args[planOption + 1];
-    assert.ok(publishPlanPath, "--from-publish-plan 后必须提供文件路径。");
+    const providedPlanPath = args[planOption + 1];
+    assert.ok(providedPlanPath, "--from-publish-plan 后必须提供文件路径。");
+    publishPlanPath = providedPlanPath;
     args.splice(planOption, 2);
   }
   if (args.length === 1 && args[0] === "--list") {
@@ -79,7 +85,6 @@ async function main(): Promise<void> {
     );
 
   const root = await mkdtemp(path.join(tmpdir(), "lioni-artifact-tests-"));
-  const artifactsDirectory = path.join(root, "artifacts");
   const commandOptions = {
     cwd: repositoryRoot,
     signal: externalInterruptSignal,
@@ -87,26 +92,8 @@ async function main(): Promise<void> {
   };
   let passed = false;
   try {
-    await mkdir(artifactsDirectory);
-    let artifact: Artifact;
-    if (publishPlanPath) {
-      artifact = await artifactFromPublishPlan(publishPlanPath);
-    } else {
-      const packed = await runCommand(
-        "pnpm",
-        [
-          "--filter",
-          "lioni",
-          "pack",
-          "--pack-destination",
-          artifactsDirectory,
-          "--json",
-        ],
-        commandOptions,
-      );
-      artifact = JSON.parse(packed.stdout) as Artifact;
-    }
-    assert.equal(artifact.name, "lioni");
+    const artifact = await artifactFromPublishPlan(publishPlanPath);
+    assert.equal(artifact.name, productPackageName);
     const artifacts = [artifact];
     await writeFile(
       path.join(root, "artifacts.json"),

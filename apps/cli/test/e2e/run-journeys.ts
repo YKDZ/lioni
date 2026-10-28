@@ -161,9 +161,11 @@ export async function runJourneys(options: {
         packageLink,
         process.platform === "win32" ? "junction" : "dir",
       );
+      const productLink = path.join(workDir, "node_modules", "@lioni", "lioni");
+      await mkdir(path.dirname(productLink), { recursive: true });
       await symlink(
         productDependency,
-        path.join(workDir, "node_modules", "lioni"),
+        productLink,
         process.platform === "win32" ? "junction" : "dir",
       );
       await journey.setup(context);

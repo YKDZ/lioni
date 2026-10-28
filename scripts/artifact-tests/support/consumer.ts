@@ -3,6 +3,7 @@ import { cp, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 
+import { productPackageName } from "../product.ts";
 import { externalInterruptSignal } from "./external-interrupt.ts";
 import { runCommand, runSubprocess, type ProcessResult } from "./process.ts";
 
@@ -36,7 +37,7 @@ function requiredEnvironment(name: string): string {
   return value;
 }
 
-/** 在工作区外只安装本次打包的 lioni 产品。 */
+/** 在工作区外只安装本次打包的 @lioni/lioni 产品。 */
 export function testArtifactConsumer(
   options: ConsumerScenarioOptions,
   execute: (consumer: Consumer) => Promise<void>,
@@ -46,9 +47,9 @@ export function testArtifactConsumer(
     const artifacts = JSON.parse(
       await readFile(path.join(runRoot, "artifacts.json"), "utf8"),
     ) as readonly Artifact[];
-    const product = artifacts.find(({ name }) => name === "lioni");
-    assert.ok(product, "本次未打包 lioni 产品。");
-    const dependencies = { lioni: `file:${product.filename}` };
+    const product = artifacts.find(({ name }) => name === productPackageName);
+    assert.ok(product, `本次未打包 ${productPackageName} 产品。`);
+    const dependencies = { [productPackageName]: `file:${product.filename}` };
     const root = await mkdtemp(path.join(runRoot, "consumer-"));
     const signal = AbortSignal.any([context.signal, externalInterruptSignal]);
     const processOptions = {

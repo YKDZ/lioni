@@ -4,7 +4,7 @@ import {
   createNumberChecker,
   defineConfig,
   type StandardSchemaV1,
-} from "lioni";
+} from "@lioni/lioni";
 
 type Body = string | { text: string };
 type Unit = { id: string; source: Body };

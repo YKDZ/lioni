@@ -3,14 +3,14 @@
 lioni 提供 `lioni` 命令行、TypeScript SDK 和 Node.js 文件适配器。Node.js 24.21 及以上版本可安装单一产品包：
 
 ```sh
-pnpm add lioni
+pnpm add @lioni/lioni
 ```
 
-`lioni` 命令从配置文件读取宿主适配器，`lioni qa lioni.config.ts` 默认输出简洁中文报告；追加 `--output-format structured` 可取得完整结构化结果。SDK 的纯函数与类型从 `lioni` 导入，文件配置、Node 存储和术语目录读取从 `lioni/node` 导入：
+`lioni` 命令从配置文件读取宿主适配器，`lioni qa lioni.config.ts` 默认输出简洁中文报告；追加 `--output-format structured` 可取得完整结构化结果。SDK 的纯函数与类型从 `@lioni/lioni` 导入，文件配置、Node 存储和术语目录读取从 `@lioni/lioni/node` 导入：
 
 ```ts
-import { analyzeQuality, defineConfig, parseTermbaseYaml } from "lioni";
-import { loadConfig, loadTermbaseYaml } from "lioni/node";
+import { analyzeQuality, defineConfig, parseTermbaseYaml } from "@lioni/lioni";
+import { loadConfig, loadTermbaseYaml } from "@lioni/lioni/node";
 
 const config = await loadConfig("lioni.config.ts");
 const result = await analyzeQuality(config);
@@ -43,8 +43,11 @@ SDK 保留自定义正文与适配器、检查器、存储，以及独立的预�
 闭包依赖不会自动纳入指纹。通过 `quality.loadDependencies` 返回的宿主资料、外部策略和其他会影响诊断内容、位置或证据的数据会纳入默认指纹；检查作者也可在自定义依据中组合默认构造能力：
 
 ```ts
-import { createDefaultQualityInputBasis, defineQualityCheck } from "lioni";
-import type { JsonValue } from "lioni";
+import {
+  createDefaultQualityInputBasis,
+  defineQualityCheck,
+} from "@lioni/lioni";
+import type { JsonValue } from "@lioni/lioni";
 
 const glossarySnapshot: JsonValue = { version: "2026-10", terms: [] };
 
@@ -73,7 +76,7 @@ const check = defineQualityCheck({
 
 译文适配器的 `translations.contentOf()` 从译文记录取出正文，`identityOf()` 提供稳定目标身份。`analyzeQuality` 将本次事实、候选、动态依赖和复用范围提供给检查器；自定义逻辑可以在 `check(input)` 中按宿主规则解释正文，并返回诊断、问题与覆盖情况。`createVueI18nChecks`、`createNumberChecker`、`createTermChecker` 等工厂为常见规则提供可复用检查器。
 
-自定义存储可实现 `QualityExceptionStore` 或 `QualityCheckResultCache`，也可实现比较基线和更新计划存储。Node 文件实现从 `lioni/node` 导入；纯 SDK 流程可将自定义存储直接放入配置或函数参数。
+自定义存储可实现 `QualityExceptionStore` 或 `QualityCheckResultCache`，也可实现比较基线和更新计划存储。Node 文件实现从 `@lioni/lioni/node` 导入；纯 SDK 流程可将自定义存储直接放入配置或函数参数。
 
 独立计划流程仍可单独使用：`previewUpdate(config, baselineStore)` 返回可保存的计划，之后由 `applyUpdatePlan(plan, config, confirm)` 校验计划并执行写入。两步可以运行在不同进程中，也可分别接入审批流程。
 
@@ -82,7 +85,7 @@ const check = defineQualityCheck({
 例外由检查报告中的执行记录创建，绑定检查项、原文键、目标语言和完整输入指纹，并覆盖该次候选检查的全部诊断：
 
 ```ts
-import { createQualityException } from "lioni";
+import { createQualityException } from "@lioni/lioni";
 
 const execution = report.checks
   .find(({ checkId }) => checkId === "catalog-term-policy")
@@ -148,8 +151,8 @@ const activeErrors = report.diagnostics.filter(
 ```ts
 import { fileURLToPath } from "node:url";
 
-import { createDefaultQualityCheckResultCache } from "lioni/node";
-import { defineConfig } from "lioni";
+import { createDefaultQualityCheckResultCache } from "@lioni/lioni/node";
+import { defineConfig } from "@lioni/lioni";
 
 export default defineConfig({
   // 其余宿主配置……

@@ -26,11 +26,11 @@
 
    ```sh
    cat .changeset/packed/publish-plan.json
-   tar -tzf .changeset/packed/packages/lioni-0.1.0.tgz
-   tar -xOf .changeset/packed/packages/lioni-0.1.0.tgz package/package.json
+   tar -tzf .changeset/packed/packages/lioni-lioni-0.1.0.tgz
+   tar -xOf .changeset/packed/packages/lioni-lioni-0.1.0.tgz package/package.json
    ```
 
-   确认 plan 只包含 `lioni@0.1.0`，tarball 的路径为 `packages/lioni-0.1.0.tgz`；manifest 声明 MIT、公开发布和 `YKDZ/lioni`，README、LICENSE 与实际文件一致，制品没有内部包或源码测试文件。保留这次已审阅的打包结果，不要在上传前重新构建。`publication:publish` 会读取同一 `.changeset/packed/publish-plan.json` 和 tarball。
+   确认 plan 只包含 `@lioni/lioni@0.1.0`，tarball 的路径为 `packages/lioni-lioni-0.1.0.tgz`；manifest 声明 MIT、公开发布和 `YKDZ/lioni`，README、LICENSE 与实际文件一致，制品没有内部包或源码测试文件。保留这次已审阅的打包结果，不要在上传前重新构建。`publication:publish` 会读取同一 `.changeset/packed/publish-plan.json` 和 tarball。
 
 4. 由维护者在本机完成 npm 登录，确认账号后使用同一打包目录上传：
 
@@ -45,24 +45,24 @@
 5. 发布后分别核对 npm 版本、默认 dist-tag 和 Changesets 生成的 Git 标签：
 
    ```sh
-   npm view lioni@0.1.0 version license repository dist.tarball --json
-   npm view lioni dist-tags --json
-   git tag --list 'lioni@0.1.0'
+   npm view @lioni/lioni@0.1.0 version license repository dist.tarball --json
+   npm view @lioni/lioni dist-tags --json
+   git tag --list '@lioni/lioni@0.1.0'
    ```
 
    本机上传不会自动创建 GitHub Release。确认该标签指向 `main` 上的发布提交后，维护者将标签推送到 `YKDZ/lioni`：
 
    ```sh
-   git push origin lioni@0.1.0
+   git push origin '@lioni/lioni@0.1.0'
    ```
 
-   然后在 GitHub 仓库的 Releases 页面，用 `lioni@0.1.0` 标签创建 Release，标题和说明采用 `apps/cli/CHANGELOG.md` 的 `0.1.0` 段落。记录 npm 上传、Git 标签和 GitHub Release 的实际结果，不把其中一步当作另外两步已完成。
+   然后在 GitHub 仓库的 Releases 页面，用 `@lioni/lioni@0.1.0` 标签创建 Release，标题和说明采用 `apps/cli/CHANGELOG.md` 的 `0.1.0` 段落。记录 npm 上传、Git 标签和 GitHub Release 的实际结果，不把其中一步当作另外两步已完成。
 
 ## 后续 GitHub OIDC 发布
 
 `.github/workflows/release.yml` 仅支持手动触发；打包和发布作业都要求运行在仓库默认分支。打包作业执行常规及重型检查、构建并生成 Changesets 制品，发布作业接收同一制品，并使用 `npm` GitHub Environment 与 OIDC 权限。
 
-待下一个真实版本准备好后，维护者在 npm 的 `lioni` 包设置页打开 Trusted Publisher，配置：
+待下一个真实版本准备好后，维护者在 npm 的 `@lioni/lioni` 包设置页打开 Trusted Publisher，配置：
 
 - GitHub 仓库：`YKDZ/lioni`
 - 工作流文件名：`release.yml`（文件位于 `.github/workflows/release.yml`）

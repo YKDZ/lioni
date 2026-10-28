@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { analyzeQuality } from "lioni";
+import { analyzeQuality } from "@lioni/lioni";
 
 import { createConfig } from "./lioni.config.ts";
 

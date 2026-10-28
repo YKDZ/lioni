@@ -8,8 +8,8 @@ import {
   createMemoScope,
   createTextAnalysis,
   evaluateTerms,
-} from "lioni";
-import { loadTermbaseYaml } from "lioni/node";
+} from "@lioni/lioni";
+import { loadTermbaseYaml } from "@lioni/lioni/node";
 
 const memo = createMemoScope();
 try {
