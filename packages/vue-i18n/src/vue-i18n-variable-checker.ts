@@ -4,11 +4,11 @@ import type {
   QualityEvidence,
   QualityIssue,
   QualityObject,
-  StandardSchemaV1,
   TranslationUnitInput,
 } from "@lioni/core";
 import { bindQualityCheck } from "@lioni/core";
 import type { MemoScope } from "@lioni/memo";
+import * as v from "valibot";
 
 import { memoizedVueI18nMessage } from "./message-memo.ts";
 import {
@@ -22,11 +22,6 @@ import type {
 } from "./quality-types.ts";
 import type { VueI18nMessage } from "./vue-i18n-messages.ts";
 import { VUE_I18N_MESSAGE_COMPILER_VERSION } from "./vue-i18n-messages.ts";
-
-type Configuration = {
-  readonly compilerVersion: typeof VUE_I18N_MESSAGE_COMPILER_VERSION;
-  readonly comparison: "branch-variable-count-patterns-v1";
-};
 
 type VariableCount = {
   readonly identity: string;
@@ -50,24 +45,11 @@ export type VueI18nVariableCorrespondenceCheckerOptions<
   readonly policies?: ReadonlyMap<string, VueI18nPolicy>;
 };
 
-const configurationSchema: StandardSchemaV1<Configuration, Configuration> = {
-  "~standard": {
-    version: 1,
-    vendor: "lioni-vue-i18n-variable-checker",
-    validate(value) {
-      return isRecord(value) &&
-        value.compilerVersion === VUE_I18N_MESSAGE_COMPILER_VERSION &&
-        value.comparison === "branch-variable-count-patterns-v1"
-        ? {
-            value: {
-              compilerVersion: VUE_I18N_MESSAGE_COMPILER_VERSION,
-              comparison: "branch-variable-count-patterns-v1",
-            },
-          }
-        : { issues: [{ message: "Vue I18n 变量检查配置无效。" }] };
-    },
-  },
-};
+const configurationSchema = v.object({
+  compilerVersion: v.literal(VUE_I18N_MESSAGE_COMPILER_VERSION),
+  comparison: v.literal("branch-variable-count-patterns-v1"),
+});
+type Configuration = v.InferOutput<typeof configurationSchema>;
 
 const configuration: Configuration = {
   compilerVersion: VUE_I18N_MESSAGE_COMPILER_VERSION,
@@ -340,8 +322,4 @@ function incompleteSelection(code: string, message: string) {
 
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
