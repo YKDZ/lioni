@@ -6,6 +6,7 @@ import {
   defineConfig,
   defineQualityCheck,
   StandardSchemaContractError,
+  validateFrameworkConfig,
   type QualityCheckDefinition,
   type QualityCheckOutcome,
   type SemanticEditCandidate,
@@ -254,6 +255,20 @@ function createChecks() {
 }
 
 void describe("quality checker configuration contracts", () => {
+  void it("配置入口接受带自定义原型的通用 schema 对象", () => {
+    const schema = Object.assign(
+      Object.create({ inherited: true }),
+      unitSchema,
+    );
+
+    assert.doesNotThrow(() =>
+      validateFrameworkConfig({
+        source: { schema, read: () => ({ scopes: [] }) },
+        keyOf: ({ id }: Unit) => id,
+      }),
+    );
+  });
+
   void it("runs transformed sync and async configurations and records their outputs", async () => {
     const { checks, observed } = createChecks();
     const config = qualityConfig(checks);

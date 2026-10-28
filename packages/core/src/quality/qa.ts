@@ -11,6 +11,7 @@ import type {
   TranslationReadFact,
   TranslationUnitInput,
 } from "../index.ts";
+import { isRecord } from "../object-guards.ts";
 import type { JsonValue, SemanticEditCandidate } from "../semantic-edits.ts";
 import { stableStringifyJson } from "../stable-json.ts";
 import {
@@ -671,10 +672,6 @@ function isQualityIssue(value: unknown): boolean {
     typeof value.code === "string" &&
     typeof value.message === "string"
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function assertQualityCheckIdentity(id: string, version: string): void {

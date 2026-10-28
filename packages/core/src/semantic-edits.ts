@@ -16,6 +16,7 @@ import type {
   TranslationReadFact,
   TranslationUnitInput,
 } from "./index.ts";
+import { isRecord } from "./object-guards.ts";
 import {
   assertJsonValue,
   snapshotJsonValue,
@@ -1217,10 +1218,6 @@ function isTranslationRangeComplete<
     scopes.length > 0 &&
     scopes.every(({ enumeration }) => enumeration === "complete")
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function assertOnlyKeys(

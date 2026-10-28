@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { isRecord } from "../object-guards.ts";
 import {
   isCacheableQualityCheckOutcome,
   type CacheableQualityCheckOutcome,
@@ -162,8 +163,4 @@ function isContentDigest(value: unknown): value is string {
 
 function isCacheKey(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

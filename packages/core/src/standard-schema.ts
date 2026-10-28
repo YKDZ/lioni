@@ -1,3 +1,10 @@
+import type {
+  StandardSchemaV1 as OfficialStandardSchemaV1,
+  StandardTypedV1,
+} from "@standard-schema/spec";
+
+import { isRecord } from "./object-guards.ts";
+
 export type JsonValue =
   | string
   | number
@@ -6,44 +13,38 @@ export type JsonValue =
   | readonly JsonValue[]
   | { readonly [key: string]: JsonValue };
 
-export type StandardSchemaV1Issue = {
-  readonly message: string;
-  readonly path?:
-    | readonly (PropertyKey | { readonly key: PropertyKey })[]
-    | undefined;
-};
+type OfficialValidation<TOutput> = ReturnType<
+  OfficialStandardSchemaV1<unknown, TOutput>["~standard"]["validate"]
+>;
 
-export type StandardSchemaV1Result<TOutput> =
-  | { readonly value: TOutput; readonly issues?: undefined }
-  | {
-      readonly issues: readonly StandardSchemaV1Issue[];
-      readonly value?: never;
-    };
-
-export type StandardSchemaV1<Input = unknown, Output = Input> = {
-  readonly "~standard": {
-    readonly version: 1;
-    readonly vendor: string;
-    readonly types?:
-      | {
-          readonly input: Input;
-          readonly output: Output;
-        }
-      | undefined;
+/** 核心 schema 契约遵循官方类型，并继续接受现有消费者使用的 PromiseLike 校验器。 */
+export type StandardSchemaV1<Input = unknown, Output = Input> = Omit<
+  OfficialStandardSchemaV1<Input, Output>,
+  "~standard"
+> & {
+  readonly "~standard": Omit<
+    OfficialStandardSchemaV1<Input, Output>["~standard"],
+    "validate"
+  > & {
     readonly validate: (
       value: unknown,
+      options?: OfficialStandardSchemaV1.Options,
     ) =>
-      | StandardSchemaV1Result<Output>
-      | PromiseLike<StandardSchemaV1Result<Output>>;
+      | OfficialValidation<Output>
+      | PromiseLike<Awaited<OfficialValidation<Output>>>;
   };
 };
 
-export type StandardSchemaTypes<TSchema> = TSchema extends {
-  readonly "~standard": {
-    readonly types?: infer TTypes;
-  };
-}
-  ? NonNullable<TTypes>
+export type StandardSchemaV1Issue = OfficialStandardSchemaV1.Issue;
+
+export type StandardSchemaV1Result<Output> =
+  OfficialStandardSchemaV1.Result<Output>;
+
+export type StandardSchemaTypes<TSchema> = TSchema extends StandardTypedV1
+  ? {
+      readonly input: StandardTypedV1.InferInput<TSchema>;
+      readonly output: StandardTypedV1.InferOutput<TSchema>;
+    }
   : never;
 
 export type IsSameType<TLeft, TRight> =
@@ -383,8 +384,14 @@ function isArrayIndexKey(key: string, length: number): boolean {
   );
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+export function isStandardSchema(value: unknown): value is StandardSchemaV1 {
+  if (!isRecord(value) || !isRecord(value["~standard"])) return false;
+  const standard = value["~standard"];
+  return (
+    standard.version === 1 &&
+    typeof standard.vendor === "string" &&
+    typeof standard.validate === "function"
+  );
 }
 
 function formatIssue(issue: StandardSchemaV1Issue): string {

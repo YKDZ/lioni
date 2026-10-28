@@ -14,6 +14,7 @@ import type {
   TranslationUnitInput,
 } from "./index.ts";
 import { readComparisonSnapshot } from "./index.ts";
+import { isRecord } from "./object-guards.ts";
 import type { JsonValue } from "./semantic-edits.ts";
 import { stableStringify } from "./stable-json.ts";
 import { assertJsonValue } from "./standard-schema.ts";
@@ -853,8 +854,4 @@ function hashJson(value: unknown): string {
   if (serialized === undefined)
     throw new TypeError("比较基线及事实必须可序列化为 JSON。");
   return `sha256:${createHash("sha256").update(serialized).digest("hex")}`;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
