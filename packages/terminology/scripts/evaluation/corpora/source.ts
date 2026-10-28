@@ -9,11 +9,10 @@ import type { ExternalSourceManifest } from "./manifest.ts";
 const execFileAsync = promisify(execFile);
 
 export type VerifiedSource = {
-  readonly id: "cfpa" | "kuma";
+  readonly id: "cfpa";
   readonly root: string;
   readonly repository: string;
   readonly commit: string;
-  readonly tag?: string;
   readonly converterVersion: string;
   readonly files: readonly {
     readonly path: string;
@@ -74,18 +73,6 @@ export async function verifySourceRoot(
   ]);
   if (dirty)
     throw new Error(`${manifest.id} 固定语料副本有未提交改动：${dirty}`);
-  if (manifest.tag !== undefined) {
-    const tag = await gitOutput(root, [
-      "describe",
-      "--tags",
-      "--exact-match",
-      "HEAD",
-    ]);
-    if (tag !== manifest.tag)
-      throw new Error(
-        `${manifest.id} 语料标签不符：期望 ${manifest.tag}，实际 ${tag}。`,
-      );
-  }
 
   const files = [];
   for (const sourceFile of manifest.files) {
@@ -103,7 +90,6 @@ export async function verifySourceRoot(
     root,
     repository: manifest.repository,
     commit,
-    ...(manifest.tag === undefined ? {} : { tag: manifest.tag }),
     converterVersion: manifest.converterVersion,
     files: Object.freeze(files),
     license: manifest.license,

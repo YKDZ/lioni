@@ -5,11 +5,7 @@ import type {
   TermbaseData,
 } from "@lioni/terminology";
 
-import {
-  cfpaSelections,
-  contentTypeSelection,
-  kumaSelections,
-} from "./manifest.ts";
+import { cfpaSelections, contentTypeSelection } from "./manifest.ts";
 import type { VerifiedSource } from "./source.ts";
 
 type TableRow = Readonly<Record<string, string>>;
@@ -41,39 +37,9 @@ export type CfpaPreparedInput = {
   readonly contentTypes: typeof contentTypeSelection.cfpa;
 };
 
-export type KumaPreparedInput = {
-  readonly schemaVersion: 1;
-  readonly id: "kuma";
-  readonly source: VerifiedSource;
-  readonly corpora: Readonly<Record<string, TermDiscoveryCorpus>>;
-  readonly facts: {
-    readonly textByLanguage: Readonly<Record<string, TextFacts>>;
-    readonly pairsByTarget: Readonly<
-      Record<
-        string,
-        {
-          readonly commonKeys: number;
-          readonly nonEmptyPairs: number;
-          readonly missingSourceKeys: number;
-          readonly missingTargetValues: number;
-          readonly identicalSourceTargetValues: number;
-        }
-      >
-    >;
-  };
-  readonly selections: typeof kumaSelections;
-  readonly contentTypes: typeof contentTypeSelection.kuma;
-};
-
-export type PreparedExternalInput = CfpaPreparedInput | KumaPreparedInput;
-
-export type TransformedExternalInput =
-  | Omit<CfpaPreparedInput, "source">
-  | Omit<KumaPreparedInput, "source">;
-
 export function transformedExternalInput(
-  input: PreparedExternalInput,
-): TransformedExternalInput {
+  input: CfpaPreparedInput,
+): Omit<CfpaPreparedInput, "source"> {
   const { source: _source, ...transformed } = input;
   return transformed;
 }
@@ -334,111 +300,5 @@ export async function convertCfpaSource(
     }),
     selections: cfpaSelections,
     contentTypes: contentTypeSelection.cfpa,
-  });
-}
-
-const expectedKumaKeyCounts = Object.freeze({
-  en: 1631,
-  "zh-CN": 1738,
-  "zh-TW": 1264,
-  ja: 1297,
-});
-
-export async function convertKumaSource(
-  source: VerifiedSource,
-  readText: (relativePath: string) => Promise<string>,
-): Promise<KumaPreparedInput> {
-  const parsed = Object.fromEntries(
-    await Promise.all(
-      Object.entries(kumaSelections.locales).map(
-        async ([language, filename]) => {
-          const value: unknown = JSON.parse(await readText(filename));
-          if (
-            typeof value !== "object" ||
-            value === null ||
-            Array.isArray(value)
-          )
-            throw new Error(`Kuma ${language} 资源必须是平面 JSON 对象。`);
-          const strings = Object.entries(value).map(([key, text]) => {
-            if (typeof text !== "string")
-              throw new Error(`Kuma ${language} 资源值不是字符串：${key}。`);
-            return [key, text] as const;
-          });
-          if (
-            strings.length !==
-            expectedKumaKeyCounts[
-              language as keyof typeof expectedKumaKeyCounts
-            ]
-          )
-            throw new Error(
-              `Kuma ${language} key 数不符：期望 ${expectedKumaKeyCounts[language as keyof typeof expectedKumaKeyCounts]}，实际 ${strings.length}。`,
-            );
-          return [language, Object.freeze(strings)];
-        },
-      ),
-    ),
-  ) as Record<string, readonly (readonly [string, string])[]>;
-  const corpora = Object.fromEntries(
-    Object.entries(parsed).map(([language, rows]) => [
-      language,
-      Object.freeze({
-        language,
-        entries: Object.freeze(
-          rows.map(([ref, text]) =>
-            Object.freeze({
-              ref,
-              fragments: Object.freeze([Object.freeze({ ref, text })]),
-            }),
-          ),
-        ),
-      }),
-    ]),
-  );
-  const textByLanguage = Object.fromEntries(
-    Object.entries(corpora).map(([language, corpus]) => [
-      language,
-      textFacts(corpus.entries),
-    ]),
-  );
-  const english = new Map(parsed.en);
-  const pairsByTarget = Object.fromEntries(
-    Object.entries(parsed)
-      .filter(([language]) => language !== "en")
-      .map(([language, rows]) => {
-        const target = new Map(rows);
-        const commonKeys = [
-          ...new Set([...english.keys(), ...target.keys()]),
-        ].filter((key) => english.has(key) && target.has(key));
-        const nonEmptyPairs = commonKeys.filter(
-          (key) => english.get(key)?.trim() && target.get(key)?.trim(),
-        );
-        const identicalSourceTargetValues = nonEmptyPairs.filter(
-          (key) => english.get(key) === target.get(key),
-        ).length;
-        return [
-          language,
-          Object.freeze({
-            commonKeys: commonKeys.length,
-            nonEmptyPairs: nonEmptyPairs.length,
-            missingSourceKeys: rows.filter(([key]) => !english.has(key)).length,
-            missingTargetValues: commonKeys.filter(
-              (key) => !target.get(key)?.trim(),
-            ).length,
-            identicalSourceTargetValues,
-          }),
-        ];
-      }),
-  );
-  return Object.freeze({
-    schemaVersion: 1,
-    id: "kuma",
-    source,
-    corpora: Object.freeze(corpora),
-    facts: Object.freeze({
-      textByLanguage: Object.freeze(textByLanguage),
-      pairsByTarget: Object.freeze(pairsByTarget),
-    }),
-    selections: kumaSelections,
-    contentTypes: contentTypeSelection.kuma,
   });
 }

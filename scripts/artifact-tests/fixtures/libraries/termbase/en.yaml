@@ -1,0 +1,6 @@
+concepts:
+  service:
+    expressions:
+      - id: service-en
+        text: service
+        usage: preferred

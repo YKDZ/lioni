@@ -4,10 +4,9 @@ export type SourceFile = {
 };
 
 export type ExternalSourceManifest = {
-  readonly id: "cfpa" | "kuma";
+  readonly id: "cfpa";
   readonly repository: string;
   readonly commit: string;
-  readonly tag?: string;
   readonly files: readonly SourceFile[];
   readonly converterVersion: string;
   readonly expectedTransformedSha256: string;
@@ -75,49 +74,6 @@ export const cfpaSource: ExternalSourceManifest = Object.freeze({
   ]),
 });
 
-export const kumaSource: ExternalSourceManifest = Object.freeze({
-  id: "kuma",
-  repository: "https://github.com/louislam/uptime-kuma.git",
-  commit: "d54e4619e52553416e292549f435cc7e57330c29",
-  tag: "2.5.7",
-  converterVersion: "lioni-kuma-v1",
-  expectedTransformedSha256:
-    "ba62e2f41d2de567176a6d862e0b7a0dc949c39869e180bcc90e12ddf0180bca",
-  files: Object.freeze([
-    {
-      path: "src/lang/en.json",
-      sha256:
-        "ad9a8a190814a5575aad48465cb188c2473daff719ab55390c01063896394872",
-    },
-    {
-      path: "src/lang/zh-CN.json",
-      sha256:
-        "b20a115ade12f06ccbf77f6e0bf76c99df4e4defaafcf1e06314962148978181",
-    },
-    {
-      path: "src/lang/zh-TW.json",
-      sha256:
-        "5b75ff92bafadfc1316377ccff0256a5f1bbe90da260414c7b98f0ab8395d0cb",
-    },
-    {
-      path: "src/lang/ja.json",
-      sha256:
-        "822212ed55221ef870287f8620ab3381d04ea1bf7b81dd55edcbd8f69614bf4b",
-    },
-    {
-      path: "LICENSE",
-      sha256:
-        "a0e4fe6bed45a817794411c8ddf2deffbe010ac3a2b2f47e5b8d2fe2f9486883",
-    },
-  ]),
-  license: Object.freeze([Object.freeze({ path: "LICENSE", spdx: "MIT" })]),
-});
-
-export const sourceManifests = Object.freeze({
-  cfpa: cfpaSource,
-  kuma: kumaSource,
-});
-
 export const cfpaSelections = Object.freeze({
   text: Object.freeze({
     columns: Object.freeze({ en: "en_us", "zh-CN": "zh_cn", ja: "ja_jp" }),
@@ -133,17 +89,6 @@ export const cfpaSelections = Object.freeze({
       "English and Chinese variants map to allowed for exploratory coverage only",
     variantSeparator: "|",
   }),
-});
-
-export const kumaSelections = Object.freeze({
-  locales: Object.freeze({
-    en: "src/lang/en.json",
-    "zh-CN": "src/lang/zh-CN.json",
-    "zh-TW": "src/lang/zh-TW.json",
-    ja: "src/lang/ja.json",
-  }),
-  textPolicy:
-    "preserve exact string values; no i18n interpolation parsing or English fallback",
 });
 
 export const contentTypeSelection = Object.freeze({
@@ -167,30 +112,6 @@ export const contentTypeSelection = Object.freeze({
       "outOfMemory.message",
       "telemetry.event.p2p_connection.description",
       "optimizeWorld.confirm.description",
-    ]),
-  }),
-  kuma: Object.freeze({
-    ui: Object.freeze([
-      "Settings",
-      "Save",
-      "Cancel",
-      "Delete",
-      "Dashboard",
-      "About",
-      "Pause",
-      "Resume",
-      "Close",
-      "Login",
-      "Logout",
-      "Confirm",
-      "Language",
-    ]),
-    paragraph: Object.freeze([
-      "homeAssistantNotificationActionHelptext",
-      "GlobalpingLocationDescription",
-      "matrixDesc2",
-      "jsonQueryDescription",
-      "GlobalpingMonitorDescription",
     ]),
   }),
 });

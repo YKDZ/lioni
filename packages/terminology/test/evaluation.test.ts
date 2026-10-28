@@ -373,10 +373,6 @@ void describe("术语质量评估入口", () => {
         firstReport.scenarios.cfpa?.execution.status,
         "not-executed",
       );
-      assert.equal(
-        firstReport.scenarios.kuma?.execution.status,
-        "not-executed",
-      );
       assert.ok(firstReport.scenarios.controlled?.inputSha256);
       assert.equal(
         firstReport.scenarios.controlled?.inputSha256,
@@ -595,7 +591,6 @@ void describe("术语质量评估入口", () => {
         report.scenarios.cfpa?.attempts?.map(({ status }) => status),
         ["failed", "failed"],
       );
-      assert.equal(report.scenarios.kuma?.execution.status, "not-executed");
       await writeFile(
         path.join(outputRoot, "keep.txt"),
         "keep evidence",

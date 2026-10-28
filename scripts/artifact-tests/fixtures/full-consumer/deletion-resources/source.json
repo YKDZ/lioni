@@ -1,7 +1,0 @@
-[
-  {
-    "id": "retired-message",
-    "source": "Archived message",
-    "context": { "file": "src/archived.ts" }
-  }
-]

@@ -9,10 +9,9 @@ import { cleanupRunDirectory } from "./support/run-directory.ts";
 
 type ParsedArguments = {
   readonly outputDirectory?: string;
-  readonly scenarios?: readonly ("controlled" | "cfpa" | "kuma")[];
-  readonly external: readonly ("cfpa" | "kuma")[];
+  readonly scenarios?: readonly ("controlled" | "cfpa")[];
+  readonly external: readonly "cfpa"[];
   readonly cfpaRoot?: string;
-  readonly kumaRoot?: string;
   readonly retries: number;
   readonly timeoutMs: number | undefined;
   readonly generatedEntryCount: number;
@@ -21,10 +20,9 @@ type ParsedArguments = {
 
 function parseArguments(args: readonly string[]): ParsedArguments {
   let outputDirectory: string | undefined;
-  let scenarios: ("controlled" | "cfpa" | "kuma")[] | undefined;
+  let scenarios: ("controlled" | "cfpa")[] | undefined;
   let cfpaRoot: string | undefined;
-  let kumaRoot: string | undefined;
-  let external: ("cfpa" | "kuma")[] = [];
+  let external: "cfpa"[] = [];
   let retries = 0;
   let timeoutMs: number | undefined;
   let generatedEntryCount = 64;
@@ -36,7 +34,7 @@ function parseArguments(args: readonly string[]): ParsedArguments {
       const value = args[++index];
       if (value === undefined) throw new Error("--scenarios 需要场景名称。");
       scenarios = value.split(",").map((name) => {
-        if (name !== "controlled" && name !== "cfpa" && name !== "kuma")
+        if (name !== "controlled" && name !== "cfpa")
           throw new Error(`不支持的评估场景：${name}`);
         return name;
       });
@@ -44,12 +42,10 @@ function parseArguments(args: readonly string[]): ParsedArguments {
       const value = args[++index];
       if (value === undefined) throw new Error("--external 需要语料名称。");
       external = value.split(",").map((name) => {
-        if (name !== "cfpa" && name !== "kuma")
-          throw new Error(`不支持的外部语料：${name}`);
+        if (name !== "cfpa") throw new Error(`不支持的外部语料：${name}`);
         return name;
       });
     } else if (argument === "--cfpa-root") cfpaRoot = args[++index];
-    else if (argument === "--kuma-root") kumaRoot = args[++index];
     else if (argument === "--retries") {
       const value = Number(args[++index]);
       if (!Number.isSafeInteger(value)) throw new Error("--retries 需要整数。");
@@ -67,7 +63,7 @@ function parseArguments(args: readonly string[]): ParsedArguments {
     } else if (argument === "--rebuild") rebuild = true;
     else throw new Error(`未知参数：${String(argument)}`);
   }
-  if (outputDirectory === "" || cfpaRoot === "" || kumaRoot === "")
+  if (outputDirectory === "" || cfpaRoot === "")
     throw new Error("路径参数必须有值。");
   return {
     ...(outputDirectory === undefined ? {} : { outputDirectory }),
@@ -76,7 +72,6 @@ function parseArguments(args: readonly string[]): ParsedArguments {
       : { scenarios: Object.freeze([...new Set(scenarios)]) }),
     external: Object.freeze([...new Set(external)]),
     ...(cfpaRoot === undefined ? {} : { cfpaRoot }),
-    ...(kumaRoot === undefined ? {} : { kumaRoot }),
     retries,
     timeoutMs,
     generatedEntryCount,
@@ -92,7 +87,6 @@ async function runQuality(args: readonly string[]): Promise<void> {
   const options = parseArguments(args);
   const outputDirectory = absolutePath(options.outputDirectory);
   const cfpaRoot = absolutePath(options.cfpaRoot);
-  const kumaRoot = absolutePath(options.kumaRoot);
   const { timeoutMs, ...definedOptions } = options;
   const abortController = new AbortController();
   const interrupt = () => abortController.abort();
@@ -104,7 +98,6 @@ async function runQuality(args: readonly string[]): Promise<void> {
         ...definedOptions,
         ...(outputDirectory === undefined ? {} : { outputDirectory }),
         ...(cfpaRoot === undefined ? {} : { cfpaRoot }),
-        ...(kumaRoot === undefined ? {} : { kumaRoot }),
         ...(timeoutMs === undefined ? {} : { timeoutMs }),
         signal: abortController.signal,
       });
@@ -315,7 +308,7 @@ async function main(): Promise<void> {
     process.stdout.write(`已清理临时运行资料，保留报告：${directory}\n`);
   } else
     throw new Error(
-      "用法：quality [--scenarios controlled,cfpa,kuma] [--external cfpa,kuma] [--cfpa-root 目录] [--kuma-root 目录] [--generated-count N] [--retries N] [--timeout-ms N] [--rebuild] [--output 目录]；performance [--scenarios controlled-scale,cfpa] [--external cfpa] [--cfpa-root 目录] [--samples N] [--retries N] [--timeout-ms N] [--group-count N] [--concept-count N] [--seed N] [--rebuild] [--output 目录]；compare --baseline report.json --candidate report.json [--intent equivalent-output|quality-adjustment] [--output 目录]；clean --output 目录",
+      "用法：quality [--scenarios controlled,cfpa] [--external cfpa] [--cfpa-root 目录] [--generated-count N] [--retries N] [--timeout-ms N] [--rebuild] [--output 目录]；performance [--scenarios controlled-scale,cfpa] [--external cfpa] [--cfpa-root 目录] [--samples N] [--retries N] [--timeout-ms N] [--group-count N] [--concept-count N] [--seed N] [--rebuild] [--output 目录]；compare --baseline report.json --candidate report.json [--intent equivalent-output|quality-adjustment] [--output 目录]；clean --output 目录",
     );
 }
 

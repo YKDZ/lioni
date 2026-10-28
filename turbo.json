@@ -82,12 +82,7 @@
       ],
       "outputs": [],
       "tags": ["quality:heavy"],
-      "passThroughEnv": [
-        "LIONI_ARTIFACT_CACHE",
-        "LIONI_ENABLE_KUMA",
-        "LIONI_KEEP_ARTIFACT_TESTS",
-        "LIONI_KUMA_SOURCE"
-      ]
+      "passThroughEnv": ["LIONI_KEEP_ARTIFACT_TESTS"]
     },
     "//#terminology:evaluation:performance": {
       "cache": false,

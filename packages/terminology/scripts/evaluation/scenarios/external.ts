@@ -13,12 +13,7 @@ import {
   type TermUseAnalysis,
 } from "@lioni/terminology";
 
-import type {
-  CfpaPreparedInput,
-  KumaPreparedInput,
-  TextFacts,
-  TransformedExternalInput,
-} from "../corpora/convert.ts";
+import type { CfpaPreparedInput, TextFacts } from "../corpora/convert.ts";
 import { contentTypeSelection } from "../corpora/manifest.ts";
 import type { ScenarioReport } from "../support/types.ts";
 
@@ -531,102 +526,4 @@ export async function runCfpaScenario(
   } finally {
     memo.dispose();
   }
-}
-
-export async function runKumaScenario(
-  input: KumaPreparedInput,
-  inputSha256: string,
-): Promise<ScenarioReport> {
-  const memo = createMemoScope();
-  try {
-    const languages: Record<string, unknown> = {};
-    let incomplete = false;
-    for (const language of ["en", "zh-CN", "zh-TW", "ja"]) {
-      const corpus = input.corpora[language]!;
-      const fullResult = await discoverTerms(corpus, {
-        ...candidatePolicy,
-        memo,
-      });
-      const ui = await analyzeContentType(
-        corpus,
-        contentTypeSelection.kuma.ui,
-        memo,
-      );
-      const paragraph = await analyzeContentType(
-        corpus,
-        contentTypeSelection.kuma.paragraph,
-        memo,
-      );
-      incomplete ||=
-        fullResult.status === "incomplete" ||
-        ui.status === "incomplete" ||
-        paragraph.status === "incomplete";
-      languages[language] = Object.freeze({
-        facts: input.facts.textByLanguage[language],
-        full: summarizeDiscovery(fullResult),
-        contentTypes: Object.freeze({ ui, paragraph }),
-        metrics: Object.freeze({
-          candidateQuality: Object.freeze({
-            status: "not-evaluated",
-            basis: "没有独立人工候选标签或已确认术语参考集。",
-          }),
-          precision: Object.freeze({
-            status: "not-evaluated",
-            basis: "缺少独立人工真值标签。",
-          }),
-          recall: Object.freeze({
-            status: "not-evaluated",
-            basis: "没有完整参考词表或逐项人工正例标注。",
-          }),
-        }),
-      });
-    }
-    return Object.freeze({
-      execution: Object.freeze({ status: "passed" }),
-      domain: Object.freeze({ status: incomplete ? "incomplete" : "complete" }),
-      inputSha256,
-      metrics: Object.freeze({
-        candidatePrecision: Object.freeze({
-          status: "not-evaluated",
-          basis: "Kuma 真实 UI 没有本项目独立人工候选标签。",
-        }),
-        diagnosticAccuracy: Object.freeze({
-          status: "not-evaluated",
-          basis: "原始译文不自动作为术语诊断正确性标签。",
-        }),
-        referenceOverlap: Object.freeze({
-          status: "not-evaluated",
-          basis: "Kuma 输入没有固定术语参考表。",
-        }),
-      }),
-      evidence: Object.freeze({
-        source: input.source,
-        converterVersion: input.source.converterVersion,
-        inputSha256,
-        selections: input.selections,
-        policies: Object.freeze({
-          candidateDiscovery: candidatePolicy,
-          selectedContentTypeDiscovery: sampleCandidatePolicy,
-          localeTreatment:
-            "exact locale only; preserve empty values and do not use fallback",
-        }),
-        workload: Object.freeze({
-          textByLanguage: input.facts.textByLanguage,
-          pairsByTarget: input.facts.pairsByTarget,
-        }),
-        interpolation:
-          "按精确 locale 字符串分析；不解析 i18n 槽位，也不应用英文 fallback。",
-        languages: Object.freeze(languages),
-      }),
-    });
-  } finally {
-    memo.dispose();
-  }
-}
-
-export function inputValue(
-  value: CfpaPreparedInput | KumaPreparedInput,
-): TransformedExternalInput {
-  const { source: _source, ...transformed } = value;
-  return transformed;
 }

@@ -1,0 +1,4 @@
+[
+  { "id": "catalog", "body": "Enregistrer 1 fichier" },
+  { "id": "guide", "body": { "text": "Lire 3 pages" } }
+]

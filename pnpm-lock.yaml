@@ -226,9 +226,6 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 24.19.2
-      lioni-uptime-kuma-host:
-        specifier: link:./integrations/uptime-kuma
-        version: link:integrations/uptime-kuma
       oxfmt:
         specifier: 'catalog:'
         version: 0.71.0
@@ -263,34 +260,6 @@ importers:
       '@lioni/tooling-config':
         specifier: workspace:*
         version: link:../../packages/tooling-config
-      '@types/node':
-        specifier: 'catalog:'
-        version: 24.19.2
-      oxfmt:
-        specifier: 'catalog:'
-        version: 0.71.0
-      oxlint:
-        specifier: 'catalog:'
-        version: 1.89.0(oxlint-tsgolint@7.0.2004)
-      oxlint-tsgolint:
-        specifier: 'catalog:'
-        version: 7.0.2004
-      typescript-7:
-        specifier: 'catalog:'
-        version: typescript@7.0.2
-
-  integrations/uptime-kuma:
-    dependencies:
-      '@lioni/core':
-        specifier: workspace:*
-        version: link:../../packages/core
-      '@lioni/terminology':
-        specifier: workspace:*
-        version: link:../../packages/terminology
-      '@lioni/vue-i18n':
-        specifier: workspace:*
-        version: link:../../packages/vue-i18n
-    devDependencies:
       '@types/node':
         specifier: 'catalog:'
         version: 24.19.2

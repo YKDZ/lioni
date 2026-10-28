@@ -1,0 +1,6 @@
+concepts:
+  service:
+    expressions:
+      - id: service-zh
+        text: 服务
+        usage: preferred

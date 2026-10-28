@@ -28,7 +28,6 @@
     "@lioni/tooling-config": "workspace:./packages/tooling-config",
     "@lioni/vue-i18n": "workspace:*",
     "@types/node": "catalog:",
-    "lioni-uptime-kuma-host": "link:./integrations/uptime-kuma",
     "oxfmt": "catalog:",
     "oxlint": "catalog:",
     "oxlint-tsgolint": "catalog:",

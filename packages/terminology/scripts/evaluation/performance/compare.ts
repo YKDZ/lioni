@@ -317,7 +317,6 @@ function externalIdentity(
       id: value.source.id,
       repository: value.source.repository,
       commit: value.source.commit,
-      tag: value.source.tag,
       converterVersion: value.source.converterVersion,
       files: value.source.files,
       license: value.source.license,

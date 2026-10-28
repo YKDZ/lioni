@@ -4,10 +4,12 @@ import type {
   QualityLocation,
   TranslationUnitInput,
 } from "@lioni/core";
+import type { MemoScope } from "@lioni/memo";
 
 import { memoizedVueI18nMessage } from "../message-memo.ts";
 import type {
   VueI18nCheckIdentity,
+  VueI18nMessageProjection,
   VueI18nPolicy,
   VueI18nProjector,
 } from "../quality-types.ts";
@@ -63,8 +65,8 @@ export function createCallArgumentCheck<
 }
 
 function evaluateCallArguments(
-  projection: import("../quality-types.ts").VueI18nMessageProjection,
-  memo: import("@lioni/memo").MemoScope,
+  projection: VueI18nMessageProjection,
+  memo: MemoScope,
   usageIndex: VueI18nUsageIndex,
 ): QualityCheckOutcome {
   if (projection.target.status !== "available")

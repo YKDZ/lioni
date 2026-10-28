@@ -30,10 +30,9 @@ const workerPath = fileURLToPath(new URL("./worker.ts", import.meta.url));
 const defaultScenarioTimeoutMs = 10 * 60 * 1000;
 export type QualityOptions = {
   readonly outputDirectory?: string;
-  readonly scenarios?: readonly ("controlled" | "cfpa" | "kuma")[];
-  readonly external?: readonly ("cfpa" | "kuma")[];
+  readonly scenarios?: readonly ("controlled" | "cfpa")[];
+  readonly external?: readonly "cfpa"[];
   readonly cfpaRoot?: string;
-  readonly kumaRoot?: string;
   readonly retries?: number;
   readonly timeoutMs?: number;
   readonly generatedEntryCount?: number;
@@ -52,17 +51,12 @@ function errorText(error: unknown): string {
 }
 
 async function prepareExternal(
-  name: "cfpa" | "kuma",
+  name: "cfpa",
   options: QualityOptions,
   outputDirectory: string,
 ): Promise<PreparedScenario> {
-  const sourceRoot = name === "cfpa" ? options.cfpaRoot : options.kumaRoot;
-  if (!sourceRoot)
-    throw new Error(
-      name === "cfpa"
-        ? "已启用 CFPA，但没有提供本地固定副本目录。"
-        : "已启用 Uptime Kuma，但没有提供固定版本本地副本目录。",
-    );
+  const sourceRoot = options.cfpaRoot;
+  if (!sourceRoot) throw new Error("已启用 CFPA，但没有提供本地固定副本目录。");
   const prepared = await prepareExternalCorpus({
     id: name,
     sourceRoot,
@@ -84,9 +78,7 @@ async function prepareExternal(
       contentTypeSelectionMethod:
         "manifest.ts 中由维护者按 key 明确选择；不依赖文本长度启发式分类。",
       interpretation:
-        name === "cfpa"
-          ? "CFPA 行和英中译法只作开集参考；不映射为经人工核验的概念或正确性标签。"
-          : "精确保留 locale 字符串；不解析插值槽位，不应用英语 fallback；这是自然 UI 语料，不是术语诊断金标。",
+        "CFPA 行和英中译法只作开集参考；不映射为经人工核验的概念或正确性标签。",
     }),
   });
 }
@@ -146,9 +138,7 @@ export async function runQualityEvaluation(
   const selectedSet = new Set(requested);
   if (selectedSet.has("cfpa") && !external.includes("cfpa"))
     throw new Error("选择 CFPA 场景时必须显式启用 --external cfpa。");
-  if (selectedSet.has("kuma") && !external.includes("kuma"))
-    throw new Error("选择 Uptime Kuma 场景时必须显式启用 --external kuma。");
-  const scenarioOrder = ["controlled", "cfpa", "kuma"] as const;
+  const scenarioOrder = ["controlled", "cfpa"] as const;
   const selected = Object.freeze(
     scenarioOrder.filter((name) => selectedSet.has(name)),
   );
@@ -164,13 +154,6 @@ export async function runQualityEvaluation(
         : external.includes("cfpa")
           ? "本次未选择 CFPA 场景。"
           : "本次未启用 CFPA。",
-    ),
-    kuma: notExecutedScenario(
-      selectedSet.has("kuma")
-        ? "等待 Uptime Kuma 来源校验与执行。"
-        : external.includes("kuma")
-          ? "本次未选择 Uptime Kuma 场景。"
-          : "本次未启用 Uptime Kuma。",
     ),
   };
   const packageJson = JSON.parse(
@@ -220,7 +203,7 @@ export async function runQualityEvaluation(
   };
 
   await persist();
-  const runScenario = async (name: "controlled" | "cfpa" | "kuma") => {
+  const runScenario = async (name: "controlled" | "cfpa") => {
     const attempts: ScenarioAttempt[] = [];
     let final: ScenarioReport | undefined;
     for (
@@ -247,7 +230,7 @@ export async function runQualityEvaluation(
         activeScenario = Object.freeze({ name, attempt: attemptNumber });
         await persist();
         const args = ["--conditions=source", workerPath, name];
-        if (name === "cfpa" || name === "kuma")
+        if (name === "cfpa")
           args.push(
             prepared.inputPath!,
             resultPath,
@@ -327,7 +310,7 @@ export async function runQualityEvaluation(
   };
 
   for (const name of selected) {
-    await runScenario(name as "controlled" | "cfpa" | "kuma");
+    await runScenario(name as "controlled" | "cfpa");
   }
   await persist(true);
   return Object.freeze({ report, outputDirectory });
