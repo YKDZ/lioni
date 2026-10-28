@@ -5,6 +5,9 @@
     },
     "dockerfile": "Dockerfile"
   },
+  "containerEnv": {
+    "PNPM_CONFIG_STORE_DIR": "/pnpm/store"
+  },
   "customizations": {
     "vscode": {
       "extensions": ["oxc.oxc-vscode"]
