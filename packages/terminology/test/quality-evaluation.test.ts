@@ -97,6 +97,83 @@ type DiscoveryDataset = {
   }[];
 };
 
+type QaQualityReport = {
+  readonly schemaVersion: 1;
+  readonly task: "qa";
+  readonly dataset: {
+    readonly id: string;
+    readonly version: string;
+    readonly reviewStatus: string;
+  };
+  readonly input: {
+    readonly groupCount: number;
+    readonly sourceFragmentCount: number;
+    readonly targetFragmentCount: number;
+  };
+  readonly output: {
+    readonly status: "complete" | "incomplete";
+    readonly matches: readonly {
+      readonly groupIndex: number;
+      readonly side: "source" | "target";
+      readonly conceptId: string;
+      readonly expressionId: string;
+      readonly range: { readonly start: number; readonly end: number };
+      readonly text: string;
+      readonly usage: string;
+    }[];
+    readonly problems: readonly {
+      readonly groupIndex: number;
+      readonly conceptId: string;
+      readonly ruleId: string;
+      readonly code: string;
+    }[];
+    readonly issues: readonly { readonly code: string }[];
+  };
+  readonly scoring: {
+    readonly matches: {
+      readonly identity: readonly string[];
+      readonly evidence: readonly string[];
+    };
+    readonly problems: {
+      readonly identity: readonly string[];
+      readonly evidence: readonly string[];
+    };
+    readonly issues: { readonly identity: readonly string[] };
+    readonly emptySets: string;
+    readonly sampleExactRate: string;
+  };
+  readonly references: readonly {
+    readonly id: string;
+    readonly matches: {
+      readonly predictedCount: number;
+      readonly expectedCount: number;
+      readonly hits: number;
+      readonly falsePositives: number;
+      readonly falseNegatives: number;
+      readonly precision: number;
+      readonly recall: number;
+      readonly f1: number;
+      readonly evidenceMismatches: number;
+      readonly exactHits: number;
+    };
+    readonly problems: {
+      readonly predictedCount: number;
+      readonly expectedCount: number;
+      readonly hits: number;
+      readonly falsePositives: number;
+      readonly falseNegatives: number;
+      readonly precision: number;
+      readonly recall: number;
+      readonly f1: number;
+      readonly evidenceMismatches: number;
+      readonly exactHits: number;
+    };
+    readonly sampleExactCount: number;
+    readonly sampleCount: number;
+    readonly sampleExactRate: number;
+  }[];
+};
+
 function runQuality(args: readonly string[]) {
   return spawnSync(
     process.execPath,
@@ -119,7 +196,7 @@ async function readReport(filename: string): Promise<QualityReport> {
   return JSON.parse(await readFile(filename, "utf8")) as QualityReport;
 }
 
-void describe("候选发现质量评测入口", () => {
+void describe("术语质量评测入口", () => {
   void it("正式发现输出分别对照多套答案并报告可手算的集合与排名分数", async () => {
     const directory = await mkdtemp(
       path.join(os.tmpdir(), "lioni-discovery-evaluation-"),
@@ -153,6 +230,7 @@ void describe("候选发现质量评测入口", () => {
       assert.equal(result.error, undefined, result.stderr);
       assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
       assert.match(result.stdout, /reviewer-a/u);
+      assert.match(result.stdout, /审阅状态 pending/u);
 
       const report = await readReport(outputPath);
       assert.equal(report.schemaVersion, 1);
@@ -324,6 +402,276 @@ void describe("候选发现质量评测入口", () => {
         ],
         [0, 0, 0],
       );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  void it("通过正式术语分析与判断评测命中、QA 问题和逐组精确率", async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "lioni-qa-evaluation-"),
+    );
+    const fixturePath = path.join(
+      packageRoot,
+      "scripts/evaluation/fixtures/qa-sample.v1.json",
+    );
+    const outputPath = path.join(directory, "report.json");
+
+    try {
+      const result = runQuality([
+        "--input",
+        fixturePath,
+        "--output",
+        outputPath,
+      ]);
+      assert.equal(result.error, undefined, result.stderr);
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      assert.match(result.stdout, /pending/u);
+
+      const report = JSON.parse(
+        await readFile(outputPath, "utf8"),
+      ) as QaQualityReport;
+      assert.equal(report.schemaVersion, 1);
+      assert.equal(report.task, "qa");
+      assert.deepEqual(report.dataset, {
+        id: "self-authored-qa-sample",
+        version: "1.0.0",
+        reviewStatus: "pending",
+      });
+      assert.equal(report.input.groupCount, 4);
+      assert.equal(report.input.sourceFragmentCount, 4);
+      assert.equal(report.input.targetFragmentCount, 4);
+      assert.equal(report.output.status, "complete");
+      assert.deepEqual(report.scoring.matches.identity, [
+        "groupIndex",
+        "side",
+        "conceptId",
+        "expressionId",
+        "fragmentIndex",
+        "ref",
+        "range",
+      ]);
+      assert.deepEqual(report.scoring.matches.evidence, [
+        "certainty",
+        "language",
+        "usage",
+        "text",
+        "expressionText",
+        "form",
+        "policyId",
+      ]);
+      assert.deepEqual(report.scoring.problems.identity, [
+        "groupIndex",
+        "conceptId",
+        "ruleId",
+        "code",
+      ]);
+      assert.deepEqual(report.scoring.problems.evidence, [
+        "sourceMatches",
+        "targetMatches",
+      ]);
+      assert.equal(report.output.matches.length, 6);
+      assert.deepEqual(
+        report.output.matches.map((match) => [
+          match.groupIndex,
+          match.side,
+          match.conceptId,
+          match.expressionId,
+          match.range,
+          match.text,
+          match.usage,
+        ]),
+        [
+          [
+            0,
+            "source",
+            "workspace",
+            "workspace-en",
+            { start: 9, end: 18 },
+            "workspace",
+            "preferred",
+          ],
+          [
+            0,
+            "target",
+            "workspace",
+            "workspace-zh-allowed",
+            { start: 2, end: 5 },
+            "工作区",
+            "allowed",
+          ],
+          [
+            1,
+            "source",
+            "workspace",
+            "workspace-en",
+            { start: 12, end: 21 },
+            "workspace",
+            "preferred",
+          ],
+          [
+            1,
+            "target",
+            "workspace",
+            "workspace-zh-allowed",
+            { start: 2, end: 5 },
+            "工作区",
+            "allowed",
+          ],
+          [
+            1,
+            "target",
+            "workspace",
+            "workspace-zh-forbidden",
+            { start: 10, end: 13 },
+            "工作间",
+            "forbidden",
+          ],
+          [
+            2,
+            "source",
+            "workspace",
+            "workspace-en",
+            { start: 9, end: 18 },
+            "workspace",
+            "preferred",
+          ],
+        ],
+      );
+      assert.deepEqual(
+        report.output.problems.map(({ groupIndex, ruleId, code }) => [
+          groupIndex,
+          ruleId,
+          code,
+        ]),
+        [
+          [1, "reject-forbidden-translation", "forbidden-translation"],
+          [2, "require-allowed-translation", "missing-allowed-translation"],
+        ],
+      );
+      assert.deepEqual(report.output.issues, []);
+
+      const reference = report.references[0];
+      assert.equal(reference?.id, "draft-reviewer-a");
+      assert.deepEqual(reference?.matches, {
+        predictedCount: 6,
+        expectedCount: 6,
+        hits: 6,
+        falsePositives: 0,
+        falseNegatives: 0,
+        precision: 1,
+        recall: 1,
+        f1: 1,
+        evidenceMismatches: 0,
+        exactHits: 6,
+      });
+      assert.deepEqual(reference?.problems, {
+        predictedCount: 2,
+        expectedCount: 2,
+        hits: 2,
+        falsePositives: 0,
+        falseNegatives: 0,
+        precision: 1,
+        recall: 1,
+        f1: 1,
+        evidenceMismatches: 0,
+        exactHits: 2,
+      });
+      assert.equal(reference?.sampleExactCount, 4);
+      assert.equal(reference?.sampleCount, 4);
+      assert.equal(reference?.sampleExactRate, 1);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  void it("按身份计假阳性与假阴性，并单列位置相同但证据不同的命中", async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "lioni-qa-negative-scoring-"),
+    );
+    const fixturePath = path.join(
+      packageRoot,
+      "scripts/evaluation/fixtures/qa-sample.v1.json",
+    );
+    const inputPath = path.join(directory, "input.json");
+    const outputPath = path.join(directory, "report.json");
+    const dataset = JSON.parse(await readFile(fixturePath, "utf8")) as {
+      references: {
+        matches: {
+          id: string;
+          groupIndex: number;
+          text: string;
+          range: { start: number; end: number };
+          [field: string]: unknown;
+        }[];
+        problems: {
+          groupIndex: number;
+          [field: string]: unknown;
+        }[];
+      }[];
+    };
+    const reference = dataset.references[0]!;
+    reference.matches = reference.matches.filter(
+      ({ id }) => id !== "g0-target-workspace",
+    );
+    reference.matches.find(
+      ({ id }) => id === "g1-target-workspace-forbidden",
+    )!.text = "错误证据";
+    reference.matches.push({
+      ...reference.matches.find(({ id }) => id === "g2-source-workspace")!,
+      id: "g3-boundary-substring",
+      groupIndex: 3,
+      range: { start: 4, end: 13 },
+      text: "workspace",
+    });
+    reference.problems = reference.problems.filter(
+      ({ groupIndex }) => groupIndex !== 2,
+    );
+    reference.problems.push({
+      groupIndex: 0,
+      conceptId: "workspace",
+      ruleId: "require-allowed-translation",
+      code: "missing-allowed-translation",
+      sourceMatches: ["g0-source-workspace"],
+      targetMatches: [],
+    });
+    await writeFile(inputPath, `${JSON.stringify(dataset, null, 2)}\n`, "utf8");
+
+    try {
+      const result = runQuality(["--input", inputPath, "--output", outputPath]);
+      assert.equal(result.error, undefined, result.stderr);
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      const report = JSON.parse(
+        await readFile(outputPath, "utf8"),
+      ) as QaQualityReport;
+      const referenceReport = report.references[0];
+      assert.deepEqual(
+        [
+          referenceReport?.matches.hits,
+          referenceReport?.matches.falsePositives,
+          referenceReport?.matches.falseNegatives,
+          referenceReport?.matches.precision,
+          referenceReport?.matches.recall,
+          referenceReport?.matches.f1,
+          referenceReport?.matches.evidenceMismatches,
+          referenceReport?.matches.exactHits,
+        ],
+        [5, 1, 1, 5 / 6, 5 / 6, 5 / 6, 1, 4],
+      );
+      assert.deepEqual(
+        [
+          referenceReport?.problems.hits,
+          referenceReport?.problems.falsePositives,
+          referenceReport?.problems.falseNegatives,
+          referenceReport?.problems.precision,
+          referenceReport?.problems.recall,
+          referenceReport?.problems.f1,
+        ],
+        [1, 1, 1, 0.5, 0.5, 0.5],
+      );
+      assert.equal(referenceReport?.sampleExactCount, 0);
+      assert.equal(referenceReport?.sampleCount, 4);
+      assert.equal(referenceReport?.sampleExactRate, 0);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
