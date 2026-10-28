@@ -3,6 +3,8 @@ import type { JsonValue, QualityLocation } from "@lioni/core";
 import type { TemplateSignature, TextRange } from "@lioni/text-analysis";
 import * as v from "valibot";
 
+import { isRecord } from "./object-guards.ts";
+
 const recordSchema = v.custom<Record<string, unknown>>(isRecord);
 const jsonValueSchema: v.BaseSchema<
   unknown,
@@ -155,10 +157,6 @@ export type MessageFamilyComparison = {
     readonly references: readonly MessageFamilyReference[];
   }[];
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isJsonValue(value: unknown): value is JsonValue {
   try {
