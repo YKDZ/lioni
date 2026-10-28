@@ -1,7 +1,3 @@
-import {
-  compareProtectedLiterals,
-  compareQuantityBranches,
-} from "@lioni/checks";
 import type {
   QualityCheckOutcome,
   QualityEvidence,
@@ -10,6 +6,9 @@ import type {
 import { quantityProfile } from "@lioni/text-analysis";
 import type { QuantityOptions, QuantityProfile } from "@lioni/text-analysis";
 
+import { compareProtectedLiterals } from "../../protected-literals.ts";
+import { compareQuantityBranches } from "../../quantities.ts";
+import { vueI18nDependencies } from "../dependencies.ts";
 import { memoizedVueI18nMessage } from "../message-memo.ts";
 import type {
   VueI18nCheckIdentity,
@@ -45,7 +44,6 @@ export function createProtectedLiteralCheck<
 >(options: {
   readonly identity: VueI18nCheckIdentity;
   readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
-  readonly policies: ReadonlyMap<string, VueI18nPolicy>;
 }) {
   const hostVersion = options.identity.hostVersion;
   const version = [
@@ -57,7 +55,6 @@ export function createProtectedLiteralCheck<
     id: options.identity.id,
     version,
     project: options.project,
-    policies: options.policies,
     requiresSource: true,
     requiresTarget: true,
     targetMustContainText: true,
@@ -66,7 +63,7 @@ export function createProtectedLiteralCheck<
     check: (input) =>
       evaluateProtectedLiterals(
         input.projected,
-        options.policies.get(input.projected.language)!,
+        vueI18nDependencies(input).policies.get(input.projected.language)!,
       ),
   });
 }
@@ -79,7 +76,6 @@ export function createQuantityCheck<
 >(options: {
   readonly identity: VueI18nCheckIdentity;
   readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
-  readonly policies: ReadonlyMap<string, VueI18nPolicy>;
 }) {
   const hostVersion = options.identity.hostVersion;
   const version = [
@@ -92,14 +88,13 @@ export function createQuantityCheck<
     id: options.identity.id,
     version,
     project: options.project,
-    policies: options.policies,
     requiresSource: true,
     requiresTarget: true,
     targetMustContainText: true,
     check: (input) =>
       evaluateQuantities(
         input.projected,
-        options.policies.get(input.projected.language)!,
+        vueI18nDependencies(input).policies.get(input.projected.language)!,
         input.memo,
       ),
   });

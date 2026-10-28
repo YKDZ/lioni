@@ -1,11 +1,11 @@
 import { readFile } from "node:fs/promises";
 
-import { defineConfig, type StandardSchemaV1 } from "@lioni/core";
 import {
-  extractVueI18nUsages,
-  prepareVueI18nQuality,
+  createVueI18nChecks,
   type VueI18nMessageProjection,
-} from "@lioni/vue-i18n";
+  type VueI18nPolicy,
+} from "@lioni/checks";
+import { defineConfig, type StandardSchemaV1 } from "@lioni/core";
 
 type Unit = { readonly source: string };
 const source = "Hello {name}";
@@ -19,9 +19,23 @@ const unitSchema = schema(
     "source" in value &&
     typeof value.source === "string",
 );
-const identity = (id: string) => ({ id, hostVersion: "artifact-consumer-v1" });
-
 export function createConfig(target: string) {
+  const policies: readonly VueI18nPolicy[] = [
+    {
+      sourceLanguage: "en",
+      targetLanguage: "zh-CN",
+      resources: {
+        source: { messages: { message: source }, range: "en.json" },
+        target: { messages: { message: target }, range: "zh-CN.json" },
+      },
+      quantities: {
+        source: { profile: "en" },
+        target: { profile: "zh-CN" },
+      },
+      protectedLiterals: {},
+      messageFamilies: { scopes: [], targetEquivalences: [] },
+    },
+  ];
   return defineConfig({
     source: {
       schema: unitSchema,
@@ -59,56 +73,21 @@ export function createConfig(target: string) {
       }),
     },
     quality: {
-      prepare: () =>
-        prepareVueI18nQuality<Unit, string, string>({
-          project: ({ sourceUnit, candidate }) =>
-            projection(sourceUnit?.unit.source, candidate.content),
-          reference: ({ sourceUnit, translation }) =>
-            projection(
-              sourceUnit.unit.source,
-              translation.bodyAvailability === "available"
-                ? translation.content
-                : undefined,
-            ),
-          policies: [
-            {
-              sourceLanguage: "en",
-              targetLanguage: "zh-CN",
-              resources: {
-                source: { messages: { message: source }, range: "en.json" },
-                target: { messages: { message: target }, range: "zh-CN.json" },
-              },
-              quantities: {
-                source: { profile: "en" },
-                target: { profile: "zh-CN" },
-              },
-              protectedLiterals: {},
-              messageFamilies: {
-                scopes: [],
-                usageScopes: [],
-                targetEquivalences: [],
-              },
-            },
-          ],
-          terms: { concepts: [] },
-          usages: extractVueI18nUsages(
-            '<template><p>{{ t("message", { name }) }}</p></template>',
-            "Message.vue",
+      checks: createVueI18nChecks<Unit, string, string>({
+        hostVersion: "artifact-consumer-v1",
+        project: ({ sourceUnit, candidate }) =>
+          projection(sourceUnit?.unit.source, candidate.content),
+        reference: ({ sourceUnit, translation }) =>
+          projection(
+            sourceUnit.unit.source,
+            translation.bodyAvailability === "available"
+              ? translation.content
+              : undefined,
           ),
-          identities: {
-            sourceSyntax: identity("source-syntax"),
-            targetSyntax: identity("target-syntax"),
-            variableCorrespondence: identity("variables"),
-            callArguments: identity("call-arguments"),
-            linkTargetExists: identity("link-target"),
-            linkCycle: identity("link-cycle"),
-            protectedLiterals: identity("protected-literals"),
-            quantities: identity("quantities"),
-            allowedTerminology: identity("allowed-terminology"),
-            forbiddenTerminology: identity("forbidden-terminology"),
-            messageFamilyConsistency: identity("message-family"),
-          },
-        }),
+      }),
+      loadDependencies: () => ({
+        vueI18n: { policies, terms: { concepts: [] } },
+      }),
     },
   });
 }

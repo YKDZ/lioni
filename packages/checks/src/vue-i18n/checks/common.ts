@@ -14,6 +14,7 @@ import type {
 import { bindQualityCheck } from "@lioni/core";
 import * as v from "valibot";
 
+import { vueI18nDependencies } from "../dependencies.ts";
 import {
   memoizedVueI18nProjection,
   vueI18nMessageProjectionSchema,
@@ -51,7 +52,6 @@ export type VueI18nMessageRuleOptions<
   readonly id: string;
   readonly version: string;
   readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
-  readonly policies: ReadonlyMap<string, VueI18nPolicy>;
   readonly requiresSource: boolean;
   readonly requiresTarget: boolean;
   readonly targetMustContainText?: boolean;
@@ -105,7 +105,9 @@ export function createVueI18nMessageCheck<
         TUnavailable
       >,
     ): Promise<QualityCheckSelection<Subject>> => {
-      const policy = options.policies.get(input.candidate.language);
+      const policy = vueI18nDependencies(input).policies.get(
+        input.candidate.language,
+      );
       if (policy === undefined) return { status: "not-applicable" };
       const projection = await memoizedVueI18nProjection(
         input,
@@ -168,7 +170,9 @@ export function createVueI18nMessageCheck<
         TUnavailable
       >,
     ) => {
-      const policy = options.policies.get(input.projected.language);
+      const policy = vueI18nDependencies(input).policies.get(
+        input.projected.language,
+      );
       if (policy === undefined)
         return incompleteOutcome([
           issue(

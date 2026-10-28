@@ -6,11 +6,11 @@ import { testArtifactConsumer } from "../support/consumer.ts";
 
 testArtifactConsumer(
   {
-    name: "Vue I18n 正式编译器与质量准备通过 SDK 和 CLI 运行",
-    packages: ["@lioni/cli", "@lioni/core", "@lioni/vue-i18n"],
+    name: "Vue I18n 消息检查集合通过 SDK 和 CLI 运行",
+    packages: ["@lioni/cli", "@lioni/core", "@lioni/checks"],
     fixtures: new URL("../fixtures/vue-i18n/", import.meta.url),
   },
-  async ({ root, typecheck, runNode, runCommand }) => {
+  async ({ root, typecheck, runNode, runProcess }) => {
     await typecheck();
     const sdk = await runNode("consumer.ts");
     const summaries = JSON.parse(sdk.stdout) as readonly {
@@ -26,7 +26,13 @@ testArtifactConsumer(
     );
     for (const { target, status, diagnostics } of summaries) {
       await writeFile(path.join(root, "target.json"), JSON.stringify(target));
-      const cli = await runCommand(executable, ["qa", "lioni.config.ts"]);
+      const cli = await runProcess(executable, [
+        "qa",
+        "lioni.config.ts",
+        "--output-format",
+        "structured",
+      ]);
+      assert.equal(cli.status, diagnostics.length === 0 ? 0 : 1);
       const { data } = JSON.parse(cli.stdout) as {
         data: {
           status: string;

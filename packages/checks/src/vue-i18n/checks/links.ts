@@ -1,6 +1,7 @@
 import type { QualityIssue, TranslationUnitInput } from "@lioni/core";
 import type { MemoScope } from "@lioni/memo";
 
+import { vueI18nDependencies } from "../dependencies.ts";
 import { memoizedVueI18nMessage } from "../message-memo.ts";
 import type {
   VueI18nCheckIdentity,
@@ -27,13 +28,11 @@ export function createLinkTargetExistsCheck<
 >(options: {
   readonly identity: VueI18nCheckIdentity;
   readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
-  readonly policies: ReadonlyMap<string, VueI18nPolicy>;
 }) {
   return createVueI18nMessageCheck({
     id: options.identity.id,
     version: version("link-target-exists", options.identity),
     project: options.project,
-    policies: options.policies,
     requiresSource: false,
     requiresTarget: true,
     check: (input) => {
@@ -52,7 +51,9 @@ export function createLinkTargetExistsCheck<
             projection,
           ),
         ]);
-      const policy = options.policies.get(projection.language)!;
+      const policy = vueI18nDependencies(input).policies.get(
+        projection.language,
+      )!;
       const diagnostics = message.linkFacts.flatMap((link) =>
         link.kind === "static" &&
         !hasOwn(policy.resources.source.messages, link.key) &&
@@ -94,13 +95,11 @@ export function createLinkCycleCheck<
 >(options: {
   readonly identity: VueI18nCheckIdentity;
   readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
-  readonly policies: ReadonlyMap<string, VueI18nPolicy>;
 }) {
   return createVueI18nMessageCheck({
     id: options.identity.id,
     version: version("link-cycle", options.identity),
     project: options.project,
-    policies: options.policies,
     requiresSource: false,
     requiresTarget: true,
     check: (input) => {
@@ -110,7 +109,7 @@ export function createLinkCycleCheck<
         ]);
       const search = findCycle(
         input.projected,
-        options.policies.get(input.projected.language)!,
+        vueI18nDependencies(input).policies.get(input.projected.language)!,
         input.memo,
       );
       const targetText = input.projected.target.text;
