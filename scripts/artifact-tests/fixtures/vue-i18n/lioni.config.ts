@@ -6,7 +6,7 @@ import {
   type VueI18nMessageProjection,
   type VueI18nPolicy,
   type StandardSchemaV1,
-} from "lioni";
+} from "@lioni/lioni";
 
 type Unit = { readonly source: string };
 const source = "Hello {name}";

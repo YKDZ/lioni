@@ -7,7 +7,7 @@ import {
   type StandardSchemaV1,
   type UpdatePolicy,
   type UpdatePlanItem,
-} from "lioni";
+} from "@lioni/lioni";
 
 export type Unit = { id: string; source: string };
 export type Translation = { id: string; text: string; writePath?: string };

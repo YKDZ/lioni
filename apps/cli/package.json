@@ -1,5 +1,5 @@
 {
-  "name": "lioni",
+  "name": "@lioni/lioni",
   "version": "0.1.0",
   "private": false,
   "description": "多语言项目资源检查与维护工具，提供命令行与 TypeScript SDK。",
