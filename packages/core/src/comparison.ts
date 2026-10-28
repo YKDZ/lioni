@@ -15,6 +15,7 @@ import type {
   TranslationReadFact,
   TranslationUnitInput,
 } from "./index.ts";
+import { isRecord } from "./object-guards.ts";
 import { assertJsonValue } from "./standard-schema.ts";
 
 export type CompareInput<
@@ -829,10 +830,6 @@ function isEnumerationCompleteness(
 
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function invalidInput(message: string): never {
