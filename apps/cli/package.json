@@ -2,6 +2,17 @@
   "name": "@lioni/cli",
   "version": "0.0.0",
   "private": true,
+  "description": "多语言项目资源检查与维护工具，提供命令行与 TypeScript SDK。",
+  "homepage": "https://github.com/YKDZ/lioni",
+  "bugs": {
+    "url": "https://github.com/YKDZ/lioni/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/YKDZ/lioni",
+    "directory": "apps/cli"
+  },
   "bin": {
     "lioni": "./dist/cli.js"
   },
@@ -9,6 +20,9 @@
     "dist"
   ],
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json --pretty false",
     "format:check": "oxfmt --list-different .",
