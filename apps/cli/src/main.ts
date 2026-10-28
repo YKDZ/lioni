@@ -5,6 +5,8 @@ import {
   analyzeQuality,
   CompletionConfigurationError,
   DuplicateTranslationUnitKeyError,
+  decideQualityReport,
+  formatQualityReport,
   readFacts,
   readCompletion,
   previewUpdate,
@@ -256,102 +258,9 @@ function completionStatusText(status: string): string {
   );
 }
 
-function qualityStatusText(status: string): string {
-  return (
-    {
-      "not-run": "未执行",
-      "not-applicable": "不适用",
-      incomplete: "不完整",
-      failed: "失败",
-      complete: "完整",
-    }[status] ?? status
-  );
-}
-
 function qualityText(value: unknown): ReturnType<typeof text.lines> {
-  const result = value as QualityRunResult;
-  return text.lines([
-    `质量检查：${qualityStatusText(result.status)}`,
-    `事实版本：${result.version}`,
-    `检查候选：${result.candidates.length}；诊断：${result.diagnostics.length}`,
-    `原文读取：${readStatusText(result.factCoverage.source.status)}；译文读取：${result.factCoverage.translations.map(({ language, status }) => `${language} ${readStatusText(status)}`).join("、") || "无"}`,
-    ...result.factCoverage.associations
-      .filter(
-        ({ status, candidateSelected }) =>
-          status !== "matched" || !candidateSelected,
-      )
-      .map(
-        ({ sourceKey, language, status, coverageStatus, candidateSelected }) =>
-          `关联 ${sourceKey} → ${language}：${status}（覆盖${readStatusText(coverageStatus)}；${candidateSelected ? "已选候选" : "未选候选"}）`,
-      ),
-    ...result.diagnostics.map(
-      ({
-        checkId,
-        executionId,
-        severity,
-        object,
-        location,
-        message,
-        evidence,
-        handling,
-      }) => {
-        const locationKey =
-          location.key === undefined ? "" : `，位置键 ${location.key}`;
-        const exception =
-          handling.status === "excepted"
-            ? `；例外 ${handling.exceptionId}：${handling.reason}`
-            : "";
-        return `[${severity}] ${checkId} ${object.key}（${location.language ?? "原文"}，${rangeText(location.range)}${locationKey}，执行 ${executionId}）：${message}${exception}；证据 ${evidence.length} 项`;
-      },
-    ),
-    ...result.exceptionApplicability.map((applicability) => {
-      const candidate =
-        applicability.candidateIndex === undefined
-          ? ""
-          : `（候选 ${applicability.candidateIndex + 1}，执行 ${applicability.executionId ?? "未编号"}）`;
-      const binding = `${applicability.checkId} ${applicability.sourceKey} → ${applicability.language}${candidate}`;
-      if (applicability.status === "applicable")
-        return `QA 例外 ${applicability.exceptionId} ${binding}：适用。`;
-      if (applicability.status === "basis-changed")
-        return `QA 例外 ${applicability.exceptionId} ${binding}：依据变化（${applicability.reasons?.map(qualityExceptionChangeReasonText).join("、") ?? "原因未知"}）。`;
-      return `QA 例外 ${applicability.exceptionId} ${binding}：本次未验证（${qualityExceptionNotVerifiedReasonText(applicability.reason)}）。`;
-    }),
-    ...result.checks.flatMap(
-      ({ checkId, version, executions, issues, status }) => [
-        ...executions.map(
-          ({
-            executionId,
-            candidateIndex,
-            sourceKey,
-            language,
-            status: executionStatus,
-            inputFingerprint,
-            fingerprintSummary,
-          }) =>
-            `检查依据 ${checkId} ${sourceKey} → ${language}（第 ${candidateIndex + 1} 个，执行 ${executionId}，版本 ${version}，${qualityStatusText(executionStatus)}）：${inputFingerprint ?? "本次未形成指纹"}${fingerprintSummary === undefined ? "" : `；配置 ${fingerprintSummary.configurationFingerprint}；输入 ${fingerprintSummary.inputFingerprint}`}`,
-        ),
-        ...issues.map(
-          ({ message }) =>
-            `[${qualityStatusText(status)}] ${checkId}：${message}`,
-        ),
-      ],
-    ),
-  ]);
-}
-
-function qualityExceptionChangeReasonText(reason: string): string {
-  if (reason === "business-input") return "业务输入变化";
-  if (reason === "configuration") return "最终配置变化";
-  if (reason === "check-implementation") return "检查版本变化";
-  return reason;
-}
-
-function qualityExceptionNotVerifiedReasonText(
-  reason: string | undefined,
-): string {
-  if (reason === "not-run") return "对应检查未运行";
-  if (reason === "no-comparable-basis") return "没有可比较依据";
-  return "原因未知";
+  const lines = formatQualityReport(value as QualityRunResult).split("\n");
+  return text.lines([lines[0] ?? "", ...lines.slice(1)]);
 }
 
 function comparisonStatusText(status: string): string {
@@ -1105,7 +1014,8 @@ function createCliContract(identity: CliCommandIdentity) {
         kind: "command",
         parent: "cli",
         name: "qa",
-        description: "使用宿主显式选择的检查器检查当前事实。",
+        description:
+          "默认输出简洁中文质量报告；使用 --output-format structured 查看完整结构化结果。",
         fields: {
           config: { kind: "positional", description: "宿主配置文件路径" },
           languages: languageOption,
@@ -1117,6 +1027,12 @@ function createCliContract(identity: CliCommandIdentity) {
             checked: {
               description: "质量检查结果",
               exitCode: 0,
+              schema: toStandardJsonSchema(v.record(v.string(), v.unknown())),
+              text: qualityText,
+            },
+            notPassed: {
+              description: "质量检查未通过",
+              exitCode: 1,
               schema: toStandardJsonSchema(v.record(v.string(), v.unknown())),
               text: qualityText,
             },
@@ -1138,7 +1054,9 @@ function createCliContract(identity: CliCommandIdentity) {
                 config,
                 languageSelection(input),
               );
-              return outcome.data.checked(result);
+              return decideQualityReport(result).passed
+                ? outcome.data.checked(result)
+                : outcome.data.notPassed(result);
             });
           } catch (error) {
             return outcome.failure.checkFailed({
@@ -1211,7 +1129,10 @@ export async function runCli(runtime: CliRuntime): Promise<number> {
   try {
     const contract = createCliContract(runtime.identity);
     const result = await executeCli(contract, {
-      invocation: parseCliInvocation(contract, runtime.argv.slice(2)),
+      invocation: parseCliInvocation(
+        contract,
+        defaultQualityOutput(runtime.argv.slice(2)),
+      ),
       dependencies: undefined,
       write: runtime.write,
     });
@@ -1233,4 +1154,14 @@ export async function runCli(runtime: CliRuntime): Promise<number> {
     }
     return 70;
   }
+}
+
+function defaultQualityOutput(args: readonly string[]): readonly string[] {
+  if (
+    args[0] !== "qa" ||
+    args.includes("--output-format") ||
+    args.some((argument) => argument.startsWith("--output-format="))
+  )
+    return args;
+  return [...args, "--output-format", "text"];
 }
