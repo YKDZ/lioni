@@ -4,7 +4,7 @@ import path from "node:path";
 import { test } from "node:test";
 
 import { externalInterruptSignal } from "./external-interrupt.ts";
-import { runCommand, type ProcessResult } from "./process.ts";
+import { runCommand, runSubprocess, type ProcessResult } from "./process.ts";
 
 export type Artifact = {
   readonly name: string;
@@ -19,6 +19,8 @@ type ConsumerCommand = (
 export type Consumer = {
   readonly root: string;
   readonly runCommand: ConsumerCommand;
+  /** 返回退出状态，供场景验证 CLI 的预期非零结果。 */
+  readonly runProcess: ConsumerCommand;
   readonly runNode: ConsumerCommand;
   readonly typecheck: () => Promise<ProcessResult>;
 };
@@ -56,13 +58,16 @@ export function testArtifactConsumer(
     );
     const root = await mkdtemp(path.join(runRoot, "consumer-"));
     const signal = AbortSignal.any([context.signal, externalInterruptSignal]);
+    const processOptions = {
+      cwd: root,
+      signal,
+      shell: process.platform === "win32",
+      terminationGraceMs: 500,
+    };
     const command: ConsumerCommand = (executable, args = []) =>
-      runCommand(executable, args, {
-        cwd: root,
-        signal,
-        shell: process.platform === "win32",
-        terminationGraceMs: 500,
-      });
+      runCommand(executable, args, processOptions);
+    const runProcess: ConsumerCommand = (executable, args = []) =>
+      runSubprocess(executable, args, processOptions);
 
     try {
       await cp(options.fixtures, root, { recursive: true });
@@ -105,6 +110,7 @@ export function testArtifactConsumer(
       await execute({
         root,
         runCommand: command,
+        runProcess,
         runNode: (file, args = []) =>
           command(process.execPath, [path.resolve(root, file), ...args]),
         typecheck: () =>
