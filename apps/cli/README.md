@@ -162,3 +162,7 @@ export default defineConfig({
 ```
 
 也可将 `quality.resultCache` 替换为实现 `get` 与 `set` 的自定义存储。缓存只保存 `complete` 和 `not-applicable` 的原始检查结果；失败、未完成、文件损坏或存储故障会重新计算。命中后仍会执行本次候选选择、投影与 schema 校验，并按当前报告关联诊断和应用例外，因此修改或删除 YAML 例外会立即反映在结果中。
+
+## 项目信息
+
+Lioni 使用 [MIT 许可证](LICENSE)。源码和问题反馈见 [YKDZ/lioni](https://github.com/YKDZ/lioni) 与[问题列表](https://github.com/YKDZ/lioni/issues)，版本说明见[更新日志](https://github.com/YKDZ/lioni/blob/main/apps/cli/CHANGELOG.md)。

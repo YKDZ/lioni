@@ -2,6 +2,17 @@
   "name": "lioni",
   "version": "0.1.0",
   "private": false,
+  "description": "多语言项目资源检查与维护工具，提供命令行与 TypeScript SDK。",
+  "homepage": "https://github.com/YKDZ/lioni",
+  "bugs": {
+    "url": "https://github.com/YKDZ/lioni/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/YKDZ/lioni",
+    "directory": "apps/cli"
+  },
   "bin": {
     "lioni": "./dist/cli.js"
   },
@@ -23,6 +34,9 @@
       "import": "./dist/node.js",
       "default": "./dist/node.js"
     }
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsdown",
