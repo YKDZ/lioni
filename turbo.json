@@ -88,6 +88,11 @@
       "cache": false,
       "outputs": [],
       "tags": ["work:on-demand"]
+    },
+    "//#terminology:evaluation:quality": {
+      "cache": false,
+      "outputs": [],
+      "tags": ["work:on-demand"]
     }
   },
   "boundaries": {

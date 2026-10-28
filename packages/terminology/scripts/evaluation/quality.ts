@@ -1,321 +1,428 @@
-import { randomUUID } from "node:crypto";
-import { readFile, mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { prepareExternalCorpus } from "./corpora/prepare.ts";
-import { controlledInputIdentity } from "./scenarios/controlled.ts";
-import { runProcess } from "./support/process.ts";
 import {
-  collectEnvironment,
-  collectSourceIdentity,
-  executionStatus,
-  notExecutedScenario,
-  packageRoot,
-  qualitySummary,
-  writeEvaluationReport,
-} from "./support/report.ts";
-import {
-  defaultEvaluationRoot,
-  defaultRunDirectory,
-  initializeRunDirectory,
-} from "./support/run-directory.ts";
-import type {
-  QualityReport,
-  ScenarioAttempt,
-  ScenarioReport,
-} from "./support/types.ts";
+  discoverTerms,
+  type DiscoverTermsOptions,
+  type TermDiscovery,
+  type TermDiscoveryCorpus,
+} from "@lioni/terminology";
 
-const workerPath = fileURLToPath(new URL("./worker.ts", import.meta.url));
-const defaultScenarioTimeoutMs = 10 * 60 * 1000;
-export type QualityOptions = {
-  readonly outputDirectory?: string;
-  readonly scenarios?: readonly ("controlled" | "cfpa")[];
-  readonly external?: readonly "cfpa"[];
-  readonly cfpaRoot?: string;
-  readonly retries?: number;
-  readonly timeoutMs?: number;
-  readonly generatedEntryCount?: number;
-  readonly rebuild?: boolean;
-  readonly signal?: AbortSignal;
+import { canonicalJson, resolvePath, sha256 } from "./support/json.ts";
+
+const defaultInputPath = fileURLToPath(
+  new URL("./fixtures/discovery-sample.v1.json", import.meta.url),
+);
+const precisionAtValues = [50, 100, 500] as const;
+const discoveryParameterNames = [
+  "maxWords",
+  "maxCharacters",
+  "minOccurrences",
+  "limit",
+] as const;
+
+type DiscoveryParameters = Pick<
+  DiscoverTermsOptions,
+  (typeof discoveryParameterNames)[number]
+>;
+
+type DiscoveryReference = {
+  readonly id: string;
+  readonly terms: readonly string[];
 };
 
-type PreparedScenario = {
+type DiscoveryDataset = {
+  readonly schemaVersion: 1;
+  readonly dataset: {
+    readonly id: string;
+    readonly version: string;
+    readonly reviewStatus: string;
+  };
+  readonly task: "discovery";
+  readonly input: TermDiscoveryCorpus;
+  readonly options: DiscoveryParameters;
+  readonly references: readonly DiscoveryReference[];
+};
+
+type QualityCliOptions = {
   readonly inputPath?: string;
-  readonly inputSha256: string;
-  readonly evidence: Readonly<Record<string, unknown>>;
+  readonly outputPath?: string;
+  readonly parameters: Partial<DiscoveryParameters>;
 };
 
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+/** 质量评测可直接接收已整理对象，也可读取同一数据契约的 JSON 文件。 */
+export type QualityEvaluationOptions = {
+  readonly dataset?: unknown;
+  readonly inputPath?: string;
+  readonly outputPath?: string;
+  readonly parameters?: Partial<DiscoveryParameters>;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-async function prepareExternal(
-  name: "cfpa",
-  options: QualityOptions,
-  outputDirectory: string,
-): Promise<PreparedScenario> {
-  const sourceRoot = options.cfpaRoot;
-  if (!sourceRoot) throw new Error("已启用 CFPA，但没有提供本地固定副本目录。");
-  const prepared = await prepareExternalCorpus({
-    id: name,
-    sourceRoot,
-    rebuild: options.rebuild ?? false,
-  });
-  const inputPath = path.join(outputDirectory, `prepared/${name}.json`);
-  await mkdir(path.dirname(inputPath), { recursive: true });
-  await writeFile(inputPath, `${JSON.stringify(prepared.input)}\n`, "utf8");
-  return Object.freeze({
-    inputPath,
-    inputSha256: prepared.inputSha256,
-    evidence: Object.freeze({
-      source: prepared.source,
-      license: prepared.source.license,
-      converterVersion: prepared.source.converterVersion,
-      transformedInputSha256: prepared.inputSha256,
-      cache: prepared.cache,
-      selections: prepared.input.selections,
-      contentTypeSelectionMethod:
-        "manifest.ts 中由维护者按 key 明确选择；不依赖文本长度启发式分类。",
-      interpretation:
-        "CFPA 行和英中译法只作开集参考；不映射为经人工核验的概念或正确性标签。",
+function requiredString(value: unknown, field: string): string {
+  if (typeof value !== "string" || value.trim() === "")
+    throw new Error(`${field} 必须是非空字符串。`);
+  return value;
+}
+
+function parseDiscoveryOptions(value: unknown): DiscoveryParameters {
+  if (value === undefined) return Object.freeze({});
+  if (!isRecord(value)) throw new Error("options 必须是对象。");
+  const options: Partial<DiscoveryParameters> = {};
+  for (const name of discoveryParameterNames) {
+    const parameter = value[name];
+    if (parameter !== undefined) {
+      if (typeof parameter !== "number" || !Number.isSafeInteger(parameter))
+        throw new Error(`options.${name} 必须是安全整数。`);
+      Object.assign(options, { [name]: parameter });
+    }
+  }
+  return Object.freeze(options);
+}
+
+function parseReferences(value: unknown): readonly DiscoveryReference[] {
+  if (!Array.isArray(value) || value.length === 0)
+    throw new Error("references 必须至少包含一套独立答案。");
+  const ids = new Set<string>();
+  return Object.freeze(
+    value.map((item, index) => {
+      if (!isRecord(item)) throw new Error(`references[${index}] 必须是对象。`);
+      const id = requiredString(item.id, `references[${index}].id`);
+      if (ids.has(id)) throw new Error(`参考答案身份重复：${id}`);
+      ids.add(id);
+      if (!Array.isArray(item.terms))
+        throw new Error(`references[${index}].terms 必须是数组。`);
+      const terms = item.terms.map((term, termIndex) => {
+        if (typeof term !== "string" || normalizeTerm(term) === "")
+          throw new Error(
+            `references[${index}].terms[${termIndex}] 必须是非空字符串。`,
+          );
+        return term;
+      });
+      return Object.freeze({ id, terms: Object.freeze(terms) });
     }),
-  });
+  );
 }
 
-function prepareControlled(generatedEntryCount: number): PreparedScenario {
-  const identity = controlledInputIdentity(generatedEntryCount);
+function parseDataset(value: unknown): DiscoveryDataset {
+  if (!isRecord(value)) throw new Error("评测输入必须是 JSON 对象。");
+  if (value.schemaVersion !== 1)
+    throw new Error("评测输入 schemaVersion 必须为 1。");
+  if (!isRecord(value.dataset)) throw new Error("dataset 必须是对象。");
+  if (value.task !== "discovery")
+    throw new Error("本入口只接受 task: discovery 的数据。");
+  if (!isRecord(value.input)) throw new Error("input 必须是对象。");
+
   return Object.freeze({
-    inputSha256: identity.inputSha256,
-    evidence: Object.freeze({
-      source: "self-authored deterministic cases; no external data",
-      generation: identity.generation,
-      generatedCorpusSha256: identity.generatedCorpusSha256,
+    schemaVersion: 1,
+    dataset: Object.freeze({
+      id: requiredString(value.dataset.id, "dataset.id"),
+      version: requiredString(value.dataset.version, "dataset.version"),
+      reviewStatus: requiredString(
+        value.dataset.reviewStatus,
+        "dataset.reviewStatus",
+      ),
     }),
+    task: "discovery",
+    input: value.input as unknown as TermDiscoveryCorpus,
+    options: parseDiscoveryOptions(value.options),
+    references: parseReferences(value.references),
   });
 }
 
-function validateRetries(retries: number | undefined): number {
-  const value = retries ?? 0;
-  if (!Number.isSafeInteger(value) || value < 0 || value > 3)
-    throw new RangeError("场景重试次数必须在 0 到 3 之间。");
-  return value;
+function parseArguments(args: readonly string[]): QualityCliOptions {
+  let inputPath: string | undefined;
+  let outputPath: string | undefined;
+  const parameters: Partial<DiscoveryParameters> = {};
+  const cliNames = new Map<string, (typeof discoveryParameterNames)[number]>([
+    ["--max-words", "maxWords"],
+    ["--max-characters", "maxCharacters"],
+    ["--min-occurrences", "minOccurrences"],
+    ["--limit", "limit"],
+  ]);
+
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (argument === "--input" || argument === "--output") {
+      const value = args[++index];
+      if (value === undefined || value.trim() === "")
+        throw new Error(`${argument} 需要路径。`);
+      if (argument === "--input") inputPath = value;
+      else outputPath = value;
+      continue;
+    }
+    const parameterName = cliNames.get(String(argument));
+    if (parameterName !== undefined) {
+      const value = Number(args[++index]);
+      if (!Number.isSafeInteger(value))
+        throw new Error(`${argument} 需要安全整数。`);
+      Object.assign(parameters, { [parameterName]: value });
+      continue;
+    }
+    if (argument === "--help") {
+      process.stdout.write(
+        "用法：evaluation:quality [--input 数据.json] [--output 报告.json] [--max-words N] [--max-characters N] [--min-occurrences N] [--limit N]\n",
+      );
+      process.exitCode = 0;
+      return Object.freeze({ parameters: Object.freeze({}) });
+    }
+    throw new Error(`未知质量评测参数：${String(argument)}`);
+  }
+
+  return Object.freeze({
+    ...(inputPath === undefined ? {} : { inputPath }),
+    ...(outputPath === undefined ? {} : { outputPath }),
+    parameters: Object.freeze(parameters),
+  });
 }
 
-function validateTimeout(timeoutMs: number | undefined): number {
-  const value = timeoutMs ?? defaultScenarioTimeoutMs;
-  if (!Number.isSafeInteger(value) || value < 1)
-    throw new RangeError("场景超时必须是正整数毫秒。");
-  return value;
+function normalizeTerm(value: string): string {
+  return value.normalize("NFC").replace(/\s+/gu, " ").trim().toLowerCase();
 }
 
-function validateGeneratedEntryCount(count: number | undefined): number {
-  const value = count ?? 64;
-  if (!Number.isSafeInteger(value) || value < 0 || value > 100_000)
-    throw new RangeError("受控生成条目数必须在 0 到 100000 之间。");
-  return value;
+function uniqueTerms(values: readonly string[]): readonly string[] {
+  return Object.freeze([...new Set(values.map(normalizeTerm))]);
+}
+
+function rankPredictions(candidates: TermDiscovery["candidates"]) {
+  const unique = new Map<
+    string,
+    { readonly term: string; readonly candidate: (typeof candidates)[number] }
+  >();
+  for (const candidate of candidates) {
+    const term = normalizeTerm(candidate.text);
+    if (!unique.has(term)) unique.set(term, Object.freeze({ term, candidate }));
+  }
+  return Object.freeze([...unique.values()]);
+}
+
+function scoreReference(
+  reference: DiscoveryReference,
+  predictions: ReturnType<typeof rankPredictions>,
+) {
+  const predicted = Object.freeze(predictions.map(({ term }) => term));
+  const expected = uniqueTerms(reference.terms);
+  const expectedSet = new Set(expected);
+  const hits = predicted.filter((term) => expectedSet.has(term)).length;
+  const falsePositives = predicted.length - hits;
+  const falseNegatives = expected.length - hits;
+  const bothEmpty = predicted.length === 0 && expected.length === 0;
+  const precision =
+    predicted.length === 0 ? Number(bothEmpty) : hits / predicted.length;
+  const recall =
+    expected.length === 0 ? Number(bothEmpty) : hits / expected.length;
+  const f1 =
+    precision + recall === 0
+      ? 0
+      : (2 * precision * recall) / (precision + recall);
+  const pAt = Object.fromEntries(
+    precisionAtValues.map((k) => {
+      const ranked = predicted.slice(0, k);
+      const rankedHits = ranked.filter((term) => expectedSet.has(term)).length;
+      return [
+        String(k),
+        Object.freeze({
+          hits: rankedHits,
+          precision: rankedHits / k,
+          outputCount: ranked.length,
+          denominator: k,
+        }),
+      ];
+    }),
+  );
+
+  return Object.freeze({
+    id: reference.id,
+    rawTermCount: reference.terms.length,
+    normalizedTermCount: expected.length,
+    predictedTermCount: predicted.length,
+    hits,
+    falsePositives,
+    falseNegatives,
+    precision,
+    recall,
+    f1,
+    pAt: Object.freeze(pAt),
+  });
+}
+
+function formatScore(value: number): string {
+  return value.toFixed(4);
+}
+
+type QualityReport = ReturnType<typeof createQualityReport>;
+
+function qualitySummary(report: QualityReport): string {
+  const referenceLines = report.references.map(
+    ({ id, precision, recall, f1, pAt }) =>
+      `- ${id}：P ${formatScore(precision)} / R ${formatScore(recall)} / F1 ${formatScore(f1)}；P@50 ${formatScore(pAt["50"]!.precision)}，P@100 ${formatScore(pAt["100"]!.precision)}，P@500 ${formatScore(pAt["500"]!.precision)}`,
+  );
+  const issueLines = report.output.issues.map(
+    ({ code, message }) => `- 未完成原因 ${code}：${message}`,
+  );
+  return [
+    `术语候选发现评测：${report.dataset.id}@${report.dataset.version}（${report.output.status}）`,
+    `输入：${report.input.entryCount} 条，${report.input.fragmentCount} 个片段；计分候选 ${report.output.statistics.returnedCandidates} 条，正式接口输出 ${report.output.statistics.discoveryCandidates}/${report.output.statistics.eligibleCandidates}（规范化重复 ${report.output.statistics.normalizedDuplicates}）${report.output.truncated ? "（已截断）" : ""}`,
+    "独立参考答案：",
+    ...referenceLines,
+    ...(issueLines.length === 0 ? [] : ["未完成原因：", ...issueLines]),
+  ].join("\n");
+}
+
+function createQualityReport(
+  dataset: DiscoveryDataset,
+  inputSha256: string,
+  parameters: DiscoveryParameters,
+  discovery: TermDiscovery,
+) {
+  const predictions = rankPredictions(discovery.candidates);
+  const references = dataset.references.map((reference) =>
+    scoreReference(reference, predictions),
+  );
+  const fragmentCount = dataset.input.entries.reduce(
+    (count, entry) => count + entry.fragments.length,
+    0,
+  );
+  return Object.freeze({
+    schemaVersion: 1,
+    task: "discovery",
+    dataset: dataset.dataset,
+    input: Object.freeze({
+      sha256: inputSha256,
+      language: dataset.input.language,
+      entryCount: dataset.input.entries.length,
+      fragmentCount,
+      complete: dataset.input.complete !== false,
+    }),
+    parameters: Object.freeze({
+      ...parameters,
+      normalization: "Unicode NFC；折叠空白；英文小写",
+    }),
+    scoring: Object.freeze({
+      emptySets: "仅当预测集与参考集都为空时 P、R、F1 记 1；其余零分母记 0。",
+      rankingDenominator:
+        "排名分母固定为 K；候选不足 K 时 outputCount 报告实际可用数量。",
+      predictionDeduplication: "规范化词面去重，保留首次发现排名",
+      referenceDeduplication: "每套参考答案内的规范化词面只计一次",
+    }),
+    output: Object.freeze({
+      status: discovery.status,
+      truncated: discovery.statistics.omittedCandidates > 0,
+      statistics: Object.freeze({
+        ...discovery.statistics,
+        discoveryCandidates: discovery.candidates.length,
+        normalizedDuplicates: discovery.candidates.length - predictions.length,
+        returnedCandidates: predictions.length,
+      }),
+      candidates: Object.freeze(
+        predictions.map(({ term, candidate }, index) =>
+          Object.freeze({
+            rank: index + 1,
+            text: candidate.text,
+            normalizedTerm: term,
+            occurrences: candidate.occurrences,
+            entryCount: candidate.entryCount,
+            ranking: candidate.ranking,
+          }),
+        ),
+      ),
+      issues: discovery.issues,
+    }),
+    references: Object.freeze(references),
+  });
+}
+
+async function loadDataset(filename: string) {
+  let raw: Buffer;
+  try {
+    raw = await readFile(filename);
+  } catch (error) {
+    throw new Error(`无法读取评测输入：${filename}`, { cause: error });
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw.toString("utf8")) as unknown;
+  } catch (error) {
+    throw new Error(`评测输入不是有效 JSON：${filename}`, { cause: error });
+  }
+  return Object.freeze({
+    dataset: parseDataset(parsed),
+    inputSha256: sha256(raw),
+  });
+}
+
+async function writeReport(filename: string, report: unknown): Promise<void> {
+  await mkdir(path.dirname(filename), { recursive: true });
+  await writeFile(filename, `${JSON.stringify(report, null, 2)}\n`, "utf8");
 }
 
 export async function runQualityEvaluation(
-  options: QualityOptions = {},
-): Promise<{
-  readonly report: QualityReport;
-  readonly outputDirectory: string;
-}> {
-  const runId = randomUUID();
-  const outputDirectory = options.outputDirectory
-    ? path.resolve(options.outputDirectory)
-    : defaultRunDirectory(runId);
-  const retries = validateRetries(options.retries);
-  const scenarioTimeoutMs = validateTimeout(options.timeoutMs);
-  const generatedEntryCount = validateGeneratedEntryCount(
-    options.generatedEntryCount,
-  );
-  await initializeRunDirectory(outputDirectory, runId);
-
-  const external = [...new Set(options.external ?? [])];
-  const requested = options.scenarios ?? ["controlled", ...external];
-  const selectedSet = new Set(requested);
-  if (selectedSet.has("cfpa") && !external.includes("cfpa"))
-    throw new Error("选择 CFPA 场景时必须显式启用 --external cfpa。");
-  const scenarioOrder = ["controlled", "cfpa"] as const;
-  const selected = Object.freeze(
-    scenarioOrder.filter((name) => selectedSet.has(name)),
-  );
-  let scenarios: Record<string, ScenarioReport> = {
-    controlled: notExecutedScenario(
-      selectedSet.has("controlled")
-        ? "等待受控场景执行。"
-        : "本次未选择受控场景。",
-    ),
-    cfpa: notExecutedScenario(
-      selectedSet.has("cfpa")
-        ? "等待 CFPA 来源校验与执行。"
-        : external.includes("cfpa")
-          ? "本次未选择 CFPA 场景。"
-          : "本次未启用 CFPA。",
-    ),
-  };
-  const packageJson = JSON.parse(
-    await readFile(path.join(packageRoot, "package.json"), "utf8"),
-  ) as { readonly version: string };
-  const startedAt = new Date().toISOString();
-  let report: QualityReport = Object.freeze({
-    schemaVersion: 1,
-    kind: "quality",
-    runId,
-    startedAt,
-    finishedAt: null,
-    status: "running",
-    selected,
-    parameters: Object.freeze({
-      retries,
-      scenarioTimeoutMs,
-      generatedEntryCount,
-      sourceMode: "workspace-source",
-      rebuildExternalInputs: options.rebuild ?? false,
-    }),
-    artifact: Object.freeze({
-      package: "@lioni/terminology",
-      version: packageJson.version,
-      entry: "source",
-    }),
-    source: await collectSourceIdentity(),
-    environment: collectEnvironment(),
-    scenarios: Object.freeze({ ...scenarios }),
+  options: QualityEvaluationOptions = {},
+): Promise<QualityReport> {
+  if (options.dataset !== undefined && options.inputPath !== undefined)
+    throw new Error("dataset 与 inputPath 只能指定其中一项。");
+  const loaded =
+    options.dataset === undefined
+      ? await loadDataset(
+          resolvePath(process.cwd(), options.inputPath ?? defaultInputPath),
+        )
+      : Object.freeze({
+          dataset: parseDataset(options.dataset),
+          inputSha256: sha256(canonicalJson(options.dataset)),
+        });
+  const { dataset, inputSha256 } = loaded;
+  const parameterOverrides = options.parameters ?? {};
+  const parameters = Object.freeze({
+    maxWords: parameterOverrides.maxWords ?? dataset.options.maxWords ?? 3,
+    maxCharacters:
+      parameterOverrides.maxCharacters ?? dataset.options.maxCharacters ?? 80,
+    minOccurrences:
+      parameterOverrides.minOccurrences ?? dataset.options.minOccurrences ?? 1,
+    limit: parameterOverrides.limit ?? dataset.options.limit ?? 100,
   });
-  let activeScenario: QualityReport["activeScenario"];
-
-  const persist = async (finished = false) => {
-    const { activeScenario: _previousActiveScenario, ...baseReport } = report;
-    report = Object.freeze({
-      ...baseReport,
-      status: finished ? executionStatus(scenarios) : "running",
-      finishedAt: finished ? new Date().toISOString() : null,
-      ...(activeScenario === undefined ? {} : { activeScenario }),
-      scenarios: Object.freeze({ ...scenarios }),
-    });
-    await writeEvaluationReport(
-      outputDirectory,
-      report,
-      qualitySummary(report),
-    );
-  };
-
-  await persist();
-  const runScenario = async (name: "controlled" | "cfpa") => {
-    const attempts: ScenarioAttempt[] = [];
-    let final: ScenarioReport | undefined;
-    for (
-      let attemptNumber = 1;
-      attemptNumber <= retries + 1;
-      attemptNumber += 1
-    ) {
-      const attemptStartedAt = new Date().toISOString();
-      let prepared: PreparedScenario | undefined;
-      let processResult: Awaited<ReturnType<typeof runProcess>> | undefined;
-      let attemptResult: ScenarioReport | undefined;
-      let reason: string | undefined;
-      try {
-        if (options.signal?.aborted)
-          throw new Error("运行在场景启动前被中断。");
-        if (name === "controlled")
-          prepared = prepareControlled(generatedEntryCount);
-        else prepared = await prepareExternal(name, options, outputDirectory);
-        const resultPath = path.join(
-          outputDirectory,
-          `attempts/${name}-${attemptNumber}.json`,
-        );
-        await mkdir(path.dirname(resultPath), { recursive: true });
-        activeScenario = Object.freeze({ name, attempt: attemptNumber });
-        await persist();
-        const args = ["--conditions=source", workerPath, name];
-        if (name === "cfpa")
-          args.push(
-            prepared.inputPath!,
-            resultPath,
-            prepared.inputSha256,
-            String(generatedEntryCount),
-          );
-        else
-          args.push(
-            "",
-            resultPath,
-            prepared.inputSha256,
-            String(generatedEntryCount),
-          );
-        processResult = await runProcess({
-          command: process.execPath,
-          args,
-          cwd: packageRoot,
-          timeoutMs: scenarioTimeoutMs,
-          ...(options.signal === undefined ? {} : { signal: options.signal }),
-        });
-        if (processResult.status !== "passed")
-          throw new Error(
-            processResult.error ??
-              (processResult.stderr ||
-                `场景进程退出状态：${processResult.status}`),
-          );
-        attemptResult = JSON.parse(
-          await readFile(resultPath, "utf8"),
-        ) as ScenarioReport;
-        if (attemptResult.execution.status !== "passed")
-          throw new Error(attemptResult.execution.reason ?? "场景未通过执行。");
-        const { evidence: scenarioEvidence, ...scenarioFields } = attemptResult;
-        final = Object.freeze({
-          ...scenarioFields,
-          attempts: Object.freeze([]),
-          inputSha256: prepared.inputSha256,
-          evidence: Object.freeze({
-            preparation: prepared.evidence,
-            scenario: scenarioEvidence,
-          }),
-        });
-      } catch (error) {
-        reason = errorText(error);
-        final = Object.freeze({
-          execution: Object.freeze({ status: "failed", reason }),
-          domain: Object.freeze({ status: "not-run" }),
-          ...(prepared === undefined
-            ? {}
-            : { inputSha256: prepared.inputSha256 }),
-          metrics: Object.freeze({}),
-          ...(prepared === undefined
-            ? {}
-            : { evidence: Object.freeze({ preparation: prepared.evidence }) }),
-        });
-      }
-
-      const status = final.execution.status === "passed" ? "passed" : "failed";
-      attempts.push(
-        Object.freeze({
-          number: attemptNumber,
-          startedAt: attemptStartedAt,
-          finishedAt: new Date().toISOString(),
-          status,
-          ...(reason === undefined ? {} : { reason }),
-          ...(processResult === undefined ? {} : { process: processResult }),
-        }),
-      );
-      activeScenario = undefined;
-      final = Object.freeze({
-        ...final,
-        attempts: Object.freeze([...attempts]),
-      });
-      scenarios = { ...scenarios, [name]: final };
-      await persist();
-      if (status === "passed" || options.signal?.aborted) break;
-    }
-  };
-
-  for (const name of selected) {
-    await runScenario(name as "controlled" | "cfpa");
-  }
-  await persist(true);
-  return Object.freeze({ report, outputDirectory });
+  const discovery = await discoverTerms(dataset.input, parameters);
+  const report = createQualityReport(
+    dataset,
+    inputSha256,
+    parameters,
+    discovery,
+  );
+  if (options.outputPath !== undefined)
+    await writeReport(resolvePath(process.cwd(), options.outputPath), report);
+  return report;
 }
 
-export function defaultOutputRoot(): string {
-  return defaultEvaluationRoot();
+async function runQuality(options: QualityCliOptions): Promise<void> {
+  const report = await runQualityEvaluation(options);
+  const summary = qualitySummary(report);
+  if (options.outputPath === undefined) {
+    process.stderr.write(`${summary}\n`);
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  } else {
+    const outputPath = resolvePath(process.cwd(), options.outputPath);
+    process.stdout.write(`${summary}\n报告 JSON：${outputPath}\n`);
+  }
+  if (report.output.status !== "complete") process.exitCode = 1;
+}
+
+async function main(): Promise<void> {
+  const options = parseArguments(process.argv.slice(2));
+  if (process.exitCode === 0) return;
+  await runQuality(options);
+}
+
+if (
+  process.argv[1] !== undefined &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  main().catch((error: unknown) => {
+    process.stderr.write(
+      `术语质量评测失败：${error instanceof Error ? error.message : String(error)}\n`,
+    );
+    process.exitCode = 1;
+  });
 }

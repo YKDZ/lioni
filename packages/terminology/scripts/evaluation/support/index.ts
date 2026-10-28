@@ -1,10 +1,7 @@
 export {
   collectEnvironment,
   collectSourceIdentity,
-  executionStatus,
-  notExecutedScenario,
   packageRoot,
-  qualitySummary,
   writeEvaluationReport,
 } from "./report.ts";
 export {
@@ -19,14 +16,6 @@ export type {
   ProcessResult,
   ProcessStatus,
 } from "./process.ts";
-export type {
-  DomainStatus,
-  EvaluationMetric,
-  ExecutionStatus,
-  QualityReport,
-  ScenarioAttempt,
-  ScenarioReport,
-} from "./types.ts";
 export { prepareExternalCorpus } from "../corpora/prepare.ts";
 export type {
   ExternalCorpusId,
