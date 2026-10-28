@@ -1,6 +1,7 @@
 import {
   analyzeQuality,
   defineConfig,
+  type JsonValue,
   type QualityCheckInput,
   type SemanticEditCandidate,
   type SourceUnitFact,
@@ -76,8 +77,8 @@ export function policyFor(
     readonly targetMessages?: Readonly<Record<string, string>>;
     readonly sourceLanguage?: string;
     readonly targetLanguage?: string;
-    readonly sourceRange?: string;
-    readonly targetRange?: string;
+    readonly sourceRange?: JsonValue;
+    readonly targetRange?: JsonValue;
     readonly sourceQuantities?: VueI18nPolicy["quantities"] extends infer T
       ? T extends { readonly source: infer S }
         ? S
@@ -128,6 +129,9 @@ export function createQualityFixture(input: {
   readonly usages?: VueI18nUsageIndex;
   readonly unavailableSourceKeys?: readonly string[];
   readonly onProject?: () => void;
+  readonly alterProjection?: (
+    projection: VueI18nMessageProjection,
+  ) => VueI18nMessageProjection;
 }) {
   const policies = input.policies;
   const byLanguage = new Map(
@@ -147,7 +151,7 @@ export function createQualityFixture(input: {
     const candidate = qualityInput.candidate;
     const policy = byLanguage.get(candidate.language);
     if (!policy) throw new Error(`缺少目标语言策略：${candidate.language}。`);
-    return projection({
+    const projected = projection({
       key: candidate.sourceKey,
       language: candidate.language,
       sourceUnit: qualityInput.sourceUnit,
@@ -163,6 +167,7 @@ export function createQualityFixture(input: {
             ? { status: "unavailable" }
             : { status: "available", text: candidate.content.text },
     });
+    return input.alterProjection?.(projected) ?? projected;
   };
 
   const reference = (

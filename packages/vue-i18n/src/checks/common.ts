@@ -9,10 +9,10 @@ import type {
   QualityIssue,
   QualityLocation,
   QualityObject,
-  StandardSchemaV1,
   TranslationUnitInput,
 } from "@lioni/core";
 import { bindQualityCheck } from "@lioni/core";
+import * as v from "valibot";
 
 import {
   memoizedVueI18nProjection,
@@ -24,19 +24,8 @@ import type {
   VueI18nProjector,
 } from "../quality-types.ts";
 
-type Configuration = { readonly version: 1 };
-
-const configurationSchema: StandardSchemaV1<Configuration, Configuration> = {
-  "~standard": {
-    version: 1,
-    vendor: "lioni-vue-i18n-quality-check",
-    validate(value) {
-      return isRecord(value) && value.version === 1
-        ? { value: { version: 1 } }
-        : { issues: [{ message: "Vue I18n 检查配置无效。" }] };
-    },
-  },
-};
+const configurationSchema = v.object({ version: v.literal(1) });
+type Configuration = v.InferOutput<typeof configurationSchema>;
 
 export type VueI18nMessageRuleInput<
   TUnit extends TranslationUnitInput,
@@ -288,8 +277,4 @@ function incompleteSelection(code: string, message: string) {
     status: "incomplete" as const,
     issue: { code, message },
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

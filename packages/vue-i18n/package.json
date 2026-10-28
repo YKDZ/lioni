@@ -38,7 +38,8 @@
     "@lioni/terminology": "workspace:*",
     "@lioni/text-analysis": "workspace:*",
     "@vue/compiler-dom": "3.4.38",
-    "@vue/compiler-sfc": "3.4.38"
+    "@vue/compiler-sfc": "3.4.38",
+    "valibot": "catalog:"
   },
   "devDependencies": {
     "@lioni/tooling-config": "workspace:*",
