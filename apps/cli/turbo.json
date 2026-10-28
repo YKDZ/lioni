@@ -32,11 +32,6 @@
       "cache": false,
       "tags": ["work:repair"]
     },
-    "postbuild": {
-      "inputs": [],
-      "outputs": [],
-      "tags": ["work:lifecycle"]
-    },
     "test": {
       "dependsOn": [],
       "inputs": [],
