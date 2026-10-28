@@ -159,6 +159,16 @@ export type {
   QualityRunResult,
   QualityExecutionOptions,
 } from "./quality/qa.ts";
+export {
+  decideQualityReport,
+  formatQualityReport,
+  isQualityReportPassing,
+} from "./quality/report.ts";
+export type {
+  QualityExecutionStatus,
+  QualityReportDecision,
+  QualityReportDecisionStatus,
+} from "./quality/report.ts";
 export type {
   CacheableQualityCheckOutcome,
   QualityCheckResultCache,

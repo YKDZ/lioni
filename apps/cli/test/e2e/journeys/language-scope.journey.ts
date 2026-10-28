@@ -32,6 +32,7 @@ const check = defineQualityCheck({
       diagnostics: [{
         severity: "warning",
         object: { kind: "translation-unit", key: candidate.sourceKey, language: candidate.language },
+        location: { language: candidate.language, range: candidate.language + ".json" },
         message: "已检查所选语言。",
         evidence: [],
       }],
@@ -139,7 +140,14 @@ export default defineConfig({
       },
       {
         name: "QA 只检查所选语言的候选",
-        args: ["qa", "lioni.config.ts", "--language", "de"],
+        args: [
+          "qa",
+          "lioni.config.ts",
+          "--language",
+          "de",
+          "--output-format",
+          "structured",
+        ],
         env: { READ_LOG: "qa.log" },
       },
       {
