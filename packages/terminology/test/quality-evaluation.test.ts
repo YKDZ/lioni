@@ -1,10 +1,22 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
+
+import {
+  runQualityEvaluation,
+  type QualityEvaluationOptions,
+} from "../scripts/evaluation/quality.ts";
 
 const packageRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const qualityEntry = path.join(packageRoot, "scripts/evaluation/quality.ts");
@@ -411,10 +423,7 @@ void describe("术语质量评测入口", () => {
     const directory = await mkdtemp(
       path.join(os.tmpdir(), "lioni-qa-evaluation-"),
     );
-    const fixturePath = path.join(
-      packageRoot,
-      "scripts/evaluation/fixtures/qa-sample.v1.json",
-    );
+    const fixturePath = path.join(packageRoot, "test/fixtures/qa-scoring.json");
     const outputPath = path.join(directory, "report.json");
 
     try {
@@ -426,7 +435,7 @@ void describe("术语质量评测入口", () => {
       ]);
       assert.equal(result.error, undefined, result.stderr);
       assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-      assert.match(result.stdout, /审阅状态 human-reviewed/u);
+      assert.match(result.stdout, /审阅状态 test-reviewed/u);
 
       const report = JSON.parse(
         await readFile(outputPath, "utf8"),
@@ -434,9 +443,9 @@ void describe("术语质量评测入口", () => {
       assert.equal(report.schemaVersion, 1);
       assert.equal(report.task, "qa");
       assert.deepEqual(report.dataset, {
-        id: "self-authored-qa-sample",
+        id: "qa-scoring-test-fixture",
         version: "1.0.0",
-        reviewStatus: "human-reviewed",
+        reviewStatus: "test-reviewed",
       });
       assert.equal(report.input.groupCount, 4);
       assert.equal(report.input.sourceFragmentCount, 4);
@@ -589,10 +598,7 @@ void describe("术语质量评测入口", () => {
     const directory = await mkdtemp(
       path.join(os.tmpdir(), "lioni-qa-negative-scoring-"),
     );
-    const fixturePath = path.join(
-      packageRoot,
-      "scripts/evaluation/fixtures/qa-sample.v1.json",
-    );
+    const fixturePath = path.join(packageRoot, "test/fixtures/qa-scoring.json");
     const inputPath = path.join(directory, "input.json");
     const outputPath = path.join(directory, "report.json");
     const dataset = JSON.parse(await readFile(fixturePath, "utf8")) as {
@@ -694,6 +700,122 @@ void describe("术语质量评测入口", () => {
       assert.equal(result.status, 1);
       assert.match(result.stderr, /无法读取评测输入/u);
       await assert.rejects(access(outputPath), /ENOENT/u);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  void it("批量评测嵌套 JSON 并按相对路径保留同 ID 报告", async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "lioni-quality-batch-"),
+    );
+    const inputDirectory = path.join(directory, "inputs");
+    const outputDirectory = path.join(directory, "reports");
+    await mkdir(path.join(inputDirectory, "nested"), { recursive: true });
+    const sharedId = "unregistered:dataset/../shared";
+    await writeDataset(
+      inputDirectory,
+      {
+        schemaVersion: 1,
+        dataset: { id: sharedId, version: "first", reviewStatus: "pending" },
+        task: "discovery",
+        input: {
+          language: "en",
+          entries: [
+            { ref: "one", fragments: [{ ref: "body", text: "cache" }] },
+          ],
+        },
+        references: [{ id: "reviewer", terms: ["cache"] }],
+      },
+      "first.json",
+    );
+    await writeDataset(
+      inputDirectory,
+      {
+        schemaVersion: 1,
+        dataset: { id: sharedId, version: "second", reviewStatus: "pending" },
+        task: "discovery",
+        input: {
+          language: "en",
+          entries: [
+            { ref: "one", fragments: [{ ref: "body", text: "cache" }] },
+            { ref: "two", fragments: [{ ref: "body", text: "repair" }] },
+          ],
+        },
+        references: [{ id: "reviewer", terms: ["cache", "repair"] }],
+      },
+      "nested/second.json",
+    );
+
+    try {
+      const result = runQuality([
+        "--input",
+        inputDirectory,
+        "--output",
+        outputDirectory,
+      ]);
+      assert.equal(result.error, undefined, result.stderr);
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+
+      const firstReport = await readReport(
+        path.join(outputDirectory, "first.json"),
+      );
+      const secondReport = await readReport(
+        path.join(outputDirectory, "nested/second.json"),
+      );
+      assert.equal(firstReport.dataset.id, sharedId);
+      assert.equal(secondReport.dataset.id, sharedId);
+      assert.equal(firstReport.dataset.version, "first");
+      assert.equal(secondReport.dataset.version, "second");
+      assert.equal(firstReport.input.entryCount, 1);
+      assert.equal(secondReport.input.entryCount, 2);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  void it("要求显式输入，同时保留帮助输出", async () => {
+    await assert.rejects(
+      runQualityEvaluation({} as QualityEvaluationOptions),
+      /必须显式提供 dataset 或 inputPath/u,
+    );
+    const missingInput = runQuality([]);
+    assert.equal(missingInput.status, 1);
+    assert.match(missingInput.stderr, /必须通过 --input 显式指定/u);
+
+    const help = runQuality(["--help"]);
+    assert.equal(help.status, 0, help.stderr);
+    assert.match(help.stdout, /--input <数据\.json 或目录>/u);
+  });
+
+  void it("拒绝把目录报告写回输入目录", async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "lioni-quality-nested-output-"),
+    );
+    await writeDataset(directory, {
+      schemaVersion: 1,
+      dataset: {
+        id: "output-boundary-input",
+        version: "1.0.0",
+        reviewStatus: "pending",
+      },
+      task: "discovery",
+      input: { language: "en", entries: [] },
+      references: [{ id: "reviewer", terms: [] }],
+    });
+
+    try {
+      const result = runQuality([
+        "--input",
+        directory,
+        "--output",
+        path.join(directory, "reports"),
+      ]);
+      assert.equal(result.status, 1);
+      assert.match(
+        result.stderr,
+        /报告目录不能与输入目录相同或位于输入目录内/u,
+      );
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

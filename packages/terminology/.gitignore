@@ -4,3 +4,6 @@ dist/
 
 # 本地外部评测语料及来源说明
 /corpora/
+
+# 各自有评测的本地运行报告
+/scripts/evaluation/cases/*/reports/

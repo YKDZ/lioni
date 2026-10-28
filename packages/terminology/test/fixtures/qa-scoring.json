@@ -1,0 +1,259 @@
+{
+  "schemaVersion": 1,
+  "dataset": {
+    "id": "qa-scoring-test-fixture",
+    "version": "1.0.0",
+    "reviewStatus": "test-reviewed"
+  },
+  "task": "qa",
+  "termbase": {
+    "concepts": [
+      {
+        "id": "workspace",
+        "languages": [
+          {
+            "language": "en",
+            "expressions": [
+              {
+                "id": "workspace-en",
+                "text": "workspace",
+                "usage": "preferred"
+              }
+            ]
+          },
+          {
+            "language": "zh-CN",
+            "expressions": [
+              {
+                "id": "workspace-zh-allowed",
+                "text": "工作区",
+                "usage": "allowed"
+              },
+              {
+                "id": "workspace-zh-forbidden",
+                "text": "工作间",
+                "usage": "forbidden"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "input": {
+    "groups": [
+      {
+        "ref": "allowed-translation",
+        "source": {
+          "language": "en",
+          "fragments": [
+            {
+              "ref": "source-body",
+              "text": "Open the workspace settings."
+            }
+          ]
+        },
+        "target": {
+          "language": "zh-CN",
+          "fragments": [
+            {
+              "ref": "target-body",
+              "text": "打开工作区设置。"
+            }
+          ]
+        }
+      },
+      {
+        "ref": "forbidden-translation",
+        "source": {
+          "language": "en",
+          "fragments": [
+            {
+              "ref": "source-body",
+              "text": "Restore the workspace."
+            }
+          ]
+        },
+        "target": {
+          "language": "zh-CN",
+          "fragments": [
+            {
+              "ref": "target-body",
+              "text": "恢复工作区，旧术语为工作间。"
+            }
+          ]
+        }
+      },
+      {
+        "ref": "missing-translation",
+        "source": {
+          "language": "en",
+          "fragments": [
+            {
+              "ref": "source-body",
+              "text": "Save the workspace."
+            }
+          ]
+        },
+        "target": {
+          "language": "zh-CN",
+          "fragments": [
+            {
+              "ref": "target-body",
+              "text": "保存当前项目。"
+            }
+          ]
+        }
+      },
+      {
+        "ref": "english-word-boundary",
+        "source": {
+          "language": "en",
+          "fragments": [
+            {
+              "ref": "source-body",
+              "text": "The workspaceX mode is ready."
+            }
+          ]
+        },
+        "target": {
+          "language": "zh-CN",
+          "fragments": [
+            {
+              "ref": "target-body",
+              "text": "模式已就绪。"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "references": [
+    {
+      "id": "draft-reviewer-a",
+      "matches": [
+        {
+          "id": "g0-source-workspace",
+          "groupIndex": 0,
+          "side": "source",
+          "certainty": "certain",
+          "conceptId": "workspace",
+          "expressionId": "workspace-en",
+          "language": "en",
+          "usage": "preferred",
+          "fragmentIndex": 0,
+          "ref": "source-body",
+          "range": { "start": 9, "end": 18 },
+          "text": "workspace",
+          "expressionText": "workspace",
+          "form": "workspace",
+          "policyId": "nfc-english-word-boundary"
+        },
+        {
+          "id": "g0-target-workspace",
+          "groupIndex": 0,
+          "side": "target",
+          "certainty": "certain",
+          "conceptId": "workspace",
+          "expressionId": "workspace-zh-allowed",
+          "language": "zh-CN",
+          "usage": "allowed",
+          "fragmentIndex": 0,
+          "ref": "target-body",
+          "range": { "start": 2, "end": 5 },
+          "text": "工作区",
+          "expressionText": "工作区",
+          "form": "工作区",
+          "policyId": "nfc-literal"
+        },
+        {
+          "id": "g1-source-workspace",
+          "groupIndex": 1,
+          "side": "source",
+          "certainty": "certain",
+          "conceptId": "workspace",
+          "expressionId": "workspace-en",
+          "language": "en",
+          "usage": "preferred",
+          "fragmentIndex": 0,
+          "ref": "source-body",
+          "range": { "start": 12, "end": 21 },
+          "text": "workspace",
+          "expressionText": "workspace",
+          "form": "workspace",
+          "policyId": "nfc-english-word-boundary"
+        },
+        {
+          "id": "g1-target-workspace",
+          "groupIndex": 1,
+          "side": "target",
+          "certainty": "certain",
+          "conceptId": "workspace",
+          "expressionId": "workspace-zh-allowed",
+          "language": "zh-CN",
+          "usage": "allowed",
+          "fragmentIndex": 0,
+          "ref": "target-body",
+          "range": { "start": 2, "end": 5 },
+          "text": "工作区",
+          "expressionText": "工作区",
+          "form": "工作区",
+          "policyId": "nfc-literal"
+        },
+        {
+          "id": "g1-target-workspace-forbidden",
+          "groupIndex": 1,
+          "side": "target",
+          "certainty": "certain",
+          "conceptId": "workspace",
+          "expressionId": "workspace-zh-forbidden",
+          "language": "zh-CN",
+          "usage": "forbidden",
+          "fragmentIndex": 0,
+          "ref": "target-body",
+          "range": { "start": 10, "end": 13 },
+          "text": "工作间",
+          "expressionText": "工作间",
+          "form": "工作间",
+          "policyId": "nfc-literal"
+        },
+        {
+          "id": "g2-source-workspace",
+          "groupIndex": 2,
+          "side": "source",
+          "certainty": "certain",
+          "conceptId": "workspace",
+          "expressionId": "workspace-en",
+          "language": "en",
+          "usage": "preferred",
+          "fragmentIndex": 0,
+          "ref": "source-body",
+          "range": { "start": 9, "end": 18 },
+          "text": "workspace",
+          "expressionText": "workspace",
+          "form": "workspace",
+          "policyId": "nfc-english-word-boundary"
+        }
+      ],
+      "problems": [
+        {
+          "groupIndex": 1,
+          "conceptId": "workspace",
+          "ruleId": "reject-forbidden-translation",
+          "code": "forbidden-translation",
+          "sourceMatches": ["g1-source-workspace"],
+          "targetMatches": ["g1-target-workspace-forbidden"]
+        },
+        {
+          "groupIndex": 2,
+          "conceptId": "workspace",
+          "ruleId": "require-allowed-translation",
+          "code": "missing-allowed-translation",
+          "sourceMatches": ["g2-source-workspace"],
+          "targetMatches": []
+        }
+      ],
+      "issues": []
+    }
+  ]
+}

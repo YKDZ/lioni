@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -27,9 +27,6 @@ import {
 
 import { canonicalJson, resolvePath, sha256 } from "./support/json.ts";
 
-const defaultInputPath = fileURLToPath(
-  new URL("./fixtures/discovery-sample.v1.json", import.meta.url),
-);
 const precisionAtValues = [50, 100, 500] as const;
 const discoveryParameterNames = [
   "maxWords",
@@ -195,13 +192,20 @@ type QualityCliOptions = {
   readonly parameters: Partial<DiscoveryParameters>;
 };
 
-/** 质量评测可直接接收已整理对象，也可读取同一数据契约的 JSON 文件。 */
-export type QualityEvaluationOptions = {
-  readonly dataset?: unknown;
-  readonly inputPath?: string;
-  readonly outputPath?: string;
-  readonly parameters?: Partial<DiscoveryParameters>;
-};
+/** 调用方必须且只能提供 dataset 对象或 inputPath 文件路径之一。 */
+export type QualityEvaluationOptions =
+  | {
+      readonly dataset: unknown;
+      readonly inputPath?: never;
+      readonly outputPath?: string;
+      readonly parameters?: Partial<DiscoveryParameters>;
+    }
+  | {
+      readonly dataset?: never;
+      readonly inputPath: string;
+      readonly outputPath?: string;
+      readonly parameters?: Partial<DiscoveryParameters>;
+    };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -634,7 +638,7 @@ function parseArguments(args: readonly string[]): QualityCliOptions {
     }
     if (argument === "--help") {
       process.stdout.write(
-        "用法：evaluation:quality [--input 数据.json] [--output 报告.json] [--max-words N] [--max-characters N] [--min-occurrences N] [--limit N]\n",
+        "用法：evaluation:quality --input <数据.json 或目录> [--output <报告.json 或目录>] [--max-words N] [--max-characters N] [--min-occurrences N] [--limit N]\n",
       );
       process.exitCode = 0;
       return Object.freeze({ parameters: Object.freeze({}) });
@@ -1208,20 +1212,71 @@ async function writeReport(filename: string, report: unknown): Promise<void> {
   await writeFile(filename, `${JSON.stringify(report, null, 2)}\n`, "utf8");
 }
 
+async function collectJsonInputs(
+  directory: string,
+): Promise<readonly string[]> {
+  const filenames: string[] = [];
+  const visit = async (currentDirectory: string): Promise<void> => {
+    let entries;
+    try {
+      entries = await readdir(currentDirectory, { withFileTypes: true });
+    } catch (error) {
+      throw new Error(`无法读取评测输入目录：${currentDirectory}`, {
+        cause: error,
+      });
+    }
+    for (const entry of entries) {
+      const filename = path.join(currentDirectory, entry.name);
+      if (entry.isDirectory()) await visit(filename);
+      else if (entry.isFile() && path.extname(entry.name) === ".json")
+        filenames.push(filename);
+    }
+  };
+
+  await visit(directory);
+  filenames.sort((left, right) => {
+    const leftRelative = path.relative(directory, left);
+    const rightRelative = path.relative(directory, right);
+    return leftRelative < rightRelative
+      ? -1
+      : leftRelative > rightRelative
+        ? 1
+        : 0;
+  });
+  if (filenames.length === 0)
+    throw new Error(`评测输入目录中没有 JSON 文件：${directory}`);
+  return Object.freeze(filenames);
+}
+
+function isSameOrInsideDirectory(
+  directory: string,
+  candidate: string,
+): boolean {
+  const relative = path.relative(directory, candidate);
+  return (
+    relative === "" ||
+    (!path.isAbsolute(relative) &&
+      relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`))
+  );
+}
+
 /**
- * 经同一质量入口评测候选发现或术语 QA 数据，可接收对象或 JSON 文件。
+ * 通过显式数据对象或 JSON 文件评测候选发现、术语 QA 数据。
  * 提供 outputPath 时写入机器可读报告；调用方负责安排持久位置。
  */
 export async function runQualityEvaluation(
-  options: QualityEvaluationOptions = {},
+  options: QualityEvaluationOptions,
 ): Promise<QualityReport> {
+  if (options === undefined)
+    throw new Error("必须显式提供 dataset 或 inputPath。");
+  if (options.dataset === undefined && options.inputPath === undefined)
+    throw new Error("必须显式提供 dataset 或 inputPath。");
   if (options.dataset !== undefined && options.inputPath !== undefined)
     throw new Error("dataset 与 inputPath 只能指定其中一项。");
   const loaded =
     options.dataset === undefined
-      ? await loadDataset(
-          resolvePath(process.cwd(), options.inputPath ?? defaultInputPath),
-        )
+      ? await loadDataset(resolvePath(process.cwd(), options.inputPath!))
       : Object.freeze({
           dataset: parseDataset(options.dataset),
           inputSha256: sha256(canonicalJson(options.dataset)),
@@ -1255,7 +1310,48 @@ export async function runQualityEvaluation(
 }
 
 async function runQuality(options: QualityCliOptions): Promise<void> {
-  const report = await runQualityEvaluation(options);
+  if (options.inputPath === undefined)
+    throw new Error("必须通过 --input 显式指定评测数据文件或目录。");
+  const inputPath = resolvePath(process.cwd(), options.inputPath);
+  let inputInfo;
+  try {
+    inputInfo = await stat(inputPath);
+  } catch (error) {
+    throw new Error(`无法读取评测输入：${inputPath}`, { cause: error });
+  }
+
+  if (inputInfo.isDirectory()) {
+    if (options.outputPath === undefined)
+      throw new Error("--input 为目录时，必须通过 --output 显式指定报告目录。");
+    const outputDirectory = resolvePath(process.cwd(), options.outputPath);
+    if (isSameOrInsideDirectory(inputPath, outputDirectory))
+      throw new Error("报告目录不能与输入目录相同或位于输入目录内。");
+    const inputFiles = await collectJsonInputs(inputPath);
+    for (const filename of inputFiles) {
+      const relativeInputPath = path.relative(inputPath, filename);
+      const outputFile = path.join(outputDirectory, relativeInputPath);
+      const report = await runQualityEvaluation({
+        inputPath: filename,
+        outputPath: outputFile,
+        parameters: options.parameters,
+      });
+      process.stdout.write(
+        `${qualitySummary(report)}\n报告 JSON：${outputFile}\n`,
+      );
+      if (report.output.status !== "complete") process.exitCode = 1;
+    }
+    return;
+  }
+  if (!inputInfo.isFile())
+    throw new Error(`评测输入必须是 JSON 文件或目录：${inputPath}`);
+
+  const report = await runQualityEvaluation({
+    inputPath,
+    ...(options.outputPath === undefined
+      ? {}
+      : { outputPath: options.outputPath }),
+    parameters: options.parameters,
+  });
   const summary = qualitySummary(report);
   if (options.outputPath === undefined) {
     process.stderr.write(`${summary}\n`);
