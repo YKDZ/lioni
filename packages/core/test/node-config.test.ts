@@ -36,7 +36,7 @@ void describe("动态 Node 配置契约", () => {
       await writeFile(invalidPath, `export default { source: {} };\n`);
       await writeFile(
         deferredPath,
-        `export default { source: { schema: { "~standard": { version: 1, vendor: "deferred", validate: (value) => ({ value }) } }, read: () => ({ scopes: [] }) }, keyOf: () => "unused", translations: {}, quality: { prepare() { throw new Error("加载配置时不能准备质量检查。"); } } };\n`,
+        `export default { source: { schema: { "~standard": { version: 1, vendor: "deferred", validate: (value) => ({ value }) } }, read: () => ({ scopes: [] }) }, keyOf: () => "unused", translations: {}, quality: { loadDependencies() { throw new Error("加载配置时不能读取质量资料。"); } } };\n`,
       );
       const defaultException = {
         id: "from-default-file",

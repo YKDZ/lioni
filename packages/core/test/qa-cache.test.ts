@@ -523,10 +523,8 @@ function createTestConfig(
       matches: () => true,
     },
     quality: {
-      prepare: () => ({
-        checks: [...(options.precedingChecks ?? []), check],
-        request: { candidates: [candidate], dependencies: {} },
-      }),
+      checks: [...(options.precedingChecks ?? []), check],
+      buildCandidates: () => [candidate],
       ...(options.cache === undefined ? {} : { resultCache: options.cache }),
       ...(options.exceptionStore === undefined
         ? {}

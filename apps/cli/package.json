@@ -36,6 +36,7 @@
     "test:e2e": "node --conditions=source --test --test-timeout=180000 --test-reporter=spec --test-reporter=./scripts/node-test-count-reporter.ts --test-reporter-destination=stdout --test-reporter-destination=stderr 'test/e2e/run-journeys.test.ts'"
   },
   "dependencies": {
+    "@intlify/message-compiler": "11.2.8",
     "@standard-schema/spec": "1.1.0",
     "@valibot/to-json-schema": "catalog:",
     "@ykdz/cli-contract": "catalog:",
@@ -49,7 +50,6 @@
     "@lioni/terminology": "workspace:*",
     "@lioni/text-analysis": "workspace:*",
     "@lioni/tooling-config": "workspace:*",
-    "@lioni/vue-i18n": "workspace:*",
     "@types/node": "catalog:",
     "oxfmt": "catalog:",
     "oxlint": "catalog:",

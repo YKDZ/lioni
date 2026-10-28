@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import type { MemoScope } from "@lioni/memo";
+import { createMemoScope, type MemoScope } from "@lioni/memo";
 
 import type { Compare } from "./comparison.ts";
 import {
@@ -17,9 +17,9 @@ import type { UpdatePolicy } from "./plans.ts";
 import {
   runQualityChecks,
   type QualityCheckDefinition,
-  type QualityCheckRequest,
   type QualityRunResult,
   type QualityObject,
+  type QualityRelationship,
 } from "./quality/qa.ts";
 import type { QualityCheckResultCache } from "./quality/quality-cache.ts";
 import { validateQualityExceptions } from "./quality/quality-exceptions.ts";
@@ -354,37 +354,34 @@ export type FrameworkConfig<
   >;
 };
 
-export type QualityPreparation<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TBody = JsonValue,
-  TUnavailable = never,
-> = {
-  readonly checks: readonly QualityCheckDefinition<
-    TUnit,
-    TTranslation,
-    QualityObject,
-    TBody,
-    TUnavailable
-  >[];
-  readonly request?: Omit<
-    QualityCheckRequest<TBody>,
-    "exceptions" | "candidates"
-  > & {
-    readonly candidates?: readonly SemanticEditCandidate<TBody>[];
-  };
-};
-
 export type QualityConfiguration<
   TUnit extends TranslationUnitInput,
   TTranslation,
   TBody = JsonValue,
   TUnavailable = never,
 > = {
-  /** 按本次读取事实准备检查；目标语言范围以 facts.translations.reads 为准。 */
-  readonly prepare?: (
-    facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
-  ) => Awaitable<QualityPreparation<TUnit, TTranslation, TBody, TUnavailable>>;
+  /** 直接声明本次运行使用的检查器；检查器的校验与执行由 SDK 管理。 */
+  readonly checks?: readonly QualityCheckDefinition<
+    TUnit,
+    TTranslation,
+    QualityObject,
+    TBody,
+    TUnavailable
+  >[];
+  /** 每次 QA 依据本次已读取事实加载一次动态检查资料。 */
+  readonly loadDependencies?: (input: {
+    readonly facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>;
+    readonly memo: MemoScope;
+  }) => Awaitable<unknown>;
+  /** 基于当前事实扩展默认候选；返回值随后仍由 selectCandidates 筛选。 */
+  readonly buildCandidates?: (input: {
+    readonly facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>;
+    readonly defaultCandidates: readonly SemanticEditCandidate<TBody>[];
+    readonly dependencies: unknown;
+    readonly memo: MemoScope;
+  }) => Awaitable<readonly SemanticEditCandidate<TBody>[]>;
+  /** 关系上下文不随候选筛选裁剪。 */
+  readonly relationships?: readonly QualityRelationship[];
   readonly resultCache?: QualityCheckResultCache;
   readonly exceptionStore?: QualityExceptionStore;
 };
@@ -664,8 +661,30 @@ function validateQualityConfiguration(value: unknown): void {
   if (value === undefined) return;
   if (!isRecord(value))
     invalidFrameworkConfig("defineConfig 的 quality 必须是对象。");
-  if (value.prepare !== undefined && typeof value.prepare !== "function")
-    invalidFrameworkConfig("defineConfig 的 quality.prepare 必须是函数。");
+  if (Object.hasOwn(value, "prepare"))
+    invalidFrameworkConfig(
+      "defineConfig 的 quality.prepare 已移除；请直接配置 quality.checks。",
+    );
+  if (value.checks !== undefined && !Array.isArray(value.checks))
+    invalidFrameworkConfig("defineConfig 的 quality.checks 必须是检查器数组。");
+  if (
+    value.loadDependencies !== undefined &&
+    typeof value.loadDependencies !== "function"
+  )
+    invalidFrameworkConfig(
+      "defineConfig 的 quality.loadDependencies 必须是函数。",
+    );
+  if (
+    value.buildCandidates !== undefined &&
+    typeof value.buildCandidates !== "function"
+  )
+    invalidFrameworkConfig(
+      "defineConfig 的 quality.buildCandidates 必须是函数。",
+    );
+  if (value.relationships !== undefined && !Array.isArray(value.relationships))
+    invalidFrameworkConfig(
+      "defineConfig 的 quality.relationships 必须是数组。",
+    );
   if (
     value.resultCache !== undefined &&
     (!isRecord(value.resultCache) ||
@@ -917,42 +936,85 @@ export async function analyzeQuality<
 >(
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
   options: LanguageSelectionOptions & {
-    /** 覆盖准备阶段的候选；显式选择语言时，所有候选必须属于该范围。 */
+    /** 直接提供候选源；显式选择语言时，所有候选必须属于该范围。 */
     readonly candidates?: readonly SemanticEditCandidate<TBody>[];
+    /** 在候选构造后筛选、排序或截取；返回项必须来自传入的集合。 */
+    readonly selectCandidates?: (
+      candidates: readonly SemanticEditCandidate<TBody>[],
+    ) => readonly SemanticEditCandidate<TBody>[];
     readonly memo?: MemoScope;
   } = {},
 ): Promise<QualityRunResult<QualityObject, TBody>> {
   validateFrameworkConfig(config);
   const exceptions = await loadQualityExceptions(config);
   const facts = await readFacts(config, options);
-  const prepared = await prepareQuality(config, facts);
-  const request =
-    options.candidates === undefined
-      ? prepared.request
-      : { ...prepared.request, candidates: options.candidates };
-  const candidates: SemanticEditCandidate<TBody>[] = [];
-  const languages = new Set(
-    facts.translations.reads.map(({ language }) => language),
-  );
-  for (const candidate of request.candidates) {
-    const validated = await validateSemanticEditCandidate(candidate, config);
-    if (options.languages !== undefined && !languages.has(validated.language))
-      throw new TypeError(
-        `译文候选语言 ${JSON.stringify(validated.language)} 不在本次执行范围内。`,
-      );
-    candidates.push(validated);
-  }
-  return runQualityChecks(
-    facts,
-    { ...request, candidates, exceptions },
-    prepared.checks,
-    {
-      ...options,
-      ...(config.quality?.resultCache === undefined
+  const memo = options.memo ?? createMemoScope();
+  try {
+    const quality = config.quality;
+    const dependencies =
+      quality?.loadDependencies === undefined
         ? {}
-        : { qualityCheckResultCache: config.quality.resultCache }),
-    },
-  );
+        : await quality.loadDependencies({ facts, memo });
+    const defaultCandidates = defaultQualityCandidates(facts);
+    const candidateSource =
+      options.candidates ??
+      (quality?.buildCandidates === undefined
+        ? defaultCandidates
+        : await quality.buildCandidates({
+            facts,
+            defaultCandidates,
+            dependencies,
+            memo,
+          }));
+    if (!Array.isArray(candidateSource))
+      throw new TypeError(
+        "defineConfig 的 quality.buildCandidates 必须返回候选数组。",
+      );
+
+    const languages = new Set(
+      facts.translations.reads.map(({ language }) => language),
+    );
+    const candidates: SemanticEditCandidate<TBody>[] = [];
+    for (const candidate of candidateSource) {
+      const validated = await validateSemanticEditCandidate(candidate, config);
+      if (options.languages !== undefined && !languages.has(validated.language))
+        throw new TypeError(
+          `译文候选语言 ${JSON.stringify(validated.language)} 不在本次执行范围内。`,
+        );
+      candidates.push(validated);
+    }
+
+    const selection =
+      options.selectCandidates === undefined
+        ? candidates
+        : options.selectCandidates(Object.freeze(candidates.slice()));
+    if (!Array.isArray(selection))
+      throw new TypeError("selectCandidates 必须返回候选数组。");
+    const candidateSet = new Set(candidates);
+    if (selection.some((candidate) => !candidateSet.has(candidate)))
+      throw new TypeError(
+        "selectCandidates 只能筛选或重排传入的候选；请通过 candidates 或 quality.buildCandidates 构造候选。",
+      );
+
+    return await runQualityChecks(
+      facts,
+      {
+        candidates: selection,
+        dependencies,
+        relationships: quality?.relationships ?? [],
+        exceptions,
+      },
+      quality?.checks ?? [],
+      {
+        memo,
+        ...(quality?.resultCache === undefined
+          ? {}
+          : { qualityCheckResultCache: quality.resultCache }),
+      },
+    );
+  } finally {
+    if (options.memo === undefined) memo.dispose();
+  }
 }
 
 async function loadQualityExceptions<
@@ -970,97 +1032,28 @@ async function loadQualityExceptions<
   return exceptions;
 }
 
-function defaultQualityRequest<
+function defaultQualityCandidates<
   TUnit extends TranslationUnitInput,
   TTranslation,
   TBody,
   TUnavailable,
 >(
   facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
-): Omit<QualityCheckRequest<TBody>, "exceptions"> {
-  return {
-    candidates: facts.associations.flatMap((association) => {
-      if (association.status !== "matched") return [];
-      const record =
-        facts.translations.records[association.translationIndexes[0] as number];
-      return record === undefined || record.bodyAvailability !== "available"
-        ? []
-        : [
-            {
-              sourceKey: association.sourceKey,
-              language: association.language,
-              content: record.content,
-            },
-          ];
-    }),
-    dependencies: {},
-  };
-}
-
-async function prepareQuality<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TBody,
-  TUnavailable,
->(
-  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
-  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
-): Promise<{
-  readonly checks: readonly QualityCheckDefinition<
-    TUnit,
-    TTranslation,
-    QualityObject,
-    TBody,
-    TUnavailable
-  >[];
-  readonly request: Omit<QualityCheckRequest<TBody>, "exceptions">;
-}> {
-  const prepare = config.quality?.prepare;
-  if (prepare === undefined)
-    return { checks: [], request: defaultQualityRequest(facts) };
-
-  const prepared: unknown = await prepare(facts);
-  if (!isRecord(prepared) || !Array.isArray(prepared.checks))
-    throw new TypeError(
-      "defineConfig 的 quality.prepare 必须返回包含 checks 数组的对象。",
-    );
-  const request = prepared.request;
-  if (request === undefined)
-    return {
-      checks: prepared.checks as QualityCheckDefinition<
-        TUnit,
-        TTranslation,
-        QualityObject,
-        TBody,
-        TUnavailable
-      >[],
-      request: defaultQualityRequest(facts),
-    };
-  if (!isRecord(request))
-    throw new TypeError(
-      "defineConfig 的 quality.prepare 返回的 request 必须是对象。",
-    );
-  if (Object.hasOwn(request, "exceptions"))
-    throw new TypeError(
-      "defineConfig 的 quality.prepare 不接受 exceptions；请通过 quality.exceptionStore 配置例外来源。",
-    );
-  const defaults = defaultQualityRequest(facts);
-  return {
-    checks: prepared.checks as QualityCheckDefinition<
-      TUnit,
-      TTranslation,
-      QualityObject,
-      TBody,
-      TUnavailable
-    >[],
-    request: {
-      ...defaults,
-      ...request,
-      candidates:
-        (request as { readonly candidates?: unknown }).candidates ??
-        defaults.candidates,
-    } as Omit<QualityCheckRequest<TBody>, "exceptions">,
-  };
+): SemanticEditCandidate<TBody>[] {
+  return facts.associations.flatMap((association) => {
+    if (association.status !== "matched") return [];
+    const record =
+      facts.translations.records[association.translationIndexes[0] as number];
+    return record === undefined || record.bodyAvailability !== "available"
+      ? []
+      : [
+          {
+            sourceKey: association.sourceKey,
+            language: association.language,
+            content: record.content,
+          },
+        ];
+  });
 }
 
 function validateSourceRead(value: unknown): void {

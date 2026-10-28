@@ -14,6 +14,12 @@ import type {
 const e2eRoot = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(e2eRoot, "..", "..");
 const coreDependency = path.join(packageRoot, "node_modules", "@lioni", "core");
+const productDependency = path.resolve(
+  packageRoot,
+  "../..",
+  "node_modules",
+  "lioni",
+);
 
 function assertNever(value: never): never {
   throw new Error(`unsupported journey mode: ${String(value)}`);
@@ -158,6 +164,11 @@ export async function runJourneys(options: {
       await symlink(
         coreDependency,
         packageLink,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      await symlink(
+        productDependency,
+        path.join(workDir, "node_modules", "lioni"),
         process.platform === "win32" ? "junction" : "dir",
       );
       await journey.setup(context);

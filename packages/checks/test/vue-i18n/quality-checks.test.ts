@@ -3,11 +3,8 @@ import test from "node:test";
 
 import { StandardSchemaContractError } from "@lioni/core";
 import type { TermbaseData } from "@lioni/terminology";
-import {
-  extractVueI18nUsages,
-  VUE_I18N_MESSAGE_COMPILER_VERSION,
-} from "@lioni/vue-i18n";
 
+import { VUE_I18N_MESSAGE_COMPILER_VERSION } from "../../src/vue-i18n/vue-i18n-messages.ts";
 import {
   checkIds,
   createQualityFixture,
@@ -76,9 +73,6 @@ void test("检查组保留独立身份，并从投影位置报告原文和候选
     check(result, checkIds.variableCorrespondence)?.status,
     "incomplete",
   );
-  assert.deepEqual(check(result, checkIds.callArguments)?.configuration, {
-    version: 1,
-  });
   assert.deepEqual(check(result, checkIds.sourceSyntax)?.configuration, {
     compilerVersion: VUE_I18N_MESSAGE_COMPILER_VERSION,
   });
@@ -329,93 +323,6 @@ void test("非法语法使变量比较未完成，缺译、不可用和真实空
     "incomplete",
   );
   assert.deepEqual(findings(unavailableSource, checkIds.targetSyntax), []);
-});
-
-void test("调用参数检查核对 AST 提取的参数，并保留未知参数的不完整状态", async () => {
-  const policy = policyFor({
-    sourceMessages: { label: "Hello {name}" },
-    targetMessages: { label: "你好 {name}" },
-  });
-  const incorrectUsages = extractVueI18nUsages(
-    "t('label', { other: value })",
-    "src/page.ts",
-  );
-  const incorrect = await createQualityFixture({
-    policies: [policy],
-    usages: incorrectUsages,
-  }).run([candidate("label", "你好 {name}")]);
-  const correctUsages = extractVueI18nUsages(
-    "t('label', { name: value })",
-    "src/page.ts",
-  );
-  const correct = await createQualityFixture({
-    policies: [policy],
-    usages: correctUsages,
-  }).run([candidate("label", "你好 {name}")]);
-  const unknownUsages = extractVueI18nUsages(
-    "t('label', params)",
-    "src/page.ts",
-  );
-  const unknown = await createQualityFixture({
-    policies: [policy],
-    usages: unknownUsages,
-  }).run([candidate("label", "你好 {name}")]);
-
-  assert.ok(
-    findings(incorrect, checkIds.callArguments).some(
-      (diagnostic) => diagnostic.object.code === "call-argument-missing",
-    ),
-  );
-  assert.deepEqual(findings(correct, checkIds.callArguments), []);
-  assert.equal(check(unknown, checkIds.callArguments)?.status, "incomplete");
-
-  const pluralPolicy = policyFor({
-    sourceMessages: { label: "{n} items" },
-    targetMessages: { label: "{count} 项" },
-  });
-  const numericPlural = await createQualityFixture({
-    policies: [pluralPolicy],
-    usages: extractVueI18nUsages("t('label', 2)", "src/page.ts"),
-  }).run([candidate("label", "{count} 项")]);
-  const namedPlural = await createQualityFixture({
-    policies: [pluralPolicy],
-    usages: extractVueI18nUsages("t('label', { n: 2 })", "src/page.ts"),
-  }).run([candidate("label", "{count} 项")]);
-
-  assert.deepEqual(findings(numericPlural, checkIds.callArguments), []);
-  assert.equal(
-    findings(numericPlural, checkIds.variableCorrespondence).length,
-    1,
-  );
-  assert.ok(
-    findings(namedPlural, checkIds.callArguments).some(
-      (diagnostic) => diagnostic.object.code === "call-argument-missing",
-    ),
-  );
-
-  const componentPolicy = policyFor({
-    sourceMessages: { label: "See {link}" },
-    targetMessages: { label: "参见{link}" },
-  });
-  const componentUsages = extractVueI18nUsages(
-    `<template><i18n-t keypath="label"><template #link><a>文档</a></template></i18n-t></template>`,
-    "src/Message.vue",
-  );
-  const componentCorrect = await createQualityFixture({
-    policies: [componentPolicy],
-    usages: componentUsages,
-  }).run([candidate("label", "参见{link}")]);
-  const componentMismatch = await createQualityFixture({
-    policies: [componentPolicy],
-    usages: componentUsages,
-  }).run([candidate("label", "参见{code}")]);
-
-  assert.deepEqual(findings(componentCorrect, checkIds.callArguments), []);
-  assert.ok(
-    findings(componentMismatch, checkIds.callArguments).some(
-      (diagnostic) => diagnostic.object.code === "call-argument-missing",
-    ),
-  );
 });
 
 void test("目标独有关联仍检查，缺失目标可见，当前候选覆盖保存正文参与循环判断", async () => {
@@ -760,29 +667,74 @@ void test("同次运行中的各检查共享一次候选消息投影", async () 
   assert.equal(projections, 1);
 });
 
-void test("公开准备结果将 Vue 策略、术语和调用资料作为嵌套 JSON 依赖传入 core", async () => {
+void test("每次质量运行读取一次 Vue 动态规则并使用最新术语资料", async () => {
+  let reads = 0;
+  let forbidDisplayTerm = true;
+  const policy = policyFor({
+    sourceMessages: { monitor: "monitor", other: "Hello" },
+    targetMessages: { monitor: "显示器", other: "其他" },
+  });
+  const fixture = createQualityFixture({
+    policies: [policy],
+    loadTerms: () => {
+      reads++;
+      return {
+        concepts: [
+          {
+            id: "monitor",
+            languages: [
+              {
+                language: "en",
+                expressions: [
+                  { id: "monitor-en", text: "monitor", usage: "preferred" },
+                ],
+              },
+              {
+                language: "zh-CN",
+                expressions: [
+                  {
+                    id: "monitor-zh",
+                    text: "显示器",
+                    usage: forbidDisplayTerm ? "forbidden" : "allowed",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      };
+    },
+  });
+
+  const first = await fixture.run([
+    candidate("monitor", "显示器"),
+    candidate("other", "其他"),
+  ]);
+  forbidDisplayTerm = false;
+  const second = await fixture.run([candidate("monitor", "显示器")]);
+
+  assert.equal(reads, 2);
+  assert.equal(findings(first, checkIds.forbiddenTerminology).length, 1);
+  assert.deepEqual(findings(second, checkIds.forbiddenTerminology), []);
+});
+
+void test("quality.loadDependencies 将 Vue 策略和术语资料作为嵌套 JSON 依赖传入 core", async () => {
   const policy = policyFor({
     sourceMessages: { label: "Hello {name}" },
     targetMessages: { label: "你好 {name}" },
   });
   const terms: TermbaseData = { concepts: [] };
-  const usages = extractVueI18nUsages(
-    "t('label', { name: value })",
-    "src/page.ts",
-  );
   const result = await createQualityFixture({
     policies: [policy],
     terms,
-    usages,
   }).run([candidate("label", "你好 {name}")]);
 
   assert.deepEqual(result.dependencies, {
-    vueI18n: { policies: [policy], terms, usages },
+    vueI18n: { policies: [policy], terms },
   });
-  assert.deepEqual(findings(result, checkIds.callArguments), []);
 });
 
-void test("质量规则依赖不是 JSON 时在准备阶段拒绝", async () => {
+void test("quality.loadDependencies 返回的规则依赖不是 JSON 时拒绝", async () => {
   const policy = policyFor({ sourceMessages: { label: "Hello" } });
   const metadata: Record<string, unknown> = {};
   metadata.self = metadata;
@@ -800,33 +752,6 @@ void test("质量规则依赖不是 JSON 时在准备阶段拒绝", async () => 
       error instanceof StandardSchemaContractError &&
       error.kind === "invalid-json",
   );
-});
-
-void test("调用点参数变化会改变对应执行的输入指纹", async () => {
-  const policy = policyFor({
-    sourceMessages: { label: "Hello" },
-    targetMessages: { label: "你好 {name}" },
-  });
-  const candidateInput = [candidate("label", "你好 {name}")];
-  const first = await createQualityFixture({
-    policies: [policy],
-    usages: extractVueI18nUsages("t('label', { name: value })", "src/first.ts"),
-  }).run(candidateInput);
-  const second = await createQualityFixture({
-    policies: [policy],
-    usages: extractVueI18nUsages(
-      "t('label', { other: value })",
-      "src/second.ts",
-    ),
-  }).run(candidateInput);
-  const fingerprint = (result: typeof first) =>
-    check(result, checkIds.callArguments)?.executions.find(
-      (execution) => execution.sourceKey === "label",
-    )?.inputFingerprint;
-
-  assert.ok(fingerprint(first));
-  assert.ok(fingerprint(second));
-  assert.notEqual(fingerprint(first), fingerprint(second));
 });
 
 void test("缺少目标候选时不把缺译占位转成空消息", async () => {

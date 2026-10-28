@@ -2,12 +2,10 @@ import { createSignatureEquivalence, signatureKey } from "@lioni/text-analysis";
 import type { TemplateSignature } from "@lioni/text-analysis";
 
 import type { VueI18nPolicy } from "./quality-types.ts";
-import type { VueI18nUsageIndex } from "./usage-types.ts";
 
-/** 按显式键、正则或调用点归属选择消息族；无法唯一归属时单独成组。 */
+/** 按显式键或正则选择消息族；未声明的键各自单独成组。 */
 export function createVueI18nScopeResolver(
   policy: VueI18nPolicy,
-  usages: VueI18nUsageIndex,
 ): (key: string) => string {
   const scopes = policy.messageFamilies.scopes.map((rule) => ({
     ...rule,
@@ -16,25 +14,11 @@ export function createVueI18nScopeResolver(
         ? undefined
         : new RegExp(rule.keyPattern, rule.flags),
   }));
-  const usageScopes = policy.messageFamilies.usageScopes.map((rule) => ({
-    scope: rule.scope,
-    pattern: new RegExp(rule.filePattern, "u"),
-  }));
-
   return (key) => {
     for (const rule of scopes)
       if (rule.keys?.includes(key) || rule.pattern?.test(key))
         return rule.scope;
-    const domains = new Set(
-      usages.entries
-        .filter((usage) => usage.key === key)
-        .map(
-          (usage) =>
-            usageScopes.find((rule) => rule.pattern.test(usage.file))?.scope,
-        )
-        .filter((scope) => scope !== undefined),
-    );
-    return domains.size === 1 ? [...domains][0]! : `unclassified:${key}`;
+    return `unclassified:${key}`;
   };
 }
 

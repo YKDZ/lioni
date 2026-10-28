@@ -7,10 +7,11 @@ import type { CliJourney } from "../journey.ts";
 const journey: CliJourney = {
   name: "inspect",
   modes: ["source", "distribution"],
-  async setup({ workDir }) {
+  async setup({ workDir, mode }) {
+    const sdkImport = mode === "source" ? "@lioni/core" : "lioni";
     await writeFile(
       path.join(workDir, "lioni.config.ts"),
-      `import { defineConfig } from "@lioni/core";
+      `import { defineConfig } from "${sdkImport}";
 
 export default defineConfig({
   source: {
@@ -77,7 +78,7 @@ export default defineConfig({
     );
     await writeFile(
       path.join(workDir, "duplicate.config.ts"),
-      `import { defineConfig } from "@lioni/core";
+      `import { defineConfig } from "${sdkImport}";
 
 export default defineConfig({
   source: {
@@ -104,7 +105,7 @@ export default defineConfig({
     );
     await writeFile(
       path.join(workDir, "qa.config.ts"),
-      `import { defineConfig, defineQualityCheck } from "@lioni/core";
+      `import { defineConfig, defineQualityCheck } from "${sdkImport}";
 import baseConfig from "./lioni.config.ts";
 
 const enabledConfigurationSchema = {
@@ -121,54 +122,41 @@ const enabledConfigurationSchema = {
 
 export default defineConfig({
   ...baseConfig,
-  quality: { prepare(facts) {
-    const checks = [defineQualityCheck({
-    id: "host-rule",
-    version: "inspect-journey-qa-v1",
-    configurationSchema: enabledConfigurationSchema,
-    configuration: { enabled: true },
-    check({ configuration, candidate }) {
-      return {
-        status: configuration.enabled ? "complete" : "not-applicable",
-        diagnostics: configuration.enabled ? [{
-          severity: "warning",
-          object: {
-            kind: "translation-unit",
-            key: candidate.sourceKey,
-            language: candidate.language
-          },
-          location: {
-            language: candidate.language,
-            range: "src/messages.ts:18"
-          },
-          message: "候选需要人工复核。",
-          evidence: []
-        }] : [],
-        issues: [],
-        coverage: {
-          selected: 1,
-          evaluated: 1,
-          notApplicable: 0,
-          incomplete: 0,
-          failed: 0
-        }
-      };
-    }
-  })];
-    const candidates = facts.associations.flatMap((association) => {
-      if (association.status !== "matched") return [];
-      const record = facts.translations.records[association.translationIndexes[0]];
-      return record?.bodyAvailability !== "available" ? [] : [{
-        sourceKey: association.sourceKey,
-        language: association.language,
-        content: record.content
-      }];
-    });
-    return {
-      checks,
-      request: { candidates, dependencies: { selectedBy: "defineConfig" } },
-    };
-  },
+  quality: {
+    checks: [defineQualityCheck({
+      id: "host-rule",
+      version: "inspect-journey-qa-v1",
+      configurationSchema: enabledConfigurationSchema,
+      configuration: { enabled: true },
+      check({ configuration, candidate }) {
+        return {
+          status: configuration.enabled ? "complete" : "not-applicable",
+          diagnostics: configuration.enabled ? [{
+            severity: "warning",
+            object: {
+              kind: "translation-unit",
+              key: candidate.sourceKey,
+              language: candidate.language
+            },
+            location: {
+              language: candidate.language,
+              range: "src/messages.ts:18"
+            },
+            message: "候选需要人工复核。",
+            evidence: []
+          }] : [],
+          issues: [],
+          coverage: {
+            selected: 1,
+            evaluated: 1,
+            notApplicable: 0,
+            incomplete: 0,
+            failed: 0
+          }
+        };
+      }
+    })],
+    loadDependencies: () => ({ selectedBy: "defineConfig" }),
   },
 });
 `,
@@ -194,11 +182,11 @@ export default defineConfig({
       },
       {
         name: "explicit host QA checker",
-        args: ["qa", "qa.config.ts"],
+        args: ["qa", "qa.config.ts", "--output-format", "structured"],
       },
       {
-        name: "readable QA candidate summary",
-        args: ["qa", "qa.config.ts", "--output-format", "text"],
+        name: "default readable QA candidate summary",
+        args: ["qa", "qa.config.ts"],
       },
       {
         name: "QA without a configured checker",
@@ -498,24 +486,29 @@ export default defineConfig({
       `${qaText?.stdout ?? ""}${qaText?.stderr ?? ""}`,
     );
     assert.equal(qaText?.stderr, "");
-    assert.match(qaText?.stdout ?? "", /检查候选：1；诊断：1/u);
-    assert.match(qaText?.stdout ?? "", /原文读取：完整；译文读取：fr 完整/u);
+    assert.match(qaText?.stdout ?? "", /质量结论：通过/u);
+    assert.match(qaText?.stdout ?? "", /执行状态：完整/u);
+    assert.match(qaText?.stdout ?? "", /语言范围：读取 fr；所选候选语言 fr/u);
+    assert.match(qaText?.stdout ?? "", /检查范围：已选候选 1 条，检查项 1 项/u);
     assert.match(
       qaText?.stdout ?? "",
-      /检查依据 host-rule src\/messages\.ts:18 → fr/u,
+      /有效问题：错误 0，警告 1，提示 0；已豁免 0/u,
     );
-    assert.match(qaText?.stdout ?? "", /sha256:[a-f0-9]{64}/u);
-    assert.match(qaText?.stdout ?? "", /host-rule .*执行 0.*候选需要人工复核/u);
-    assert.equal(noChecks?.exitCode, 0);
-    assert.equal(
-      (JSON.parse(noChecks?.stdout ?? "") as { data: { status: string } }).data
-        .status,
-      "not-run",
+    assert.match(
+      qaText?.stdout ?? "",
+      /- \[警告\] host-rule src\/messages\.ts:18（fr，src\/messages\.ts:18）：候选需要人工复核/u,
     );
+    assert.equal(noChecks?.exitCode, 1);
+    assert.match(noChecks?.stdout ?? "", /语言范围：读取 fr；所选候选语言 fr/u);
+    assert.match(
+      noChecks?.stdout ?? "",
+      /检查范围：已选候选 1 条，检查项 0 项/u,
+    );
+    assert.match(noChecks?.stdout ?? "", /没有配置检查项/u);
     assert.equal(results[6]?.exitCode, 0);
     assert.match(results[6]?.stdout ?? "", /inspect/u);
     assert.equal(results[7]?.exitCode, 0);
-    assert.equal(results[7]?.stdout, "lioni 0.0.0\n");
+    assert.equal(results[7]?.stdout, "lioni 0.1.0\n");
     assert.equal(results[8]?.exitCode, 2);
     assert.equal(results[8]?.stdout, "");
     assert.partialDeepStrictEqual(JSON.parse(results[8]?.stderr ?? ""), {

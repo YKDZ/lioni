@@ -4,7 +4,7 @@ import path from "node:path";
 import { test } from "node:test";
 
 import { externalInterruptSignal } from "./external-interrupt.ts";
-import { runCommand, type ProcessResult } from "./process.ts";
+import { runCommand, runSubprocess, type ProcessResult } from "./process.ts";
 
 export type Artifact = {
   readonly name: string;
@@ -19,13 +19,14 @@ type ConsumerCommand = (
 export type Consumer = {
   readonly root: string;
   readonly runCommand: ConsumerCommand;
+  /** 返回退出状态，供场景验证 CLI 的预期非零结果。 */
+  readonly runProcess: ConsumerCommand;
   readonly runNode: ConsumerCommand;
   readonly typecheck: () => Promise<ProcessResult>;
 };
 
 type ConsumerScenarioOptions = {
   readonly name: string;
-  readonly packages: readonly string[];
   readonly fixtures: URL;
 };
 
@@ -35,7 +36,7 @@ function requiredEnvironment(name: string): string {
   return value;
 }
 
-/** 在工作区外安装本次打包的制品。场景只声明自己使用的直接依赖。 */
+/** 在工作区外只安装本次打包的 lioni 产品。 */
 export function testArtifactConsumer(
   options: ConsumerScenarioOptions,
   execute: (consumer: Consumer) => Promise<void>,
@@ -45,24 +46,21 @@ export function testArtifactConsumer(
     const artifacts = JSON.parse(
       await readFile(path.join(runRoot, "artifacts.json"), "utf8"),
     ) as readonly Artifact[];
-    const overrides = Object.fromEntries(
-      artifacts.map(({ name, filename }) => [name, `file:${filename}`]),
-    );
-    const dependencies = Object.fromEntries(
-      options.packages.map((name) => {
-        assert.ok(overrides[name], `本次未打包 ${name}。`);
-        return [name, overrides[name]];
-      }),
-    );
+    const product = artifacts.find(({ name }) => name === "lioni");
+    assert.ok(product, "本次未打包 lioni 产品。");
+    const dependencies = { lioni: `file:${product.filename}` };
     const root = await mkdtemp(path.join(runRoot, "consumer-"));
     const signal = AbortSignal.any([context.signal, externalInterruptSignal]);
+    const processOptions = {
+      cwd: root,
+      signal,
+      shell: process.platform === "win32",
+      terminationGraceMs: 500,
+    };
     const command: ConsumerCommand = (executable, args = []) =>
-      runCommand(executable, args, {
-        cwd: root,
-        signal,
-        shell: process.platform === "win32",
-        terminationGraceMs: 500,
-      });
+      runCommand(executable, args, processOptions);
+    const runProcess: ConsumerCommand = (executable, args = []) =>
+      runSubprocess(executable, args, processOptions);
 
     try {
       await cp(options.fixtures, root, { recursive: true });
@@ -76,11 +74,6 @@ export function testArtifactConsumer(
           dependencies,
           devDependencies: { "@types/node": "24.19.2" },
         }),
-      );
-      // 传递依赖也必须来自本批制品；把它们全列为直接依赖会掩盖漏报依赖。
-      await writeFile(
-        path.join(root, "pnpm-workspace.yaml"),
-        JSON.stringify({ overrides }),
       );
       await writeFile(
         path.join(root, "tsconfig.json"),
@@ -105,6 +98,7 @@ export function testArtifactConsumer(
       await execute({
         root,
         runCommand: command,
+        runProcess,
         runNode: (file, args = []) =>
           command(process.execPath, [path.resolve(root, file), ...args]),
         typecheck: () =>

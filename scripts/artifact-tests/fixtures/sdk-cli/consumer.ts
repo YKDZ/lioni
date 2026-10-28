@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { analyzeQuality, readCompletion, readFacts } from "@lioni/core";
+import { analyzeQuality, readCompletion, readFacts } from "lioni";
 
 import config from "./lioni.config.ts";
 

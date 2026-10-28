@@ -186,6 +186,18 @@ export type {
   QuantityBranchIssue,
   TermCheckerOptions,
 } from "@lioni/checks";
+export { createVueI18nChecks } from "@lioni/checks";
+export type {
+  VueI18nCheckData,
+  VueI18nCheckDependencies,
+  VueI18nChecksOptions,
+  VueI18nMessageProjection,
+  VueI18nPolicy,
+  VueI18nProjector,
+  VueI18nQuantityPolicy,
+  VueI18nReferenceProjector,
+  VueI18nScopeRule,
+} from "@lioni/checks";
 
 export {
   assessTermUse,

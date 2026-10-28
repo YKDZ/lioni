@@ -38,3 +38,18 @@ export { compareQuantityBranches } from "./quantities.ts";
 export type { QuantityBranch, QuantityBranchIssue } from "./quantities.ts";
 export { compareProtectedLiterals } from "./protected-literals.ts";
 export type { ProtectedLiteralIssue } from "./protected-literals.ts";
+export { createVueI18nChecks } from "./vue-i18n/quality-checks.ts";
+export type {
+  VueI18nCheckData,
+  VueI18nCheckDependencies,
+  VueI18nChecksOptions,
+  VueI18nMessageProjection,
+  VueI18nPolicy,
+  VueI18nProjectionInput,
+  VueI18nProjector,
+  VueI18nReferenceProjector,
+  VueI18nScopeRule,
+  VueI18nQuantityPolicy,
+  VueI18nSourceMessage,
+  VueI18nTargetMessage,
+} from "./vue-i18n/quality-types.ts";

@@ -15,7 +15,7 @@
     "boundaries": "turbo boundaries",
     "publication:pack": "turbo run build && changeset pack --out-dir .changeset/packed",
     "publication:publish": "changeset publish --from-pack-dir .changeset/packed",
-    "verify:artifacts": "node --conditions=source scripts/run-artifact-tests.ts",
+    "verify:artifacts": "pnpm run publication:pack && node --conditions=source scripts/run-artifact-tests.ts --from-publish-plan .changeset/packed/publish-plan.json",
     "terminology:evaluation:quality": "pnpm --filter @lioni/terminology evaluation:quality",
     "terminology:evaluation:performance": "pnpm exec turbo run build --filter=@lioni/terminology... && pnpm --filter @lioni/terminology run evaluation:performance"
   },
@@ -27,8 +27,8 @@
     "@lioni/terminology": "workspace:*",
     "@lioni/text-analysis": "workspace:*",
     "@lioni/tooling-config": "workspace:./packages/tooling-config",
-    "@lioni/vue-i18n": "workspace:*",
     "@types/node": "catalog:",
+    "lioni": "workspace:./apps/cli",
     "oxfmt": "catalog:",
     "oxlint": "catalog:",
     "oxlint-tsgolint": "catalog:",

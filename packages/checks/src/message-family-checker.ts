@@ -132,6 +132,13 @@ export type MessageFamilyCheckerOptions<
       TUnavailable,
       TSubject
     >,
+    context: QualityCheckInput<
+      TUnit,
+      TTranslation,
+      unknown,
+      TBody,
+      TUnavailable
+    >,
   ) => Awaitable<MessageFamilyInput>;
   /** 候选可访问完整 QA 输入，以便复用候选共用投影。 */
   readonly projectCandidate?: (
@@ -151,6 +158,7 @@ export type MessageFamilyCheckerOptions<
   readonly targetEquivalence?: (
     signature: TemplateSignature,
     language: string,
+    input: QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
   ) => string;
   readonly limits?: Partial<MessageFamilyLimits>;
 };
@@ -212,10 +220,11 @@ export function createMessageFamilyChecker<
   };
 
   async function projectReferences(
-    facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
+    input: QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
     language: string,
     memo: MemoScope,
   ): Promise<ProjectedReferences> {
+    const facts = input.facts;
     const issues: MessageFamilyIssue[] = [];
     const incompleteFamilies = new Set<string>();
     const references: MessageFamilyReference[] = [];
@@ -342,7 +351,7 @@ export function createMessageFamilyChecker<
         };
         let projected: MessageFamilyInput;
         try {
-          projected = await options.project(context);
+          projected = await options.project(context, input);
         } catch (error) {
           throw new QualityCheckBindingError(checkId, "projection", error);
         }
@@ -382,6 +391,7 @@ export function createMessageFamilyChecker<
             group.target.language,
             { sourceKey: association.sourceKey },
             memo,
+            input,
           );
           issues.push(...signed.issues);
           if (signed.familyKey === "") {
@@ -419,19 +429,19 @@ export function createMessageFamilyChecker<
   }
 
   const memoKeyReferences = (
-    facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
+    input: QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
     language: string,
     _memo: MemoScope,
-  ): readonly unknown[] => [facts, language];
+  ): readonly unknown[] => [input.facts, language, input.dependencies];
   function getReferences(
     memo: MemoScope,
-    facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
+    input: QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
     language: string,
   ): Promise<ProjectedReferences> {
     const memoized = memo.memo(projectReferences, {
       key: memoKeyReferences,
     });
-    return memoized(facts, language, memo);
+    return memoized(input, language, memo);
   }
 
   return bindQualityCheck<
@@ -463,10 +473,13 @@ export function createMessageFamilyChecker<
       status: "ready",
       value:
         options.projectCandidate === undefined
-          ? await options.project({
-              kind: "candidate",
-              subject: input.subject,
-            })
+          ? await options.project(
+              {
+                kind: "candidate",
+                subject: input.subject,
+              },
+              input,
+            )
           : await options.projectCandidate(input),
     }),
     check: async (
@@ -559,7 +572,7 @@ export function createMessageFamilyChecker<
 
       const references = await getReferences(
         input.memo,
-        input.facts,
+        input,
         input.subject.language,
       );
       const initialCandidateIssueCount = candidateIssues.length;
@@ -588,6 +601,7 @@ export function createMessageFamilyChecker<
           group.target.language,
           { sourceKey: input.subject.sourceKey },
           input.memo,
+          input,
         );
         candidateIssues.push(...signed.issues);
         if (signed.familyKey === "") {
@@ -692,17 +706,33 @@ export function createMessageFamilyChecker<
   });
 }
 
-async function signGroup(
+async function signGroup<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
   group: MessageFamilyGroup,
   analysis: TextAnalysis,
   sourceTemplate: TemplateOptions,
   targetTemplate: TemplateOptions,
   targetEquivalence:
-    | ((signature: TemplateSignature, language: string) => string)
+    | ((
+        signature: TemplateSignature,
+        language: string,
+        input: QualityCheckInput<
+          TUnit,
+          TTranslation,
+          unknown,
+          TBody,
+          TUnavailable
+        >,
+      ) => string)
     | undefined,
   language: string,
   context: { readonly sourceKey?: string },
   memo: MemoScope,
+  input: QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
 ): Promise<SignedMessageGroup> {
   const issues: MessageFamilyIssue[] = [];
   const source = await signText(
@@ -746,7 +776,8 @@ async function signGroup(
     };
   const targetParts = target.signatures.map((signature) => {
     const key =
-      targetEquivalence?.(signature, language) ?? signatureKey(signature);
+      targetEquivalence?.(signature, language, input) ??
+      signatureKey(signature);
     if (typeof key !== "string" || key.length === 0)
       throw new TypeError("目标签名等价键必须为非空字符串。");
     return key;
