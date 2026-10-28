@@ -1,16 +1,31 @@
 {
-  "name": "@lioni/cli",
-  "version": "0.0.0",
-  "private": true,
+  "name": "lioni",
+  "version": "0.1.0",
+  "private": false,
   "bin": {
     "lioni": "./dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "import": "./dist/node.js",
+      "default": "./dist/node.js"
+    }
+  },
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.build.json --pretty false",
+    "build": "tsdown",
     "format:check": "oxfmt --list-different .",
     "format:write": "oxfmt --write .",
     "lint": "oxlint --quiet --format=unix --ignore-pattern node_modules .",
@@ -21,17 +36,26 @@
     "test:e2e": "node --conditions=source --test --test-timeout=180000 --test-reporter=spec --test-reporter=./scripts/node-test-count-reporter.ts --test-reporter-destination=stdout --test-reporter-destination=stderr 'test/e2e/run-journeys.test.ts'"
   },
   "dependencies": {
-    "@lioni/core": "workspace:*",
+    "@standard-schema/spec": "1.1.0",
     "@valibot/to-json-schema": "catalog:",
     "@ykdz/cli-contract": "catalog:",
-    "valibot": "catalog:"
+    "valibot": "catalog:",
+    "yaml": "^2.9.1"
   },
   "devDependencies": {
+    "@lioni/checks": "workspace:*",
+    "@lioni/core": "workspace:*",
+    "@lioni/memo": "workspace:*",
+    "@lioni/terminology": "workspace:*",
+    "@lioni/text-analysis": "workspace:*",
     "@lioni/tooling-config": "workspace:*",
+    "@lioni/vue-i18n": "workspace:*",
     "@types/node": "catalog:",
     "oxfmt": "catalog:",
     "oxlint": "catalog:",
     "oxlint-tsgolint": "catalog:",
+    "tsdown": "0.22.1",
+    "typescript": "6.0.3",
     "typescript-7": "catalog:"
   },
   "engines": {

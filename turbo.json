@@ -1,5 +1,10 @@
 {
   "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**"],
+      "tags": ["quality:light"]
+    },
     "//#boundaries": {
       "tags": ["quality:light"]
     },

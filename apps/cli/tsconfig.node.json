@@ -9,5 +9,6 @@
     "test/**/*.ts",
     "*.config.ts",
     "template/**/*.ts"
-  ]
+  ],
+  "exclude": ["tsdown.config.ts"]
 }
