@@ -50,13 +50,19 @@
    git tag --list 'lioni@0.1.0'
    ```
 
-   本机上传不会自动创建 GitHub Release。确认该标签指向 `main` 上的发布提交后，维护者将标签推送到 `YKDZ/lioni`，并创建对应的 GitHub Release；发布标题与内容使用 `apps/cli/CHANGELOG.md` 的 `0.1.0` 段落。记录 npm 上传、Git 标签和 GitHub Release 的实际结果，不把其中一步当作另外两步已完成。
+   本机上传不会自动创建 GitHub Release。确认该标签指向 `main` 上的发布提交后，维护者将标签推送到 `YKDZ/lioni`：
+
+   ```sh
+   git push origin lioni@0.1.0
+   ```
+
+   然后在 GitHub 仓库的 Releases 页面，用 `lioni@0.1.0` 标签创建 Release，标题和说明采用 `apps/cli/CHANGELOG.md` 的 `0.1.0` 段落。记录 npm 上传、Git 标签和 GitHub Release 的实际结果，不把其中一步当作另外两步已完成。
 
 ## 后续 GitHub OIDC 发布
 
 `.github/workflows/release.yml` 仅支持手动触发；打包和发布作业都要求运行在仓库默认分支。打包作业执行常规及重型检查、构建并生成 Changesets 制品，发布作业接收同一制品，并使用 `npm` GitHub Environment 与 OIDC 权限。
 
-待下一个真实版本准备好后，维护者在 npm 为 `lioni` 配置可信发布者：
+待下一个真实版本准备好后，维护者在 npm 的 `lioni` 包设置页打开 Trusted Publisher，配置：
 
 - GitHub 仓库：`YKDZ/lioni`
 - 工作流文件名：`release.yml`（文件位于 `.github/workflows/release.yml`）
