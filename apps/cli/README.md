@@ -165,4 +165,4 @@ export default defineConfig({
 
 ## 项目信息
 
-Lioni 使用 [MIT 许可证](LICENSE)。源码和问题反馈见 [YKDZ/lioni](https://github.com/YKDZ/lioni) 与[问题列表](https://github.com/YKDZ/lioni/issues)，版本说明见[更新日志](CHANGELOG.md)。
+Lioni 使用 [MIT 许可证](LICENSE)。源码和问题反馈见 [YKDZ/lioni](https://github.com/YKDZ/lioni) 与[问题列表](https://github.com/YKDZ/lioni/issues)，版本说明见[更新日志](https://github.com/YKDZ/lioni/blob/main/apps/cli/CHANGELOG.md)。
