@@ -1,3 +1,6 @@
 node_modules/
 dist/
 .turbo/
+
+# 本地外部评测语料及来源说明
+/corpora/
