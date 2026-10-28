@@ -3,7 +3,6 @@ import type {
   CoverageStatus,
   EnumerationCompleteness,
   SourceUnitFact,
-  StandardSchemaV1,
   TranslationAdapter,
   TranslationIdentity,
   TranslationRead,
@@ -11,8 +10,10 @@ import type {
   TranslationReadScopeFact,
   TranslationUnitInput,
 } from "./index.ts";
+import { isRecord } from "./object-guards.ts";
 import {
   assertJsonValue,
+  isStandardSchema,
   StandardSchemaContractError,
   validateWithStandardSchema,
 } from "./standard-schema.ts";
@@ -286,18 +287,4 @@ function assertUniqueTranslationIdentity(
       duplicateIndex,
     });
   firstIndexes.set(serialized, duplicateIndex);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isStandardSchema(value: unknown): value is StandardSchemaV1 {
-  if (!isRecord(value) || !isRecord(value["~standard"])) return false;
-  const standard = value["~standard"];
-  return (
-    standard.version === 1 &&
-    typeof standard.vendor === "string" &&
-    typeof standard.validate === "function"
-  );
 }

@@ -8,6 +8,7 @@ import {
   evaluateCompletion,
 } from "./completion.ts";
 import type { CompletionFacts, CompletionPolicy } from "./completion.ts";
+import { isRecord } from "./object-guards.ts";
 import type { UpdatePolicy } from "./plans.ts";
 import {
   runQualityChecks,
@@ -30,6 +31,7 @@ import type {
 } from "./semantic-edits.ts";
 import {
   assertJsonValue,
+  isStandardSchema,
   StandardSchemaContractError,
   validateWithStandardSchema,
 } from "./standard-schema.ts";
@@ -1019,20 +1021,6 @@ async function prepareQuality<
         defaults.candidates,
     } as Omit<QualityCheckRequest<TBody>, "exceptions">,
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isStandardSchema(value: unknown): value is StandardSchemaV1 {
-  if (!isRecord(value) || !isRecord(value["~standard"])) return false;
-  const standard = value["~standard"];
-  return (
-    standard.version === 1 &&
-    typeof standard.vendor === "string" &&
-    typeof standard.validate === "function"
-  );
 }
 
 function validateSourceRead(value: unknown): void {

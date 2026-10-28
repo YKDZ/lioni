@@ -210,15 +210,23 @@ void describe("QA 例外", () => {
   });
 
   void it("校验手写例外使用的同一数据结构", () => {
-    const value: unknown = createQualityException({
+    const exception = createQualityException({
       id: "save-copy-meaning-fr",
       reason: "译文保留了预期动作。",
       execution,
     });
+    const value: unknown = exception;
 
     assert.doesNotThrow(() => validateQualityException(value));
     assert.throws(
       () => validateQualityException({ ...execution, id: "wrong-shape" }),
+      QualityExceptionFormatError,
+    );
+    assert.throws(
+      () =>
+        validateQualityException(
+          Object.assign(Object.create({ inherited: true }), exception),
+        ),
       QualityExceptionFormatError,
     );
   });

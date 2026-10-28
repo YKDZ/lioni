@@ -24,6 +24,7 @@ import type {
   StandardSchemaV1,
 } from "./index.ts";
 import { readFacts, validateFrameworkConfig } from "./index.ts";
+import { isRecord } from "./object-guards.ts";
 import type {
   JsonValue,
   TranslationWriteRequest,
@@ -969,10 +970,6 @@ function sameIdentity(
   right: TranslationIdentity,
 ): boolean {
   return identityKey(left) === identityKey(right);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isPlanAssociations(value: unknown): boolean {

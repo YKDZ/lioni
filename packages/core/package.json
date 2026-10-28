@@ -36,6 +36,7 @@
   },
   "dependencies": {
     "@lioni/memo": "workspace:*",
+    "@standard-schema/spec": "1.1.0",
     "yaml": "^2.9.1"
   },
   "devDependencies": {

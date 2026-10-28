@@ -1,3 +1,5 @@
+import { isPlainRecord } from "../object-guards.ts";
+
 const QUALITY_EXCEPTION_FORMAT = "lioni.qa-exceptions/v1" as const;
 
 export type QualityExceptionFingerprintSummary = {
@@ -142,14 +144,15 @@ export async function upsertQualityExceptionFromReport(
   let selectedExecution: Record<string, unknown> | undefined;
   for (const check of reportValue.checks) {
     if (
-      !isRecord(check) ||
+      !isPlainRecord(check) ||
       typeof check.checkId !== "string" ||
       !Array.isArray(check.executions)
     )
       throw invalid("QA 报告中的检查执行结构无效。");
     if (check.checkId !== checkId) continue;
     for (const execution of check.executions) {
-      if (!isRecord(execution)) throw invalid("QA 报告中的候选执行结构无效。");
+      if (!isPlainRecord(execution))
+        throw invalid("QA 报告中的候选执行结构无效。");
       if (execution.executionId !== executionId) continue;
       if (execution.checkId !== checkId)
         throw invalid("候选执行的检查身份与报告分组不一致。");
@@ -171,9 +174,9 @@ export async function upsertQualityExceptionFromReport(
 }
 
 function unwrapQualityReport(value: unknown): Record<string, unknown> {
-  if (!isRecord(value)) throw invalid("QA 报告必须是对象。");
+  if (!isPlainRecord(value)) throw invalid("QA 报告必须是对象。");
   if (!Object.hasOwn(value, "data")) return value;
-  if (!isRecord(value.data))
+  if (!isPlainRecord(value.data))
     throw invalid("CLI QA 报告的 data 结果必须是对象。");
   return value.data;
 }
@@ -182,7 +185,7 @@ function unwrapQualityReport(value: unknown): Record<string, unknown> {
 export function validateQualityException(
   value: unknown,
 ): asserts value is QualityException {
-  if (!isRecord(value)) throw invalid("例外记录必须是对象。");
+  if (!isPlainRecord(value)) throw invalid("例外记录必须是对象。");
   assertExactKeys(
     value,
     [
@@ -202,7 +205,7 @@ export function validateQualityException(
   assertString(value.sourceKey, "原文键");
   assertNonEmptyString(value.language, "目标语言");
   assertNonEmptyString(value.inputFingerprint, "输入指纹");
-  if (!isRecord(value.fingerprintSummary))
+  if (!isPlainRecord(value.fingerprintSummary))
     throw invalid("例外依据摘要必须是对象。");
   assertExactKeys(
     value.fingerprintSummary,
@@ -224,7 +227,7 @@ export function validateQualityException(
 export function validateQualityExceptionFile(
   value: unknown,
 ): asserts value is QualityExceptionFile {
-  if (!isRecord(value)) throw invalid("例外文件顶层必须是对象。");
+  if (!isPlainRecord(value)) throw invalid("例外文件顶层必须是对象。");
   if (value.format !== QUALITY_EXCEPTION_FORMAT) {
     const actual = typeof value.format === "string" ? value.format : "未标识";
     throw new QualityExceptionFormatError(
@@ -388,13 +391,6 @@ function assertString(
   description: string,
 ): asserts value is string {
   if (typeof value !== "string") throw invalid(`${description}必须是文本。`);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value))
-    return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
 }
 
 function invalid(message: string): QualityExceptionFormatError {
