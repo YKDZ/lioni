@@ -118,7 +118,7 @@ async function artifactFromWorkspaceProduct(
   );
 }
 
-/** 消费已构建的正式包；Turbo 负责前置构建，失败时保留临时目录供复现。 */
+/** 消费已构建的产品包；根任务负责前置构建，失败时保留临时目录供复现。 */
 async function main(): Promise<void> {
   const available = (await readdir(scenarios))
     .filter((name) => name.endsWith(".test.ts"))
