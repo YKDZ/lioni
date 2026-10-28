@@ -33,7 +33,8 @@
     "@lioni/core": "workspace:*",
     "@lioni/memo": "workspace:*",
     "@lioni/terminology": "workspace:*",
-    "@lioni/text-analysis": "workspace:*"
+    "@lioni/text-analysis": "workspace:*",
+    "valibot": "catalog:"
   },
   "devDependencies": {
     "@lioni/tooling-config": "workspace:*",

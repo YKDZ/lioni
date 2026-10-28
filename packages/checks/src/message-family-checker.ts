@@ -12,7 +12,6 @@ import type {
   QualityLocation,
   QualityObject,
   SourceUnitFact,
-  StandardSchemaV1,
   TranslationAssociationFact,
   TranslationUnitInput,
 } from "@lioni/core";
@@ -26,10 +25,14 @@ import type {
   TemplateOptions,
   TemplateSignature,
   TextAnalysis,
-  TextRange,
 } from "@lioni/text-analysis";
 import { createTextAnalysis, signatureKey } from "@lioni/text-analysis";
+import * as v from "valibot";
 
+import {
+  messageFamilyInputSchema,
+  messageFamilyLimitsSchema,
+} from "./message-families.ts";
 import type {
   MessageFamilyComparison,
   MessageFamilyGroup,
@@ -45,7 +48,13 @@ import {
   indexMessageFamilies,
 } from "./message-families.ts";
 
-type Configuration = { readonly limits: MessageFamilyLimits };
+const configurationSchema = v.pipe(
+  v.custom<Record<string, unknown>>(isRecord, "消息族展示配置无效。"),
+  v.object({ limits: messageFamilyLimitsSchema }, "消息族展示配置无效。"),
+  v.readonly(),
+);
+
+type Configuration = v.InferOutput<typeof configurationSchema>;
 
 export type MessageFamilySubject<
   TSelectedUnit extends TranslationUnitInput,
@@ -167,39 +176,7 @@ const defaultLimits: MessageFamilyLimits = {
   maxSourcesPerCategory: 3,
 };
 
-const configurationSchema: StandardSchemaV1<Configuration, Configuration> = {
-  "~standard": {
-    version: 1,
-    vendor: "lioni-message-family-checker",
-    validate(value) {
-      if (!isRecord(value) || !isRecord(value.limits))
-        return { issues: [{ message: "消息族展示配置无效。" }] };
-      const { maxCategories, maxSourcesPerCategory } = value.limits;
-      if (
-        !isPositiveInteger(maxCategories) ||
-        !isPositiveInteger(maxSourcesPerCategory)
-      )
-        return { issues: [{ message: "消息族展示上限必须为正整数。" }] };
-      return {
-        value: {
-          limits: { maxCategories, maxSourcesPerCategory },
-        },
-      };
-    },
-  },
-};
-
-const inputSchema: StandardSchemaV1<MessageFamilyInput, MessageFamilyInput> = {
-  "~standard": {
-    version: 1,
-    vendor: "lioni-message-family-checker",
-    validate(value) {
-      if (!isMessageFamilyInput(value))
-        return { issues: [{ message: "消息族投影必须包含有效的 groups。" }] };
-      return { value };
-    },
-  },
-};
+const inputSchema = messageFamilyInputSchema;
 
 const defaultTemplate: TemplateOptions = { abstract: () => undefined };
 
@@ -1115,155 +1092,6 @@ function validateProjection(
   return result.value;
 }
 
-function isMessageFamilyInput(value: unknown): value is MessageFamilyInput {
-  if (!isRecord(value) || !Array.isArray(value.groups)) return false;
-  if (value.complete !== undefined && typeof value.complete !== "boolean")
-    return false;
-  if (value.issues !== undefined && !isIssues(value.issues)) return false;
-  return value.groups.every(isGroup);
-}
-
-function isGroup(value: unknown): value is MessageFamilyGroup {
-  return (
-    isRecord(value) &&
-    isJsonValue(value.ref) &&
-    typeof value.scope === "string" &&
-    value.scope.length > 0 &&
-    isMessageText(value.source) &&
-    isMessageText(value.target)
-  );
-}
-
-function isMessageText(value: unknown): value is MessageFamilyGroup["source"] {
-  return (
-    isRecord(value) &&
-    typeof value.language === "string" &&
-    value.language.length > 0 &&
-    Array.isArray(value.fragments) &&
-    (value.complete === undefined || typeof value.complete === "boolean") &&
-    (value.issues === undefined || isIssues(value.issues)) &&
-    value.fragments.every(isFragment)
-  );
-}
-
-function isFragment(value: unknown): value is MessageFragment {
-  return (
-    isRecord(value) &&
-    isJsonValue(value.ref) &&
-    typeof value.text === "string" &&
-    (value.protectedRanges === undefined ||
-      (Array.isArray(value.protectedRanges) &&
-        value.protectedRanges.every((range) =>
-          isTextRange(value.text as string, range),
-        )))
-  );
-}
-
-function isIssues(value: unknown): value is readonly MessageFamilyIssue[] {
-  return (
-    Array.isArray(value) &&
-    value.every(
-      (item) =>
-        isRecord(item) &&
-        typeof item.code === "string" &&
-        item.code.length > 0 &&
-        typeof item.message === "string" &&
-        (item.language === undefined || typeof item.language === "string") &&
-        (item.sourceKey === undefined || typeof item.sourceKey === "string") &&
-        (item.ref === undefined || isJsonValue(item.ref)) &&
-        (item.range === undefined || isRange(item.range)),
-    )
-  );
-}
-
-function isRange(value: unknown): value is TextRange {
-  return (
-    isRecord(value) &&
-    Number.isInteger(value.start) &&
-    Number.isInteger(value.end) &&
-    (value.start as number) >= 0 &&
-    (value.end as number) >= (value.start as number)
-  );
-}
-
-function isTextRange(text: string, value: unknown): value is TextRange {
-  if (!isRange(value) || value.end > text.length) return false;
-  return (
-    isCodePointBoundary(text, value.start) &&
-    isCodePointBoundary(text, value.end)
-  );
-}
-
-function isCodePointBoundary(text: string, index: number): boolean {
-  if (index === 0 || index === text.length) return true;
-  const before = text.charCodeAt(index - 1);
-  const after = text.charCodeAt(index);
-  return !(
-    before >= 0xd800 &&
-    before <= 0xdbff &&
-    after >= 0xdc00 &&
-    after <= 0xdfff
-  );
-}
-
-function isJsonValue(
-  value: unknown,
-  active: Set<object> = new Set(),
-): value is import("@lioni/core").JsonValue {
-  if (
-    value === null ||
-    typeof value === "string" ||
-    typeof value === "boolean" ||
-    (typeof value === "number" &&
-      Number.isFinite(value) &&
-      !Object.is(value, -0))
-  )
-    return true;
-  if (typeof value !== "object" || active.has(value)) return false;
-  active.add(value);
-  try {
-    if (Array.isArray(value)) {
-      if (
-        Object.getPrototypeOf(value) !== Array.prototype ||
-        Reflect.ownKeys(value).some(
-          (key) =>
-            key !== "length" &&
-            (typeof key !== "string" || !/^0$|^[1-9][0-9]*$/u.test(key)),
-        )
-      )
-        return false;
-      for (let index = 0; index < value.length; index += 1) {
-        if (!Object.hasOwn(value, index) || !isJsonValue(value[index], active))
-          return false;
-      }
-      return true;
-    }
-    if (
-      !isRecord(value) ||
-      Object.getPrototypeOf(value) !== Object.prototype ||
-      Reflect.ownKeys(value).some((key) => typeof key !== "string")
-    )
-      return false;
-    for (const key of Object.keys(value)) {
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (
-        descriptor === undefined ||
-        !descriptor.enumerable ||
-        !Object.hasOwn(descriptor, "value") ||
-        !isJsonValue(descriptor.value, active)
-      )
-        return false;
-    }
-    return true;
-  } finally {
-    active.delete(value);
-  }
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isPositiveInteger(value: unknown): value is number {
-  return Number.isInteger(value) && (value as number) > 0;
 }
