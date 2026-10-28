@@ -75,7 +75,7 @@ export default defineConfig({
     criterion: "存在实际译文",
     resolveCompletion: ({ translations }) => translations.length > 0,
   },
-  quality: { prepare: () => ({ checks: [check] }) },
+  quality: { checks: [check] },
   translationWriteback: {
     locateExistingTarget: ({ translation }) => ({ status: "located", locator: translation.identity }),
     locateNewTarget: ({ sourceKey, language }) => ({ status: "located", locator: { key: sourceKey, language } }),

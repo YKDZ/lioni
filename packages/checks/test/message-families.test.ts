@@ -350,10 +350,8 @@ function configFor(
       matches: (unit, translation) => unit.id === translation.id,
     },
     quality: {
-      prepare: () => ({
-        checks: [qualityChecker],
-        request: { candidates: [], dependencies: {} },
-      }),
+      checks: [qualityChecker],
+      buildCandidates: () => [],
       ...(exceptionStore === undefined ? {} : { exceptionStore }),
     },
   });

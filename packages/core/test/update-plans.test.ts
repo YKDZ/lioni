@@ -103,9 +103,9 @@ function makeConfig(
       ? {}
       : { updatePolicy: options.updatePolicy }),
     quality: {
-      prepare() {
+      loadDependencies() {
         options.onQuality?.();
-        throw new Error("预览不应加载 QA 输入。");
+        throw new Error("预览不应加载 QA 资料。");
       },
     },
   });

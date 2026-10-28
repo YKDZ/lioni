@@ -304,6 +304,8 @@ type PreparedQualityCheck<
   ) => Awaitable<QualityCheckExecutionPreparation<TObject>>;
 };
 
+type QualityCheckPreparer = () => Promise<unknown>;
+
 type QualityCheckExecutionPreparation<TObject extends QualityObject> =
   | {
       readonly status: "not-applicable" | "incomplete";
@@ -333,6 +335,7 @@ const qualityCheckDefinitionBrand: unique symbol = Symbol(
   "qualityCheckDefinition",
 );
 
+/** 不透明的检查器契约；私有函数类型仅保留宿主与检查输入的类型关系。 */
 export type QualityCheckDefinition<
   TUnit extends TranslationUnitInput,
   TTranslation,
@@ -340,13 +343,15 @@ export type QualityCheckDefinition<
   TBody = unknown,
   TUnavailable = never,
 > = {
-  readonly [qualityCheckDefinitionBrand]: true;
+  readonly [qualityCheckDefinitionBrand]: (
+    input: QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
+  ) => QualityCheckOutcome<TObject>;
   readonly id: string;
   readonly version: string;
-  readonly prepare: () => Promise<
-    PreparedQualityCheck<TUnit, TTranslation, TObject, TBody, TUnavailable>
-  >;
 };
+
+/** 将执行状态与公开检查器对象分离，避免暴露内部准备和执行协议。 */
+const qualityCheckPreparers = new WeakMap<object, QualityCheckPreparer>();
 
 export type QualityCheckBinding<
   TUnit extends TranslationUnitInput,
@@ -467,41 +472,68 @@ export function defineQualityCheck<
     check,
   } = definition;
   assertQualityCheckIdentity(id, version);
-  return {
+  const qualityCheck = {
     [qualityCheckDefinitionBrand]: true,
     id,
     version,
     configuration,
     configurationSchema,
     check,
-    prepare: async () => {
-      const configurationDescription = `QA 检查器 ${id} 的配置`;
-      const parsedConfiguration = await validateWithStandardSchema(
-        configurationSchema,
-        configuration,
-        configurationDescription,
-      );
-      assertJsonValue(parsedConfiguration, `QA 检查器 ${id} 的最终配置`);
-      return {
-        configuration: parsedConfiguration,
-        version,
-        prepareInput: (input) => {
-          const checkInput = {
-            ...input,
-            configuration: parsedConfiguration,
-          };
-          return {
-            status: "ready",
-            fingerprintInput: prepareFingerprintInput(
-              id,
-              fingerprintInput,
-              checkInput,
-            ),
-            execute: () => check(checkInput),
-          };
-        },
-      };
-    },
+  } as const;
+  qualityCheckPreparers.set(qualityCheck, async () => {
+    const configurationDescription = `QA 检查器 ${id} 的配置`;
+    const parsedConfiguration = await validateWithStandardSchema(
+      configurationSchema,
+      configuration,
+      configurationDescription,
+    );
+    assertJsonValue(parsedConfiguration, `QA 检查器 ${id} 的最终配置`);
+    return {
+      configuration: parsedConfiguration,
+      version,
+      prepareInput: (
+        input: QualityCheckExecutionInput<
+          TUnit,
+          TTranslation,
+          TBody,
+          TUnavailable
+        >,
+      ) => {
+        const checkInput = {
+          ...input,
+          configuration: parsedConfiguration,
+        };
+        return {
+          status: "ready",
+          fingerprintInput: prepareFingerprintInput(
+            id,
+            fingerprintInput,
+            checkInput,
+          ),
+          execute: () => check(checkInput),
+        };
+      },
+    };
+  });
+  return qualityCheck as unknown as QualityCheckDefinition<
+    TUnit,
+    TTranslation,
+    TObject,
+    TBody,
+    TUnavailable
+  > & {
+    readonly version: string;
+    readonly configuration: StandardSchemaInput<TSchema>;
+    readonly configurationSchema: TSchema;
+    readonly check: (
+      input: QualityCheckInput<
+        TUnit,
+        TTranslation,
+        StandardSchemaOutput<TSchema>,
+        TBody,
+        TUnavailable
+      >,
+    ) => Awaitable<QualityCheckOutcome<TObject>>;
   };
 }
 
@@ -542,96 +574,114 @@ export function bindQualityCheck<
     check,
   } = definition;
   assertQualityCheckIdentity(id, version);
-  return {
+  const qualityCheck = {
     [qualityCheckDefinitionBrand]: true,
     id,
     version,
     configuration,
     configurationSchema,
     inputSchema,
-    prepare: async () => {
-      const configurationDescription = `QA 检查器 ${id} 的配置`;
-      const parsedConfiguration = await validateWithStandardSchema(
-        configurationSchema,
-        configuration,
-        configurationDescription,
-      );
-      assertJsonValue(parsedConfiguration, `QA 检查器 ${id} 的最终配置`);
-      return {
-        configuration: parsedConfiguration,
-        version,
-        prepareInput: async (input) => {
-          const boundInput = { ...input, configuration: parsedConfiguration };
-          let selection: QualityCheckSelection<TSubject, TObject>;
-          try {
-            selection = await select(boundInput);
-          } catch (error) {
-            throw new QualityCheckBindingError(id, "selection", error);
-          }
-          if (!isQualityCheckSelection(selection))
-            throw new QualityCheckBindingError(
-              id,
-              "selection",
-              new TypeError("适用范围选择返回了无效结果。"),
-            );
-          if (selection.status === "not-applicable")
-            return {
-              status: "not-applicable",
-              outcome: bindingOutcome<TObject>("not-applicable"),
-            };
-          if (selection.status === "incomplete")
-            return {
-              status: "incomplete",
-              outcome: bindingOutcome<TObject>("incomplete", selection.issue),
-            };
-
-          const projectionInput = {
-            ...boundInput,
-            subject: selection.subject,
-          };
-          let projection: QualityCheckProjection<
-            StandardSchemaInput<TInputSchema>,
-            TObject
-          >;
-          try {
-            projection = await project(projectionInput);
-          } catch (error) {
-            throw new QualityCheckBindingError(id, "projection", error);
-          }
-          if (!isQualityCheckProjection(projection))
-            throw new QualityCheckBindingError(
-              id,
-              "projection",
-              new TypeError("检查输入投影返回了无效结果。"),
-            );
-          if (projection.status === "incomplete")
-            return {
-              status: "incomplete",
-              outcome: bindingOutcome<TObject>("incomplete", projection.issue),
-            };
-
-          const projectedInput = await validateWithStandardSchema(
-            inputSchema,
-            projection.value,
-            `QA 检查器 ${id} 的投影输入`,
+  } as const;
+  qualityCheckPreparers.set(qualityCheck, async () => {
+    const configurationDescription = `QA 检查器 ${id} 的配置`;
+    const parsedConfiguration = await validateWithStandardSchema(
+      configurationSchema,
+      configuration,
+      configurationDescription,
+    );
+    assertJsonValue(parsedConfiguration, `QA 检查器 ${id} 的最终配置`);
+    return {
+      configuration: parsedConfiguration,
+      version,
+      prepareInput: async (
+        input: QualityCheckExecutionInput<
+          TUnit,
+          TTranslation,
+          TBody,
+          TUnavailable
+        >,
+      ) => {
+        const boundInput = { ...input, configuration: parsedConfiguration };
+        let selection: QualityCheckSelection<TSubject, TObject>;
+        try {
+          selection = await select(boundInput);
+        } catch (error) {
+          throw new QualityCheckBindingError(id, "selection", error);
+        }
+        if (!isQualityCheckSelection(selection))
+          throw new QualityCheckBindingError(
+            id,
+            "selection",
+            new TypeError("适用范围选择返回了无效结果。"),
           );
-          const checkInput = {
-            ...boundInput,
-            subject: selection.subject,
-            projected: projectedInput,
-          };
+        if (selection.status === "not-applicable")
           return {
-            status: "ready",
-            fingerprintInput: prepareFingerprintInput(
-              id,
-              fingerprintInput,
-              checkInput,
-            ),
-            execute: () => check(checkInput),
+            status: "not-applicable",
+            outcome: bindingOutcome<TObject>("not-applicable"),
           };
-        },
-      };
-    },
+        if (selection.status === "incomplete")
+          return {
+            status: "incomplete",
+            outcome: bindingOutcome<TObject>("incomplete", selection.issue),
+          };
+
+        const projectionInput = {
+          ...boundInput,
+          subject: selection.subject,
+        };
+        let projection: QualityCheckProjection<
+          StandardSchemaInput<TInputSchema>,
+          TObject
+        >;
+        try {
+          projection = await project(projectionInput);
+        } catch (error) {
+          throw new QualityCheckBindingError(id, "projection", error);
+        }
+        if (!isQualityCheckProjection(projection))
+          throw new QualityCheckBindingError(
+            id,
+            "projection",
+            new TypeError("检查输入投影返回了无效结果。"),
+          );
+        if (projection.status === "incomplete")
+          return {
+            status: "incomplete",
+            outcome: bindingOutcome<TObject>("incomplete", projection.issue),
+          };
+
+        const projectedInput = await validateWithStandardSchema(
+          inputSchema,
+          projection.value,
+          `QA 检查器 ${id} 的投影输入`,
+        );
+        const checkInput = {
+          ...boundInput,
+          subject: selection.subject,
+          projected: projectedInput,
+        };
+        return {
+          status: "ready",
+          fingerprintInput: prepareFingerprintInput(
+            id,
+            fingerprintInput,
+            checkInput,
+          ),
+          execute: () => check(checkInput),
+        };
+      },
+    };
+  });
+  return qualityCheck as unknown as QualityCheckDefinition<
+    TUnit,
+    TTranslation,
+    TObject,
+    TBody,
+    TUnavailable
+  > & {
+    readonly configuration: StandardSchemaInput<TConfigurationSchema>;
+    readonly configurationSchema: TConfigurationSchema;
+    readonly inputSchema: TInputSchema;
   };
 }
 
@@ -787,9 +837,20 @@ export async function runQualityChecks<
       if (checkIds.has(definition.id))
         throw new TypeError(`QA 检查项 id ${definition.id} 重复。`);
       checkIds.add(definition.id);
+      const prepare = qualityCheckPreparers.get(definition);
+      if (prepare === undefined)
+        throw new TypeError(
+          `QA 检查项 ${definition.id} 必须由 defineQualityCheck 或 bindQualityCheck 创建。`,
+        );
       preparedChecks.push({
         id: definition.id,
-        prepared: await definition.prepare(),
+        prepared: (await prepare()) as PreparedQualityCheck<
+          TUnit,
+          TTranslation,
+          QualityObject,
+          TBody,
+          TUnavailable
+        >,
       });
     }
 

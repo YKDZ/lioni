@@ -6,13 +6,15 @@
 
 使用 `@lioni/checks` 的内置工厂时，另提供 `hostVersion` 描述宿主的选择、投影和组合逻辑。工厂会将它与固定的内置算法版本合并。
 
-质量设置集中在 `defineConfig` 的 `quality` 对象中。`quality.prepare(facts)` 每次 `analyzeQuality` 在读取事实后调用一次，返回本次使用的 `checks` 和可选 `request`。静态检查使用相同形式，例如 `quality: { prepare: () => ({ checks }) }`。省略 `prepare` 时使用空检查列表和默认候选；省略 request 时仍使用默认候选。结果缓存与例外存储分别配置为 `quality.resultCache` 和 `quality.exceptionStore`。
+质量设置集中在 `defineConfig` 的 `quality` 对象中。检查器直接放入 `quality.checks`，其配置 schema 由 SDK 在每次运行时校验。需要动态规则资料时，用 `quality.loadDependencies({ facts, memo })` 按本次已读取事实加载一次；返回值会提供给每条检查器，并进入默认输入指纹。
+
+框架按匹配的可用译文生成默认候选。需要增加或改造候选集合时，可用 `quality.buildCandidates({ facts, defaultCandidates, dependencies, memo })` 一次构造；`analyzeQuality` 的 `candidates` 选项可直接提供外部候选源，并覆盖配置中的构造器。可另传 `selectCandidates(candidates)` 完成过滤、排序或截取；空数组保持为空。候选筛选只限制实际检查范围，完整读取事实与关系上下文仍提供给检查器。结果缓存与例外存储分别配置为 `quality.resultCache` 和 `quality.exceptionStore`。
 
 ## 默认输入依据
 
 默认依据包含完整框架事实、当前候选、对应原文单元、检查依赖和关联关系。对象属性顺序不影响摘要，数组顺序保留。输入必须是普通 JSON；函数、`memo`、例外和存储实例不属于默认依据。框架始终把检查身份、实现版本及经过 schema 转换的最终配置加入指纹。完整框架事实可能包含与某条诊断无关的条目；这些条目改变时指纹也可能变化，使现有例外不再匹配，这是保守范围带来的代价。
 
-闭包依赖不会自动纳入指纹。宿主资料、外部策略和会影响诊断内容、位置或证据的数据，应通过检查依赖或自定义指纹依据显式提供。检查作者可在自定义依据中组合默认构造能力：
+闭包依赖不会自动纳入指纹。通过 `quality.loadDependencies` 返回的宿主资料、外部策略和其他会影响诊断内容、位置或证据的数据会纳入默认指纹；检查作者也可在自定义依据中组合默认构造能力：
 
 ```ts
 import {

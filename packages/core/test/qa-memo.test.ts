@@ -68,24 +68,16 @@ function configFor(compute: (memo: MemoScope) => void) {
       matches: () => true,
     },
     quality: {
-      prepare: () => ({
-        request: {
-          candidates: [
-            { sourceKey: "save", language: "zh-CN", content: "保存" },
-          ],
-          dependencies: {},
-        },
-        checks: ["first", "second"].map((id) =>
-          defineTestQualityCheck<typeof source, typeof translation, string>({
-            id,
-            configuration: {},
-            check: ({ memo }) => {
-              compute(memo);
-              return complete();
-            },
-          }),
-        ),
-      }),
+      checks: ["first", "second"].map((id) =>
+        defineTestQualityCheck<typeof source, typeof translation, string>({
+          id,
+          configuration: {},
+          check: ({ memo }) => {
+            compute(memo);
+            return complete();
+          },
+        }),
+      ),
     },
   });
 }
@@ -112,13 +104,32 @@ void test("配置不执行计算，同次 QA 共享范围，运行结束关闭�
   assert.equal(calls, 2);
 });
 
-void test("quality.prepare 可只提供依赖并沿用默认候选，显式空候选仍为空", async () => {
+void test("直接配置检查器并按运行读取资料，筛选不裁剪事实且空选择保持为空", async () => {
   const source = { source: "Save" };
   const translation = { id: "save", text: "保存" };
-  let prepareCalls = 0;
+  let dependencyReads = 0;
   let sourceReads = 0;
   const observed: unknown[] = [];
-  const preparedSourceKeys: string[][] = [];
+  const observedContexts: unknown[] = [];
+  const dependencySourceKeys: string[][] = [];
+  const checker = defineTestQualityCheck<
+    typeof source,
+    typeof translation,
+    string
+  >({
+    id: "candidate-observer",
+    configuration: {},
+    check: ({ candidate, facts, relationships }) => {
+      observed.push(candidate.content);
+      observedContexts.push({
+        translationRecords: facts.translations.records.map(
+          ({ content }) => content,
+        ),
+        relationships,
+      });
+      return complete();
+    },
+  });
   const config = defineConfig({
     source: {
       schema: sourceSchemaFromExamples(source),
@@ -159,54 +170,79 @@ void test("quality.prepare 可只提供依赖并沿用默认候选，显式空�
       matches: () => true,
     },
     quality: {
-      async prepare(facts) {
-        prepareCalls += 1;
-        assert.equal(sourceReads, prepareCalls);
-        preparedSourceKeys.push(facts.source.units.map(({ key }) => key));
+      checks: [checker],
+      relationships: [
+        {
+          kind: "translation-family",
+          key: "catalog",
+          members: [{ key: "save", language: "zh-CN" }],
+        },
+      ],
+      async loadDependencies({ facts, memo }) {
+        dependencyReads += 1;
+        assert.equal(sourceReads, dependencyReads);
+        dependencySourceKeys.push(facts.source.units.map(({ key }) => key));
         await Promise.resolve();
-        return {
-          checks: [
-            defineTestQualityCheck<typeof source, typeof translation, string>({
-              id: "candidate-observer",
-              configuration: {},
-              check: ({ candidate }) => {
-                observed.push(candidate.content);
-                return complete();
-              },
-            }),
-          ],
-          request: {
-            ...(prepareCalls === 3 ? { candidates: [] } : {}),
-            dependencies: { run: prepareCalls },
-          },
-        };
+        memo.memo(() => "loaded")();
+        return { run: dependencyReads };
       },
     },
   });
 
-  assert.equal(prepareCalls, 0);
+  assert.equal(dependencyReads, 0);
   const first = await analyzeQuality(config);
   assert.equal(first.status, "complete");
-  assert.equal(prepareCalls, 1);
+  assert.equal(dependencyReads, 1);
   assert.deepEqual(first.candidates, [
     { sourceKey: "save", language: "zh-CN", content: "保存" },
   ]);
   assert.deepEqual(first.dependencies, { run: 1 });
 
   const second = await analyzeQuality(config, {
-    candidates: [{ sourceKey: "save", language: "zh-CN", content: "外部候选" }],
+    candidates: [
+      { sourceKey: "external", language: "zh-CN", content: "外部候选 A" },
+      { sourceKey: "external", language: "zh-CN", content: "外部候选 B" },
+    ],
+    selectCandidates: (candidates) => candidates.slice(1),
   });
-  assert.equal(prepareCalls, 2);
+  assert.equal(dependencyReads, 2);
   assert.deepEqual(second.candidates, [
-    { sourceKey: "save", language: "zh-CN", content: "外部候选" },
+    { sourceKey: "external", language: "zh-CN", content: "外部候选 B" },
   ]);
   assert.deepEqual(second.dependencies, { run: 2 });
-  const third = await analyzeQuality(config);
-  assert.equal(prepareCalls, 3);
+  assert.equal(second.factCoverage.associations[0]?.candidateSelected, false);
+  const third = await analyzeQuality(config, {
+    selectCandidates: () => [],
+  });
+  assert.equal(dependencyReads, 3);
   assert.deepEqual(third.candidates, []);
   assert.deepEqual(third.dependencies, { run: 3 });
-  assert.deepEqual(observed, ["保存", "外部候选"]);
-  assert.deepEqual(preparedSourceKeys, [["save"], ["save"], ["save"]]);
+  assert.deepEqual(observed, ["保存", "外部候选 B"]);
+  assert.deepEqual(observedContexts, [
+    {
+      translationRecords: ["保存"],
+      relationships: [
+        {
+          kind: "translation-family",
+          key: "catalog",
+          members: [{ key: "save", language: "zh-CN" }],
+        },
+      ],
+    },
+    {
+      translationRecords: ["保存"],
+      relationships: [
+        {
+          kind: "translation-family",
+          key: "catalog",
+          members: [{ key: "save", language: "zh-CN" }],
+        },
+      ],
+    },
+  ]);
+  assert.equal(second.factCoverage.translations.length, 1);
+  assert.deepEqual(dependencySourceKeys, [["save"], ["save"], ["save"]]);
+  assert.equal(third.factCoverage.associations[0]?.candidateSelected, false);
 });
 
 void test("调用方范围可以跨运行复用，core 不取得关闭权", async () => {

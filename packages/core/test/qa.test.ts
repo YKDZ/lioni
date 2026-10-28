@@ -71,30 +71,29 @@ void describe("quality checks", () => {
           matches: () => true,
         },
         quality: {
-          prepare: () => ({
-            request: { candidates: [candidate], dependencies },
-            checks: [
-              defineTestQualityCheck({
-                id: "dependency-observer",
-                configuration: {},
-                check(input) {
-                  observedDependencies = input.dependencies;
-                  return {
-                    status: "complete",
-                    diagnostics: [],
-                    issues: [],
-                    coverage: {
-                      selected: 1,
-                      evaluated: 1,
-                      notApplicable: 0,
-                      incomplete: 0,
-                      failed: 0,
-                    },
-                  };
-                },
-              }),
-            ],
-          }),
+          buildCandidates: () => [candidate],
+          loadDependencies: () => dependencies,
+          checks: [
+            defineTestQualityCheck({
+              id: "dependency-observer",
+              configuration: {},
+              check(input) {
+                observedDependencies = input.dependencies;
+                return {
+                  status: "complete",
+                  diagnostics: [],
+                  issues: [],
+                  coverage: {
+                    selected: 1,
+                    evaluated: 1,
+                    notApplicable: 0,
+                    incomplete: 0,
+                    failed: 0,
+                  },
+                };
+              },
+            }),
+          ],
         },
       });
     }
