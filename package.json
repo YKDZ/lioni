@@ -15,7 +15,7 @@
     "boundaries": "turbo boundaries",
     "publication:pack": "turbo run build && changeset pack --out-dir .changeset/packed",
     "publication:publish": "changeset publish --from-pack-dir .changeset/packed",
-    "verify:artifacts": "pnpm run publication:pack && node --conditions=source scripts/run-artifact-tests.ts --from-publish-plan .changeset/packed/publish-plan.json",
+    "verify:artifacts": "pnpm --filter '@lioni/lioni...' run build && node --conditions=source scripts/run-artifact-tests.ts",
     "terminology:evaluation:quality": "pnpm --filter @lioni/terminology evaluation:quality",
     "terminology:evaluation:performance": "pnpm exec turbo run build --filter=@lioni/terminology... && pnpm --filter @lioni/terminology run evaluation:performance"
   },
