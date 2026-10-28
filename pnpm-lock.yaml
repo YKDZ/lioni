@@ -223,9 +223,6 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 24.19.2
-      lioni:
-        specifier: workspace:./apps/cli
-        version: link:apps/cli
       oxfmt:
         specifier: 'catalog:'
         version: 0.71.0

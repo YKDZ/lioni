@@ -47,8 +47,7 @@
         "@lioni/core#build",
         "@lioni/memo#build",
         "@lioni/terminology#build",
-        "@lioni/text-analysis#build",
-        "lioni#build"
+        "@lioni/text-analysis#build"
       ],
       "tags": ["work:repair"]
     },

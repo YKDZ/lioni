@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { QualityRunResult } from "lioni";
+import type { QualityRunResult } from "@lioni/core";
 
 import { testArtifactConsumer } from "../support/consumer.ts";
 
