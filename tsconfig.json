@@ -6,9 +6,6 @@
     },
     {
       "path": "./tsconfig.scripts.json"
-    },
-    {
-      "path": "./tsconfig.artifact-fixtures.json"
     }
   ]
 }

@@ -7,13 +7,6 @@ export type TermbaseYamlFiles = {
   readonly languages: Readonly<Record<string, string>>;
 };
 
-type ParsedTermbaseYaml = {
-  readonly concepts: Readonly<Record<string, unknown>>;
-  readonly languages: Readonly<
-    Record<string, Readonly<Record<string, unknown>>>
-  >;
-};
-
 export type TermbaseYamlIssue = {
   readonly code: string;
   readonly file: string;

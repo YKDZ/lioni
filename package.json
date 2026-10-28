@@ -28,7 +28,6 @@
     "@lioni/text-analysis": "workspace:*",
     "@lioni/tooling-config": "workspace:./packages/tooling-config",
     "@types/node": "catalog:",
-    "lioni": "workspace:./apps/cli",
     "oxfmt": "catalog:",
     "oxlint": "catalog:",
     "oxlint-tsgolint": "catalog:",
