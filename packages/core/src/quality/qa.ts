@@ -413,6 +413,7 @@ export type QualityCheckBinding<
   ) => Awaitable<QualityCheckOutcome<TObject>>;
 };
 
+/** 声明质量检查项；正式运行会校验配置并调用检查函数。返回值只表达检查项身份。 */
 export function defineQualityCheck<
   TUnit extends TranslationUnitInput,
   TTranslation,
@@ -443,26 +444,7 @@ export function defineQualityCheck<
       TUnavailable
     >,
   ) => Awaitable<QualityCheckOutcome<TObject>>;
-}): QualityCheckDefinition<
-  TUnit,
-  TTranslation,
-  TObject,
-  TBody,
-  TUnavailable
-> & {
-  readonly version: string;
-  readonly configuration: StandardSchemaInput<TSchema>;
-  readonly configurationSchema: TSchema;
-  readonly check: (
-    input: QualityCheckInput<
-      TUnit,
-      TTranslation,
-      StandardSchemaOutput<TSchema>,
-      TBody,
-      TUnavailable
-    >,
-  ) => Awaitable<QualityCheckOutcome<TObject>>;
-} {
+}): QualityCheckDefinition<TUnit, TTranslation, TObject, TBody, TUnavailable> {
   const {
     id,
     version,
@@ -476,9 +458,6 @@ export function defineQualityCheck<
     [qualityCheckDefinitionBrand]: true,
     id,
     version,
-    configuration,
-    configurationSchema,
-    check,
   } as const;
   qualityCheckPreparers.set(qualityCheck, async () => {
     const configurationDescription = `QA 检查器 ${id} 的配置`;
@@ -521,20 +500,7 @@ export function defineQualityCheck<
     TObject,
     TBody,
     TUnavailable
-  > & {
-    readonly version: string;
-    readonly configuration: StandardSchemaInput<TSchema>;
-    readonly configurationSchema: TSchema;
-    readonly check: (
-      input: QualityCheckInput<
-        TUnit,
-        TTranslation,
-        StandardSchemaOutput<TSchema>,
-        TBody,
-        TUnavailable
-      >,
-    ) => Awaitable<QualityCheckOutcome<TObject>>;
-  };
+  >;
 }
 
 export function bindQualityCheck<
