@@ -520,24 +520,19 @@ function createCliContract(identity: CliCommandIdentity) {
             "lioni.baseline.json",
           );
           try {
-            const loaded = await loadConfig(configPath);
-            return await loaded.use(async (config) => {
-              const result = await recordBaselineForConfig(
-                config,
-                baselinePath,
-              );
-              const snapshot = result.baseline.snapshot;
-              return outcome.data.recorded({
-                outcome: result.outcome,
-                path: baselinePath,
-                sourceScopeCount: snapshot.source.read.scopes.length,
-                sourceUnitCount: snapshot.source.units.length,
-                translationScopeCount: snapshot.translations.reads.reduce(
-                  (count, read) => count + read.scopes.length,
-                  0,
-                ),
-                translationRecordCount: snapshot.translations.records.length,
-              });
+            const config = await loadConfig(configPath);
+            const result = await recordBaselineForConfig(config, baselinePath);
+            const snapshot = result.baseline.snapshot;
+            return outcome.data.recorded({
+              outcome: result.outcome,
+              path: baselinePath,
+              sourceScopeCount: snapshot.source.read.scopes.length,
+              sourceUnitCount: snapshot.source.units.length,
+              translationScopeCount: snapshot.translations.reads.reduce(
+                (count, read) => count + read.scopes.length,
+                0,
+              ),
+              translationRecordCount: snapshot.translations.records.length,
             });
           } catch (error) {
             return outcome.failure.recordFailed({
@@ -606,25 +601,23 @@ function createCliContract(identity: CliCommandIdentity) {
             "lioni.baseline.json",
           );
           try {
-            const loaded = await loadConfig(configPath);
-            return await loaded.use(async (config) => {
-              if (input.dryRun === true) {
-                const plan = await previewUpdateForConfig(
-                  config,
-                  baselinePath,
-                  languageSelection(input),
-                );
-                return outcome.data.previewed(plan);
-              }
-              const result = await updateForConfig(
+            const config = await loadConfig(configPath);
+            if (input.dryRun === true) {
+              const plan = await previewUpdateForConfig(
                 config,
                 baselinePath,
                 languageSelection(input),
               );
-              return result.status === "completed"
-                ? outcome.data.applied(result)
-                : outcome.failure.applyFailed(result);
-            });
+              return outcome.data.previewed(plan);
+            }
+            const result = await updateForConfig(
+              config,
+              baselinePath,
+              languageSelection(input),
+            );
+            return result.status === "completed"
+              ? outcome.data.applied(result)
+              : outcome.failure.applyFailed(result);
           } catch (error) {
             return outcome.failure.previewFailed({
               message: error instanceof Error ? error.message : String(error),
@@ -725,40 +718,38 @@ function createCliContract(identity: CliCommandIdentity) {
         },
         async handler({ input, outcome }) {
           try {
-            const loaded = await loadConfig(input.config);
-            return await loaded.use(async (config) => {
-              const facts = await readFacts(config, languageSelection(input));
-              return outcome.data.read({
-                ...facts,
-                source: {
-                  ...facts.source,
-                  read: {
-                    ...facts.source.read,
-                    scopes: facts.source.read.scopes.map((scope) => ({
-                      ...scope,
-                    })),
-                  },
-                  units: facts.source.units.map((unit) => ({ ...unit })),
-                },
-                translations: {
-                  reads: facts.translations.reads.map((read) => ({
-                    ...read,
-                    scopes: read.scopes.map((scope) => ({
-                      ...scope,
-                      covers: [...scope.covers],
-                      translationIndexes: [...scope.translationIndexes],
-                    })),
-                  })),
-                  records: facts.translations.records.map((record) => ({
-                    ...record,
+            const config = await loadConfig(input.config);
+            const facts = await readFacts(config, languageSelection(input));
+            return outcome.data.read({
+              ...facts,
+              source: {
+                ...facts.source,
+                read: {
+                  ...facts.source.read,
+                  scopes: facts.source.read.scopes.map((scope) => ({
+                    ...scope,
                   })),
                 },
-                associations: facts.associations.map((association) => ({
-                  ...association,
-                  scopeIndexes: [...association.scopeIndexes],
-                  translationIndexes: [...association.translationIndexes],
+                units: facts.source.units.map((unit) => ({ ...unit })),
+              },
+              translations: {
+                reads: facts.translations.reads.map((read) => ({
+                  ...read,
+                  scopes: read.scopes.map((scope) => ({
+                    ...scope,
+                    covers: [...scope.covers],
+                    translationIndexes: [...scope.translationIndexes],
+                  })),
                 })),
-              });
+                records: facts.translations.records.map((record) => ({
+                  ...record,
+                })),
+              },
+              associations: facts.associations.map((association) => ({
+                ...association,
+                scopeIndexes: [...association.scopeIndexes],
+                translationIndexes: [...association.translationIndexes],
+              })),
             });
           } catch (error) {
             if (error instanceof DuplicateTranslationUnitKeyError)
@@ -856,23 +847,21 @@ function createCliContract(identity: CliCommandIdentity) {
         },
         async handler({ input, outcome }) {
           try {
-            const loaded = await loadConfig(input.config);
-            return await loaded.use(async (config) => {
-              const facts = await readCompletion(
-                config,
-                languageSelection(input),
-              );
-              return outcome.data.read({
-                ...facts.completion,
-                scope: {
-                  ...facts.completion.scope,
-                  targetLanguages: [...facts.completion.scope.targetLanguages],
-                },
-                obligations: facts.completion.obligations.map((obligation) => ({
-                  ...obligation,
-                  translationIndexes: [...obligation.translationIndexes],
-                })),
-              });
+            const config = await loadConfig(input.config);
+            const facts = await readCompletion(
+              config,
+              languageSelection(input),
+            );
+            return outcome.data.read({
+              ...facts.completion,
+              scope: {
+                ...facts.completion.scope,
+                targetLanguages: [...facts.completion.scope.targetLanguages],
+              },
+              obligations: facts.completion.obligations.map((obligation) => ({
+                ...obligation,
+                translationIndexes: [...obligation.translationIndexes],
+              })),
             });
           } catch (error) {
             if (error instanceof DuplicateTranslationUnitKeyError)
@@ -980,27 +969,25 @@ function createCliContract(identity: CliCommandIdentity) {
               await readFile(reportPath, "utf8"),
             ) as unknown;
             const configPath = path.resolve(process.cwd(), input.config);
-            const loaded = await loadConfig(configPath);
+            const config = await loadConfig(configPath);
             const executionId = Number(input.executionId);
-            return await loaded.use(async (config) => {
-              const store = config.quality?.exceptionStore;
-              if (store === undefined)
-                throw new TypeError("配置未提供 QA 例外存储。");
-              const exception = await upsertQualityExceptionFromReport({
-                report,
-                checkId: input.checkId,
-                executionId,
-                id: input.id,
-                reason: input.reason,
-                store,
-              });
-              return outcome.data.upserted({
-                id: exception.id,
-                checkId: exception.checkId,
-                sourceKey: exception.sourceKey,
-                language: exception.language,
-                executionId,
-              });
+            const store = config.quality?.exceptionStore;
+            if (store === undefined)
+              throw new TypeError("配置未提供 QA 例外存储。");
+            const exception = await upsertQualityExceptionFromReport({
+              report,
+              checkId: input.checkId,
+              executionId,
+              id: input.id,
+              reason: input.reason,
+              store,
+            });
+            return outcome.data.upserted({
+              id: exception.id,
+              checkId: exception.checkId,
+              sourceKey: exception.sourceKey,
+              language: exception.language,
+              executionId,
             });
           } catch (error) {
             return outcome.failure.upsertFailed({
@@ -1048,16 +1035,14 @@ function createCliContract(identity: CliCommandIdentity) {
         },
         async handler({ input, outcome }) {
           try {
-            const loaded = await loadConfig(input.config);
-            return await loaded.use(async (config) => {
-              const result = await analyzeQuality(
-                config,
-                languageSelection(input),
-              );
-              return decideQualityReport(result).passed
-                ? outcome.data.checked(result)
-                : outcome.data.notPassed(result);
-            });
+            const config = await loadConfig(input.config);
+            const result = await analyzeQuality(
+              config,
+              languageSelection(input),
+            );
+            return decideQualityReport(result).passed
+              ? outcome.data.checked(result)
+              : outcome.data.notPassed(result);
           } catch (error) {
             return outcome.failure.checkFailed({
               message: error instanceof Error ? error.message : String(error),

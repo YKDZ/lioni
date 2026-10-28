@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 
 import {
+  asciiNumbers,
   compareProtectedLiterals,
   compareQuantityBranches,
-} from "@lioni/checks";
-import { createMemoScope } from "@lioni/memo";
-import { compileTerms, evaluateTerms } from "@lioni/terminology";
-import { loadTermbaseYaml } from "@lioni/terminology/node";
-import { asciiNumbers, createTextAnalysis } from "@lioni/text-analysis";
+  compileTerms,
+  createMemoScope,
+  createTextAnalysis,
+  evaluateTerms,
+} from "lioni";
+import { loadTermbaseYaml } from "lioni/node";
 
 const memo = createMemoScope();
 try {

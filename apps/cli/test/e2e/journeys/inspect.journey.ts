@@ -7,10 +7,11 @@ import type { CliJourney } from "../journey.ts";
 const journey: CliJourney = {
   name: "inspect",
   modes: ["source", "distribution"],
-  async setup({ workDir }) {
+  async setup({ workDir, mode }) {
+    const sdkImport = mode === "source" ? "@lioni/core" : "lioni";
     await writeFile(
       path.join(workDir, "lioni.config.ts"),
-      `import { defineConfig } from "@lioni/core";
+      `import { defineConfig } from "${sdkImport}";
 
 export default defineConfig({
   source: {
@@ -77,7 +78,7 @@ export default defineConfig({
     );
     await writeFile(
       path.join(workDir, "duplicate.config.ts"),
-      `import { defineConfig } from "@lioni/core";
+      `import { defineConfig } from "${sdkImport}";
 
 export default defineConfig({
   source: {
@@ -104,7 +105,7 @@ export default defineConfig({
     );
     await writeFile(
       path.join(workDir, "qa.config.ts"),
-      `import { defineConfig, defineQualityCheck } from "@lioni/core";
+      `import { defineConfig, defineQualityCheck } from "${sdkImport}";
 import baseConfig from "./lioni.config.ts";
 
 const enabledConfigurationSchema = {
@@ -507,7 +508,7 @@ export default defineConfig({
     assert.equal(results[6]?.exitCode, 0);
     assert.match(results[6]?.stdout ?? "", /inspect/u);
     assert.equal(results[7]?.exitCode, 0);
-    assert.equal(results[7]?.stdout, "lioni 0.0.0\n");
+    assert.equal(results[7]?.stdout, "lioni 0.1.0\n");
     assert.equal(results[8]?.exitCode, 2);
     assert.equal(results[8]?.stdout, "");
     assert.partialDeepStrictEqual(JSON.parse(results[8]?.stderr ?? ""), {

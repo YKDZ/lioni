@@ -7,7 +7,6 @@ import { testArtifactConsumer } from "../support/consumer.ts";
 testArtifactConsumer(
   {
     name: "文件计划跨进程写回、冲突与失败恢复",
-    packages: ["@lioni/core"],
     fixtures: new URL("../fixtures/workflows/", import.meta.url),
   },
   async ({ root, runNode, typecheck }) => {

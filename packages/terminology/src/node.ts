@@ -2,11 +2,7 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import {
-  assembleTermbaseYaml,
-  parseTermbaseYaml,
-  type TermbaseYamlFiles,
-} from "./yaml.ts";
+import { parseTermbaseYaml, type TermbaseYamlFiles } from "./yaml.ts";
 
 /** 读取默认术语目录：concepts.yaml 和任意数量的 <language>.yaml 文件。 */
 export async function readTermbaseYamlFiles(
@@ -41,5 +37,5 @@ export async function readTermbaseYamlFiles(
 /** 读取完整术语目录并返回经过原生模型校验的术语库。 */
 export async function loadTermbaseYaml(directory: string | URL) {
   const files = await readTermbaseYamlFiles(directory);
-  return assembleTermbaseYaml(parseTermbaseYaml(files));
+  return parseTermbaseYaml(files);
 }

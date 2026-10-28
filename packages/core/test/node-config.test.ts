@@ -79,32 +79,28 @@ void describe("动态 Node 配置契约", () => {
       );
 
       const loaded = await loadConfig(configPath);
-      const observed = await loaded.use(async (config) => {
-        const facts = await readSourceFacts(config);
-        return {
-          key: facts.units[0]?.key,
-          source: facts.units[0]?.unit.source,
-        };
-      });
+      const directFacts = await readSourceFacts(loaded);
+      assert.equal(directFacts.units[0]?.unit.source, "Save");
+      const facts = await readSourceFacts(loaded);
+      const observed = {
+        key: facts.units[0]?.key,
+        source: facts.units[0]?.unit.source,
+      };
 
       assert.deepStrictEqual(observed, { key: "18", source: "Save" });
-      const defaultExceptions = await loaded.use((config) =>
-        config.quality?.exceptionStore?.load(),
-      );
+      const defaultExceptions = await loaded.quality?.exceptionStore?.load();
       assert.deepEqual(defaultExceptions, [defaultException]);
       const custom = await loadConfig(customPath);
-      const customExceptions = await custom.use((config) =>
-        config.quality?.exceptionStore?.load(),
-      );
+      const customExceptions = await custom.quality?.exceptionStore?.load();
       assert.deepEqual(customExceptions, [customException]);
       const plain = await loadConfig(unboundPath);
-      const plainFacts = await plain.use(readSourceFacts);
+      const plainFacts = await readSourceFacts(plain);
       assert.equal(plainFacts.units.length, 0);
       const deferred = await loadConfig(deferredPath);
-      const deferredFacts = await deferred.use(readSourceFacts);
+      const deferredFacts = await readSourceFacts(deferred);
       assert.equal(deferredFacts.units.length, 0);
       await assert.rejects(
-        deferred.use(readComparisonSnapshot),
+        readComparisonSnapshot(deferred),
         StandardSchemaContractError,
       );
       await assert.rejects(

@@ -2,10 +2,11 @@ import { readFile } from "node:fs/promises";
 
 import {
   createVueI18nChecks,
+  defineConfig,
   type VueI18nMessageProjection,
   type VueI18nPolicy,
-} from "@lioni/checks";
-import { defineConfig, type StandardSchemaV1 } from "@lioni/core";
+  type StandardSchemaV1,
+} from "lioni";
 
 type Unit = { readonly source: string };
 const source = "Hello {name}";

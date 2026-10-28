@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +19,39 @@ import { runCommand } from "./artifact-tests/support/process.ts";
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const scenarios = new URL("./artifact-tests/scenarios/", import.meta.url);
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** 从 Changesets 正式发布计划定位已经打包的产品 tarball。 */
+async function artifactFromPublishPlan(planPath: string): Promise<Artifact> {
+  const absolutePlanPath = path.resolve(repositoryRoot, planPath);
+  const parsed: unknown = JSON.parse(await readFile(absolutePlanPath, "utf8"));
+  assert.ok(isRecord(parsed), "Changesets 发布计划必须是对象。");
+  assert.equal(parsed.version, 1, "不支持此 Changesets 发布计划版本。");
+  assert.ok(Array.isArray(parsed.plan), "Changesets 发布计划缺少 plan 列表。");
+
+  const releases = parsed.plan.flatMap((group: unknown) =>
+    Array.isArray(group) ? group : [],
+  );
+  const release = releases.find(
+    (entry: unknown) =>
+      isRecord(entry) && entry.kind === "publish" && entry.name === "lioni",
+  );
+  assert.ok(isRecord(release), "发布计划中没有 lioni 产品。");
+  assert.ok(isRecord(release.tarball), "lioni 发布项缺少 tarball。");
+  const tarballPath = release.tarball.path;
+  assert.ok(
+    typeof tarballPath === "string",
+    "Changesets tarball 路径必须是文本。",
+  );
+
+  const filename = path.resolve(path.dirname(absolutePlanPath), tarballPath);
+  const file = await stat(filename);
+  assert.ok(file.isFile(), `Changesets tarball 不存在：${filename}`);
+  return { name: "lioni", filename };
+}
+
 /** 消费已构建的正式包；Turbo 负责前置构建，失败时保留临时目录供复现。 */
 async function main(): Promise<void> {
   const available = (await readdir(scenarios))
@@ -18,6 +59,13 @@ async function main(): Promise<void> {
     .map((name) => name.slice(0, -".test.ts".length))
     .sort();
   const args = process.argv.slice(2).filter((arg) => arg !== "--");
+  const planOption = args.indexOf("--from-publish-plan");
+  let publishPlanPath: string | undefined;
+  if (planOption !== -1) {
+    publishPlanPath = args[planOption + 1];
+    assert.ok(publishPlanPath, "--from-publish-plan 后必须提供文件路径。");
+    args.splice(planOption, 2);
+  }
   if (args.length === 1 && args[0] === "--list") {
     process.stdout.write(`${available.join("\n")}\n`);
     return;
@@ -40,32 +88,15 @@ async function main(): Promise<void> {
   let passed = false;
   try {
     await mkdir(artifactsDirectory);
-    const listed = await runCommand(
-      "pnpm",
-      [
-        "--filter",
-        "@lioni/*",
-        "--filter",
-        "!@lioni/tooling-config",
-        "list",
-        "--recursive",
-        "--depth",
-        "-1",
-        "--json",
-      ],
-      commandOptions,
-    );
-    const packages = JSON.parse(listed.stdout) as readonly {
-      readonly name: string;
-    }[];
-    assert.ok(packages.length > 0, "没有可打包的 Lioni 包。");
-    const artifacts: Artifact[] = [];
-    for (const { name } of packages) {
+    let artifact: Artifact;
+    if (publishPlanPath) {
+      artifact = await artifactFromPublishPlan(publishPlanPath);
+    } else {
       const packed = await runCommand(
         "pnpm",
         [
           "--filter",
-          name,
+          "lioni",
           "pack",
           "--pack-destination",
           artifactsDirectory,
@@ -73,10 +104,10 @@ async function main(): Promise<void> {
         ],
         commandOptions,
       );
-      const artifact = JSON.parse(packed.stdout) as Artifact;
-      assert.equal(artifact.name, name);
-      artifacts.push(artifact);
+      artifact = JSON.parse(packed.stdout) as Artifact;
     }
+    assert.equal(artifact.name, "lioni");
+    const artifacts = [artifact];
     await writeFile(
       path.join(root, "artifacts.json"),
       JSON.stringify(artifacts),

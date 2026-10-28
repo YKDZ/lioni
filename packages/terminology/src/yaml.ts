@@ -7,7 +7,7 @@ export type TermbaseYamlFiles = {
   readonly languages: Readonly<Record<string, string>>;
 };
 
-export type ParsedTermbaseYaml = {
+type ParsedTermbaseYaml = {
   readonly concepts: Readonly<Record<string, unknown>>;
   readonly languages: Readonly<
     Record<string, Readonly<Record<string, unknown>>>
@@ -21,7 +21,7 @@ export type TermbaseYamlIssue = {
 };
 
 export class TermbaseYamlError extends TypeError {
-  readonly stage: "parse" | "assemble";
+  readonly stage: "parse" | "validation";
   readonly issues: readonly TermbaseYamlIssue[];
 
   constructor(
@@ -36,10 +36,8 @@ export class TermbaseYamlError extends TypeError {
   }
 }
 
-/** 解析共享概念文件与按语言拆分的 YAML 文件，不读取文件系统。 */
-export function parseTermbaseYaml(
-  files: TermbaseYamlFiles,
-): ParsedTermbaseYaml {
+/** 在内存中解析概念与语言 YAML，并返回经过领域校验的术语库。 */
+export function parseTermbaseYaml(files: TermbaseYamlFiles): Termbase {
   const concepts = parseMapping(files.concepts, "concepts.yaml");
   const languages = Object.fromEntries(
     Object.entries(files.languages).map(([language, contents]) => [
@@ -47,11 +45,7 @@ export function parseTermbaseYaml(
       parseMapping(contents, `${language}.yaml`, true),
     ]),
   );
-  return { concepts, languages };
-}
-
-/** 将已解析文件组合为原生概念、语言段与表达模型并执行领域校验。 */
-export function assembleTermbaseYaml(parsed: ParsedTermbaseYaml): Termbase {
+  const parsed = { concepts, languages };
   const unknownConcepts = Object.entries(parsed.languages).flatMap(
     ([language, declarations]) =>
       Object.keys(declarations)
@@ -77,23 +71,25 @@ export function assembleTermbaseYaml(parsed: ParsedTermbaseYaml): Termbase {
   );
   const assemblyIssues = [...unknownConcepts, ...declaredLanguages];
   if (assemblyIssues.length)
-    throw new TermbaseYamlError("assemble", assemblyIssues);
+    throw new TermbaseYamlError("validation", assemblyIssues);
 
-  const concepts = Object.entries(parsed.concepts).map(([id, metadata]) => {
-    if (!isRecord(metadata))
-      throw new TypeError(`concepts.yaml 中的概念 ${id} 必须是映射。`);
-    const languages = Object.entries(parsed.languages).flatMap(
-      ([language, declarations]) => {
-        if (!Object.hasOwn(declarations, id)) return [];
-        const declaration = declarations[id];
-        if (!isRecord(declaration))
-          throw new TypeError(`${language}.yaml 中的概念 ${id} 必须是映射。`);
-        return [{ ...declaration, language }];
-      },
-    );
-    return { ...metadata, id, languages };
-  });
-  return createTermbase({ concepts });
+  const assembledConcepts = Object.entries(parsed.concepts).map(
+    ([id, metadata]) => {
+      if (!isRecord(metadata))
+        throw new TypeError(`concepts.yaml 中的概念 ${id} 必须是映射。`);
+      const languages = Object.entries(parsed.languages).flatMap(
+        ([language, declarations]) => {
+          if (!Object.hasOwn(declarations, id)) return [];
+          const declaration = declarations[id];
+          if (!isRecord(declaration))
+            throw new TypeError(`${language}.yaml 中的概念 ${id} 必须是映射。`);
+          return [{ ...declaration, language }];
+        },
+      );
+      return { ...metadata, id, languages };
+    },
+  );
+  return createTermbase({ concepts: assembledConcepts });
 }
 
 function parseMapping(

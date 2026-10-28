@@ -122,9 +122,7 @@ const journey: CliJourney = {
       ])}\n`,
     );
     const previousConfig = await loadConfig(previousConfigPath);
-    const snapshot = await previousConfig.use((config) =>
-      readComparisonSnapshot(config),
-    );
+    const snapshot = await readComparisonSnapshot(previousConfig);
     const baseline = replaceComparisonBaseline({ current: snapshot });
     await writeFile(
       path.join(removedDir, "lioni.baseline.json"),
@@ -158,9 +156,7 @@ const journey: CliJourney = {
       `${JSON.stringify(unchangedTranslations)}\n`,
     );
     const unchangedConfig = await loadConfig(unchangedConfigPath);
-    const unchangedSnapshot = await unchangedConfig.use((config) =>
-      readComparisonSnapshot(config),
-    );
+    const unchangedSnapshot = await readComparisonSnapshot(unchangedConfig);
     await writeFile(
       path.join(emptyDir, "lioni.baseline.json"),
       `${JSON.stringify(replaceComparisonBaseline({ current: unchangedSnapshot }))}\n`,

@@ -5,7 +5,6 @@ import path from "node:path";
 import { describe, it } from "node:test";
 
 import {
-  assembleTermbaseYaml,
   parseTermbaseYaml,
   TermContractError,
   TermbaseYamlError,
@@ -177,52 +176,50 @@ void describe("默认 YAML 术语库", () => {
   });
 
   void it("拒绝语言文件引用未登记的概念", () => {
-    const parsed = parseTermbaseYaml({
-      concepts: "concepts:\n  known: {}\n",
-      languages: {
-        en: [
-          "concepts:",
-          "  unknown:",
-          "    expressions:",
-          "      - id: unknown-en",
-          "        text: Unknown",
-          "        usage: preferred",
-          "",
-        ].join("\n"),
-      },
-    });
-
     assert.throws(
-      () => assembleTermbaseYaml(parsed),
+      () =>
+        parseTermbaseYaml({
+          concepts: "concepts:\n  known: {}\n",
+          languages: {
+            en: [
+              "concepts:",
+              "  unknown:",
+              "    expressions:",
+              "      - id: unknown-en",
+              "        text: Unknown",
+              "        usage: preferred",
+              "",
+            ].join("\n"),
+          },
+        }),
       (error) =>
         error instanceof TermbaseYamlError &&
-        error.stage === "assemble" &&
+        error.stage === "validation" &&
         error.issues.some((issue) => issue.code === "unknown-concept"),
     );
   });
 
   void it("拒绝在语言文件里再次声明语言", () => {
-    const parsed = parseTermbaseYaml({
-      concepts: "concepts:\n  server: {}\n",
-      languages: {
-        en: [
-          "concepts:",
-          "  server:",
-          "    language: zh-CN",
-          "    expressions:",
-          "      - id: server-en",
-          "        text: Server",
-          "        usage: preferred",
-          "",
-        ].join("\n"),
-      },
-    });
-
     assert.throws(
-      () => assembleTermbaseYaml(parsed),
+      () =>
+        parseTermbaseYaml({
+          concepts: "concepts:\n  server: {}\n",
+          languages: {
+            en: [
+              "concepts:",
+              "  server:",
+              "    language: zh-CN",
+              "    expressions:",
+              "      - id: server-en",
+              "        text: Server",
+              "        usage: preferred",
+              "",
+            ].join("\n"),
+          },
+        }),
       (error) =>
         error instanceof TermbaseYamlError &&
-        error.stage === "assemble" &&
+        error.stage === "validation" &&
         error.issues.some((issue) => issue.code === "language-in-file"),
     );
   });
@@ -240,53 +237,53 @@ void describe("默认 YAML 术语库", () => {
         error.issues.length > 0,
     );
 
-    const sameExpressionId = parseTermbaseYaml({
-      concepts: "concepts:\n  server: {}\n",
-      languages: {
-        en: [
-          "concepts:",
-          "  server:",
-          "    expressions:",
-          "      - id: shared",
-          "        text: Server",
-          "        usage: preferred",
-          "",
-        ].join("\n"),
-        fr: [
-          "concepts:",
-          "  server:",
-          "    expressions:",
-          "      - id: shared",
-          "        text: Serveur",
-          "        usage: preferred",
-          "",
-        ].join("\n"),
-      },
-    });
     assert.throws(
-      () => assembleTermbaseYaml(sameExpressionId),
+      () =>
+        parseTermbaseYaml({
+          concepts: "concepts:\n  server: {}\n",
+          languages: {
+            en: [
+              "concepts:",
+              "  server:",
+              "    expressions:",
+              "      - id: shared",
+              "        text: Server",
+              "        usage: preferred",
+              "",
+            ].join("\n"),
+            fr: [
+              "concepts:",
+              "  server:",
+              "    expressions:",
+              "      - id: shared",
+              "        text: Serveur",
+              "        usage: preferred",
+              "",
+            ].join("\n"),
+          },
+        }),
       (error) =>
         error instanceof TermContractError &&
         error.issues.some((issue) => issue.code === "duplicate-expression-id"),
     );
 
-    const noLanguage = parseTermbaseYaml({
-      concepts: "concepts:\n  server: {}\n",
-      languages: {},
-    });
     assert.throws(
-      () => assembleTermbaseYaml(noLanguage),
+      () =>
+        parseTermbaseYaml({
+          concepts: "concepts:\n  server: {}\n",
+          languages: {},
+        }),
       (error) =>
         error instanceof TermContractError &&
         error.issues.some((issue) => issue.code === "invalid-languages"),
     );
 
-    const emptyExpressions = parseTermbaseYaml({
-      concepts: "concepts:\n  server: {}\n",
-      languages: { en: "concepts:\n  server:\n    expressions: []\n" },
-    });
     assert.throws(
-      () => assembleTermbaseYaml(emptyExpressions),
+      () =>
+        parseTermbaseYaml({
+          concepts: "concepts:\n  server: {}\n",
+          languages: { en: "concepts:\n  server:\n    expressions: []\n" },
+        }),
       (error) =>
         error instanceof TermContractError &&
         error.issues.some((issue) => issue.code === "invalid-expressions"),
@@ -323,7 +320,7 @@ void describe("默认 YAML 术语库", () => {
         error.issues.some((issue) => issue.code === "non-string-key"),
     );
 
-    const parsed = parseTermbaseYaml({
+    const termbase = parseTermbaseYaml({
       concepts: ["concepts:", '  "1":', "    note: retained", ""].join("\n"),
       languages: {
         en: [
@@ -337,8 +334,6 @@ void describe("默认 YAML 术语库", () => {
         ].join("\n"),
       },
     });
-    const termbase = assembleTermbaseYaml(parsed);
-
     assert.equal(termbase.concepts.length, 1);
     assert.equal(termbase.getConcept("1")?.id, "1");
     assert.equal(termbase.getConcept("1")?.note, "retained");

@@ -1,7 +1,10 @@
 import { readFile } from "node:fs/promises";
 
-import { createNumberChecker } from "@lioni/checks";
-import { defineConfig, type StandardSchemaV1 } from "@lioni/core";
+import {
+  createNumberChecker,
+  defineConfig,
+  type StandardSchemaV1,
+} from "lioni";
 
 type Body = string | { text: string };
 type Unit = { id: string; source: Body };
