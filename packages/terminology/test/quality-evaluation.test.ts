@@ -426,7 +426,7 @@ void describe("术语质量评测入口", () => {
       ]);
       assert.equal(result.error, undefined, result.stderr);
       assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-      assert.match(result.stdout, /pending/u);
+      assert.match(result.stdout, /审阅状态 human-reviewed/u);
 
       const report = JSON.parse(
         await readFile(outputPath, "utf8"),
@@ -436,7 +436,7 @@ void describe("术语质量评测入口", () => {
       assert.deepEqual(report.dataset, {
         id: "self-authored-qa-sample",
         version: "1.0.0",
-        reviewStatus: "pending",
+        reviewStatus: "human-reviewed",
       });
       assert.equal(report.input.groupCount, 4);
       assert.equal(report.input.sourceFragmentCount, 4);

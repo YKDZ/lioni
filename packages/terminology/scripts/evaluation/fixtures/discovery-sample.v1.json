@@ -3,7 +3,7 @@
   "dataset": {
     "id": "self-authored-discovery-sample",
     "version": "1.0.1",
-    "reviewStatus": "pending"
+    "reviewStatus": "human-reviewed"
   },
   "task": "discovery",
   "input": {
