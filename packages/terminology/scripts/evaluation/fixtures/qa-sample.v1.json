@@ -3,7 +3,7 @@
   "dataset": {
     "id": "self-authored-qa-sample",
     "version": "1.0.0",
-    "reviewStatus": "pending"
+    "reviewStatus": "human-reviewed"
   },
   "task": "qa",
   "termbase": {
