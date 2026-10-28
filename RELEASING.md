@@ -22,7 +22,15 @@
    pnpm run publication:pack
    ```
 
-3. 审阅 `.changeset/packed` 中唯一的 `lioni` 制品。确认其名称和版本为 `lioni@0.1.0`，manifest 声明 MIT、公开发布和 `YKDZ/lioni`，README、LICENSE 与实际文件一致，制品没有内部包或源码测试文件。保留这次已审阅的打包结果，不要在上传前重新构建。
+3. 审阅 Changesets 原生清单和其中引用的同一 tarball：
+
+   ```sh
+   cat .changeset/packed/publish-plan.json
+   tar -tzf .changeset/packed/packages/lioni-0.1.0.tgz
+   tar -xOf .changeset/packed/packages/lioni-0.1.0.tgz package/package.json
+   ```
+
+   确认 plan 只包含 `lioni@0.1.0`，tarball 的路径为 `packages/lioni-0.1.0.tgz`；manifest 声明 MIT、公开发布和 `YKDZ/lioni`，README、LICENSE 与实际文件一致，制品没有内部包或源码测试文件。保留这次已审阅的打包结果，不要在上传前重新构建。`publication:publish` 会读取同一 `.changeset/packed/publish-plan.json` 和 tarball。
 
 4. 由维护者在本机完成 npm 登录，确认账号后使用同一打包目录上传：
 
