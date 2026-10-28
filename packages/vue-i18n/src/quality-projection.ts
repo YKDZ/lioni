@@ -1,29 +1,94 @@
-import type {
-  QualityCheckInput,
-  StandardSchemaV1,
-  TranslationUnitInput,
-} from "@lioni/core";
+import type { QualityCheckInput, TranslationUnitInput } from "@lioni/core";
+import * as v from "valibot";
 
-import type {
-  VueI18nMessageProjection,
-  VueI18nProjectionInput,
-  VueI18nProjector,
-} from "./quality-types.ts";
+const recordSchema = v.custom<Record<string, unknown>>(
+  (value) =>
+    value !== null && typeof value === "object" && !Array.isArray(value),
+);
 
-export const vueI18nMessageProjectionSchema: StandardSchemaV1<
-  VueI18nMessageProjection,
-  VueI18nMessageProjection
-> = {
-  "~standard": {
-    version: 1,
-    vendor: "lioni-vue-i18n-message-projection",
-    validate(value) {
-      return isMessageProjection(value)
-        ? { value }
-        : { issues: [{ message: "Vue I18n 消息投影结构无效。" }] };
-    },
-  },
-};
+const sourceMessageSchema = v.pipe(
+  recordSchema,
+  v.variant("status", [
+    v.looseObject({ status: v.literal("available"), text: v.string() }),
+    v.looseObject({ status: v.literal("unavailable") }),
+    v.looseObject({ status: v.literal("absent") }),
+  ]),
+);
+
+const targetMessageSchema = v.pipe(
+  recordSchema,
+  v.variant("status", [
+    v.looseObject({ status: v.literal("available"), text: v.string() }),
+    v.looseObject({ status: v.literal("unavailable") }),
+    v.looseObject({ status: v.literal("missing") }),
+  ]),
+);
+
+const qualityLocationSchema = v.pipe(
+  recordSchema,
+  v.check(
+    (value) => Object.hasOwn(value, "range"),
+    "Vue I18n 消息位置必须显式提供 range。",
+  ),
+  v.looseObject({
+    language: v.nullable(v.string()),
+    range: v.unknown(),
+    key: v.exactOptional(v.string()),
+  }),
+);
+
+const locationsSchema = v.pipe(
+  recordSchema,
+  v.looseObject({
+    source: qualityLocationSchema,
+    target: qualityLocationSchema,
+  }),
+);
+
+const vueI18nMessageProjectionShapeSchema = v.pipe(
+  recordSchema,
+  v.looseObject({
+    key: v.string(),
+    language: v.string(),
+    source: sourceMessageSchema,
+    target: targetMessageSchema,
+    locations: locationsSchema,
+  }),
+);
+
+export type VueI18nMessageProjection = v.InferOutput<
+  typeof vueI18nMessageProjectionShapeSchema
+>;
+
+/** 验证投影形状但返回原值，避免宽松对象复制时丢弃宿主扩展键。 */
+export const vueI18nMessageProjectionSchema =
+  v.custom<VueI18nMessageProjection>(
+    (value) => v.safeParse(vueI18nMessageProjectionShapeSchema, value).success,
+    "Vue I18n 消息投影结构无效。",
+  );
+
+export type VueI18nSourceMessage = VueI18nMessageProjection["source"];
+export type VueI18nTargetMessage = VueI18nMessageProjection["target"];
+
+/** 共用投影只依赖 QA 事实、候选及关系，不读取检查专属配置。 */
+export type VueI18nProjectionInput<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable = never,
+> = Omit<
+  QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
+  "configuration"
+>;
+
+export type VueI18nProjector<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable = never,
+> = (
+  input: VueI18nProjectionInput<TUnit, TTranslation, TBody, TUnavailable>,
+) => VueI18nMessageProjection;
 
 const projectionKey = <
   TUnit extends TranslationUnitInput,
@@ -55,43 +120,4 @@ export function memoizedVueI18nProjection<
     key: projectionKey,
   });
   return memoized(projectionInput);
-}
-
-export function isMessageProjection(
-  value: unknown,
-): value is VueI18nMessageProjection {
-  if (!isRecord(value)) return false;
-  return (
-    typeof value.key === "string" &&
-    typeof value.language === "string" &&
-    isSourceMessage(value.source) &&
-    isTargetMessage(value.target) &&
-    isRecord(value.locations) &&
-    isQualityLocation(value.locations.source) &&
-    isQualityLocation(value.locations.target)
-  );
-}
-
-function isSourceMessage(value: unknown): boolean {
-  if (!isRecord(value)) return false;
-  if (value.status === "available") return typeof value.text === "string";
-  return value.status === "unavailable" || value.status === "absent";
-}
-
-function isTargetMessage(value: unknown): boolean {
-  if (!isRecord(value)) return false;
-  if (value.status === "available") return typeof value.text === "string";
-  return value.status === "unavailable" || value.status === "missing";
-}
-
-function isQualityLocation(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    (value.language === null || typeof value.language === "string") &&
-    Object.hasOwn(value, "range")
-  );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

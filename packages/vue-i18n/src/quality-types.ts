@@ -2,9 +2,7 @@ import type { MessageFamilyReferenceProjection } from "@lioni/checks";
 import type {
   ActualTranslationFact,
   JsonValue,
-  QualityCheckInput,
   QualityCheckRequest,
-  QualityLocation,
   QualityPreparation,
   SemanticEditCandidate,
   SourceUnitFact,
@@ -14,49 +12,19 @@ import type {
 import type { TermbaseData } from "@lioni/terminology";
 import type { QuantityOptions } from "@lioni/text-analysis";
 
+import type {
+  VueI18nMessageProjection,
+  VueI18nProjector,
+} from "./quality-projection.ts";
 import type { VueI18nUsageIndex } from "./usage-types.ts";
 
-export type VueI18nSourceMessage =
-  | { readonly status: "available"; readonly text: string }
-  | { readonly status: "unavailable" }
-  | { readonly status: "absent" };
-
-export type VueI18nTargetMessage =
-  | { readonly status: "available"; readonly text: string }
-  | { readonly status: "unavailable" }
-  | { readonly status: "missing" };
-
-/** 候选与参照都使用的显式消息投影。缺少或不可读的正文不会伪装成空串。 */
-export type VueI18nMessageProjection = {
-  readonly key: string;
-  readonly language: string;
-  readonly source: VueI18nSourceMessage;
-  readonly target: VueI18nTargetMessage;
-  readonly locations: {
-    readonly source: QualityLocation;
-    readonly target: QualityLocation;
-  };
-};
-
-/** 共用投影只能读取事实、候选及关系，不能依赖某个检查专属 configuration。 */
-export type VueI18nProjectionInput<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TBody,
-  TUnavailable = never,
-> = Omit<
-  QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
-  "configuration"
->;
-
-export type VueI18nProjector<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TBody,
-  TUnavailable = never,
-> = (
-  input: VueI18nProjectionInput<TUnit, TTranslation, TBody, TUnavailable>,
-) => VueI18nMessageProjection;
+export type {
+  VueI18nMessageProjection,
+  VueI18nProjectionInput,
+  VueI18nProjector,
+  VueI18nSourceMessage,
+  VueI18nTargetMessage,
+} from "./quality-projection.ts";
 
 export type VueI18nQuantityPolicy = QuantityOptions & {
   readonly profile?: string;

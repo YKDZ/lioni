@@ -3,7 +3,10 @@ import test from "node:test";
 
 import { StandardSchemaContractError } from "@lioni/core";
 import type { TermbaseData } from "@lioni/terminology";
-import { extractVueI18nUsages } from "@lioni/vue-i18n";
+import {
+  extractVueI18nUsages,
+  VUE_I18N_MESSAGE_COMPILER_VERSION,
+} from "@lioni/vue-i18n";
 
 import {
   checkIds,
@@ -72,6 +75,124 @@ void test("检查组保留独立身份，并从投影位置报告原文和候选
   assert.equal(
     check(result, checkIds.variableCorrespondence)?.status,
     "incomplete",
+  );
+  assert.deepEqual(check(result, checkIds.callArguments)?.configuration, {
+    version: 1,
+  });
+  assert.deepEqual(check(result, checkIds.sourceSyntax)?.configuration, {
+    compilerVersion: VUE_I18N_MESSAGE_COMPILER_VERSION,
+  });
+  assert.deepEqual(
+    check(result, checkIds.variableCorrespondence)?.configuration,
+    {
+      compilerVersion: VUE_I18N_MESSAGE_COMPILER_VERSION,
+      comparison: "branch-variable-count-patterns-v1",
+    },
+  );
+});
+
+void test("特殊消息键和带未知字段的 JSON 资源范围沿正式投影保留", async () => {
+  const keys = ["__proto__", "constructor", "prototype"];
+  const sourceRange = Object.fromEntries([
+    ["__proto__", { owner: "source" }],
+    ["constructor", "source constructor"],
+    ["prototype", { reviewed: false }],
+    ["hostMetadata", { revision: 3 }],
+  ]);
+  const targetRange = Object.fromEntries([
+    ["__proto__", { owner: "target" }],
+    ["constructor", "target constructor"],
+    ["prototype", { reviewed: true }],
+    ["hostMetadata", { revision: 4 }],
+  ]);
+  const sourceLocationMetadata = Object.fromEntries([
+    ["__proto__", { owner: "source location" }],
+    ["constructor", "source location constructor"],
+    ["prototype", { reviewed: false }],
+    ["hostMetadata", { revision: 5 }],
+  ]);
+  const targetLocationMetadata = Object.fromEntries([
+    ["__proto__", { owner: "target location" }],
+    ["constructor", "target location constructor"],
+    ["prototype", { reviewed: true }],
+    ["hostMetadata", { revision: 6 }],
+  ]);
+  const policy = policyFor({
+    sourceMessages: Object.fromEntries(
+      keys.map((key) => [key, "bad } source"]),
+    ),
+    targetMessages: Object.fromEntries(
+      keys.map((key) => [key, "bad } target"]),
+    ),
+    sourceRange,
+    targetRange,
+  });
+  const result = await createQualityFixture({
+    policies: [policy],
+    alterProjection: (projection) => ({
+      ...projection,
+      locations: {
+        ...projection.locations,
+        source: {
+          ...projection.locations.source,
+          ...sourceLocationMetadata,
+        },
+        target: {
+          ...projection.locations.target,
+          ...targetLocationMetadata,
+        },
+      },
+    }),
+  }).run(keys.map((key) => candidate(key, "bad } target")));
+  const targetSyntaxFindings = findings(result, checkIds.targetSyntax);
+
+  assert.deepEqual(
+    targetSyntaxFindings.map(({ object }) => object.key),
+    keys,
+  );
+  assert.deepEqual(
+    targetSyntaxFindings.map(({ location }) => location.range),
+    keys.map(() => targetRange),
+  );
+  assert.deepEqual(
+    findings(result, checkIds.sourceSyntax).map(
+      ({ location }) => location.range,
+    ),
+    keys.map(() => sourceRange),
+  );
+  for (const { location } of targetSyntaxFindings) {
+    assert.deepEqual(location["__proto__"], { owner: "target location" });
+    assert.equal(location.constructor, "target location constructor");
+    assert.deepEqual(location.prototype, { reviewed: true });
+    assert.deepEqual(location.hostMetadata, { revision: 6 });
+  }
+  for (const { location } of findings(result, checkIds.sourceSyntax)) {
+    assert.deepEqual(location["__proto__"], { owner: "source location" });
+    assert.equal(location.constructor, "source location constructor");
+    assert.deepEqual(location.prototype, { reviewed: false });
+    assert.deepEqual(location.hostMetadata, { revision: 5 });
+  }
+});
+
+void test("共享投影仍拒绝带有投影字段的数组", async () => {
+  const fixture = createQualityFixture({
+    policies: [
+      policyFor({
+        sourceMessages: { label: "Hello" },
+        targetMessages: { label: "你好" },
+      }),
+    ],
+    alterProjection: (projection) => Object.assign([], projection),
+  });
+
+  await assert.rejects(
+    fixture.run([candidate("label", "你好")]),
+    (error: unknown) => {
+      assert.ok(error instanceof StandardSchemaContractError);
+      assert.equal(error.kind, "schema-mismatch");
+      assert.match(error.valueDescription, /投影/u);
+      return true;
+    },
   );
 });
 
