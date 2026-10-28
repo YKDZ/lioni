@@ -5,7 +5,7 @@ import path from "node:path";
 import type { CliJourney } from "../journey.ts";
 
 const journey: CliJourney = {
-  name: "facts",
+  name: "inspect",
   modes: ["source", "distribution"],
   async setup({ workDir }) {
     await writeFile(
@@ -14,7 +14,7 @@ const journey: CliJourney = {
 
 export default defineConfig({
   source: {
-    schema: { "~standard": { version: 1, vendor: "facts-journey", validate(value) {
+    schema: { "~standard": { version: 1, vendor: "inspect-journey", validate(value) {
       const context = value?.context;
       return typeof value === "object" && value !== null && !Array.isArray(value) &&
         typeof value.source === "string" && typeof context === "object" && context !== null &&
@@ -39,7 +39,7 @@ export default defineConfig({
   translations: {
     languages: ["fr"],
     identityOf: (translation) => ({ namespace: "messages", key: translation.id }),
-    schema: { "~standard": { version: 1, vendor: "facts-journey-translation", validate(value) {
+    schema: { "~standard": { version: 1, vendor: "inspect-journey-translation", validate(value) {
       const context = value?.context;
       return typeof value === "object" && value !== null && !Array.isArray(value) &&
         typeof value.id === "string" && typeof value.text === "string" && typeof context === "object" && context !== null &&
@@ -47,7 +47,7 @@ export default defineConfig({
         ? { value }
         : { issues: [{ message: "译文记录结构不匹配。" }] };
     } } },
-    contentSchema: { "~standard": { version: 1, vendor: "facts-journey-content", validate(value) {
+    contentSchema: { "~standard": { version: 1, vendor: "inspect-journey-content", validate(value) {
       return typeof value === "string"
         ? { value }
         : { issues: [{ message: "译文正文必须是字符串。" }] };
@@ -81,7 +81,7 @@ export default defineConfig({
 
 export default defineConfig({
   source: {
-    schema: { "~standard": { version: 1, vendor: "facts-journey", validate(value) {
+    schema: { "~standard": { version: 1, vendor: "inspect-journey", validate(value) {
       const context = value?.context;
       return typeof value === "object" && value !== null && !Array.isArray(value) &&
         typeof value.source === "string" && typeof context === "object" && context !== null &&
@@ -110,7 +110,7 @@ import baseConfig from "./lioni.config.ts";
 const enabledConfigurationSchema = {
   "~standard": {
     version: 1,
-    vendor: "facts-journey-qa",
+    vendor: "inspect-journey-qa",
     validate(value) {
       return typeof value === "object" && value !== null && !Array.isArray(value) && typeof value.enabled === "boolean"
         ? { value }
@@ -124,7 +124,7 @@ export default defineConfig({
   quality: { prepare(facts) {
     const checks = [defineQualityCheck({
     id: "host-rule",
-    version: "facts-journey-qa-v1",
+    version: "inspect-journey-qa-v1",
     configurationSchema: enabledConfigurationSchema,
     configuration: { enabled: true },
     check({ configuration, candidate }) {
@@ -181,16 +181,16 @@ export default defineConfig({
   commands() {
     return [
       {
-        name: "structured source and translation facts",
-        args: ["facts", "lioni.config.ts"],
+        name: "以结构化格式查看源译资源",
+        args: ["inspect", "lioni.config.ts"],
       },
       {
-        name: "readable source and translation facts",
-        args: ["facts", "lioni.config.ts", "--output-format", "text"],
+        name: "以文本格式查看源译资源",
+        args: ["inspect", "lioni.config.ts", "--output-format", "text"],
       },
       {
-        name: "duplicate source identity",
-        args: ["facts", "duplicate.config.ts"],
+        name: "查看资源时报告原文身份重复",
+        args: ["inspect", "duplicate.config.ts"],
       },
       {
         name: "explicit host QA checker",
@@ -206,7 +206,7 @@ export default defineConfig({
       },
       { name: "help", args: ["--help"] },
       { name: "version", args: ["--version"] },
-      { name: "missing configuration argument", args: ["facts"] },
+      { name: "查看资源时缺少配置参数", args: ["inspect"] },
     ];
   },
   async assertions({ results }) {
@@ -448,7 +448,7 @@ export default defineConfig({
     assert.equal(qaResult.data.checks.length, 1);
     const check = qaResult.data.checks[0];
     assert.equal(check?.checkId, "host-rule");
-    assert.equal(check?.version, "facts-journey-qa-v1");
+    assert.equal(check?.version, "inspect-journey-qa-v1");
     assert.deepEqual(check?.configuration, { enabled: true });
     assert.equal(check?.status, "complete");
     assert.equal(qaResult.data.diagnostics.length, 1);
@@ -490,7 +490,7 @@ export default defineConfig({
     );
     assert.equal(
       check?.executions[0]?.fingerprintSummary?.version,
-      "lioni.check-input/v1:facts-journey-qa-v1",
+      "lioni.check-input/v1:inspect-journey-qa-v1",
     );
     assert.equal(
       qaText?.exitCode,
@@ -513,7 +513,7 @@ export default defineConfig({
       "not-run",
     );
     assert.equal(results[6]?.exitCode, 0);
-    assert.match(results[6]?.stdout ?? "", /facts/u);
+    assert.match(results[6]?.stdout ?? "", /inspect/u);
     assert.equal(results[7]?.exitCode, 0);
     assert.equal(results[7]?.stdout, "lioni 0.0.0\n");
     assert.equal(results[8]?.exitCode, 2);

@@ -12,6 +12,7 @@ import {
   upsertQualityExceptionFromReport,
   update,
   type FrameworkConfig,
+  type LanguageSelectionOptions,
   type QualityRunResult,
   type TranslationUnitInput,
   type UpdatePlan,
@@ -42,6 +43,23 @@ export type CliRuntime = {
   readonly write: WriteCliOutput;
   readonly identity: CliCommandIdentity;
 };
+
+const languageOption = {
+  kind: "repeatableOption",
+  longOption: "--language",
+  description: "本次执行的目标语言；可重复指定，省略时执行全部已配置语言",
+} as const;
+
+const languagesSchema = v.optional(v.array(v.string()));
+const scopedConfigSchema = toStandardJsonSchema(
+  v.object({ config: v.string(), languages: languagesSchema }),
+);
+
+function languageSelection(input: {
+  readonly languages?: readonly string[] | undefined;
+}): LanguageSelectionOptions {
+  return input.languages === undefined ? {} : { languages: input.languages };
+}
 
 const enumerationSchema = v.picklist(["complete", "partial", "failed"]);
 const readStatusSchema = v.picklist([
@@ -627,6 +645,7 @@ function createCliContract(identity: CliCommandIdentity) {
         description: "预览更新决定，或按决定写入译文资源。",
         fields: {
           config: { kind: "positional", description: "宿主配置文件路径" },
+          languages: languageOption,
           dryRun: {
             kind: "flag",
             longOption: "--dry-run",
@@ -634,7 +653,11 @@ function createCliContract(identity: CliCommandIdentity) {
           },
         },
         input: toStandardJsonSchema(
-          v.object({ config: v.string(), dryRun: v.optional(v.boolean()) }),
+          v.object({
+            config: v.string(),
+            languages: languagesSchema,
+            dryRun: v.optional(v.boolean()),
+          }),
         ),
         success: {
           kind: "data",
@@ -677,10 +700,18 @@ function createCliContract(identity: CliCommandIdentity) {
             const loaded = await loadConfig(configPath);
             return await loaded.use(async (config) => {
               if (input.dryRun === true) {
-                const plan = await previewUpdateForConfig(config, baselinePath);
+                const plan = await previewUpdateForConfig(
+                  config,
+                  baselinePath,
+                  languageSelection(input),
+                );
                 return outcome.data.previewed(plan);
               }
-              const result = await updateForConfig(config, baselinePath);
+              const result = await updateForConfig(
+                config,
+                baselinePath,
+                languageSelection(input),
+              );
               return result.status === "completed"
                 ? outcome.data.applied(result)
                 : outcome.failure.applyFailed(result);
@@ -692,15 +723,16 @@ function createCliContract(identity: CliCommandIdentity) {
           }
         },
       }),
-      ...define.command("facts")({
+      ...define.command("inspect")({
         kind: "command",
         parent: "cli",
-        name: "facts",
-        description: "读取源译事实并计算宿主定义的关联。",
+        name: "inspect",
+        description: "查看原文、译文及对应关系，了解缺失、冲突和读取情况。",
         fields: {
           config: { kind: "positional", description: "宿主配置文件路径" },
+          languages: languageOption,
         },
-        input: toStandardJsonSchema(v.object({ config: v.string() })),
+        input: scopedConfigSchema,
         success: {
           kind: "data",
           variants: {
@@ -786,7 +818,7 @@ function createCliContract(identity: CliCommandIdentity) {
           try {
             const loaded = await loadConfig(input.config);
             return await loaded.use(async (config) => {
-              const facts = await readFacts(config);
+              const facts = await readFacts(config, languageSelection(input));
               return outcome.data.read({
                 ...facts,
                 source: {
@@ -839,8 +871,9 @@ function createCliContract(identity: CliCommandIdentity) {
         description: "按宿主判据计算本地化义务与完成统计。",
         fields: {
           config: { kind: "positional", description: "宿主配置文件路径" },
+          languages: languageOption,
         },
-        input: toStandardJsonSchema(v.object({ config: v.string() })),
+        input: scopedConfigSchema,
         success: {
           kind: "data",
           variants: {
@@ -916,7 +949,10 @@ function createCliContract(identity: CliCommandIdentity) {
           try {
             const loaded = await loadConfig(input.config);
             return await loaded.use(async (config) => {
-              const facts = await readCompletion(config);
+              const facts = await readCompletion(
+                config,
+                languageSelection(input),
+              );
               return outcome.data.read({
                 ...facts.completion,
                 scope: {
@@ -1072,8 +1108,9 @@ function createCliContract(identity: CliCommandIdentity) {
         description: "使用宿主显式选择的检查器检查当前事实。",
         fields: {
           config: { kind: "positional", description: "宿主配置文件路径" },
+          languages: languageOption,
         },
-        input: toStandardJsonSchema(v.object({ config: v.string() })),
+        input: scopedConfigSchema,
         success: {
           kind: "data",
           variants: {
@@ -1097,7 +1134,10 @@ function createCliContract(identity: CliCommandIdentity) {
           try {
             const loaded = await loadConfig(input.config);
             return await loaded.use(async (config) => {
-              const result = await analyzeQuality(config);
+              const result = await analyzeQuality(
+                config,
+                languageSelection(input),
+              );
               return outcome.data.checked(result);
             });
           } catch (error) {
@@ -1137,6 +1177,7 @@ function previewUpdateForConfig<
 >(
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
   baselinePath: string,
+  options: LanguageSelectionOptions,
 ) {
   const store = createFileComparisonBaselineStore<
     TUnit,
@@ -1144,7 +1185,7 @@ function previewUpdateForConfig<
     TBody,
     TUnavailable
   >(baselinePath);
-  return previewUpdate(config, store);
+  return previewUpdate(config, store, options);
 }
 
 function updateForConfig<
@@ -1155,6 +1196,7 @@ function updateForConfig<
 >(
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
   baselinePath: string,
+  options: LanguageSelectionOptions,
 ) {
   const store = createFileComparisonBaselineStore<
     TUnit,
@@ -1162,7 +1204,7 @@ function updateForConfig<
     TBody,
     TUnavailable
   >(baselinePath);
-  return update(config, store);
+  return update(config, store, options);
 }
 
 export async function runCli(runtime: CliRuntime): Promise<number> {

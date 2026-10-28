@@ -16,6 +16,10 @@ import type {
   TranslationReadFact,
   TranslationUnitInput,
 } from "./index.ts";
+import {
+  resolveLanguageSelection,
+  type LanguageSelectionOptions,
+} from "./language-scope.ts";
 import { isRecord } from "./object-guards.ts";
 import {
   assertJsonValue,
@@ -332,7 +336,10 @@ export async function validateTranslationWriteRequest<
   };
 }
 
-/** 直接执行人工或外部工具提供的写入候选与删除决定。 */
+/**
+ * 直接执行人工或外部工具提供的写入候选与删除决定。
+ * 显式选择语言时，越界请求整批拒绝，写入前后只读取所选语言。
+ */
 export async function writeTranslationRequests<
   TUnit extends TranslationUnitInput,
   TTranslation,
@@ -347,13 +354,30 @@ export async function writeTranslationRequests<
     TBody,
     TUnavailable
   >,
+  options: LanguageSelectionOptions = {},
 ): Promise<TranslationWriteBatchResult<TBody, TUnit>> {
+  const languages = resolveLanguageSelection(
+    config.translations?.languages ?? [],
+    options,
+  );
   if (!Array.isArray(requests)) invalidWriteRequest("requests 必须是数组。");
   if (requests.length === 0) return { results: [] };
 
   const validated = await Promise.all(
     requests.map((request) => validateTranslationWriteRequest(request, config)),
   );
+  if (options.languages !== undefined) {
+    for (const request of validated) {
+      const language =
+        "identity" in request.target
+          ? request.target.identity.language
+          : request.target.language;
+      if (!languages.includes(language))
+        invalidWriteRequest(
+          `写入请求引用了本次未选择的目标语言 ${JSON.stringify(language)}。`,
+        );
+    }
+  }
   const results: (TranslationWriteResult<TBody, TUnit> | undefined)[] =
     validated.map((request) => ({ request, status: "notWritable" }));
   const adapter = config.translationWriteback;
@@ -387,8 +411,8 @@ export async function writeTranslationRequests<
     );
   const readCurrent = () =>
     condition === undefined
-      ? readWriteSnapshot(config, needsSource)
-      : readComparisonSnapshot(config);
+      ? readWriteSnapshot(config, needsSource, languages)
+      : readComparisonSnapshot(config, options);
   let current: WriteSnapshot<TUnit, TTranslation, TBody, TUnavailable>;
   try {
     current = await readCurrent();
@@ -567,11 +591,13 @@ async function readWriteSnapshot<
 >(
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
   includeSource: boolean,
+  languages: readonly string[],
 ): Promise<WriteSnapshot<TUnit, TTranslation, TBody, TUnavailable>> {
   const source = includeSource ? await readSourceFacts(config) : undefined;
   const translations = await readTranslationFacts(
     config.translations,
     source?.units ?? [],
+    languages,
   );
   return {
     ...(source === undefined ? {} : { source }),

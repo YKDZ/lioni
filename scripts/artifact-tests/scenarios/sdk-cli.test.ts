@@ -22,8 +22,8 @@ testArtifactConsumer(
       process.platform === "win32" ? "lioni.cmd" : "lioni",
     );
     const cli = (...args: string[]) => runCommand(executable, args);
-    const facts = await cli("facts", "lioni.config.ts");
-    assert.partialDeepStrictEqual(JSON.parse(facts.stdout), {
+    const inspection = await cli("inspect", "lioni.config.ts");
+    assert.partialDeepStrictEqual(JSON.parse(inspection.stdout), {
       schemaVersion: "2",
       data: JSON.parse(sdk.stdout),
     });
@@ -47,6 +47,21 @@ testArtifactConsumer(
       .data;
     assert.equal(quality.status, "complete");
     assert.equal(quality.diagnostics.length, 1);
+    const selectedReport = await cli(
+      "qa",
+      "lioni.config.ts",
+      "--language",
+      "de",
+    );
+    const selectedQuality = (
+      JSON.parse(selectedReport.stdout) as { data: QualityRunResult }
+    ).data;
+    assert.equal(selectedQuality.status, "complete");
+    assert.equal(selectedQuality.diagnostics.length, 0);
+    assert.equal(selectedQuality.candidates.length, 2);
+    assert.ok(
+      selectedQuality.candidates.every(({ language }) => language === "de"),
+    );
     const execution = quality.checks[0]?.executions[0];
     assert.ok(execution?.inputFingerprint);
     await writeFile(path.join(root, "qa-report.json"), report.stdout);

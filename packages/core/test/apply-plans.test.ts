@@ -11,6 +11,7 @@ import {
   update,
   type ComparisonBaseline,
   type ComparisonBaselineStore,
+  type FrameworkConfig,
   type JsonValue,
   type TranslationWriteRequest,
 } from "../src/index.ts";
@@ -192,6 +193,175 @@ function sampleTranslation(id = "A"): Translation {
 }
 
 void describe("apply update plan", () => {
+  void it("拒绝旧式条件参数，防止跳过条件后执行写入", async () => {
+    const scenario = createScenario({ sources: [sampleSource()] });
+    await assert.rejects(
+      update(scenario.config, scenario.baselineStore, (() => false) as never),
+      {
+        name: "TypeError",
+        message:
+          "update 的第三参数必须是选项对象；请通过 options.condition 传入附加写入条件。",
+      },
+    );
+    assert.equal(scenario.counts.sourceRead, 0);
+    assert.equal(scenario.counts.writes, 0);
+    assert.deepEqual(scenario.state.translations, []);
+  });
+
+  for (const withCondition of [false, true]) {
+    void it(`选择单语更新时隔离双语历史、写入和回读${withCondition ? "，并执行附加条件" : ""}`, async () => {
+      const scenario = createScenario({
+        sources: [sampleSource("A")],
+        translations: [sampleTranslation("A")],
+      });
+      const japanese = [{ id: "A", text: "日本語 A" }];
+      const reads: string[] = [];
+      const writes: string[] = [];
+      let selected = false;
+      let conditions = 0;
+      const original = scenario.config.translations!;
+      const writer = scenario.config.translationWriteback!;
+      const config: FrameworkConfig<Unit, Translation, JsonValue> = {
+        ...scenario.config,
+        translations: {
+          ...original,
+          languages: ["ja", "fr"],
+          read(language, sourceUnits) {
+            reads.push(language);
+            if (selected) assert.equal(language, "fr");
+            return {
+              scopes: [
+                {
+                  range: `${language}.json`,
+                  covers: sourceUnits.map(({ key }) => key),
+                  enumeration: "complete",
+                  records: (language === "ja"
+                    ? japanese
+                    : scenario.state.translations
+                  ).map((value) => ({
+                    value,
+                    bodyAvailability: "available" as const,
+                  })),
+                },
+              ],
+            };
+          },
+        },
+        translationWriteback: {
+          ...writer,
+          write(input) {
+            const target = input.request.target;
+            const language =
+              "identity" in target ? target.identity.language : target.language;
+            writes.push(language);
+            assert.equal(language, "fr");
+            return writer.write!(input);
+          },
+        },
+      };
+      await recordComparisonBaseline(config, scenario.baselineStore);
+      const baseline = structuredClone(scenario.currentBaseline());
+      scenario.state.sources = [sampleSource("B")];
+      reads.length = 0;
+      selected = true;
+
+      const result = await update(config, scenario.baselineStore, {
+        languages: ["fr"],
+        ...(withCondition
+          ? {
+              condition: ({ current }) => {
+                conditions += 1;
+                assert.deepEqual(
+                  current.translations.reads.map(({ language }) => language),
+                  ["fr"],
+                );
+                return true;
+              },
+            }
+          : {}),
+      });
+
+      assert.equal(result.status, "completed");
+      assert.deepEqual(
+        result.results.map(({ status }) => status),
+        ["written", "written"],
+      );
+      assert.deepEqual(scenario.state.translations, [
+        { id: "B", text: "Source B" },
+      ]);
+      assert.deepEqual(japanese, [{ id: "A", text: "日本語 A" }]);
+      assert.ok(reads.length >= 3);
+      assert.deepEqual([...new Set(reads)], ["fr"]);
+      assert.deepEqual(writes, ["fr", "fr"]);
+      assert.equal(conditions, withCondition ? 2 : 0);
+      assert.deepEqual(scenario.currentBaseline(), baseline);
+      assert.notEqual(
+        result.plan.previous?.version,
+        baseline?.snapshot.version,
+      );
+      assert.deepEqual(
+        result.plan.previous?.translations.records.map(
+          ({ language, index }) => [language, index],
+        ),
+        [["fr", 0]],
+      );
+      assert.deepEqual(
+        result.plan.previous?.translations.reads[0]?.scopes[0]
+          ?.translationIndexes,
+        [0],
+      );
+      assert.deepEqual(
+        result.plan.comparisons.translationChanges.map(
+          ({ identity }) => identity.language,
+        ),
+        ["fr"],
+      );
+    });
+  }
+
+  void it("显式语言范围拒绝策略在决定或写入请求中越界", async () => {
+    const scenario = createScenario({ sources: [sampleSource()] });
+    const original = scenario.config.translations!;
+    for (const escape of [
+      "decision",
+      "target",
+      "targets",
+      "request",
+    ] as const) {
+      const config: FrameworkConfig<Unit, Translation, JsonValue> = {
+        ...scenario.config,
+        translations: { ...original, languages: ["fr", "ja"] },
+        updatePolicy: async (input) => {
+          assert.deepEqual(
+            input.current.translations.reads.map(({ language }) => language),
+            ["fr"],
+          );
+          const items = await defaultUpdatePolicy(input);
+          return items.map((item) => {
+            if (item.action !== "write") return item;
+            const target = { language: "ja", namespace: "messages", key: "A" };
+            if (escape === "decision") return { ...item, language: "ja" };
+            if (escape === "target") return { ...item, target };
+            if (escape === "targets") return { ...item, targets: [target] };
+            return {
+              ...item,
+              request: {
+                ...item.request,
+                target: { sourceKey: "A", language: "ja" },
+              },
+            };
+          });
+        },
+      };
+      await assert.rejects(
+        update(config, undefined, { languages: ["fr"] }),
+        /本次未选择的目标语言 "ja"/u,
+      );
+    }
+    assert.equal(scenario.counts.writes, 0);
+    assert.deepEqual(scenario.state.translations, []);
+  });
+
   void it("保存并执行计划时保留合法 JSON 正文的自有原型保留键", async () => {
     const content = JSON.parse(
       '{"__proto__":"Hello","safe":"yes"}',

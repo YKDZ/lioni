@@ -72,7 +72,7 @@ export default defineConfig({
   },
   keyOf: (unit) => unit.id,
   translations: {
-    languages: ["fr"],
+    languages: ["fr", "de"],
     identityOf: (translation) => ({
       namespace: "catalog",
       key: translation.id,
@@ -84,14 +84,14 @@ export default defineConfig({
     contentSchema: schema(isBody),
     contentOf: (translation) => translation.body,
     matches: (unit, translation) => unit.id === translation.id,
-    async read(_language, sourceUnits) {
+    async read(language, sourceUnits) {
       const values = JSON.parse(
-        await readFile(new URL("./fr.json", import.meta.url), "utf8"),
+        await readFile(new URL(`./${language}.json`, import.meta.url), "utf8"),
       ) as Translation[];
       return {
         scopes: [
           {
-            range: "fr.json",
+            range: `${language}.json`,
             enumeration: "complete",
             covers: sourceUnits.map(({ key }) => key),
             records: values.map((value) => ({

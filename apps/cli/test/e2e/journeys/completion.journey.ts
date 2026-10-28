@@ -123,7 +123,7 @@ export default defineConfig({
 `,
     );
     await writeFile(
-      path.join(workDir, "facts-only.config.ts"),
+      path.join(workDir, "inspect-only.config.ts"),
       `import { defineConfig } from "@lioni/core";
 
 export default defineConfig({
@@ -162,12 +162,12 @@ export default defineConfig({
         args: ["completion", "partial.config.ts"],
       },
       {
-        name: "facts do not require a completion policy",
-        args: ["facts", "facts-only.config.ts"],
+        name: "查看资源无需完成判据",
+        args: ["inspect", "inspect-only.config.ts"],
       },
       {
         name: "completion requires a host policy",
-        args: ["completion", "facts-only.config.ts"],
+        args: ["completion", "inspect-only.config.ts"],
       },
       {
         name: "completion requires explicit target languages",

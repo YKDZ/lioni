@@ -8,6 +8,10 @@ import {
   evaluateCompletion,
 } from "./completion.ts";
 import type { CompletionFacts, CompletionPolicy } from "./completion.ts";
+import {
+  resolveLanguageSelection,
+  type LanguageSelectionOptions,
+} from "./language-scope.ts";
 import { isRecord } from "./object-guards.ts";
 import type { UpdatePolicy } from "./plans.ts";
 import {
@@ -41,6 +45,8 @@ import type {
   StandardSchemaTypes,
 } from "./standard-schema.ts";
 import { readTranslationFacts } from "./translation-snapshot.ts";
+
+export type { LanguageSelectionOptions } from "./language-scope.ts";
 
 export {
   CompletionConfigurationError,
@@ -365,6 +371,7 @@ export type QualityConfiguration<
   TBody = JsonValue,
   TUnavailable = never,
 > = {
+  /** 按本次读取事实准备检查；目标语言范围以 facts.translations.reads 为准。 */
   readonly prepare?: (
     facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
   ) => Awaitable<QualityPreparation<TUnit, TTranslation, TBody, TUnavailable>>;
@@ -753,9 +760,14 @@ export async function readComparisonSnapshot<
   TUnavailable,
 >(
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+  options: LanguageSelectionOptions = {},
 ): Promise<ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>> {
   validateFrameworkConfig(config);
-  return await collectComparisonSnapshot(config);
+  const languages = resolveLanguageSelection(
+    config.translations?.languages ?? [],
+    options,
+  );
+  return await collectComparisonSnapshot(config, languages);
 }
 
 async function collectComparisonSnapshot<
@@ -765,11 +777,13 @@ async function collectComparisonSnapshot<
   TUnavailable,
 >(
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+  languages: readonly string[],
 ): Promise<ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>> {
   const source = await readSourceFacts(config);
   const translations = await readTranslationFacts(
     config.translations,
     source.units,
+    languages,
   );
 
   const version = comparisonSnapshotVersion({ source, translations });
@@ -783,9 +797,14 @@ export async function readFacts<
   TUnavailable,
 >(
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+  options: LanguageSelectionOptions = {},
 ): Promise<FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>> {
   validateFrameworkConfig(config);
   const translationAdapter = config.translations;
+  const languages = resolveLanguageSelection(
+    translationAdapter?.languages ?? [],
+    options,
+  );
   if (
     translationAdapter !== undefined &&
     translationAdapter.languages.length > 0 &&
@@ -794,7 +813,7 @@ export async function readFacts<
     invalidFrameworkConfig(
       "readFacts 需要 translations.matches 来计算源译关联；独立快照读取无需此函数。",
     );
-  const snapshot = await collectComparisonSnapshot(config);
+  const snapshot = await collectComparisonSnapshot(config, languages);
 
   const associations: TranslationAssociationFact[] = [];
   for (const languageRead of snapshot.translations.reads) {
@@ -858,6 +877,7 @@ export async function readCompletion<
   TUnavailable,
 >(
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+  options: LanguageSelectionOptions = {},
 ): Promise<CompletionFacts<TUnit, TTranslation, TBody, TUnavailable>> {
   validateFrameworkConfig(config);
   const policy = config.completion;
@@ -874,7 +894,7 @@ export async function readCompletion<
   if (config.translations === undefined)
     throw new CompletionConfigurationError("missingTranslations");
 
-  const facts = await readFacts(config);
+  const facts = await readFacts(config, options);
   const completion = await evaluateCompletion(facts, policy);
   return { ...facts, completion };
 }
@@ -886,22 +906,32 @@ export async function analyzeQuality<
   TUnavailable,
 >(
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
-  options: {
+  options: LanguageSelectionOptions & {
+    /** 覆盖准备阶段的候选；显式选择语言时，所有候选必须属于该范围。 */
     readonly candidates?: readonly SemanticEditCandidate<TBody>[];
     readonly memo?: MemoScope;
   } = {},
 ): Promise<QualityRunResult<QualityObject, TBody>> {
   validateFrameworkConfig(config);
   const exceptions = await loadQualityExceptions(config);
-  const facts = await readFacts(config);
+  const facts = await readFacts(config, options);
   const prepared = await prepareQuality(config, facts);
   const request =
     options.candidates === undefined
       ? prepared.request
       : { ...prepared.request, candidates: options.candidates };
   const candidates: SemanticEditCandidate<TBody>[] = [];
-  for (const candidate of request.candidates)
-    candidates.push(await validateSemanticEditCandidate(candidate, config));
+  const languages = new Set(
+    facts.translations.reads.map(({ language }) => language),
+  );
+  for (const candidate of request.candidates) {
+    const validated = await validateSemanticEditCandidate(candidate, config);
+    if (options.languages !== undefined && !languages.has(validated.language))
+      throw new TypeError(
+        `译文候选语言 ${JSON.stringify(validated.language)} 不在本次执行范围内。`,
+      );
+    candidates.push(validated);
+  }
   return runQualityChecks(
     facts,
     { ...request, candidates, exceptions },

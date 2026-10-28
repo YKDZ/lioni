@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import { validateComparisonBaseline } from "./baselines.ts";
@@ -24,6 +25,10 @@ import type {
   StandardSchemaV1,
 } from "./index.ts";
 import { readFacts, validateFrameworkConfig } from "./index.ts";
+import {
+  resolveLanguageSelection,
+  type LanguageSelectionOptions,
+} from "./language-scope.ts";
 import { isRecord } from "./object-guards.ts";
 import type {
   JsonValue,
@@ -645,7 +650,10 @@ export async function defaultUpdatePolicy<
   return items;
 }
 
-/** 读取当前事实、选用配置比较器并生成业务计划；不写资源或推进基线。 */
+/**
+ * 读取当前事实、选用配置比较器并生成业务计划；不写资源或推进基线。
+ * 显式选择语言时，历史事实、比较器和策略均限定在该范围，策略不得扩大范围。
+ */
 export async function previewUpdate<
   TUnit extends TranslationUnitInput,
   TTranslation,
@@ -654,8 +662,13 @@ export async function previewUpdate<
 >(
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
   store?: ComparisonBaselineStore<TUnit, TTranslation, TBody, TUnavailable>,
+  options: LanguageSelectionOptions = {},
 ): Promise<UpdatePlan<TUnit, TTranslation, TBody, TUnavailable>> {
   validateFrameworkConfig(config);
+  const languages = resolveLanguageSelection(
+    config.translations?.languages ?? [],
+    options,
+  );
   if (
     config.updatePolicy !== undefined &&
     typeof config.updatePolicy !== "function"
@@ -671,8 +684,17 @@ export async function previewUpdate<
 
   const baseline = await store?.load();
   if (baseline !== undefined) validateComparisonBaseline(baseline);
-  const current = await readFacts(config);
-  const previous = baseline?.snapshot;
+  const current = await readFacts(config, options);
+  // 比较器和策略也只接收本次范围；未选语言的历史不能成为本次决定依据。
+  const previous =
+    baseline === undefined
+      ? undefined
+      : options.languages === undefined
+        ? baseline.snapshot
+        : selectSnapshotLanguages<TUnit, TTranslation, TBody, TUnavailable>(
+            baseline.snapshot,
+            languages,
+          );
   const comparisons = await compareSnapshots<
     TUnit,
     TTranslation,
@@ -698,21 +720,110 @@ export async function previewUpdate<
             TUnavailable
           >(previous, current, config),
   };
-  return createUpdatePlan<TUnit, TTranslation, TBody, TUnavailable>({
-    ...(previous === undefined ? {} : { previous }),
-    current,
-    comparisons,
-    associations,
-    ...(config.sourceToContent === undefined
-      ? {}
-      : { sourceToContent: config.sourceToContent }),
-    ...(config.translations === undefined
-      ? {}
-      : { contentSchema: config.translations.contentSchema }),
-    ...(config.updatePolicy === undefined
-      ? {}
-      : { updatePolicy: config.updatePolicy }),
-  });
+  const plan = await createUpdatePlan<TUnit, TTranslation, TBody, TUnavailable>(
+    {
+      ...(previous === undefined ? {} : { previous }),
+      current,
+      comparisons,
+      associations,
+      ...(config.sourceToContent === undefined
+        ? {}
+        : { sourceToContent: config.sourceToContent }),
+      ...(config.translations === undefined
+        ? {}
+        : { contentSchema: config.translations.contentSchema }),
+      ...(config.updatePolicy === undefined
+        ? {}
+        : { updatePolicy: config.updatePolicy }),
+    },
+  );
+  if (options.languages !== undefined)
+    assertUpdatePlanLanguages(plan, languages);
+  return plan;
+}
+
+function selectSnapshotLanguages<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  snapshot: ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
+  languages: readonly string[],
+): ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable> {
+  const indexes = new Map<number, number>();
+  const records = snapshot.translations.records
+    .filter(({ language }) => languages.includes(language))
+    .map((record, index) => {
+      indexes.set(record.index, index);
+      return { ...record, index };
+    });
+  const reads = snapshot.translations.reads
+    .filter(({ language }) => languages.includes(language))
+    .map((read) => ({
+      ...read,
+      scopes: read.scopes.map((scope) => ({
+        ...scope,
+        translationIndexes: scope.translationIndexes.map((index) => {
+          const selectedIndex = indexes.get(index);
+          if (selectedIndex === undefined)
+            throw new TypeError("比较基线的译文范围引用了其他语言的记录。");
+          return selectedIndex;
+        }),
+      })),
+    }));
+  const selected = {
+    source: snapshot.source,
+    translations: { reads, records },
+  };
+  return {
+    version: `sha256:${createHash("sha256").update(JSON.stringify(selected)).digest("hex")}`,
+    ...selected,
+  };
+}
+
+/** 显式选择语言时，策略和保存的计划都不能扩大执行范围。 */
+export function assertUpdatePlanLanguages<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  plan: UpdatePlan<TUnit, TTranslation, TBody, TUnavailable>,
+  languages: readonly string[],
+): void {
+  for (const item of plan.items) {
+    const referenced = [
+      item.language,
+      ...(item.target === undefined ? [] : [item.target.language]),
+      ...(item.targets ?? []).map(({ language }) => language),
+      ...item.changes.translations.flatMap((change) => [
+        change.identity.language,
+        ...(change.previous === undefined
+          ? []
+          : [change.previous.language, change.previous.identity.language]),
+        ...(change.current === undefined
+          ? []
+          : [change.current.language, change.current.identity.language]),
+      ]),
+    ];
+    if (item.request !== undefined) {
+      const request = item.request;
+      referenced.push(
+        "identity" in request.target
+          ? request.target.identity.language
+          : request.target.language,
+      );
+      if (request.expectedTarget.status === "present")
+        referenced.push(request.expectedTarget.identity.language);
+    }
+    for (const language of referenced) {
+      if (!languages.includes(language))
+        throw new TypeError(
+          `更新计划引用了本次未选择的目标语言 ${JSON.stringify(language)}。`,
+        );
+    }
+  }
 }
 
 /** 验证保存后的 JSON 计划；不会重新比较、关联或调用策略。 */

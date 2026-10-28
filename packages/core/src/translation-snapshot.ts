@@ -86,6 +86,7 @@ export async function readTranslationFacts<
     | TranslationAdapter<TUnit, TTranslation, TBody, TUnavailable>
     | undefined,
   sourceUnits: readonly SourceUnitFact<TUnit>[],
+  languages: readonly string[] = adapter?.languages ?? [],
 ): Promise<TranslationFactsSnapshot<TTranslation, TBody, TUnavailable>> {
   const translations = {
     reads: [] as TranslationReadFact[],
@@ -95,7 +96,7 @@ export async function readTranslationFacts<
   validateTranslationAdapterConfig(adapter);
 
   const firstTranslationIndexes = new Map<string, number>();
-  for (const language of adapter.languages) {
+  for (const language of languages) {
     let read: TranslationRead<TTranslation, TUnavailable> | undefined;
     let errorMessage: string | undefined;
     try {
