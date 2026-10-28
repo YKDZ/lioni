@@ -33,3 +33,6 @@ RUN install -m 0755 -d /etc/apt/keyrings \
     && apt-get update \
     && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
+
+# Debian 登录 shell 会重置 PATH；恢复 Corepack 和 pnpm 全局命令目录。
+RUN printf '%s\n' 'export PATH="$PNPM_HOME/bin:$PNPM_HOME:$PATH"' > /etc/profile.d/pnpm.sh

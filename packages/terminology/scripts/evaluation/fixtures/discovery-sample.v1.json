@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "dataset": {
     "id": "self-authored-discovery-sample",
-    "version": "1.0.0",
-    "reviewStatus": "pending"
+    "version": "1.0.1",
+    "reviewStatus": "human-reviewed"
   },
   "task": "discovery",
   "input": {
@@ -51,7 +51,7 @@
     },
     {
       "id": "draft-annotator-b",
-      "terms": ["project snapshot", "workspace settings", "review dialog"]
+      "terms": ["project snapshot", "workspace settings", "snapshot"]
     }
   ]
 }
