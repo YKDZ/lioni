@@ -4,11 +4,6 @@ import { createMemoScope, type MemoScope } from "@lioni/memo";
 
 import type { Compare } from "./comparison.ts";
 import {
-  CompletionConfigurationError,
-  evaluateCompletion,
-} from "./completion.ts";
-import type { CompletionFacts, CompletionPolicy } from "./completion.ts";
-import {
   resolveLanguageSelection,
   type LanguageSelectionOptions,
 } from "./language-scope.ts";
@@ -48,21 +43,6 @@ import { readTranslationFacts } from "./translation-snapshot.ts";
 
 export type { LanguageSelectionOptions } from "./language-scope.ts";
 
-export {
-  CompletionConfigurationError,
-  evaluateCompletion,
-} from "./completion.ts";
-export type {
-  CompletionResolution,
-  CompletionResolverInput,
-  ResolveCompletion,
-  CompletionPolicy,
-  CompletionStatus,
-  CompletionObligationFact,
-  CompletionReport,
-  CompletionFacts,
-  CompletionConfigurationErrorReason,
-} from "./completion.ts";
 export {
   validateSemanticEditCandidate,
   validateTranslationWriteRequest,
@@ -324,12 +304,6 @@ export type FrameworkConfig<
     TUnavailable
   >;
   readonly compare?: Compare<TUnit, TTranslation, TBody, TUnavailable>;
-  readonly completion?: CompletionPolicy<
-    TUnit,
-    TTranslation,
-    TBody,
-    TUnavailable
-  >;
   readonly translationWriteback?: TranslationWritebackAdapter<
     TUnit,
     TTranslation,
@@ -784,7 +758,7 @@ export async function readSourceFacts<
   };
 }
 
-/** 读取源、目标事实及依据，不计算源译关联、完成度或 QA。 */
+/** 读取源、目标事实及读取依据，不计算源译关联或运行 QA。 */
 export async function readComparisonSnapshot<
   TUnit extends TranslationUnitInput,
   TTranslation,
@@ -900,35 +874,6 @@ export async function readFacts<
     associations,
   });
   return { ...snapshot, version, associations };
-}
-
-export async function readCompletion<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TBody,
-  TUnavailable,
->(
-  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
-  options: LanguageSelectionOptions = {},
-): Promise<CompletionFacts<TUnit, TTranslation, TBody, TUnavailable>> {
-  validateFrameworkConfig(config);
-  const policy = config.completion;
-  if (policy === undefined)
-    throw new CompletionConfigurationError("missingPolicy");
-  if (
-    !isRecord(policy) ||
-    typeof policy.criterion !== "string" ||
-    typeof policy.resolveCompletion !== "function"
-  )
-    throw new TypeError(
-      "defineConfig 的 completion 必须提供 criterion 与 resolveCompletion 函数。",
-    );
-  if (config.translations === undefined)
-    throw new CompletionConfigurationError("missingTranslations");
-
-  const facts = await readFacts(config, options);
-  const completion = await evaluateCompletion(facts, policy);
-  return { ...facts, completion };
 }
 
 export async function analyzeQuality<

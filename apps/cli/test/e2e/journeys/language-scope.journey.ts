@@ -73,10 +73,6 @@ export default defineConfig({
       }] };
     },
   },
-  completion: {
-    criterion: "存在实际译文",
-    resolveCompletion: ({ translations }) => translations.length > 0,
-  },
   quality: { checks: [check] },
   translationWriteback: {
     locateExistingTarget: ({ translation }) => ({ status: "located", locator: translation.identity }),
@@ -135,11 +131,6 @@ export default defineConfig({
         env: { READ_LOG: "unknown.log" },
       },
       {
-        name: "完成统计使用所选语言范围",
-        args: ["completion", "lioni.config.ts", "--language", "fr"],
-        env: { READ_LOG: "completion.log" },
-      },
-      {
         name: "QA 只检查所选语言的候选",
         args: [
           "qa",
@@ -180,10 +171,7 @@ export default defineConfig({
     assert.deepEqual(multiple, all);
     assert.equal(results[3]?.exitCode, 1);
     assert.match(results[3]?.stderr ?? "", /es/u);
-    const completion = dataOf(results[4]);
-    assert.deepEqual(completion.scope.targetLanguages, ["fr"]);
-    assert.equal(completion.scope.obligationCount, 2);
-    const quality = dataOf(results[5]);
+    const quality = dataOf(results[4]);
     assert.deepEqual(
       quality.candidates.map(
         (candidate: { language: string }) => candidate.language,
@@ -191,13 +179,13 @@ export default defineConfig({
       ["de", "de"],
     );
     assert.equal(quality.diagnostics.length, 2);
-    const plan = dataOf(results[6]);
+    const plan = dataOf(results[5]);
     assert.equal(plan.items.length, 2);
     assert.equal(
       plan.items.every((item: { language: string }) => item.language === "fr"),
       true,
     );
-    const execution = dataOf(results[7]);
+    const execution = dataOf(results[6]);
     assert.equal(execution.status, "completed");
     assert.equal(
       execution.results.some(
@@ -220,7 +208,6 @@ export default defineConfig({
       ["all.log", ["fr", "de"]],
       ["selected.log", ["fr"]],
       ["multiple.log", ["fr", "de"]],
-      ["completion.log", ["fr"]],
       ["qa.log", ["de"]],
       ["preview.log", ["fr"]],
     ] as const) {

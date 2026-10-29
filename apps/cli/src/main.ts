@@ -3,12 +3,10 @@ import path from "node:path";
 
 import {
   analyzeQuality,
-  CompletionConfigurationError,
   DuplicateTranslationUnitKeyError,
   decideQualityReport,
   formatQualityReport,
   readFacts,
-  readCompletion,
   previewUpdate,
   recordComparisonBaseline,
   upsertQualityExceptionFromReport,
@@ -166,45 +164,6 @@ const factsSchema = toStandardJsonSchema(
   }),
 );
 
-const completionSchema = toStandardJsonSchema(
-  v.object({
-    factsVersion: v.string(),
-    criterion: v.string(),
-    status: v.picklist(["complete", "incomplete", "unknown"]),
-    scope: v.object({
-      sourceReadStatus: readStatusSchema,
-      sourceUnitCount: v.nullable(v.number()),
-      knownSourceUnitCount: v.number(),
-      targetLanguages: v.array(v.string()),
-      obligationCount: v.nullable(v.number()),
-      knownObligationCount: v.number(),
-      unknownTotalReason: v.optional(v.string()),
-    }),
-    confirmedCompleteCount: v.number(),
-    confirmedIncompleteCount: v.number(),
-    unknownCount: v.number(),
-    completionRate: v.nullable(v.number()),
-    obligations: v.array(
-      v.object({
-        sourceKey: v.string(),
-        language: v.string(),
-        status: v.picklist(["complete", "incomplete", "unknown"]),
-        associationStatus: v.picklist([
-          "matched",
-          "missing",
-          "unavailable",
-          "unknown",
-          "conflict",
-        ]),
-        coverageStatus: readStatusSchema,
-        sourceBodyAvailability: v.picklist(["available", "unavailable"]),
-        translationIndexes: v.array(v.number()),
-        reason: v.optional(v.string()),
-      }),
-    ),
-  }),
-);
-
 const baselineRecordSchema = toStandardJsonSchema(
   v.object({
     outcome: v.picklist(["saved", "unchanged"]),
@@ -249,13 +208,6 @@ function enumerationText(enumeration: string): string {
 
 function rangeText(range: unknown): string {
   return JSON.stringify(range) ?? "null";
-}
-
-function completionStatusText(status: string): string {
-  return (
-    { complete: "完成", incomplete: "未完成", unknown: "未知" }[status] ??
-    status
-  );
 }
 
 function qualityText(value: unknown): ReturnType<typeof text.lines> {
@@ -759,123 +711,6 @@ function createCliContract(identity: CliCommandIdentity) {
                 key: error.key,
                 firstIndex: error.firstIndex,
                 duplicateIndex: error.duplicateIndex,
-              });
-            return outcome.failure.readFailed({
-              message: error instanceof Error ? error.message : String(error),
-            });
-          }
-        },
-      }),
-      ...define.command("completion")({
-        kind: "command",
-        parent: "cli",
-        name: "completion",
-        description: "按宿主判据计算本地化义务与完成统计。",
-        fields: {
-          config: { kind: "positional", description: "宿主配置文件路径" },
-          languages: languageOption,
-        },
-        input: scopedConfigSchema,
-        success: {
-          kind: "data",
-          variants: {
-            read: {
-              description: "义务与完成统计",
-              exitCode: 0,
-              schema: completionSchema,
-              text: (completion) =>
-                text.lines([
-                  `完成统计：${completionStatusText(completion.status)}`,
-                  `事实版本：${completion.factsVersion}`,
-                  `判据：${completion.criterion}`,
-                  `统计范围：${completion.scope.knownSourceUnitCount} 个已知原文，${completion.scope.targetLanguages.join(", ") || "无目标语言"}`,
-                  `原文总数：${completion.scope.sourceUnitCount ?? "未知"}（${readStatusText(completion.scope.sourceReadStatus)}）`,
-                  `义务：${completion.scope.knownObligationCount}/${completion.scope.obligationCount ?? "未知"}`,
-                  `完成 ${completion.confirmedCompleteCount}；未完成 ${completion.confirmedIncompleteCount}；未知 ${completion.unknownCount}`,
-                  `完成率：${completion.completionRate === null ? "未知" : `${(completion.completionRate * 100).toFixed(1)}%`}`,
-                  ...(completion.scope.unknownTotalReason === undefined
-                    ? []
-                    : [`总数未知原因：${completion.scope.unknownTotalReason}`]),
-                  ...completion.obligations.map(
-                    ({
-                      sourceKey,
-                      language,
-                      status,
-                      associationStatus,
-                      coverageStatus,
-                      sourceBodyAvailability,
-                      translationIndexes,
-                      reason,
-                    }) =>
-                      `- ${sourceKey} → ${language}：${completionStatusText(status)}（原文正文${sourceBodyAvailability === "available" ? "可用" : "不可用"}，关联 ${associationStatus}，覆盖${readStatusText(coverageStatus)}，译文 ${translationIndexes.join(", ") || "无"}${reason === undefined ? "" : `；${reason}`}）`,
-                  ),
-                ]),
-            },
-          },
-        },
-        failures: {
-          duplicateIdentity: {
-            description: "原文身份重复",
-            exitCode: 1,
-            schema: toStandardJsonSchema(
-              v.object({
-                key: v.string(),
-                firstIndex: v.number(),
-                duplicateIndex: v.number(),
-              }),
-            ),
-            text: ({ key, firstIndex, duplicateIndex }) =>
-              text.line(
-                `原文身份重复：${key}（第 ${firstIndex + 1} 与第 ${duplicateIndex + 1} 个单元）。`,
-              ),
-          },
-          configurationRequired: {
-            description: "完成统计配置不完整",
-            exitCode: 1,
-            schema: toStandardJsonSchema(
-              v.object({
-                reason: v.picklist(["missingPolicy", "missingTranslations"]),
-                message: v.string(),
-              }),
-            ),
-            text: ({ message }) => text.line(`无法计算完成统计：${message}`),
-          },
-          readFailed: {
-            description: "读取完成事实失败",
-            exitCode: 1,
-            schema: toStandardJsonSchema(v.object({ message: v.string() })),
-            text: ({ message }) => text.line(`读取完成事实失败：${message}`),
-          },
-        },
-        async handler({ input, outcome }) {
-          try {
-            const config = await loadConfig(input.config);
-            const facts = await readCompletion(
-              config,
-              languageSelection(input),
-            );
-            return outcome.data.read({
-              ...facts.completion,
-              scope: {
-                ...facts.completion.scope,
-                targetLanguages: [...facts.completion.scope.targetLanguages],
-              },
-              obligations: facts.completion.obligations.map((obligation) => ({
-                ...obligation,
-                translationIndexes: [...obligation.translationIndexes],
-              })),
-            });
-          } catch (error) {
-            if (error instanceof DuplicateTranslationUnitKeyError)
-              return outcome.failure.duplicateIdentity({
-                key: error.key,
-                firstIndex: error.firstIndex,
-                duplicateIndex: error.duplicateIndex,
-              });
-            if (error instanceof CompletionConfigurationError)
-              return outcome.failure.configurationRequired({
-                reason: error.reason,
-                message: error.message,
               });
             return outcome.failure.readFailed({
               message: error instanceof Error ? error.message : String(error),

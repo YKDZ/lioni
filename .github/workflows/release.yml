@@ -19,7 +19,7 @@ jobs:
     permissions:
       contents: read
     outputs:
-      pack-dir-artifact-id: ${{ steps.pack.outputs.pack-dir-artifact-id }}
+      pack-dir-artifact-id: ${{ steps.upload-pack.outputs.artifact-id }}
     steps:
       - name: 检出源码
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -37,11 +37,18 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: 检查源码
         run: pnpm run check && pnpm run check:heavy
-      - name: 按依赖顺序构建
-        run: pnpm exec turbo run build
-      - name: 打包未发布版本
-        id: pack
-        uses: changesets/action/pack@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+      - name: 按正式路径构建并打包未发布版本
+        run: pnpm run publication:pack
+      - name: 验收待发布制品
+        run: node --conditions=source scripts/run-artifact-tests.ts --from-publish-plan .changeset/packed/publish-plan.json
+      - name: 上传已验收制品
+        id: upload-pack
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lioni-release-pack
+          path: .changeset/packed
+          if-no-files-found: error
+          retention-days: 30
 
   publish:
     name: 发布 npm 包和 GitHub Release
@@ -71,3 +78,4 @@ jobs:
         uses: changesets/action/publish@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
         with:
           pack-dir-artifact-id: ${{ needs.pack.outputs.pack-dir-artifact-id }}
+          create-github-releases: true

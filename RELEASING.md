@@ -1,74 +1,22 @@
 # 发布维护说明
 
-产品版本由维护者更新在 `apps/cli/package.json`，唯一发布说明维护在产品目录 `apps/cli/CHANGELOG.md`。每个版本使用与完整包版本完全相同的二级标题，例如 `## 0.1.0`；Changesets Action 会按包目录与版本读取对应段落作为 GitHub Release 说明。Changesets 负责打包和发布，不要求逐项 changeset、自动版本 PR 或日志生成。
+维护者在 `apps/cli/package.json` 更新版本号，并在 `apps/cli/CHANGELOG.md` 编写该版本唯一的发布说明。标题使用完整包版本，例如 `## 0.1.1`。Changesets 会以此说明创建 GitHub Release；不使用逐项 changeset、自动版本 PR 或推送即发布。
 
-## 首次本机发布
+## GitHub Actions OIDC 发布
 
-首次发布前，确认经审阅的版本和说明已提交到公开仓库 `YKDZ/lioni` 的 `main`，且该版本尚未出现在 npm。发布前检查通过不代表已经发布。
+发布工作流 `.github/workflows/release.yml` 只允许人工启动，打包和发布作业都要求运行在仓库默认分支。将版本号和说明合入默认分支后，在 GitHub Actions 页面选择该工作流并手动运行。
 
-1. 检出 `main` 并确认工作区干净，安装锁定依赖：
+打包作业执行常规和重型门禁，再通过 `pnpm run publication:pack` 构建并生成 Changesets 发布计划和 tarball。随后，`scripts/run-artifact-tests.ts` 按该计划验收实际 tarball。只有验收成功后，工作流才上传 `.changeset/packed`；发布作业使用该上传制品发布，不会重新打包。Changesets 发布步骤使用 GitHub OIDC 上传 npm 包，并推送版本标签、按变更说明创建 GitHub Release。
 
-   ```sh
-   git switch main
-   git pull --ff-only origin main
-   pnpm install --frozen-lockfile
-   ```
+首次使用或修改可信发布配置时，核对以下字段与本仓库工作流一致：
 
-2. 运行发布工作流使用的检查，并通过正式路径构建和打包：
-
-   ```sh
-   pnpm run check
-   pnpm run check:heavy
-   pnpm run publication:pack
-   ```
-
-3. 审阅 Changesets 原生清单和其中引用的同一 tarball：
-
-   ```sh
-   cat .changeset/packed/publish-plan.json
-   tar -tzf .changeset/packed/packages/lioni-lioni-0.1.0.tgz
-   tar -xOf .changeset/packed/packages/lioni-lioni-0.1.0.tgz package/package.json
-   ```
-
-   确认 plan 只包含 `@lioni/lioni@0.1.0`，tarball 的路径为 `packages/lioni-lioni-0.1.0.tgz`；manifest 声明 MIT、公开发布和 `YKDZ/lioni`，README、LICENSE 与实际文件一致，制品没有内部包或源码测试文件。保留这次已审阅的打包结果，不要在上传前重新构建。`publication:publish` 会读取同一 `.changeset/packed/publish-plan.json` 和 tarball。
-
-4. 由维护者在本机完成 npm 登录，确认账号后使用同一打包目录上传：
-
-   ```sh
-   npm login
-   npm whoami
-   pnpm run publication:publish
-   ```
-
-   本机认证和上传由维护者完成。不要把凭据写入仓库或 CI；不要用试发包来初始化产品。
-
-5. 发布后分别核对 npm 版本、默认 dist-tag 和 Changesets 生成的 Git 标签：
-
-   ```sh
-   npm view @lioni/lioni@0.1.0 version license repository dist.tarball --json
-   npm view @lioni/lioni dist-tags --json
-   git tag --list '@lioni/lioni@0.1.0'
-   ```
-
-   本机上传不会自动创建 GitHub Release。确认该标签指向 `main` 上的发布提交后，维护者将标签推送到 `YKDZ/lioni`：
-
-   ```sh
-   git push origin '@lioni/lioni@0.1.0'
-   ```
-
-   然后在 GitHub 仓库的 Releases 页面，用 `@lioni/lioni@0.1.0` 标签创建 Release，标题和说明采用 `apps/cli/CHANGELOG.md` 的 `0.1.0` 段落。记录 npm 上传、Git 标签和 GitHub Release 的实际结果，不把其中一步当作另外两步已完成。
-
-## 后续 GitHub OIDC 发布
-
-`.github/workflows/release.yml` 仅支持手动触发；打包和发布作业都要求运行在仓库默认分支。打包作业执行常规及重型检查、构建并生成 Changesets 制品，发布作业接收同一制品，并使用 `npm` GitHub Environment 与 OIDC 权限。
-
-待下一个真实版本准备好后，维护者在 npm 的 `@lioni/lioni` 包设置页打开 Trusted Publisher，配置：
-
-- GitHub 仓库：`YKDZ/lioni`
-- 工作流文件名：`release.yml`（文件位于 `.github/workflows/release.yml`）
+- npm 包：`@lioni/lioni`
+- GitHub 用户或组织：`YKDZ`
+- 仓库：`lioni`
+- 工作流文件名：`release.yml`（不要填写目录路径）
 - GitHub Environment：`npm`
-- 发布权限：允许工作流直接发布
+- 允许该可信发布者直接发布 npm 包
 
-不要配置长期 npm token。npm 新建的可信发布者设置需在 48 小时内首次成功使用；因此应与真实的新版本发布同步设置，并在期限内从 `main` 手动运行工作流、确认成功上传了该版本。没有新的真实版本时，暂不登记信任；不要重跑已发布的 `0.1.0`、空跑工作流或制造版本来证明 OIDC。分别记录可信发布设置和首次 OIDC 发布的真实结果。
+GitHub Environment `npm` 必须存在。发布作业只授予 OIDC 所需的 `id-token: write` 与创建标签和 GitHub Release 所需的 `contents: write`；工作流不读取长期 npm 发布令牌。npm 包的 `repository.url` 必须与 GitHub 仓库地址匹配。可信发布的配置字段和权限要求见 [npm 可信发布者文档](https://docs.npmjs.com/trusted-publishers/)。
 
-详细字段说明见 [npm 可信发布者文档](https://docs.npmjs.com/trusted-publishers/)。
+工作流成功后，分别核对 npm 版本、Git 版本标签及 GitHub Release，确认三者对应同一版本。失败或被跳过的步骤不代表发布已完成。
