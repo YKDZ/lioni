@@ -361,6 +361,7 @@ export type QualityConfiguration<
   }) => Awaitable<readonly SemanticEditCandidate<TBody>[]>;
   /** 关系上下文不随候选筛选裁剪。 */
   readonly relationships?: readonly QualityRelationship[];
+  /** 显式启用原始结果缓存；命中后仍应用当前 QA 例外，存储故障不阻断检查。 */
   readonly resultCache?: QualityCheckResultCache;
   readonly exceptionStore?: QualityExceptionStore;
 };

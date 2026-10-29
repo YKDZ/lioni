@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { StandardSchemaContractError } from "@lioni/core";
+import {
+  createQualityException,
+  StandardSchemaContractError,
+  type QualityException,
+  type QualityCheckResultCache,
+} from "@lioni/core";
 import type { TermbaseData } from "@lioni/terminology";
 
 import { VUE_I18N_MESSAGE_COMPILER_VERSION } from "../../src/vue-i18n/vue-i18n-messages.ts";
@@ -767,4 +772,137 @@ void test("缺少目标候选时不把缺译占位转成空消息", async () => 
     "not-run",
   );
   assert.deepEqual(findings(result, checkIds.variableCorrespondence), []);
+});
+
+void test("Vue 术语例外与缓存仅随当前消息、术语资料和诊断位置变化", async () => {
+  const sourceMessages = { a: "monitor", b: "Hello" };
+  const targetMessages = { a: "显示器", b: "你好" };
+  const policy = policyFor({ sourceMessages, targetMessages });
+  let targetRange = "zh-CN.json";
+  let exceptions: readonly QualityException[] = [];
+  let terms: TermbaseData = {
+    concepts: [
+      {
+        id: "monitor",
+        languages: [
+          {
+            language: "en",
+            expressions: [{ id: "en", text: "monitor", usage: "preferred" }],
+          },
+          {
+            language: "zh-CN",
+            expressions: [
+              { id: "zh", text: "显示器", usage: "forbidden" },
+              { id: "zh-allowed", text: "监视器", usage: "allowed" },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  const originalTerms = terms;
+  const cache = new Map<
+    string,
+    Awaited<ReturnType<QualityCheckResultCache["get"]>>
+  >();
+  let termCacheHits = 0;
+  const fixture = createQualityFixture({
+    policies: [policy],
+    loadTerms: () => terms,
+    alterProjection: (value) => ({
+      ...value,
+      locations: {
+        ...value.locations,
+        target: { ...value.locations.target, range: targetRange },
+      },
+    }),
+    exceptionStore: {
+      async load() {
+        return exceptions;
+      },
+      async upsert(value) {
+        exceptions = [...exceptions, value];
+      },
+    },
+    resultCache: {
+      async get(key) {
+        const value = cache.get(key);
+        if (
+          value?.diagnostics.some(
+            (item) =>
+              item.object.code === "forbidden-translation" ||
+              item.object.code === "missing-allowed-translation",
+          )
+        )
+          termCacheHits++;
+        return value;
+      },
+      async set(key, value) {
+        cache.set(key, value);
+      },
+    },
+  });
+  const run = (text = "显示器") => fixture.run([candidate("a", text)]);
+  const first = await run();
+  const ids = [checkIds.allowedTerminology, checkIds.forbiddenTerminology];
+  exceptions = first.checks
+    .filter((item) => ids.includes(item.checkId as (typeof ids)[number]))
+    .flatMap((item) =>
+      item.executions.map((execution) =>
+        createQualityException({
+          id: execution.checkId,
+          reason: "接受消息 A",
+          execution,
+        }),
+      ),
+    );
+  assert.equal(exceptions.length, 2);
+  sourceMessages.b = "Goodbye";
+  targetMessages.b = "再见";
+  const unrelated = await run();
+  assert.deepEqual(
+    unrelated.exceptionApplicability.map((item) => item.status),
+    ["applicable", "applicable"],
+  );
+  assert.equal(termCacheHits, 2);
+  assert.deepEqual(
+    unrelated.diagnostics
+      .filter((item) => ids.includes(item.checkId as (typeof ids)[number]))
+      .map((item) => item.handling.status),
+    ["excepted", "excepted"],
+  );
+  const changedCandidate = await run("另一个译法");
+  assert.deepEqual(
+    changedCandidate.exceptionApplicability.map((item) => item.status),
+    ["basis-changed", "basis-changed"],
+  );
+  sourceMessages.a = "monitor changed";
+  assert.deepEqual(
+    (await run()).exceptionApplicability.map((item) => item.status),
+    ["basis-changed", "basis-changed"],
+  );
+  sourceMessages.a = "monitor";
+  terms = { concepts: [] };
+  const changedTerms = await run();
+  assert.deepEqual(
+    changedTerms.exceptionApplicability.map((item) => item.status),
+    ["basis-changed", "basis-changed"],
+  );
+  assert.deepEqual(findings(changedTerms, checkIds.forbiddenTerminology), []);
+  terms = originalTerms;
+  targetRange = "moved/zh-CN.json";
+  const moved = await run();
+  assert.deepEqual(
+    moved.exceptionApplicability.map((item) => item.status),
+    ["basis-changed", "basis-changed"],
+  );
+  assert.equal(
+    findings(moved, checkIds.forbiddenTerminology)[0]?.location.range,
+    targetRange,
+  );
+  targetRange = "zh-CN.json";
+  assert.deepEqual(
+    (await run()).exceptionApplicability.map((item) => item.status),
+    ["applicable", "applicable"],
+  );
 });

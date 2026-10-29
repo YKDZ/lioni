@@ -413,7 +413,12 @@ export type QualityCheckBinding<
   ) => Awaitable<QualityCheckOutcome<TObject>>;
 };
 
-/** 声明质量检查项；正式运行会校验配置并调用检查函数。返回值只表达检查项身份。 */
+/**
+ * 声明质量检查项；正式运行会校验配置并调用检查函数，返回值只表达检查项身份。
+ * version 应覆盖算法及宿主选择、投影和策略的语义变化。默认指纹包含完整事实、
+ * 当前候选、原文、动态依赖及关联关系；fingerprintInput 替换业务依据，检查身份、
+ * 版本和最终配置仍始终参与。闭包依赖须由作者显式纳入依据。
+ */
 export function defineQualityCheck<
   TUnit extends TranslationUnitInput,
   TTranslation,

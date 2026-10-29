@@ -4,8 +4,10 @@ import {
   type QualityCheckInput,
   type QualityCheckProjection,
   type QualityCheckProjectionInput,
+  type QualityCheckRuleInput,
   type QualityCheckSelection,
   type QualityEvidence,
+  type QualityInputBasis,
   type QualityLocation,
   type TranslationUnitInput,
 } from "@lioni/core";
@@ -29,7 +31,7 @@ export type TermCheckerOptions<
   TUnavailable = never,
 > = {
   readonly id?: string;
-  /** 宿主提供的术语资料、选择、投影和位置映射的版本。 */
+  /** 宿主提供的识别策略、规则、选择、投影和位置映射的语义版本。 */
   readonly hostVersion: string;
   readonly terms:
     | CompiledTerms
@@ -43,6 +45,22 @@ export type TermCheckerOptions<
         >,
       ) => Awaitable<CompiledTerms>);
   readonly rule: TermRule;
+  /**
+   * 显式替换默认业务依据；须涵盖投影、检查对象、位置映射及其他实际依赖。
+   * 工厂额外纳入本次使用的术语库数据，核心保留检查身份、版本和配置。
+   * 未提供时沿用核心的完整事实依据；函数行为变化须更新 hostVersion。
+   */
+  readonly fingerprintInput?: (
+    input: QualityCheckRuleInput<
+      TUnit,
+      TTranslation,
+      TermRulesConfiguration,
+      TSubject,
+      TermComparisonInput,
+      TBody,
+      TUnavailable
+    >,
+  ) => QualityInputBasis;
   readonly select: (
     input: QualityCheckInput<
       TUnit,
@@ -89,29 +107,47 @@ export function createTermChecker<
   >,
 ) {
   const rule = options.rule;
+  const fingerprintInput = options.fingerprintInput;
   return bindQualityCheck<
     TUnit,
     TTranslation,
     typeof termRulesConfigurationSchema,
     typeof termComparisonInputSchema,
-    TSubject,
+    { readonly value: TSubject; readonly terms: CompiledTerms },
     import("@lioni/core").QualityObject,
     TBody,
     TUnavailable
   >({
     id: options.id ?? `terminology/${rule.id}`,
-    version: `checks.terminology-rule/v1+${options.hostVersion}`,
+    version: `checks.terminology-rule/v2+${options.hostVersion}`,
     configurationSchema: termRulesConfigurationSchema,
     configuration: { rules: [rule.id] },
     inputSchema: termComparisonInputSchema,
-    select: options.select,
-    project: options.project,
-    async check(input) {
+    async select(input) {
+      const selection = await options.select(input);
+      if (selection.status !== "selected") return selection;
+      // 在指纹计算前解析资料，指纹与规则计算始终消费同一次加载的结果。
       const terms =
         typeof options.terms === "function"
           ? await options.terms(input)
           : options.terms;
-      const report = await evaluateTerms(terms, input.projected, {
+      return {
+        status: "selected",
+        subject: { value: selection.subject, terms },
+      };
+    },
+    project: (input) =>
+      options.project({ ...input, subject: input.subject.value }),
+    ...(fingerprintInput === undefined
+      ? {}
+      : {
+          fingerprintInput: (input) => ({
+            input: fingerprintInput({ ...input, subject: input.subject.value }),
+            termbase: input.subject.terms.termbase.data,
+          }),
+        }),
+    async check(input) {
+      const report = await evaluateTerms(input.subject.terms, input.projected, {
         rules: [rule],
         memo: input.memo,
       });
@@ -131,7 +167,7 @@ export function createTermChecker<
             language,
             side,
             sourceKey: object.key,
-            subject: input.subject,
+            subject: input.subject.value,
           }) ?? {
             language,
             range: ref,

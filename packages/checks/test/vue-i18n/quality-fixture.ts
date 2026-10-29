@@ -9,6 +9,8 @@ import {
   defineConfig,
   type JsonValue,
   type QualityCheckInput,
+  type QualityCheckResultCache,
+  type QualityExceptionStore,
   type SemanticEditCandidate,
   type SourceUnitFact,
   type StandardSchemaV1,
@@ -98,6 +100,8 @@ export function createQualityFixture(input: {
   readonly policies: readonly VueI18nPolicy[];
   readonly terms?: TermbaseData;
   readonly loadTerms?: () => TermbaseData;
+  readonly resultCache?: QualityCheckResultCache;
+  readonly exceptionStore?: QualityExceptionStore;
   readonly unavailableSourceKeys?: readonly string[];
   readonly onProject?: () => void;
   readonly alterProjection?: (
@@ -239,6 +243,12 @@ export function createQualityFixture(input: {
       },
     },
     quality: {
+      ...(input.resultCache === undefined
+        ? {}
+        : { resultCache: input.resultCache }),
+      ...(input.exceptionStore === undefined
+        ? {}
+        : { exceptionStore: input.exceptionStore }),
       checks: createVueI18nChecks<Unit, Translation, Body>({
         hostVersion: "vue-i18n-quality-test-v1",
         project,

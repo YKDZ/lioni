@@ -1,9 +1,10 @@
-import type {
-  QualityCheckDefinition,
-  QualityCheckInput,
-  QualityCheckSelection,
-  QualityObject,
-  TranslationUnitInput,
+import {
+  snapshotJsonValue,
+  type QualityCheckDefinition,
+  type QualityCheckInput,
+  type QualityCheckSelection,
+  type QualityObject,
+  type TranslationUnitInput,
 } from "@lioni/core";
 import {
   compileTerms,
@@ -98,6 +99,16 @@ export function createVueI18nTerminologyChecks<
         return input.memo.memo(compile)(vueI18nDependencies(input).terms);
       },
       rule,
+      // 投影已表达实际文本与语言；位置参与结果缓存，其他消息资源不构成本项依据。
+      fingerprintInput: ({ candidate, projected, subject }) => ({
+        sourceKey: candidate.sourceKey,
+        language: candidate.language,
+        projected,
+        locations: snapshotJsonValue(
+          subject.projection.locations,
+          "术语检查诊断位置",
+        ),
+      }),
       select: async (
         input: QualityCheckInput<
           TUnit,

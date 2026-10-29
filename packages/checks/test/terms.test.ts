@@ -9,6 +9,7 @@ import {
   StandardSchemaContractError,
   type JsonValue,
   type QualityException,
+  type QualityCheckResultCache,
   type StandardSchemaV1,
   writeTranslationRequests,
   type TranslationWriteRequest,
@@ -20,6 +21,7 @@ import {
   rejectForbiddenTranslation,
   requireAllowedTranslation,
   type TermComparisonInput,
+  type CompiledTerms,
 } from "@lioni/terminology";
 import { createTextAnalysis, segmentWords } from "@lioni/text-analysis";
 
@@ -84,10 +86,16 @@ function schema<T>(
 }
 
 function createScenario(
-  options: { readonly countTermBoundary?: boolean } = {},
+  options: {
+    readonly countTermBoundary?: boolean;
+    readonly narrowFingerprint?: boolean;
+    readonly loadTerms?: () => Promise<CompiledTerms>;
+    readonly resultCache?: QualityCheckResultCache;
+  } = {},
 ) {
   let storedBody: Body = { visible: "工作区", hidden: "作业区" };
   let sourceTitle = "workspace";
+  let otherText = "消息 B";
   let exceptions: readonly QualityException[] = [];
   let invalidProjection = false;
   let targetComplete = true;
@@ -215,7 +223,16 @@ function createScenario(
   const checks = [
     createTermChecker<Unit, Translation, string, Body>({
       hostVersion: "terms-test-v1",
-      terms,
+      terms: options.loadTerms ?? terms,
+      ...(options.narrowFingerprint
+        ? {
+            fingerprintInput: ({ projected, candidate }) => ({
+              projected,
+              sourceKey: candidate.sourceKey,
+              language: candidate.language,
+            }),
+          }
+        : {}),
       rule: requireAllowedTranslation(),
       select: ({ candidate }) => ({
         status: "selected",
@@ -230,7 +247,16 @@ function createScenario(
     }),
     createTermChecker<Unit, Translation, string, Body>({
       hostVersion: "terms-test-v1",
-      terms,
+      terms: options.loadTerms ?? terms,
+      ...(options.narrowFingerprint
+        ? {
+            fingerprintInput: ({ projected, candidate }) => ({
+              projected,
+              sourceKey: candidate.sourceKey,
+              language: candidate.language,
+            }),
+          }
+        : {}),
       rule: rejectForbiddenTranslation(),
       select: ({ candidate }) => ({
         status: "selected",
@@ -264,6 +290,10 @@ function createScenario(
                 },
                 bodyAvailability: "available",
               },
+              {
+                value: { id: "other", source: { title: "other", notes: [] } },
+                bodyAvailability: "available",
+              },
             ],
           },
         ],
@@ -290,6 +320,13 @@ function createScenario(
                 value: { id: "workspace", body: storedBody },
                 bodyAvailability: "available",
               },
+              {
+                value: {
+                  id: "other",
+                  body: { visible: otherText, hidden: "" },
+                },
+                bodyAvailability: "available",
+              },
             ],
           },
         ],
@@ -310,6 +347,9 @@ function createScenario(
       },
     },
     quality: {
+      ...(options.resultCache === undefined
+        ? {}
+        : { resultCache: options.resultCache }),
       exceptionStore: {
         async load() {
           return exceptions;
@@ -335,6 +375,9 @@ function createScenario(
   return {
     config,
     terms,
+    setOtherText: (value: string) => {
+      otherText = value;
+    },
     setSourceTitle: (value: string) => {
       sourceTitle = value;
     },
@@ -520,8 +563,8 @@ void test("QA 例外保留术语发现，宿主条件控制语义编辑", async 
   assert.deepEqual(
     passedQuality.checks.map(({ version }) => version),
     [
-      "checks.terminology-rule/v1+terms-test-v1",
-      "checks.terminology-rule/v1+terms-test-v1",
+      "checks.terminology-rule/v2+terms-test-v1",
+      "checks.terminology-rule/v2+terms-test-v1",
     ],
   );
   assert.deepEqual(
@@ -641,4 +684,130 @@ void test("术语投影不符合 Standard Schema 时保持正式契约错误", a
       error.kind === "schema-mismatch" &&
       error.valueDescription.includes("投影输入"),
   );
+});
+
+void test("术语工厂显式收窄依据后仅相关变化影响例外，默认仍包含完整事实", async () => {
+  for (const narrowFingerprint of [false, true]) {
+    const scenario = createScenario({ narrowFingerprint });
+    const candidates = [
+      {
+        sourceKey: "workspace",
+        language: "zh",
+        content: { visible: "作业区", hidden: "工作区" },
+      },
+    ];
+    const run = () => analyzeQuality(scenario.config, { candidates });
+    const first = await run();
+    scenario.setExceptions(
+      first.checks.flatMap((check) =>
+        check.executions.map((execution) =>
+          createQualityException({
+            id: execution.checkId,
+            reason: "接受消息 A 的译法",
+            execution,
+          }),
+        ),
+      ),
+    );
+    assert.deepEqual(
+      (await run()).exceptionApplicability.map((item) => item.status),
+      ["applicable", "applicable"],
+    );
+    scenario.setOtherText("修改消息 B");
+    const unrelated = await run();
+    assert.deepEqual(
+      unrelated.exceptionApplicability.map((item) => item.status),
+      narrowFingerprint
+        ? ["applicable", "applicable"]
+        : ["basis-changed", "basis-changed"],
+    );
+    assert.deepEqual(
+      unrelated.diagnostics.map((item) => item.handling.status),
+      narrowFingerprint ? ["excepted", "excepted"] : ["active", "active"],
+    );
+    scenario.setSourceTitle("workspace changed");
+    assert.deepEqual(
+      (await run()).exceptionApplicability.map((item) => item.status),
+      ["basis-changed", "basis-changed"],
+    );
+    scenario.setSourceTitle("workspace");
+    scenario.setOtherText("消息 B");
+    assert.deepEqual(
+      (await run()).exceptionApplicability.map((item) => item.status),
+      ["applicable", "applicable"],
+    );
+  }
+});
+
+void test("术语工厂以本次异步加载的资料绑定指纹和计算，缓存不能掩盖资料变化", async () => {
+  let reads = 0;
+  const original = createScenario().terms;
+  let terms = original;
+  const stored = new Map<
+    string,
+    Awaited<ReturnType<QualityCheckResultCache["get"]>>
+  >();
+  let hits = 0;
+  const scenario = createScenario({
+    narrowFingerprint: true,
+    loadTerms: async () => {
+      reads++;
+      return terms;
+    },
+    resultCache: {
+      async get(key) {
+        const value = stored.get(key);
+        if (value) hits++;
+        return value;
+      },
+      async set(key, value) {
+        stored.set(key, value);
+      },
+    },
+  });
+  const candidates = [
+    {
+      sourceKey: "workspace",
+      language: "zh",
+      content: { visible: "作业区", hidden: "工作区" },
+    },
+  ];
+  const run = () => analyzeQuality(scenario.config, { candidates });
+  const first = await run();
+  assert.equal(reads, 2);
+  scenario.setExceptions(
+    first.checks.flatMap((check) =>
+      check.executions.map((execution) =>
+        createQualityException({
+          id: execution.checkId,
+          reason: "接受消息 A 的译法",
+          execution,
+        }),
+      ),
+    ),
+  );
+  scenario.setOtherText("修改消息 B");
+  const cached = await run();
+  assert.equal(hits, 2);
+  assert.equal(reads, 4);
+  assert.deepEqual(
+    cached.diagnostics.map((item) => item.handling.status),
+    ["excepted", "excepted"],
+  );
+  terms = compileTerms(createTermbase({ concepts: [] }));
+  const changed = await run();
+  assert.equal(reads, 6);
+  assert.equal(hits, 2);
+  assert.deepEqual(changed.diagnostics, []);
+  assert.deepEqual(
+    changed.exceptionApplicability.map((item) => item.status),
+    ["basis-changed", "basis-changed"],
+  );
+  terms = original;
+  assert.deepEqual(
+    (await run()).diagnostics.map((item) => item.handling.status),
+    ["excepted", "excepted"],
+  );
+  assert.equal(reads, 8);
+  assert.equal(hits, 4);
 });

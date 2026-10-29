@@ -6,9 +6,12 @@ import {
   type VueI18nMessageProjection,
   type VueI18nPolicy,
   type StandardSchemaV1,
+  type TermbaseData,
+  type QualityException,
 } from "@lioni/lioni";
 
-type Unit = { readonly source: string };
+type Unit = { readonly key: string; readonly source: string };
+type Translation = { readonly key: string; readonly text: string };
 const source = "Hello {name}";
 const stringSchema = schema(
   (value): value is string => typeof value === "string",
@@ -17,17 +20,49 @@ const unitSchema = schema(
   (value): value is Unit =>
     typeof value === "object" &&
     value !== null &&
+    "key" in value &&
+    typeof value.key === "string" &&
     "source" in value &&
     typeof value.source === "string",
 );
-export function createConfig(target: string) {
+const translationSchema = schema(
+  (value): value is Translation =>
+    typeof value === "object" &&
+    value !== null &&
+    "key" in value &&
+    typeof value.key === "string" &&
+    "text" in value &&
+    typeof value.text === "string",
+);
+export function createConfig(
+  target: string,
+  options: {
+    readonly otherText?: string;
+    readonly terms?: TermbaseData;
+    readonly exceptions?: readonly QualityException[];
+  } = {},
+) {
   const policies: readonly VueI18nPolicy[] = [
     {
       sourceLanguage: "en",
       targetLanguage: "zh-CN",
       resources: {
-        source: { messages: { message: source }, range: "en.json" },
-        target: { messages: { message: target }, range: "zh-CN.json" },
+        source: {
+          messages: {
+            message: source,
+            ...(options.otherText === undefined ? {} : { other: "Other" }),
+          },
+          range: "en.json",
+        },
+        target: {
+          messages: {
+            message: target,
+            ...(options.otherText === undefined
+              ? {}
+              : { other: options.otherText }),
+          },
+          range: "zh-CN.json",
+        },
       },
       quantities: {
         source: { profile: "en" },
@@ -46,35 +81,68 @@ export function createConfig(target: string) {
             range: "en.json",
             enumeration: "complete" as const,
             records: [
-              { value: { source }, bodyAvailability: "available" as const },
+              {
+                value: { key: "message", source },
+                bodyAvailability: "available" as const,
+              },
+              ...(options.otherText === undefined
+                ? []
+                : [
+                    {
+                      value: { key: "other", source: "Other" },
+                      bodyAvailability: "available" as const,
+                    },
+                  ]),
             ],
           },
         ],
       }),
     },
-    keyOf: () => "message",
+    keyOf: ({ key }) => key,
     translations: {
       languages: ["zh-CN"],
-      schema: stringSchema,
+      schema: translationSchema,
       contentSchema: stringSchema,
-      contentOf: (translation) => translation,
-      keyOf: () => ({ namespace: "messages", key: "message" }),
-      matches: () => true,
+      contentOf: ({ text }) => text,
+      keyOf: ({ key }) => ({ namespace: "messages", key }),
+      matches: (unit, translation) => unit.key === translation.key,
       read: () => ({
         scopes: [
           {
             range: "zh-CN.json",
             enumeration: "complete" as const,
-            covers: ["message"],
+            covers:
+              options.otherText === undefined
+                ? ["message"]
+                : ["message", "other"],
             records: [
-              { value: target, bodyAvailability: "available" as const },
+              {
+                value: { key: "message", text: target },
+                bodyAvailability: "available" as const,
+              },
+              ...(options.otherText === undefined
+                ? []
+                : [
+                    {
+                      value: { key: "other", text: options.otherText },
+                      bodyAvailability: "available" as const,
+                    },
+                  ]),
             ],
           },
         ],
       }),
     },
     quality: {
-      checks: createVueI18nChecks<Unit, string, string>({
+      exceptionStore: {
+        async load() {
+          return options.exceptions ?? [];
+        },
+        async upsert() {
+          throw new Error("制品验收只读取例外。");
+        },
+      },
+      checks: createVueI18nChecks<Unit, Translation, string>({
         hostVersion: "artifact-consumer-v1",
         project: ({ sourceUnit, candidate }) =>
           projection(sourceUnit?.unit.source, candidate.content),
@@ -87,7 +155,7 @@ export function createConfig(target: string) {
           ),
       }),
       loadDependencies: () => ({
-        vueI18n: { policies, terms: { concepts: [] } },
+        vueI18n: { policies, terms: options.terms ?? { concepts: [] } },
       }),
     },
   });
