@@ -182,6 +182,12 @@ const updateResultSchema = toStandardJsonSchema(
     plan: v.record(v.string(), v.unknown()),
     status: v.picklist(["completed", "failed"]),
     results: v.array(v.record(v.string(), v.unknown())),
+    baseline: v.optional(
+      v.object({
+        outcome: v.picklist(["saved", "unchanged", "notAdvanced", "failed"]),
+        message: v.optional(v.string()),
+      }),
+    ),
     batchError: v.optional(v.object({ name: v.string(), message: v.string() })),
   }),
 );
@@ -369,6 +375,10 @@ function updateResultText(value: unknown): ReturnType<typeof text.lines> {
       readonly status: string;
       readonly reason?: string;
     }[];
+    readonly baseline?: {
+      readonly outcome: "saved" | "unchanged" | "notAdvanced" | "failed";
+      readonly message?: string;
+    };
     readonly batchError?: { readonly name: string; readonly message: string };
   };
   const statusNames: Readonly<Record<string, string>> = {
@@ -393,6 +403,15 @@ function updateResultText(value: unknown): ReturnType<typeof text.lines> {
             : `${item.sourceKey} → ${item.language}`;
       return `${updateActionNames[action] ?? "更新"} ${subject}：${statusNames[status] ?? "未完成"}${reason === undefined ? "" : `；${reason}`}`;
     }),
+    ...(result.baseline === undefined
+      ? []
+      : [
+          result.baseline.outcome === "saved"
+            ? "比较基线已记录。"
+            : result.baseline.outcome === "unchanged"
+              ? "比较基线没有变化。"
+              : (result.baseline.message ?? "比较基线未推进。"),
+        ]),
     ...(result.batchError === undefined
       ? []
       : [
@@ -530,6 +549,11 @@ function createCliContract(identity: CliCommandIdentity) {
         fields: {
           config: { kind: "positional", description: "宿主配置文件路径" },
           languages: languageOption,
+          recordBaseline: {
+            kind: "flag",
+            longOption: "--record-baseline",
+            description: "完整更新确认后记录比较基线",
+          },
           dryRun: {
             kind: "flag",
             longOption: "--dry-run",
@@ -540,6 +564,7 @@ function createCliContract(identity: CliCommandIdentity) {
           v.object({
             config: v.string(),
             languages: languagesSchema,
+            recordBaseline: v.optional(v.boolean()),
             dryRun: v.optional(v.boolean()),
           }),
         ),
@@ -593,7 +618,7 @@ function createCliContract(identity: CliCommandIdentity) {
             const result = await updateForConfig(
               config,
               baselinePath,
-              languageSelection(input),
+              updateSelection(input),
             );
             const cliResult = cliUpdateResult(result);
             return result.status === "completed"
@@ -963,7 +988,7 @@ function updateForConfig<
 >(
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
   baselinePath: string,
-  options: LanguageSelectionOptions,
+  options: LanguageSelectionOptions & { readonly recordBaseline?: boolean },
 ) {
   const store = createFileComparisonBaselineStore<
     TUnit,
@@ -972,6 +997,18 @@ function updateForConfig<
     TUnavailable
   >(baselinePath);
   return update(config, store, options);
+}
+
+function updateSelection(input: {
+  readonly languages?: readonly string[] | undefined;
+  readonly recordBaseline?: boolean | undefined;
+}): LanguageSelectionOptions & { readonly recordBaseline?: boolean } {
+  return {
+    ...languageSelection(input),
+    ...(input.recordBaseline === undefined
+      ? {}
+      : { recordBaseline: input.recordBaseline }),
+  };
 }
 
 export async function runCli(runtime: CliRuntime): Promise<number> {

@@ -46,7 +46,7 @@ function createScenario(
     baselineLoads: 0,
     baselineSaves: 0,
   };
-  const faults: { writeKey?: string } = {};
+  const faults: { writeKey?: string; baselineSave?: boolean } = {};
   let storedBaseline:
     | ComparisonBaseline<Unit, Translation, JsonValue, never>
     | undefined;
@@ -62,7 +62,8 @@ function createScenario(
     },
     async save(baseline) {
       counts.baselineSaves += 1;
-      storedBaseline = baseline;
+      if (faults.baselineSave) throw new Error("EACCES: baseline write failed");
+      storedBaseline = structuredClone(baseline);
     },
   };
 
@@ -112,7 +113,10 @@ function createScenario(
     },
     translations: {
       languages: ["fr"],
-      keyOf: ({ id }) => ({ namespace: "messages", key: id }),
+      keyOf: ({ id }) => ({
+        namespace: "messages",
+        key: id,
+      }),
       schema: translationSchema,
       contentSchema: jsonValueSchema,
       contentOf: ({ text }) => text,
@@ -191,6 +195,63 @@ function sampleSource(id = "A"): Unit {
 
 function sampleTranslation(id = "A"): Translation {
   return { id, text: `Text ${id}`, sourceId: id };
+}
+
+function createBilingualConfig(
+  scenario: ReturnType<typeof createScenario>,
+  translationsByLanguage: Record<string, Translation[]>,
+): FrameworkConfig<Unit, Translation, JsonValue> {
+  const translations = scenario.config.translations!;
+  const writer = scenario.config.translationWriteback!;
+  return {
+    ...scenario.config,
+    translations: {
+      ...translations,
+      languages: ["fr", "ja"],
+      read(language, sourceUnits) {
+        return {
+          scopes: [
+            {
+              range: `${language}.json`,
+              covers: sourceUnits.map(({ key }) => key),
+              enumeration: "complete",
+              records: (translationsByLanguage[language] ?? []).map(
+                (value) => ({ value, bodyAvailability: "available" as const }),
+              ),
+            },
+          ],
+        };
+      },
+    },
+    translationWriteback: {
+      ...writer,
+      locateExistingTarget: ({ identity }) => ({
+        status: "located" as const,
+        locator: { range: `${identity.language}.json`, key: identity.key },
+      }),
+      write({ request }) {
+        const language =
+          "identity" in request.target
+            ? request.target.identity.language
+            : request.target.language;
+        const key =
+          "identity" in request.target
+            ? request.target.identity.key
+            : request.target.sourceKey;
+        const records = translationsByLanguage[language] ?? [];
+        if (request.operation === "delete") {
+          translationsByLanguage[language] = records.filter(
+            ({ id }) => id !== key,
+          );
+          return;
+        }
+        const existing = records.find(({ id }) => id === key);
+        if (existing === undefined)
+          records.push({ id: key, text: request.content });
+        else existing.text = request.content;
+      },
+    },
+  };
 }
 
 void describe("apply update plan", () => {
@@ -411,11 +472,114 @@ void describe("apply update plan", () => {
     assert.equal(scenario.counts.baselineSaves, 0);
   });
 
-  void it("fails the overall update when a batch throws after every write is confirmed", async () => {
+  void it("records the post-write facts as the comparison baseline when requested", async () => {
+    const scenario = createScenario({ sources: [sampleSource()] });
+
+    const result = await update(scenario.config, scenario.baselineStore, {
+      recordBaseline: true,
+    });
+
+    assert.equal(result.status, "completed");
+    assert.equal(result.baseline?.outcome, "saved");
+    assert.deepEqual(scenario.state.translations, [
+      { id: "A", text: "Source A" },
+    ]);
+    assert.deepEqual(
+      scenario.currentBaseline()?.snapshot.source.units.map(({ unit }) => unit),
+      [sampleSource()],
+    );
+    assert.deepEqual(
+      scenario
+        .currentBaseline()
+        ?.snapshot.translations.records.map(({ translation }) => translation),
+      [{ id: "A", text: "Source A" }],
+    );
+  });
+
+  void it("records a baseline after a complete update that made no write", async () => {
+    const scenario = createScenario({
+      sources: [sampleSource()],
+      translations: [{ id: "A", text: "Source A", sourceId: "A" }],
+      withWriter: false,
+    });
+
+    const result = await update(scenario.config, scenario.baselineStore, {
+      recordBaseline: true,
+    });
+
+    assert.equal(result.status, "completed");
+    assert.deepEqual(
+      result.results.map(({ status }) => status),
+      ["retained"],
+    );
+    assert.equal(result.baseline?.outcome, "saved");
+    assert.deepEqual(scenario.state.translations, [
+      { id: "A", text: "Source A", sourceId: "A" },
+    ]);
+  });
+
+  void it("rejects partial-language baseline advancement before writing", async () => {
+    const scenario = createScenario({ sources: [sampleSource()] });
+    const translations = scenario.config.translations!;
+    const config: FrameworkConfig<Unit, Translation, JsonValue> = {
+      ...scenario.config,
+      translations: { ...translations, languages: ["fr", "ja"] },
+    };
+
+    await assert.rejects(
+      update(config, scenario.baselineStore, {
+        languages: ["fr"],
+        recordBaseline: true,
+      }),
+      /要求本次更新覆盖全部配置语言/u,
+    );
+
+    assert.deepEqual(scenario.state.translations, []);
+  });
+
+  void it("keeps the baseline when a custom policy omits one language for a changed source", async () => {
+    const scenario = createScenario({ sources: [sampleSource()] });
+    const translationsByLanguage: Record<string, Translation[]> = {
+      fr: [sampleTranslation()],
+      ja: [sampleTranslation()],
+    };
+    const baseConfig = createBilingualConfig(scenario, translationsByLanguage);
+    const config: FrameworkConfig<Unit, Translation, JsonValue> = {
+      ...baseConfig,
+      updatePolicy: async (input) =>
+        (await defaultUpdatePolicy(input)).filter(
+          ({ language }) => language === "fr",
+        ),
+    };
+    await recordComparisonBaseline(config, scenario.baselineStore);
+    const previousBaseline = structuredClone(scenario.currentBaseline());
+    scenario.state.sources = [{ ...sampleSource(), source: "Updated source" }];
+
+    const result = await update(config, scenario.baselineStore, {
+      recordBaseline: true,
+    });
+
+    assert.equal(result.status, "failed");
+    assert.deepEqual(
+      result.results.map(({ status }) => status),
+      ["written"],
+    );
+    assert.equal(result.baseline?.outcome, "notAdvanced");
+    assert.deepEqual(scenario.currentBaseline(), previousBaseline);
+    assert.deepEqual(translationsByLanguage.ja, [sampleTranslation()]);
+  });
+
+  void it("keeps the baseline when a batch throws even after all targets are confirmed", async () => {
     const scenario = createScenario({
       sources: [sampleSource("A"), sampleSource("B")],
+      translations: [sampleTranslation("A"), sampleTranslation("B")],
     });
-    const failure = new Error("host finished writes but could not finalize");
+    await recordComparisonBaseline(scenario.config, scenario.baselineStore);
+    const previousBaseline = structuredClone(scenario.currentBaseline());
+    scenario.state.sources = [
+      { id: "A", source: "Updated source A" },
+      { id: "B", source: "Updated source B" },
+    ];
     const writer = scenario.config.translationWriteback!;
     const config: FrameworkConfig<Unit, Translation, JsonValue> = {
       ...scenario.config,
@@ -423,34 +587,294 @@ void describe("apply update plan", () => {
         ...writer,
         writeBatch({ requests }) {
           for (const { request } of requests) {
+            if (request.operation !== "write")
+              throw new Error("expected a write request");
             const key =
               "identity" in request.target
                 ? request.target.identity.key
                 : request.target.sourceKey;
             const existing = scenario.state.translations.find(
-              (translation) => translation.id === key,
+              ({ id }) => id === key,
             );
-            if (existing === undefined)
-              scenario.state.translations.push({
-                id: key,
-                text: request.operation === "write" ? request.content : "",
-              });
-            else if (request.operation === "write")
-              existing.text = request.content;
+            if (existing !== undefined) existing.text = request.content;
           }
-          throw failure;
+          throw undefined;
         },
       },
     };
 
-    const result = await update(config, scenario.baselineStore);
+    const result = await update(config, scenario.baselineStore, {
+      recordBaseline: true,
+    });
 
     assert.equal(result.status, "failed");
+    assert.equal(Object.hasOwn(result, "batchError"), true);
+    assert.equal(result.batchError, undefined);
     assert.deepEqual(
       result.results.map(({ status }) => status),
       ["written", "written"],
     );
-    assert.equal(result.batchError, failure);
+    assert.equal(result.baseline?.outcome, "notAdvanced");
+    assert.deepEqual(scenario.currentBaseline(), previousBaseline);
+    assert.deepEqual(scenario.state.translations, [
+      { id: "A", text: "Updated source A", sourceId: "A" },
+      { id: "B", text: "Updated source B", sourceId: "B" },
+    ]);
+  });
+
+  void it("requires a decision for confirmed missing translations", async () => {
+    const scenario = createScenario({ sources: [sampleSource()] });
+    const translationsByLanguage: Record<string, Translation[]> = {
+      fr: [sampleTranslation()],
+      ja: [],
+    };
+    const baseConfig = createBilingualConfig(scenario, translationsByLanguage);
+    await recordComparisonBaseline(baseConfig, scenario.baselineStore);
+    const previousBaseline = structuredClone(scenario.currentBaseline());
+    const config: FrameworkConfig<Unit, Translation, JsonValue> = {
+      ...baseConfig,
+      updatePolicy: async (input) =>
+        (await defaultUpdatePolicy(input)).filter(
+          ({ language }) => language === "fr",
+        ),
+    };
+
+    const result = await update(config, scenario.baselineStore, {
+      recordBaseline: true,
+    });
+
+    assert.equal(result.status, "failed");
+    assert.deepEqual(
+      result.results.map(({ status }) => status),
+      ["retained"],
+    );
+    assert.equal(result.baseline?.outcome, "notAdvanced");
+    assert.deepEqual(scenario.currentBaseline(), previousBaseline);
+    assert.deepEqual(translationsByLanguage.ja, []);
+  });
+
+  void it("allows an explicit retain decision for a changed source language", async () => {
+    const scenario = createScenario({ sources: [sampleSource()] });
+    const translationsByLanguage: Record<string, Translation[]> = {
+      fr: [sampleTranslation()],
+      ja: [sampleTranslation()],
+    };
+    const baseConfig = createBilingualConfig(scenario, translationsByLanguage);
+    await recordComparisonBaseline(baseConfig, scenario.baselineStore);
+    scenario.state.sources = [{ ...sampleSource(), source: "Updated source" }];
+    const config: FrameworkConfig<Unit, Translation, JsonValue> = {
+      ...baseConfig,
+      updatePolicy: async (input) =>
+        (await defaultUpdatePolicy(input)).map((item) => {
+          if (item.language !== "ja" || item.action !== "write") return item;
+          const { request: _request, after: _after, ...retained } = item;
+          return {
+            ...retained,
+            action: "retain" as const,
+            reason: "项目规则明确保留日文译文。",
+          };
+        }),
+    };
+
+    const result = await update(config, scenario.baselineStore, {
+      recordBaseline: true,
+    });
+
+    assert.equal(result.status, "completed");
+    assert.deepEqual(
+      result.results.map(({ status }) => status),
+      ["written", "retained"],
+    );
+    assert.equal(result.baseline?.outcome, "saved");
+    assert.deepEqual(translationsByLanguage.ja, [sampleTranslation()]);
+  });
+
+  void it("does not advance a baseline when an update decision needs review", async () => {
+    const scenario = createScenario({
+      sources: [sampleSource()],
+      translations: [sampleTranslation()],
+    });
+    const config: FrameworkConfig<Unit, Translation, JsonValue> = {
+      ...scenario.config,
+      updatePolicy: async (input) =>
+        (await defaultUpdatePolicy(input)).map(
+          ({ request: _request, after: _after, ...item }) => ({
+            ...item,
+            action: "review" as const,
+          }),
+        ),
+    };
+
+    const result = await update(config, scenario.baselineStore, {
+      recordBaseline: true,
+    });
+
+    assert.equal(result.status, "failed");
+    assert.equal(result.results[0]?.status, "review");
+    assert.equal(result.baseline?.outcome, "notAdvanced");
+    assert.equal(scenario.currentBaseline(), undefined);
+    assert.deepEqual(scenario.state.translations, [sampleTranslation()]);
+  });
+
+  void it("keeps the baseline after a failed translation write", async () => {
+    const scenario = createScenario({ sources: [sampleSource()] });
+    await recordComparisonBaseline(scenario.config, scenario.baselineStore);
+    const previousBaseline = structuredClone(scenario.currentBaseline());
+    scenario.state.sources = [{ ...sampleSource(), source: "Updated source" }];
+    scenario.faults.writeKey = "A";
+
+    const result = await update(scenario.config, scenario.baselineStore, {
+      recordBaseline: true,
+    });
+
+    assert.equal(result.status, "failed");
+    assert.deepEqual(
+      result.results.map(({ status }) => status),
+      ["writeFailed"],
+    );
+    assert.equal(result.baseline?.outcome, "notAdvanced");
+    assert.deepEqual(scenario.currentBaseline(), previousBaseline);
+  });
+
+  void it("keeps the baseline when a complete post-update read finds changed source facts", async () => {
+    const scenario = createScenario({
+      sources: [sampleSource()],
+      translations: [sampleTranslation()],
+    });
+    await recordComparisonBaseline(scenario.config, scenario.baselineStore);
+    const previousBaseline = structuredClone(scenario.currentBaseline());
+    const config: FrameworkConfig<Unit, Translation, JsonValue> = {
+      ...scenario.config,
+      updatePolicy: async (input) => {
+        const items = await defaultUpdatePolicy(input);
+        scenario.state.sources = [
+          { ...sampleSource(), source: "Changed during update" },
+        ];
+        return items;
+      },
+    };
+
+    const result = await update(config, scenario.baselineStore, {
+      recordBaseline: true,
+    });
+
+    assert.equal(result.status, "failed");
+    assert.deepEqual(
+      result.results.map(({ status }) => status),
+      ["retained"],
+    );
+    assert.deepEqual(result.baseline, {
+      outcome: "notAdvanced",
+      message: "执行后原文与本次更新依据不一致；比较基线保留。",
+    });
+    assert.deepEqual(scenario.currentBaseline(), previousBaseline);
+  });
+
+  void it("keeps the baseline when a post-update language read is incomplete", async () => {
+    const scenario = createScenario({
+      sources: [sampleSource()],
+      translations: [sampleTranslation()],
+    });
+    await recordComparisonBaseline(scenario.config, scenario.baselineStore);
+    const previousBaseline = structuredClone(scenario.currentBaseline());
+    let afterPlan = false;
+    const translations = scenario.config.translations!;
+    const config: FrameworkConfig<Unit, Translation, JsonValue> = {
+      ...scenario.config,
+      translations: {
+        ...translations,
+        async read(language, sourceUnits) {
+          const current = await translations.read(language, sourceUnits);
+          return afterPlan
+            ? {
+                scopes: current.scopes.map((scope) => ({
+                  ...scope,
+                  enumeration: "partial" as const,
+                })),
+              }
+            : current;
+        },
+      },
+      updatePolicy: async (input) => {
+        const items = await defaultUpdatePolicy(input);
+        afterPlan = true;
+        return items;
+      },
+    };
+
+    const result = await update(config, scenario.baselineStore, {
+      recordBaseline: true,
+    });
+
+    assert.equal(result.status, "failed");
+    assert.deepEqual(
+      result.results.map(({ status }) => status),
+      ["retained"],
+    );
+    assert.equal(result.baseline?.outcome, "notAdvanced");
+    assert.match(result.baseline?.message ?? "", /读取不完整/u);
+    assert.deepEqual(scenario.currentBaseline(), previousBaseline);
+  });
+
+  void it("advances after processing a confirmed source-removal deletion", async () => {
+    const scenario = createScenario({
+      sources: [sampleSource()],
+      translations: [sampleTranslation()],
+    });
+    await recordComparisonBaseline(scenario.config, scenario.baselineStore);
+    scenario.state.sources = [];
+
+    const result = await update(scenario.config, scenario.baselineStore, {
+      recordBaseline: true,
+    });
+
+    assert.equal(result.status, "completed");
+    assert.deepEqual(
+      result.results.map(({ status }) => status),
+      ["written"],
+    );
+    assert.equal(result.baseline?.outcome, "saved");
+    assert.deepEqual(scenario.state.translations, []);
+    assert.deepEqual(scenario.currentBaseline()?.snapshot.source.units, []);
+  });
+
+  void it("records a target-only fact while retaining it after source removal", async () => {
+    const scenario = createScenario({ sources: [sampleSource()] });
+    await recordComparisonBaseline(scenario.config, scenario.baselineStore);
+    scenario.state.sources = [];
+    scenario.state.translations = [sampleTranslation("B")];
+
+    const result = await update(scenario.config, scenario.baselineStore, {
+      recordBaseline: true,
+    });
+
+    assert.equal(result.status, "completed");
+    assert.deepEqual(
+      result.results.map(({ status }) => status),
+      ["retained"],
+    );
+    assert.equal(result.baseline?.outcome, "saved");
+    assert.deepEqual(scenario.state.translations, [sampleTranslation("B")]);
+  });
+
+  void it("reports baseline persistence failure separately after a confirmed write", async () => {
+    const scenario = createScenario({ sources: [sampleSource()] });
+    scenario.faults.baselineSave = true;
+
+    const result = await update(scenario.config, scenario.baselineStore, {
+      recordBaseline: true,
+    });
+
+    assert.equal(result.status, "failed");
+    assert.equal(result.results[0]?.status, "written");
+    assert.deepEqual(result.baseline, {
+      outcome: "failed",
+      message: "译文已写入，基线未推进：EACCES: baseline write failed",
+    });
+    assert.deepEqual(scenario.state.translations, [
+      { id: "A", text: "Source A" },
+    ]);
+    assert.equal(scenario.currentBaseline(), undefined);
   });
 
   void it("rejects a restored delete plan when its expected source is present again", async () => {

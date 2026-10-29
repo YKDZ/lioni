@@ -220,6 +220,21 @@ export async function recordComparisonBaseline<
   RecordComparisonBaselineResult<TUnit, TTranslation, TBody, TUnavailable>
 > {
   const current = await readComparisonSnapshot(config);
+  return recordComparisonBaselineFromSnapshot(current, store);
+}
+
+/** 保存已经完成读取和核对的快照，供组合工作流复用同一份新事实。 */
+export async function recordComparisonBaselineFromSnapshot<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  current: ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
+  store: ComparisonBaselineStore<TUnit, TTranslation, TBody, TUnavailable>,
+): Promise<
+  RecordComparisonBaselineResult<TUnit, TTranslation, TBody, TUnavailable>
+> {
   assertCompleteSnapshot(current);
   const previous = await store.load();
   const baseline = replaceComparisonBaseline({
