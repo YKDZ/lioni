@@ -213,7 +213,7 @@ export function createQualityFixture(input: {
       schema: translationSchema,
       contentSchema: bodySchema,
       contentOf: (translation) => ({ text: translation.text }),
-      identityOf: (translation) => ({
+      keyOf: (translation) => ({
         namespace: "messages",
         key: translation.key,
       }),

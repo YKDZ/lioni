@@ -39,7 +39,7 @@ export default defineConfig({
   keyOf: (unit) => unit.context.file + ":" + unit.context.line,
   translations: {
     languages: ["fr"],
-    identityOf: (translation) => ({ namespace: "messages", key: translation.id }),
+    keyOf: (translation) => ({ namespace: "messages", key: translation.id }),
     schema: { "~standard": { version: 1, vendor: "inspect-journey-translation", validate(value) {
       const context = value?.context;
       return typeof value === "object" && value !== null && !Array.isArray(value) &&

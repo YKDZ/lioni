@@ -226,9 +226,7 @@ function readMixedSource(unrelatedSource = "Reference 7") {
 
 const mixedTranslations = {
   languages: ["fr"],
-  identityOf: (
-    translation: MixedTranslation | MixedUnavailableTranslation,
-  ) => ({
+  keyOf: (translation: MixedTranslation | MixedUnavailableTranslation) => ({
     namespace: "messages",
     key: translation.key,
   }),

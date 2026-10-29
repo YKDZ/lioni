@@ -272,7 +272,7 @@ function createScenario(
     keyOf: ({ id }) => id,
     translations: {
       languages: ["zh"],
-      identityOf: (translation) => ({
+      keyOf: (translation) => ({
         namespace: "messages",
         key: translation.id,
       }),

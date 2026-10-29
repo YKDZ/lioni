@@ -131,7 +131,7 @@ const config = defineConfig<
   createPlaceholderContent: (source) => ({ message: source, state: "draft" }),
   translations: {
     languages: ["fr"],
-    identityOf: (translation) => ({
+    keyOf: (translation) => ({
       namespace: "fixture",
       key: translation.id,
     }),

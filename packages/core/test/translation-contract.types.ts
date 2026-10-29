@@ -71,7 +71,7 @@ const config = defineConfig({
   },
   translations: {
     languages: ["fr"],
-    identityOf: fixtureTranslationIdentity,
+    keyOf: fixtureTranslationIdentity,
     schema: availableSchema,
     unavailableSchema,
     contentSchema,
@@ -137,7 +137,7 @@ const interfaceBodyConfig = defineConfig({
   keyOf: (unit) => String(unit.context.line),
   translations: {
     languages: ["fr"],
-    identityOf: fixtureTranslationIdentity,
+    keyOf: fixtureTranslationIdentity,
     schema: interfaceTranslationSchema,
     contentSchema: interfaceBodySchema,
     read: () => ({ scopes: [] }),
@@ -157,7 +157,7 @@ defineConfig({
   keyOf: (unit) => String(unit.context.line),
   translations: {
     languages: ["fr"],
-    identityOf: fixtureTranslationIdentity,
+    keyOf: fixtureTranslationIdentity,
     schema: availableSchema,
     contentSchema,
     read: () => ({ scopes: [] }),
@@ -172,7 +172,7 @@ defineConfig({
   keyOf: (unit) => String(unit.context.line),
   translations: {
     languages: ["fr"],
-    identityOf: fixtureTranslationIdentity,
+    keyOf: fixtureTranslationIdentity,
     schema: availableSchema,
     contentSchema,
     read: () => ({
@@ -209,7 +209,7 @@ defineConfig({
   keyOf: (unit) => String(unit.context.line),
   translations: {
     languages: ["fr"],
-    identityOf: fixtureTranslationIdentity,
+    keyOf: fixtureTranslationIdentity,
     schema: availableSchema,
     // @ts-expect-error 声明的 schema 必须保留输入和输出类型。
     contentSchema: transformingContentSchema,
