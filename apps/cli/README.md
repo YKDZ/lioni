@@ -76,6 +76,8 @@ const check = defineQualityCheck({
 
 译文适配器的 `translations.contentOf()` 从译文记录取出正文，`identityOf()` 提供稳定目标身份。`analyzeQuality` 将本次事实、候选、动态依赖和复用范围提供给检查器；自定义逻辑可以在 `check(input)` 中按宿主规则解释正文，并返回诊断、问题与覆盖情况。`createVueI18nChecks`、`createNumberChecker`、`createTermChecker` 等工厂为常见规则提供可复用检查器。
 
+SDK 的 `readFacts(config)` 返回宿主原文记录及其稳定键、实际译文记录及其身份、源译关联，以及每个读取范围的完整性和正文可用性。需要完成率或 CI 条件的宿主可以直接消费这些事实并自行定义判据；框架保留事实本身，不将它们转换为完成状态。
+
 自定义存储可实现 `QualityExceptionStore` 或 `QualityCheckResultCache`，也可实现比较基线和更新计划存储。Node 文件实现从 `@lioni/lioni/node` 导入；纯 SDK 流程可将自定义存储直接放入配置或函数参数。
 
 独立计划流程仍可单独使用：`previewUpdate(config, baselineStore)` 返回可保存的计划，之后由 `applyUpdatePlan(plan, config, confirm)` 校验计划并执行写入。两步可以运行在不同进程中，也可分别接入审批流程。

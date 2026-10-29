@@ -8,7 +8,7 @@ import { testArtifactConsumer } from "../support/consumer.ts";
 
 testArtifactConsumer(
   {
-    name: "安装后的 SDK 配置与 CLI 质量报告",
+    name: "安装后的 SDK 事实读取与 CLI 质量报告",
     fixtures: new URL("../fixtures/sdk-cli/", import.meta.url),
   },
   async ({ root, runNode, runCommand, runProcess, typecheck }) => {
@@ -26,10 +26,6 @@ testArtifactConsumer(
       schemaVersion: "2",
       data: JSON.parse(sdk.stdout),
     });
-    assert.partialDeepStrictEqual(
-      JSON.parse((await cli("completion", "lioni.config.ts")).stdout),
-      { data: { status: "complete" } },
-    );
     assert.partialDeepStrictEqual(
       JSON.parse((await cli("baseline", "lioni.config.ts")).stdout),
       { data: { outcome: "saved" } },

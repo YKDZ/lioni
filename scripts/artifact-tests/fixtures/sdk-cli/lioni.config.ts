@@ -106,12 +106,5 @@ export default defineConfig({
       };
     },
   },
-  completion: {
-    criterion: "存在正文的实际译文",
-    resolveCompletion: ({ translations }) =>
-      translations.some(
-        ({ bodyAvailability }) => bodyAvailability === "available",
-      ),
-  },
   quality: { checks: [numbers] },
 });
