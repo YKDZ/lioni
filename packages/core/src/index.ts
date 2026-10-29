@@ -336,8 +336,11 @@ export type FrameworkConfig<
     TBody,
     TUnavailable
   >;
-  /** 将宿主原文正文映射为目标语言中的待译占位正文。 */
-  readonly sourceToContent?: (
+  /**
+   * 同步纯填充函数：仅接收原文正文并返回目标正文。默认直接使用已读取的原文正文；
+   * 默认值与自定义结果都会按 contentSchema 保值验证。
+   */
+  readonly createPlaceholderContent?: (
     source: NoInfer<TUnit["source"]>,
   ) => NoInfer<TBody>;
   readonly updatePolicy?: UpdatePolicy<

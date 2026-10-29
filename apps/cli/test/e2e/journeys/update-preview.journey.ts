@@ -7,6 +7,8 @@ import { loadConfig } from "@lioni/core/node";
 
 import type { CliJourney } from "../journey.ts";
 
+const expectedModifiedBaselineByWorkDir = new Map<string, string>();
+
 function configSource(
   sources: readonly { readonly id: string; readonly source: string }[],
   _translations: readonly {
@@ -19,11 +21,12 @@ function configSource(
     readonly writeUnconfirmed?: boolean;
   } = {},
 ): string {
-  return `import { readFileSync, writeFileSync } from "node:fs";
+  return `import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "@lioni/core";
 
 const translationsPath = fileURLToPath(new URL("./lioni.translations.json", import.meta.url));
+const writeLogPath = fileURLToPath(new URL("./lioni.writes.log", import.meta.url));
 
 export default defineConfig({
   source: {
@@ -39,7 +42,7 @@ export default defineConfig({
     }] })
   },
   keyOf: (unit) => unit.id,
-  sourceToContent: (source) => "待译：" + source,
+  createPlaceholderContent: (source) => "待译：" + source,
   ${options.noDecisions === true ? "updatePolicy: () => []," : ""}
   translations: {
     languages: ["fr"],
@@ -75,6 +78,7 @@ export default defineConfig({
         records.push({ targetId: id, sourceId, text: request.content });
       } else existing.text = request.content;
       writeFileSync(translationsPath, JSON.stringify(records) + "\\n");
+      appendFileSync(writeLogPath, "write\\n");
     }
   }
 });
@@ -162,6 +166,43 @@ const journey: CliJourney = {
       `${JSON.stringify(replaceComparisonBaseline({ current: unchangedSnapshot }))}\n`,
     );
 
+    const modifiedDir = path.join(workDir, "modified");
+    await mkdir(modifiedDir);
+    const oldTranslations = [
+      {
+        targetId: "target-welcome",
+        sourceId: "welcome",
+        text: "人工译文",
+      },
+    ];
+    await writeFile(
+      path.join(modifiedDir, "lioni.translations.json"),
+      `${JSON.stringify(oldTranslations)}\n`,
+    );
+    const oldConfigPath = path.join(modifiedDir, "previous.config.ts");
+    await writeFile(
+      oldConfigPath,
+      configSource([{ id: "welcome", source: "Welcome" }], oldTranslations),
+    );
+    await writeFile(
+      path.join(modifiedDir, "lioni.config.ts"),
+      configSource(
+        [{ id: "welcome", source: "Welcome back" }],
+        oldTranslations,
+      ),
+    );
+    const oldConfig = await loadConfig(oldConfigPath);
+    const oldSnapshot = await readComparisonSnapshot(oldConfig);
+    const modifiedBaseline = replaceComparisonBaseline({
+      current: oldSnapshot,
+    });
+    const modifiedBaselineText = `${JSON.stringify(modifiedBaseline)}\n`;
+    await writeFile(
+      path.join(modifiedDir, "lioni.baseline.json"),
+      modifiedBaselineText,
+    );
+    expectedModifiedBaselineByWorkDir.set(workDir, modifiedBaselineText);
+
     const unconfirmedDir = path.join(workDir, "unconfirmed");
     await mkdir(unconfirmedDir);
     await writeFile(
@@ -232,6 +273,20 @@ const journey: CliJourney = {
         name: "keep machine status in structured execution results",
         args: ["update", "unconfirmed/lioni.config.ts"],
       },
+      {
+        name: "preview a modified source reset",
+        args: [
+          "update",
+          "modified/lioni.config.ts",
+          "--dry-run",
+          "--output-format",
+          "text",
+        ],
+      },
+      {
+        name: "execute the modified source reset through the host adapter",
+        args: ["update", "modified/lioni.config.ts"],
+      },
     ];
   },
   async assertions({ context, results }) {
@@ -243,6 +298,8 @@ const journey: CliJourney = {
     const retained = results[5];
     const unconfirmedText = results[6];
     const unconfirmedStructured = results[7];
+    const modifiedPreview = results[8];
+    const modifiedApplied = results[9];
     const baselinePath = path.join(context.workDir, "lioni.baseline.json");
 
     assert.equal(structured?.exitCode, 0, structured?.stderr);
@@ -334,6 +391,52 @@ const journey: CliJourney = {
     assert.equal(structuredFailure.variant, "applyFailed");
     assert.equal(structuredFailure.data.status, "failed");
     assert.equal(structuredFailure.data.results[0]?.status, "writeUnconfirmed");
+
+    assert.equal(modifiedPreview?.exitCode, 0, modifiedPreview?.stderr);
+    assert.equal(modifiedPreview?.stderr, "");
+    assert.ok(modifiedPreview?.stdout.includes("重置待译占位"));
+    assert.ok(modifiedPreview?.stdout.includes("人工译文"));
+    assert.ok(modifiedPreview?.stdout.includes("待译：Welcome back"));
+    assert.ok(
+      modifiedPreview?.stdout.includes(
+        "原文已变化；使用当前原文生成待译占位并重置现有译文。",
+      ),
+    );
+    assert.equal(modifiedApplied?.exitCode, 0, modifiedApplied?.stderr);
+    assert.equal(modifiedApplied?.stderr, "");
+    const modifiedExecution = JSON.parse(modifiedApplied?.stdout ?? "unknown");
+    assert.equal(modifiedExecution.variant, "applied");
+    assert.equal(modifiedExecution.data.status, "completed");
+    assert.equal(modifiedExecution.data.results[0]?.status, "written");
+    assert.deepStrictEqual(
+      JSON.parse(
+        await readFile(
+          path.join(context.workDir, "modified/lioni.translations.json"),
+          "utf8",
+        ),
+      ),
+      [
+        {
+          targetId: "target-welcome",
+          sourceId: "welcome",
+          text: "待译：Welcome back",
+        },
+      ],
+    );
+    assert.equal(
+      await readFile(
+        path.join(context.workDir, "modified/lioni.writes.log"),
+        "utf8",
+      ),
+      "write\n",
+    );
+    assert.equal(
+      await readFile(
+        path.join(context.workDir, "modified/lioni.baseline.json"),
+        "utf8",
+      ),
+      expectedModifiedBaselineByWorkDir.get(context.workDir),
+    );
   },
 };
 

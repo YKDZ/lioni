@@ -54,7 +54,7 @@ export default defineConfig({
     }] }),
   },
   keyOf: (unit) => unit.id,
-  sourceToContent: (source) => source,
+  createPlaceholderContent: (source) => source,
   translations: {
     languages: ["fr", "de"],
     schema,

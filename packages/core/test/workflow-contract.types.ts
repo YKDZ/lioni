@@ -128,7 +128,7 @@ const config = defineConfig<
 >({
   source: { schema: unitSchema, read: () => ({ scopes: [] }) },
   keyOf: (unit) => unit.context.key,
-  sourceToContent: (source) => ({ message: source, state: "draft" }),
+  createPlaceholderContent: (source) => ({ message: source, state: "draft" }),
   translations: {
     languages: ["fr"],
     identityOf: (translation) => ({

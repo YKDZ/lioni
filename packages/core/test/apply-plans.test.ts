@@ -30,7 +30,7 @@ function createScenario(
     readonly translations?: readonly Translation[];
     readonly additionalTranslationExamples?: readonly Translation[];
     readonly withWriter?: boolean;
-    readonly sourceToContent?: (source: string) => JsonValue;
+    readonly createPlaceholderContent?: (source: string) => JsonValue;
   } = {},
 ) {
   const state = {
@@ -100,7 +100,8 @@ function createScenario(
       },
     },
     keyOf: ({ id }) => id,
-    sourceToContent: options.sourceToContent ?? ((source) => source),
+    createPlaceholderContent:
+      options.createPlaceholderContent ?? ((source) => source),
     compare: (input) => {
       counts.comparisons += 1;
       return defaultCompare(input);
@@ -366,13 +367,18 @@ void describe("apply update plan", () => {
     const content = JSON.parse(
       '{"__proto__":"Hello","safe":"yes"}',
     ) as JsonValue;
+    let placeholderCalls = 0;
     const scenario = createScenario({
       sources: [{ id: "A", source: JSON.stringify(content) }],
       additionalTranslationExamples: [{ id: "A", text: content }],
-      sourceToContent: (source) => JSON.parse(source) as JsonValue,
+      createPlaceholderContent: (source) => {
+        placeholderCalls += 1;
+        return JSON.parse(source) as JsonValue;
+      },
     });
 
     const plan = await previewUpdate(scenario.config);
+    assert.equal(placeholderCalls, 1);
     const item = plan.items[0];
     assert.equal(item?.action, "write");
     if (item?.action !== "write") return;
@@ -384,6 +390,7 @@ void describe("apply update plan", () => {
 
     assert.equal(result.status, "completed");
     assert.equal(result.results[0]?.status, "written");
+    assert.equal(placeholderCalls, 1);
     assert.deepEqual(scenario.state.translations, [{ id: "A", text: content }]);
   });
 
