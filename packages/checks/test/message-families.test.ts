@@ -20,7 +20,11 @@ import {
   snapshotJsonValue,
   type QualityCheckResultCache,
 } from "@lioni/core";
-import { asciiNumbers, createTextAnalysis } from "@lioni/text-analysis";
+import {
+  asciiNumbers,
+  createTextAnalysis,
+  signatureKey,
+} from "@lioni/text-analysis";
 import type {
   TemplateSignature,
   TextAnalysis,
@@ -44,6 +48,7 @@ function checkerFor(
   options: {
     readonly partialCandidate?: boolean;
     readonly candidateProjection?: MessageFamilyInput;
+    readonly referenceProjection?: MessageFamilyInput;
     readonly explicitBasis?: boolean;
     readonly referenceProjections?: { count: number };
     readonly analysis?: TextAnalysis;
@@ -141,9 +146,11 @@ function checkerFor(
               ]
             : [],
       };
-      return isCandidate && options.candidateProjection !== undefined
-        ? options.candidateProjection
-        : result;
+      return (
+        (isCandidate
+          ? options.candidateProjection
+          : options.referenceProjection) ?? result
+      );
     },
     ...(options.explicitBasis
       ? {
@@ -242,6 +249,57 @@ void test("消息族正式入口验证展示上限并保留投影证据", async 
   );
   assert.deepEqual(evidence.groupRef, specialReference);
   assert.deepEqual(evidence.source, projection.groups[0]!.source);
+});
+
+void test("一致且没有诊断时也在投影入口拒绝特殊键中的非 JSON 引用", async () => {
+  const invalidProjection = {
+    groups: [
+      {
+        ref: { nested: Object.fromEntries([["__proto__", undefined]]) },
+        scope: "ui",
+        source: {
+          language: "en",
+          fragments: [{ ref: "source", text: "Save" }],
+        },
+        target: {
+          language: "zh",
+          fragments: [{ ref: "target", text: "保存" }],
+        },
+      },
+    ],
+  } as unknown as MessageFamilyInput;
+  for (const kind of ["candidate", "reference"] as const) {
+    const checker = checkerFor(
+      kind === "candidate"
+        ? { candidateProjection: invalidProjection }
+        : { referenceProjection: invalidProjection },
+    );
+    await assert.rejects(
+      analyzeQuality(
+        configFor(
+          [
+            { id: "editing", source: "Save" },
+            { id: "saved", source: "Save" },
+          ],
+          [{ id: "saved", text: "保存" }],
+          checker,
+        ),
+        {
+          candidates: [
+            { sourceKey: "editing", language: "zh", content: "保存" },
+          ],
+        },
+      ),
+      (error: unknown) => {
+        let cause = error;
+        while (cause instanceof QualityCheckBindingError) cause = cause.cause;
+        assert.ok(cause instanceof StandardSchemaContractError);
+        assert.equal(cause.kind, "schema-mismatch");
+        assert.deepEqual(cause.issues?.[0]?.path, ["groups", 0, "ref"]);
+        return true;
+      },
+    );
+  }
 });
 
 function configFor(
@@ -1088,4 +1146,64 @@ void test("已知其他族的关联冲突局部化，相关冲突与未知源结
     ),
     true,
   );
+});
+
+void test("同一保存记录的同类别重复组稳定选择完整证据，缓存与重新计算一致", async () => {
+  const group = (text: string) => ({
+    ref: "same-ref",
+    scope: "ui",
+    source: { language: "en", fragments: [{ ref: "source", text: "Save" }] },
+    target: { language: "zh", fragments: [{ ref: "target", text }] },
+  });
+  const stored = new Map<
+    string,
+    Awaited<ReturnType<QualityCheckResultCache["get"]>>
+  >();
+  let hits = 0;
+  const cache: QualityCheckResultCache = {
+    async get(key) {
+      const value = stored.get(key);
+      if (value !== undefined) hits++;
+      return value;
+    },
+    async set(key, value) {
+      stored.set(key, value);
+    },
+  };
+  const run = (
+    texts: readonly string[],
+    resultCache?: QualityCheckResultCache,
+  ) =>
+    analyzeQuality(
+      configFor(
+        [
+          { id: "editing", source: "Save" },
+          { id: "saved", source: "Save" },
+        ],
+        [{ id: "saved", text: "A" }],
+        checkerFor({
+          explicitBasis: true,
+          candidateProjection: { groups: [group("C")] },
+          referenceProjection: { groups: texts.map(group) },
+          targetEquivalence: (signature) =>
+            ["A", "B"].includes(
+              signature.parts[0]?.type === "text"
+                ? signature.parts[0].text
+                : "",
+            )
+              ? "same"
+              : signatureKey(signature),
+        }),
+        undefined,
+        resultCache,
+      ),
+      { candidates: [{ sourceKey: "editing", language: "zh", content: "C" }] },
+    );
+  const before = await run(["A", "B"], cache);
+  const cached = await run(["B", "A"], cache);
+  const fresh = await run(["B", "A"]);
+  assert.equal(hits, 1);
+  assert.equal(before.diagnostics.length, 1);
+  assert.deepEqual(cached.diagnostics, fresh.diagnostics);
+  assert.deepEqual(before.diagnostics, fresh.diagnostics);
 });

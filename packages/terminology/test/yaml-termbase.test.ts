@@ -347,3 +347,38 @@ void describe("默认 YAML 术语库", () => {
     assert.equal(termbase.getConcept("1")?.note, "retained");
   });
 });
+
+void it("特殊概念身份仍要求映射，含特殊键的语言文件不视为空文件", () => {
+  const conceptMapping = "concepts:\n  __proto__: {}\n";
+  const languageMapping =
+    "concepts:\n  __proto__:\n    expressions:\n      - id: en\n        text: Server\n        usage: allowed\n";
+  for (const invalid of ["not-a-map", "null", "[]"]) {
+    assert.throws(
+      () =>
+        parseTermbaseYaml({
+          concepts: `concepts:\n  __proto__: ${invalid}\n`,
+          languages: { en: languageMapping },
+        }),
+      TermbaseYamlError,
+    );
+    assert.throws(
+      () =>
+        parseTermbaseYaml({
+          concepts: conceptMapping,
+          languages: { en: `concepts:\n  __proto__: ${invalid}\n` },
+        }),
+      TermbaseYamlError,
+    );
+  }
+  assert.throws(
+    () =>
+      parseTermbaseYaml({
+        concepts: "concepts:\n  server: {}\n",
+        languages: {
+          en: "__proto__: not-a-map\n",
+          zh: "concepts:\n  server:\n    expressions:\n      - id: zh\n        text: 服务器\n        usage: allowed\n",
+        },
+      }),
+    TermbaseYamlError,
+  );
+});

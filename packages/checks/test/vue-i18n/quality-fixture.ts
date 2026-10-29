@@ -98,6 +98,7 @@ export function policyFor(
 
 export function createQualityFixture(input: {
   readonly policies: readonly VueI18nPolicy[];
+  readonly loadPolicies?: () => readonly VueI18nPolicy[];
   readonly terms?: TermbaseData;
   readonly loadTerms?: () => TermbaseData;
   readonly resultCache?: QualityCheckResultCache;
@@ -247,7 +248,7 @@ export function createQualityFixture(input: {
       }),
       loadDependencies: () => ({
         vueI18n: {
-          policies,
+          policies: input.loadPolicies?.() ?? policies,
           terms: input.loadTerms?.() ?? input.terms ?? { concepts: [] },
         },
       }),

@@ -21,8 +21,11 @@ export function isCodePointBoundary(text: string, offset: number): boolean {
 }
 
 export function validateInput(input: TextInput): void {
-  const result = textInputSchema.safeParse(input);
-  if (!result.success) throw analysisError("invalid-input", result.error);
+  if (!textInputSchema.validate(input))
+    throw analysisError(
+      "invalid-input",
+      textInputSchema.safeParse(input).error!,
+    );
 }
 
 export function validateRange(
@@ -30,8 +33,20 @@ export function validateRange(
   range: TextRange,
   allowEmpty = false,
 ): void {
-  const result = textRangeSchema.safeParse(range);
-  if (!result.success) throw analysisError("invalid-range", result.error);
+  if (!textRangeSchema.validate(range))
+    throw analysisError(
+      "invalid-range",
+      textRangeSchema.safeParse(range).error!,
+    );
+  validateRangeBounds(text, range, allowEmpty);
+}
+
+/** 在形状已经通过 schema 后，只检查区间与当前原文的关系。 */
+export function validateRangeBounds(
+  text: string,
+  range: TextRange,
+  allowEmpty = false,
+): void {
   if (
     range.end > text.length ||
     (allowEmpty ? range.start > range.end : range.start >= range.end) ||

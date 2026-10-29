@@ -35,30 +35,33 @@ export type TermDiscoveryCorpus = {
   readonly complete?: boolean;
 };
 
-const corpusEntrySchema = z
-  .object({
-    ref: jsonValueSchema,
-    fragments: z.array(termFragmentSchema).readonly(),
-  })
-  .readonly();
-export const discoveryCorpusSchema = z
-  .object({
-    language: nonemptyTextSchema,
-    entries: z.array(corpusEntrySchema).readonly(),
-    complete: z.boolean().exactOptional(),
-  })
-  .readonly() satisfies z.ZodType<TermDiscoveryCorpus>;
-export const discoveryParametersSchema = z.object({
-  maxWords: z.int().min(1).max(8).default(3),
-  maxCharacters: z.int().positive().default(80),
-  minOccurrences: z.int().positive().default(1),
-  limit: z.int().nonnegative().default(100),
-  maxExamples: z.int().positive().default(3),
+const corpusEntrySchema = z.object({
+  ref: jsonValueSchema,
+  fragments: z.array(termFragmentSchema),
 });
-const candidateRangesSchema = z.array(termRangeSchema);
-const candidateRankSchema = z
-  .object({ method: nonemptyTextSchema, score: z.number() })
-  .readonly();
+export const discoveryCorpusSchema = z.compile(
+  z.object({
+    language: nonemptyTextSchema,
+    entries: z.array(corpusEntrySchema),
+    complete: z.boolean().exactOptional(),
+  }),
+) satisfies z.ZodType<TermDiscoveryCorpus>;
+export const discoveryParametersSchema = z.compile(
+  z.object({
+    maxWords: z.int().min(1).max(8).default(3),
+    maxCharacters: z.int().positive().default(80),
+    minOccurrences: z.int().positive().default(1),
+    limit: z.int().nonnegative().default(100),
+    maxExamples: z.int().positive().default(3),
+  }),
+);
+const candidateRangesSchema = z.compile(z.array(termRangeSchema));
+const candidateRankSchema = z.compile(
+  z.object({
+    method: nonemptyTextSchema,
+    score: z.number(),
+  }),
+);
 
 export type TermCandidateOccurrence = {
   readonly entryIndex: number;
@@ -144,9 +147,11 @@ export type TermDiscovery = {
 
 export function discoverySnapshot(value: unknown): TermDiscoveryCorpus {
   const snapshot = copyJson(value, "input");
-  const result = discoveryCorpusSchema.safeParse(snapshot);
-  if (!result.success)
-    throw new TermContractError("input", contractIssues(result.error));
+  if (!discoveryCorpusSchema.validate(snapshot))
+    throw new TermContractError(
+      "input",
+      contractIssues(discoveryCorpusSchema.safeParse(snapshot).error!),
+    );
   return snapshot as unknown as TermDiscoveryCorpus;
 }
 
@@ -239,13 +244,19 @@ export async function discoverTerms(
             fragmentIndex,
           });
       }
+      if (!candidateRangesSchema.validate(analysis.words))
+        throw new TermContractError(
+          "input",
+          contractIssues(
+            candidateRangesSchema.safeParse(analysis.words).error!,
+          ),
+        );
       const words = Object.freeze(
         analysis.words.map((word) => Object.freeze({ ...word })),
       );
       let previousEnd = 0;
       for (const word of words) {
         if (
-          !termRangeSchema.safeParse(word).success ||
           word.start < previousEnd ||
           !validTermRange(fragment.text, word) ||
           fragment.text.slice(word.start, word.end) !== word.text
@@ -271,7 +282,7 @@ export async function discoverTerms(
         maxCharacters,
       });
       const generatedRanges = generateCandidates(generationInput);
-      if (!candidateRangesSchema.safeParse(generatedRanges).success)
+      if (!candidateRangesSchema.validate(generatedRanges))
         throw new TermContractError("input", [
           contractIssue(
             "invalid-candidate-generation",
@@ -405,7 +416,7 @@ export async function discoverTerms(
         options.candidateRanker === undefined
           ? draft.ranking
           : options.candidateRanker(draft);
-      if (!candidateRankSchema.safeParse(ranking).success)
+      if (!candidateRankSchema.validate(ranking))
         throw new TermContractError("input", [
           contractIssue(
             "invalid-candidate-ranking",

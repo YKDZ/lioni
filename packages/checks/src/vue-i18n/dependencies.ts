@@ -19,17 +19,28 @@ export type ResolvedVueI18nDependencies = {
   >;
 };
 
+/** 按自有条目验证字典，避免对象键处理跳过 __proto__ 对应的值。 */
+function dictionarySchema<TSchema extends z.ZodType>(valueSchema: TSchema) {
+  return z.preprocess(
+    (value) =>
+      value !== null && typeof value === "object" && !Array.isArray(value)
+        ? new Map(Object.entries(value))
+        : value,
+    z.map(z.string(), valueSchema),
+  );
+}
+
 const quantityOptionsSchema = z.object({
-  aliases: z.record(z.string(), z.string()).optional(),
+  aliases: dictionarySchema(z.string()).optional(),
   defaultUnit: z.string().optional(),
   ignoredLiterals: z.array(z.string()).optional(),
 });
 const quantityPolicySchema = quantityOptionsSchema.extend({
   profile: z.string().optional(),
-  byKey: z.record(z.string(), quantityOptionsSchema).optional(),
+  byKey: dictionarySchema(quantityOptionsSchema).optional(),
 });
 const resourceSchema = z.object({
-  messages: z.record(z.string(), z.string()),
+  messages: dictionarySchema(z.string()),
   range: z.unknown(),
 });
 const dependenciesSchema = z.object({
@@ -49,7 +60,7 @@ const dependenciesSchema = z.object({
               target: quantityPolicySchema,
             })
             .optional(),
-          protectedLiterals: z.record(z.string(), z.array(z.string())),
+          protectedLiterals: dictionarySchema(z.array(z.string())),
           messageFamilies: z.object({
             scopes: z.array(
               z.object({

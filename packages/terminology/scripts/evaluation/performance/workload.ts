@@ -1,4 +1,3 @@
-import { createTermbase } from "@lioni/terminology";
 import type {
   TermComparisonInput,
   TermDiscoveryCorpus,
@@ -6,8 +5,9 @@ import type {
 } from "@lioni/terminology";
 import { z } from "zod";
 
-import { discoverySnapshot } from "#/discovery";
-import { comparisonSnapshot } from "#/input";
+import { termbaseContract } from "#/data";
+import { discoveryCorpusSchema } from "#/discovery";
+import { comparisonContract } from "#/input";
 
 import { canonicalJson, sha256 } from "../support/json.ts";
 
@@ -37,9 +37,13 @@ export const performanceInputSchema = z
   .object({
     schemaVersion: z.literal(1),
     id: z.literal("controlled-scale"),
-    termbase: z.transform((value) => createTermbase(value).data),
-    comparison: z.transform(comparisonSnapshot),
-    discovery: z.transform(discoverySnapshot),
+    termbase: termbaseContract.transform((value): TermbaseData => value),
+    comparison: comparisonContract.transform(
+      (value): TermComparisonInput => value,
+    ),
+    discovery: discoveryCorpusSchema.transform(
+      (value): TermDiscoveryCorpus => value,
+    ),
     facts: performanceFactsSchema,
     generation: z
       .object({

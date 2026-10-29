@@ -369,10 +369,6 @@ importers:
         version: typescript@7.0.2
 
   packages/memo:
-    dependencies:
-      zod:
-        specifier: 'catalog:'
-        version: 4.6.7
     devDependencies:
       '@lioni/tooling-config':
         specifier: workspace:*

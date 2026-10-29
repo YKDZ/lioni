@@ -71,7 +71,9 @@ async function runSample(
   const value: unknown = JSON.parse(await readFile(inputPath, "utf8"));
   if (sha256(canonicalJson(value)) !== expectedInputSha256)
     throw new Error("性能输入文件与固定种子报告不一致。");
-  const input = performanceInputSchema.parse(value);
+  performanceInputSchema.parse(value);
+  // 保持 JSON.parse 的输入形态；正式入口各自负责资料快照，准备阶段不预先复制冻结。
+  const input = value as PerformancePreparedInput;
   const termbase = createTermbase(input.termbase);
   const terms = compileTerms(termbase);
   const entry = publicEntry();

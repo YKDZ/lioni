@@ -35,9 +35,12 @@ export type TermComparisonInput = {
   readonly groups: readonly TermComparisonGroup[];
 };
 
-export const termRangeSchema = z
-  .object({ start: z.int().nonnegative(), end: z.int().nonnegative() })
-  .readonly();
+export const termRangeSchema = z.compile(
+  z.object({
+    start: z.int().nonnegative(),
+    end: z.int().nonnegative(),
+  }),
+);
 
 export function splitsSurrogatePair(text: string, boundary: number): boolean {
   if (boundary <= 0 || boundary >= text.length) return false;
@@ -61,7 +64,7 @@ export const termFragmentSchema = z
   .object({
     ref: jsonValueSchema,
     text: z.string(),
-    protectedRanges: z.array(termRangeSchema).readonly().exactOptional(),
+    protectedRanges: z.array(termRangeSchema).exactOptional(),
   })
   .superRefine((fragment, context) => {
     fragment.protectedRanges?.forEach((range, index) => {
@@ -72,31 +75,32 @@ export const termFragmentSchema = z
           path: ["protectedRanges", index],
         });
     });
-  })
-  .readonly() satisfies z.ZodType<TermFragment>;
-export const termTextInputSchema = z
-  .object({
+  }) satisfies z.ZodType<TermFragment>;
+export const termTextInputSchema = z.compile(
+  z.object({
     language: nonemptyTextSchema,
-    fragments: z.array(termFragmentSchema).readonly(),
+    fragments: z.array(termFragmentSchema),
     /** 省略表示宿主已提供此侧完整的比较范围。 */
     complete: z.boolean().exactOptional(),
-  })
-  .readonly() satisfies z.ZodType<TermTextInput>;
-const comparisonGroupSchema = z
-  .object({
-    ref: jsonValueSchema.exactOptional(),
-    source: termTextInputSchema,
-    target: termTextInputSchema,
-  })
-  .readonly();
-export const comparisonContract = z
-  .object({ groups: z.array(comparisonGroupSchema).readonly() })
-  .readonly() satisfies z.ZodType<TermComparisonInput>;
+  }),
+) satisfies z.ZodType<TermTextInput>;
+const comparisonGroupSchema = z.object({
+  ref: jsonValueSchema.exactOptional(),
+  source: termTextInputSchema,
+  target: termTextInputSchema,
+});
+export const comparisonContract = z.compile(
+  z.object({
+    groups: z.array(comparisonGroupSchema),
+  }),
+) satisfies z.ZodType<TermComparisonInput>;
 
 export function validateTextInput(value: TermTextInput): void {
-  const result = termTextInputSchema.safeParse(value);
-  if (!result.success)
-    throw new TermContractError("input", contractIssues(result.error));
+  if (!termTextInputSchema.validate(value))
+    throw new TermContractError(
+      "input",
+      contractIssues(termTextInputSchema.safeParse(value).error!),
+    );
 }
 
 export const termComparisonInputSchema: StandardSchemaV1<TermComparisonInput> =
@@ -107,10 +111,13 @@ export const termComparisonInputSchema: StandardSchemaV1<TermComparisonInput> =
       validate(value) {
         try {
           const snapshot = copyJson(value, "input");
-          const result = comparisonContract.safeParse(snapshot);
-          return result.success
+          return comparisonContract.validate(snapshot)
             ? { value: snapshot as TermComparisonInput }
-            : { issues: contractIssues(result.error) };
+            : {
+                issues: contractIssues(
+                  comparisonContract.safeParse(snapshot).error!,
+                ),
+              };
         } catch (error) {
           if (error instanceof TermContractError)
             return { issues: error.issues };
@@ -122,9 +129,11 @@ export const termComparisonInputSchema: StandardSchemaV1<TermComparisonInput> =
 
 export function comparisonSnapshot(value: unknown): TermComparisonInput {
   const snapshot = copyJson(value, "input");
-  const result = comparisonContract.safeParse(snapshot);
-  if (!result.success)
-    throw new TermContractError("input", contractIssues(result.error));
+  if (!comparisonContract.validate(snapshot))
+    throw new TermContractError(
+      "input",
+      contractIssues(comparisonContract.safeParse(snapshot).error!),
+    );
   return snapshot as TermComparisonInput;
 }
 

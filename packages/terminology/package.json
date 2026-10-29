@@ -39,9 +39,9 @@
   "dependencies": {
     "@lioni/memo": "workspace:*",
     "@lioni/text-analysis": "workspace:*",
+    "@standard-schema/spec": "1.1.0",
     "yaml": "^2.9.1",
-    "zod": "catalog:",
-    "@standard-schema/spec": "1.1.0"
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@lioni/tooling-config": "workspace:*",

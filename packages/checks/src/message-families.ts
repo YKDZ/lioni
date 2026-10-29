@@ -1,3 +1,4 @@
+import { snapshotJsonValue } from "@lioni/core";
 import type {
   JsonValue,
   QualityLocation,
@@ -5,6 +6,16 @@ import type {
 } from "@lioni/core";
 import type { TemplateSignature, TextRange } from "@lioni/text-analysis";
 import { z } from "zod";
+
+// 引用沿用核心无损 JSON 契约；z.json() 会跳过自有 __proto__，遗漏其中的非法值。
+const referenceSchema = z.custom<JsonValue>((value) => {
+  try {
+    snapshotJsonValue(value, "消息族投影引用");
+    return true;
+  } catch {
+    return false;
+  }
+}, "消息族投影引用必须是无损 JSON 值。");
 
 const rangeSchema = z
   .object({
@@ -20,14 +31,14 @@ const messageFamilyIssueSchema = z
     message: z.string(),
     language: z.string().optional(),
     sourceKey: z.string().optional(),
-    ref: z.json().optional(),
+    ref: referenceSchema.optional(),
     range: rangeSchema.optional(),
   })
   .readonly();
 
 const messageFragmentSchema = z
   .object({
-    ref: z.json(),
+    ref: referenceSchema,
     text: z.string(),
     protectedRanges: z.array(rangeSchema).readonly().optional(),
   })
@@ -50,7 +61,7 @@ const messageTextSchema = z
 
 const messageFamilyGroupSchema = z
   .object({
-    ref: z.json(),
+    ref: referenceSchema,
     /** 宿主明确声明可相互参照的业务范围。 */
     scope: z.string().min(1),
     source: messageTextSchema,
@@ -189,19 +200,27 @@ export function indexMessageFamilies(
   references: readonly MessageFamilyReference[],
 ): MessageFamilyIndex {
   const families = new Map<string, Family>();
-  // 类别与代表来源都按稳定身份排序，资源遍历顺序不改变报告证据。
-  const ordered = [...references].sort((left, right) => {
-    const key = (value: MessageFamilyReference) =>
-      JSON.stringify([
-        value.targetKey,
-        value.translationIdentity,
-        value.sourceKey,
-        value.group.ref,
-      ]);
-    const leftKey = key(left);
-    const rightKey = key(right);
-    return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
-  });
+  // 同一物理记录可能映射出多个等价组；完整证据决定代表，不能让排序平局依赖宿主遍历顺序。
+  const ordered = references
+    .map((reference) => ({
+      reference,
+      key: messageFamilyEvidenceKey([
+        reference.targetKey,
+        reference.translationIdentity,
+        reference.sourceKey,
+        reference.group.ref,
+        reference.group.scope,
+        reference.group.source,
+        reference.group.target,
+        reference.sourceSignatures.map(messageFamilySignatureEvidence),
+        reference.targetSignatures.map(messageFamilySignatureEvidence),
+        reference.translationLocation ?? null,
+      ]),
+    }))
+    .sort((left, right) =>
+      left.key < right.key ? -1 : left.key > right.key ? 1 : 0,
+    )
+    .map(({ reference }) => reference);
   for (const reference of ordered) {
     let family = families.get(reference.familyKey);
     if (family === undefined) {
@@ -301,4 +320,31 @@ export function compareMessageFamily(
     omittedReferences: referenceCount - shownReferences,
     categories,
   };
+}
+
+/** 指纹准备、代表选择和报告共同使用的签名证据，省略识别器私有值。 */
+export function messageFamilySignatureEvidence(signature: TemplateSignature) {
+  return {
+    parts: signature.parts,
+    slots: signature.slots.map(({ start, end, kind, identity, raw }) => ({
+      start,
+      end,
+      kind,
+      identity,
+      raw,
+    })),
+  };
+}
+
+/** JSON 对象属性顺序不参与消息族证据排序，数组顺序仍表达业务内容。 */
+export function messageFamilyEvidenceKey(value: unknown): string {
+  return JSON.stringify(value, (_key, item: unknown) =>
+    item !== null && typeof item === "object" && !Array.isArray(item)
+      ? Object.fromEntries(
+          Object.entries(item).sort(([left], [right]) =>
+            left < right ? -1 : left > right ? 1 : 0,
+          ),
+        )
+      : item,
+  );
 }

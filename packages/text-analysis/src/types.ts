@@ -88,53 +88,50 @@ export class TextAnalysisContractError extends Error {
   }
 }
 
-export const textRangeSchema = z
-  .object({ start: z.int().nonnegative(), end: z.int().nonnegative() })
-  .readonly() satisfies z.ZodType<TextRange>;
-export const textInputSchema = z
-  .object({
+export const textRangeSchema = z.compile(
+  z.object({
+    start: z.int().nonnegative(),
+    end: z.int().nonnegative(),
+  }),
+) satisfies z.ZodType<TextRange>;
+export const textInputSchema = z.compile(
+  z.object({
     text: z.string(),
     language: z.string().min(1),
-    protectedRanges: z.array(textRangeSchema).readonly().exactOptional(),
-  })
-  .readonly() satisfies z.ZodType<TextInput>;
-export const analysisIssueSchema = z
-  .object({
-    code: z.string().min(1),
-    message: z.string(),
-    range: textRangeSchema.exactOptional(),
-  })
-  .readonly() satisfies z.ZodType<TextAnalysisIssue>;
+    protectedRanges: z.array(textRangeSchema).exactOptional(),
+  }),
+) satisfies z.ZodType<TextInput>;
+export const analysisIssueSchema = z.object({
+  code: z.string().min(1),
+  message: z.string(),
+  range: textRangeSchema.exactOptional(),
+}) satisfies z.ZodType<TextAnalysisIssue>;
 export const textTokenSchema = textRangeSchema
-  .unwrap()
+
   .extend({
     kind: z.string().min(1),
     identity: z.string().min(1).exactOptional(),
     value: z.unknown().exactOptional(),
     /** 显式保护该区间；种类名称不隐式决定保护行为。 */
     protect: z.boolean().exactOptional(),
-  })
-  .readonly() satisfies z.ZodType<TextToken>;
-export const recognitionSchema = z
-  .object({
-    tokens: z.array(textTokenSchema).readonly(),
-    complete: z.boolean(),
-    issues: z.array(analysisIssueSchema).readonly(),
-  })
-  .readonly() satisfies z.ZodType<RecognitionResult>;
+  }) satisfies z.ZodType<TextToken>;
+export const recognitionSchema = z.object({
+  tokens: z.array(textTokenSchema),
+  complete: z.boolean(),
+  issues: z.array(analysisIssueSchema),
+}) satisfies z.ZodType<RecognitionResult>;
 export const wordTokenSchema = textRangeSchema
-  .unwrap()
-  .extend({ text: z.string() })
-  .readonly() satisfies z.ZodType<WordToken>;
-export const wordAnalysisSchema = z
-  .object({
-    words: z.array(wordTokenSchema).readonly(),
-    boundaries: z.array(z.int().nonnegative()).readonly(),
+
+  .extend({ text: z.string() }) satisfies z.ZodType<WordToken>;
+export const wordAnalysisSchema = z.compile(
+  z.object({
+    words: z.array(wordTokenSchema),
+    boundaries: z.array(z.int().nonnegative()),
     /** 结构和词界阶段均完整时为 true；两阶段的问题按顺序合并。 */
     complete: z.boolean(),
-    issues: z.array(analysisIssueSchema).readonly(),
-  })
-  .readonly() satisfies z.ZodType<WordAnalysis>;
+    issues: z.array(analysisIssueSchema),
+  }),
+) satisfies z.ZodType<WordAnalysis>;
 
 export function analysisError(
   code: string,

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   createQualityException,
+  QualityCheckBindingError,
   StandardSchemaContractError,
   type QualityException,
   type QualityCheckResultCache,
@@ -170,6 +171,94 @@ void test("特殊消息键和带未知字段的 JSON 资源范围沿正式投影
     assert.equal(location.constructor, "source location constructor");
     assert.deepEqual(location.prototype, { reviewed: false });
     assert.deepEqual(location.hostMetadata, { revision: 5 });
+  }
+});
+
+void test("特殊字典键的字面值与数量策略完整验证并参与正式检查", async () => {
+  const policy = policyFor({
+    sourceMessages: JSON.parse(
+      '{"__proto__":"Wait 1 __proto__ URL","root":"Root"}',
+    ),
+    targetMessages: JSON.parse('{"__proto__":"等待 2","root":"@:__proto__"}'),
+    protectedLiterals: JSON.parse('{"__proto__":["URL"]}'),
+    sourceQuantities: {
+      profile: "en",
+      aliases: JSON.parse('{"__proto__":"minute"}'),
+    },
+    targetQuantities: {
+      profile: "zh-CN",
+      byKey: JSON.parse('{"__proto__":{"defaultUnit":"minute"}}'),
+    },
+  });
+  const fixture = createQualityFixture({ policies: [policy] });
+  const missing = await fixture.run([
+    candidate("__proto__", "等待 2"),
+    candidate("root", "@:__proto__"),
+  ]);
+  assert.equal(findings(missing, checkIds.protectedLiterals).length, 1);
+  assert.equal(findings(missing, checkIds.quantities).length, 1);
+  assert.deepEqual(findings(missing, checkIds.linkTargetExists), []);
+  const corrected = await fixture.run([
+    candidate("__proto__", "等待 1 分钟 URL"),
+  ]);
+  assert.deepEqual(findings(corrected, checkIds.protectedLiterals), []);
+  assert.deepEqual(findings(corrected, checkIds.quantities), []);
+});
+
+void test("动态策略拒绝特殊字典键下的非法资源、字面值和数量配置", async () => {
+  const policy = policyFor({
+    sourceMessages: { a: "Wait 1 minute URL" },
+    targetMessages: { a: "等待 2 分钟" },
+  });
+  const invalid = JSON.parse('{"__proto__":123}');
+  const cases = [
+    {
+      expected: "protectedLiterals.__proto__",
+      value: { protectedLiterals: invalid },
+    },
+    {
+      expected: "resources.source.messages.__proto__",
+      value: { sourceMessages: invalid },
+    },
+    {
+      expected: "resources.target.messages.__proto__",
+      value: { targetMessages: invalid },
+    },
+    {
+      expected: "quantities.source.aliases.__proto__",
+      value: { sourceQuantities: { profile: "en", aliases: invalid } },
+    },
+    {
+      expected: "quantities.target.byKey.__proto__",
+      value: { targetQuantities: { profile: "zh-CN", byKey: invalid } },
+    },
+    {
+      expected: "quantities.target.byKey.__proto__.aliases.__proto__",
+      value: {
+        targetQuantities: {
+          profile: "zh-CN",
+          byKey: JSON.parse('{"__proto__":{"aliases":{"__proto__":123}}}'),
+        },
+      },
+    },
+  ];
+  for (const scenario of cases) {
+    const fixture = createQualityFixture({
+      policies: [policy],
+      loadPolicies: () => [policyFor(scenario.value)],
+    });
+    await assert.rejects(
+      fixture.run([candidate("a", "等待 2 分钟")]),
+      (error: unknown) => {
+        assert.ok(error instanceof QualityCheckBindingError);
+        assert.ok(error.cause instanceof TypeError);
+        assert.ok(
+          error.cause.message.includes(scenario.expected),
+          error.cause.message,
+        );
+        return true;
+      },
+    );
   }
 });
 

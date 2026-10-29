@@ -6,14 +6,13 @@ import {
   fitsRange,
   mergeRanges,
   validateInput,
-  validateRange,
+  validateRangeBounds,
 } from "./ranges.ts";
 import { createTemplateSignature } from "./templates.ts";
 import type { TemplateOptions, TemplateSignature } from "./templates.ts";
 import {
   TextAnalysisContractError,
   analysisError,
-  analysisIssueSchema,
   recognitionSchema,
   textTokenSchema,
   wordAnalysisSchema,
@@ -32,30 +31,36 @@ import type {
 } from "./types.ts";
 import { segmentWords } from "./words.ts";
 
-const analysisIssuesSchema = z.array(analysisIssueSchema);
-
 function copyIssues(
   text: string,
-  value: unknown,
-  code: string,
+  value: readonly TextAnalysisIssue[],
 ): readonly TextAnalysisIssue[] {
-  const result = analysisIssuesSchema.safeParse(value);
-  if (!result.success) throw analysisError(code, result.error);
   return Object.freeze(
-    result.data.map((issue) => {
-      if (issue.range !== undefined) validateRange(text, issue.range);
-      return issue;
+    value.map((issue) => {
+      if (issue.range !== undefined) validateRangeBounds(text, issue.range);
+      return Object.freeze({
+        code: issue.code,
+        message: issue.message,
+        ...(issue.range === undefined
+          ? {}
+          : { range: Object.freeze({ ...issue.range }) }),
+      });
     }),
   );
 }
 
-const recognizedSchema = z.union([z.array(textTokenSchema), recognitionSchema]);
+const recognizedSchema = z.compile(
+  z.union([z.array(textTokenSchema), recognitionSchema]),
+);
 function recognitionResult(
   value: readonly TextToken[] | RecognitionResult,
 ): RecognitionResult {
-  const result = recognizedSchema.safeParse(value);
-  if (!result.success) throw analysisError("invalid-recognition", result.error);
-  // 验证输出只判断契约；保留宿主 token 的附加字段和值身份。
+  if (!recognizedSchema.validate(value))
+    throw analysisError(
+      "invalid-recognition",
+      recognizedSchema.safeParse(value).error!,
+    );
+  // 只验证形状；保留宿主 token 的附加字段和值身份。
   return Array.isArray(value)
     ? { tokens: value, complete: true, issues: [] }
     : (value as RecognitionResult);
@@ -107,15 +112,13 @@ export function createTextAnalysis(
         await recognizer({ text, language, protectedRanges, availableRanges }),
       );
       complete = complete && recognized.complete;
-      issues.push(
-        ...copyIssues(text, recognized.issues, "invalid-recognition"),
-      );
+      issues.push(...copyIssues(text, recognized.issues));
       const sorted = [...recognized.tokens].sort(
         (a, b) => a.start - b.start || a.end - b.end,
       );
       let previousEnd = -1;
       for (const token of sorted) {
-        validateRange(text, token);
+        validateRangeBounds(text, token);
         if (!fitsRange(token, availableRanges) || token.start < previousEnd)
           throw new TextAnalysisContractError(
             "overlapping-token",
@@ -149,12 +152,14 @@ export function createTextAnalysis(
       language: analysis.language,
       protectedRanges: analysis.protectedRanges,
     });
-    const validated = wordAnalysisSchema.safeParse(result);
-    if (!validated.success)
-      throw analysisError("invalid-segmentation", validated.error);
+    if (!wordAnalysisSchema.validate(result))
+      throw analysisError(
+        "invalid-segmentation",
+        wordAnalysisSchema.safeParse(result).error!,
+      );
     let previousEnd = -1;
     for (const word of result.words) {
-      validateRange(analysis.text, word);
+      validateRangeBounds(analysis.text, word);
       if (
         !fitsRange(word, analysis.availableRanges) ||
         word.start < previousEnd ||
@@ -167,7 +172,11 @@ export function createTextAnalysis(
       previousEnd = word.end;
     }
     for (const boundary of result.boundaries) {
-      validateRange(analysis.text, { start: boundary, end: boundary }, true);
+      validateRangeBounds(
+        analysis.text,
+        { start: boundary, end: boundary },
+        true,
+      );
       if (
         analysis.protectedRanges.some(
           (range) => range.start < boundary && boundary < range.end,
@@ -178,11 +187,7 @@ export function createTextAnalysis(
           "词界不能位于受保护区间内部。",
         );
     }
-    const issues = copyIssues(
-      analysis.text,
-      result.issues,
-      "invalid-segmentation",
-    );
+    const issues = copyIssues(analysis.text, result.issues);
     return Object.freeze({
       words: Object.freeze(
         result.words.map((word) => Object.freeze({ ...word })),

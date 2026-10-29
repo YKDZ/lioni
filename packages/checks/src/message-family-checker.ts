@@ -34,6 +34,8 @@ import { z } from "zod";
 
 import {
   messageFamilyInputSchema,
+  messageFamilyEvidenceKey,
+  messageFamilySignatureEvidence,
   messageFamilyLimitsSchema,
 } from "./message-families.ts";
 import type {
@@ -1014,7 +1016,8 @@ function createDiagnostic<TSelectedUnit extends TranslationUnitInput, TBody>(
       scope: signed.group.scope,
       source: signed.group.source,
       target: signed.group.target,
-      signatures: signed.targetSignatures?.map(sanitizeSignature) ?? null,
+      signatures:
+        signed.targetSignatures?.map(messageFamilySignatureEvidence) ?? null,
     },
   };
   const saved: QualityEvidence[] = comparison.categories.flatMap(
@@ -1038,8 +1041,12 @@ function createDiagnostic<TSelectedUnit extends TranslationUnitInput, TBody>(
           scope: reference.group.scope,
           source: reference.group.source,
           target: reference.group.target,
-          sourceSignatures: reference.sourceSignatures.map(sanitizeSignature),
-          targetSignatures: reference.targetSignatures.map(sanitizeSignature),
+          sourceSignatures: reference.sourceSignatures.map(
+            messageFamilySignatureEvidence,
+          ),
+          targetSignatures: reference.targetSignatures.map(
+            messageFamilySignatureEvidence,
+          ),
           category: reference.targetKey,
         },
       })),
@@ -1072,8 +1079,8 @@ function createDiagnostic<TSelectedUnit extends TranslationUnitInput, TBody>(
 }
 
 function stableCompare(left: unknown, right: unknown): number {
-  const leftKey = JSON.stringify(left);
-  const rightKey = JSON.stringify(right);
+  const leftKey = messageFamilyEvidenceKey(left);
+  const rightKey = messageFamilyEvidenceKey(right);
   return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
 }
 
@@ -1081,23 +1088,13 @@ function signedBasis(signed: SignedMessageGroup) {
   return {
     group: signed.group,
     familyKey: signed.familyKey,
-    sourceSignatures: signed.sourceSignatures.map(sanitizeSignature),
-    targetSignatures: signed.targetSignatures?.map(sanitizeSignature) ?? null,
+    sourceSignatures: signed.sourceSignatures.map(
+      messageFamilySignatureEvidence,
+    ),
+    targetSignatures:
+      signed.targetSignatures?.map(messageFamilySignatureEvidence) ?? null,
     targetKey: signed.targetKey ?? null,
     issues: signed.issues,
-  };
-}
-
-function sanitizeSignature(signature: TemplateSignature): unknown {
-  return {
-    parts: signature.parts,
-    slots: signature.slots.map(({ start, end, kind, identity, raw }) => ({
-      start,
-      end,
-      kind,
-      identity,
-      raw,
-    })),
   };
 }
 

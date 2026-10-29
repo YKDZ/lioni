@@ -79,8 +79,9 @@ export function parseTermbaseYaml(files: TermbaseYamlFiles): Termbase {
   return createTermbase({ concepts: assembledConcepts });
 }
 
-const mappingSchema = z.record(z.string(), z.record(z.string(), z.unknown()));
+const mappingSchema = z.record(z.string(), z.unknown());
 const documentSchema = z.object({ concepts: mappingSchema });
+const declarationsSchema = z.array(z.tuple([z.string(), mappingSchema]));
 
 function parseMapping(
   contents: string,
@@ -104,7 +105,11 @@ function parseMapping(
   if (emptyAllowed && document.contents === null) return {};
   rejectNonStringMappingKeys(document.contents, file);
   const value: unknown = document.toJS({ maxAliasCount: 100 });
-  if (emptyAllowed && z.record(z.string(), z.never()).safeParse(value).success)
+  if (
+    emptyAllowed &&
+    mappingSchema.safeParse(value).success &&
+    Object.keys(value as object).length === 0
+  )
     return {};
   const result = documentSchema.safeParse(value);
   if (!result.success)
@@ -116,8 +121,20 @@ function parseMapping(
         message: `${file} ${issue.path.join(".")}：${issue.message}`,
       })),
     );
-  // 保留映射中的特殊概念身份，领域内容统一交给 createTermbase。
-  return (value as z.infer<typeof documentSchema>).concepts;
+  // 按原始键值项验证，避免 record 跳过 __proto__ 对应的声明。
+  const concepts = (value as z.infer<typeof documentSchema>).concepts;
+  const entries = Object.entries(concepts);
+  const declarations = declarationsSchema.safeParse(entries);
+  if (!declarations.success)
+    throw new TermbaseYamlError(
+      "parse",
+      declarations.error.issues.map((issue) => ({
+        code: "invalid-declaration",
+        file,
+        message: `${file} concepts.${entries[Number(issue.path[0])]?.[0] ?? String(issue.path[0])}：${issue.message}`,
+      })),
+    );
+  return concepts as Record<string, Record<string, unknown>>;
 }
 
 function rejectNonStringMappingKeys(node: unknown, file: string): void {
