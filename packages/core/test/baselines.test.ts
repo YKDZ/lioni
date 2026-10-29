@@ -115,7 +115,7 @@ function makeConfig(options: {
           ),
         })),
       }),
-      identityOf: (translation) => ({
+      keyOf: (translation) => ({
         namespace: translation.namespace,
         key: translation.id,
       }),

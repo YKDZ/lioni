@@ -45,7 +45,7 @@ function fixture(quality?: QualityConfiguration<Unit, Translation, string>) {
       languages: ["fr", "de", "ja"],
       schema: schemaFromExamples<Translation>({ key: "save", text: "" }),
       contentSchema: schemaFromExamples(""),
-      identityOf: fixtureTranslationIdentity,
+      keyOf: fixtureTranslationIdentity,
       contentOf: ({ text }) => text,
       matches: (source, translation) => source.key === translation.key,
       read(language, sourceUnits) {

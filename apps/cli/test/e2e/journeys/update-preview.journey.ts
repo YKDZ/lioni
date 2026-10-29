@@ -54,7 +54,7 @@ export default defineConfig({
     contentSchema: { "~standard": { version: 1, vendor: "update-preview-content", validate(value) {
       return typeof value === "string" ? { value } : { issues: [{ message: "译文正文必须是字符串。" }] };
     } } },
-    identityOf: (translation) => ({ namespace: "messages", key: translation.targetId }),
+    keyOf: (translation) => ({ namespace: "messages", key: translation.targetId }),
     contentOf: (translation) => translation.text,
     matches: (unit, translation) => unit.id === translation.sourceId,
     read: (_language, sourceUnits) => ({ scopes: [{

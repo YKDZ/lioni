@@ -34,7 +34,7 @@ export default defineConfig({
       return typeof value === "string" ? { value } : { issues: [{ message: "译文正文必须是字符串。" }] };
     } } },
     read: () => ({ scopes: [{ range: "locales/fr.json", covers: [], enumeration: "complete", records: [] }] }),
-    identityOf: (translation) => ({ namespace: "messages", key: translation.id }),
+    keyOf: (translation) => ({ namespace: "messages", key: translation.id }),
     contentOf: (translation) => translation.text
   }
 });

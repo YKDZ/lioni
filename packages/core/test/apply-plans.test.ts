@@ -112,7 +112,7 @@ function createScenario(
     },
     translations: {
       languages: ["fr"],
-      identityOf: ({ id }) => ({ namespace: "messages", key: id }),
+      keyOf: ({ id }) => ({ namespace: "messages", key: id }),
       schema: translationSchema,
       contentSchema: jsonValueSchema,
       contentOf: ({ text }) => text,

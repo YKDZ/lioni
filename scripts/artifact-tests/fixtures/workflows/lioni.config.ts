@@ -124,7 +124,7 @@ export default defineConfig({
     contentSchema: schema(
       (value): value is string => typeof value === "string",
     ),
-    identityOf: (translation) => ({ namespace: "files", key: translation.id }),
+    keyOf: (translation) => ({ namespace: "files", key: translation.id }),
     contentOf: (translation) => translation.text,
     matches: (unit, translation) => unit.id === translation.id,
     async read(_language, sourceUnits) {

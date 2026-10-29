@@ -79,7 +79,7 @@ function makeConfig(
         text: "example",
       }),
       contentSchema: options.contentSchema ?? stringSchema,
-      identityOf: ({ targetId }) => ({ namespace: "messages", key: targetId }),
+      keyOf: ({ targetId }) => ({ namespace: "messages", key: targetId }),
       contentOf: ({ text }) => text,
       matches: (unit, translation) => unit.id === translation.sourceId,
       read: (_language, sourceUnits) => ({
@@ -390,7 +390,7 @@ void describe("业务更新计划与预览", () => {
         languages: ["fr"],
         schema: translationSchema,
         contentSchema: jsonValueSchema,
-        identityOf: ({ targetId }) => ({
+        keyOf: ({ targetId }) => ({
           namespace: "messages",
           key: targetId,
         }),
@@ -703,7 +703,7 @@ void describe("业务更新计划与预览", () => {
         languages: ["fr"],
         schema: translationSchema,
         contentSchema: jsonValueSchema,
-        identityOf: ({ targetId }) => ({
+        keyOf: ({ targetId }) => ({
           language: "fr",
           namespace: "messages",
           key: targetId,

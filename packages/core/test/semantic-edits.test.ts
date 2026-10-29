@@ -61,7 +61,7 @@ function configFor(options: {
     },
     translations: {
       languages: ["fr"],
-      identityOf: (translation) => ({
+      keyOf: (translation) => ({
         namespace: "messages",
         key: translation.id,
       }),

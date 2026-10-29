@@ -327,7 +327,7 @@ function configFor(
     keyOf: ({ id }) => id,
     translations: {
       languages: ["zh"],
-      identityOf: (translation) => ({
+      keyOf: (translation) => ({
         namespace: "messages",
         key: translation.targetKey ?? translation.id,
       }),

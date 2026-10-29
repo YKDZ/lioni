@@ -60,7 +60,7 @@ export default defineConfig({
     schema,
     contentSchema: schema,
     contentOf: (translation) => translation.text,
-    identityOf: (translation) => ({ namespace: "messages", key: translation.id }),
+    keyOf: (translation) => ({ namespace: "messages", key: translation.id }),
     matches: (unit, translation) => unit.id === translation.id,
     read(language, sourceUnits) {
       appendFileSync(new URL("./" + process.env.READ_LOG, import.meta.url), language + "\\n");

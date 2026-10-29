@@ -74,7 +74,9 @@ const check = defineQualityCheck({
 
 `config.source.read()` 读取宿主定义的原文记录，`source.schema` 校验记录结构。框架保留完整原文单元；`sourceUnit.unit.source` 的业务含义由宿主定义，框架不会从任意 JSON 字段猜测正文。原文与译文正文可使用字符串、对象或宿主的其他类型，由 schema 和适配器定义。
 
-译文适配器的 `translations.contentOf()` 从译文记录取出正文，`identityOf()` 提供稳定目标身份。`analyzeQuality` 将本次事实、候选、动态依赖和复用范围提供给检查器；自定义逻辑可以在 `check(input)` 中按宿主规则解释正文，并返回诊断、问题与覆盖情况。`createVueI18nChecks`、`createNumberChecker`、`createTermChecker` 等工厂为常见规则提供可复用检查器。
+默认比较结果为 `modified` 时，更新会用当前原文生成待译占位，并覆盖已有译文或旧占位。`createPlaceholderContent(source)` 是同步纯函数，只接收原文正文并返回目标正文；默认实现直接返回原文正文。默认与自定义结果都会由 `translations.contentSchema` 校验。
+
+译文适配器的 `translations.contentOf()` 从译文记录取出正文，`translations.keyOf()` 提取稳定身份中的 `namespace` 与 `key`，语言由框架补入。原文与译文的关联仍由可选的 `translations.matches()` 表达；身份键相同不会自动建立关联。`analyzeQuality` 将本次事实、候选、动态依赖和复用范围提供给检查器；自定义逻辑可以在 `check(input)` 中按宿主规则解释正文，并返回诊断、问题与覆盖情况。`createVueI18nChecks`、`createNumberChecker`、`createTermChecker` 等工厂为常见规则提供可复用检查器。
 
 SDK 的 `readFacts(config)` 返回宿主原文记录及其稳定键、实际译文记录及其身份、源译关联，以及每个读取范围的完整性和正文可用性。需要完成率或 CI 条件的宿主可以直接消费这些事实并自行定义判据；框架保留事实本身，不将它们转换为完成状态。
 

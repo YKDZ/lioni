@@ -504,7 +504,7 @@ function createTestConfig(
     keyOf: () => "message:hello",
     translations: {
       languages: ["fr"],
-      identityOf: fixtureTranslationIdentity,
+      keyOf: fixtureTranslationIdentity,
       schema: schemaFromExamples(translation),
       contentSchema: jsonValueSchema,
       contentOf: ({ text }) => text,

@@ -61,7 +61,7 @@ export function validateTranslationAdapterConfig(translations: unknown): void {
     !Array.isArray(translations.languages) ||
     translations.languages.some((language) => typeof language !== "string") ||
     typeof translations.read !== "function" ||
-    typeof translations.identityOf !== "function" ||
+    typeof translations.keyOf !== "function" ||
     typeof translations.contentOf !== "function" ||
     !isStandardSchema(translations.schema) ||
     !isStandardSchema(translations.contentSchema) ||
@@ -71,7 +71,7 @@ export function validateTranslationAdapterConfig(translations: unknown): void {
     throw new StandardSchemaContractError(
       "defineConfig 配置",
       "schema-mismatch",
-      "defineConfig 的 translations 必须提供语言列表、记录与正文 schema、identityOf、read 与 contentOf 函数；matches 可按需提供。",
+      "defineConfig 的 translations 必须提供语言列表、记录与正文 schema、keyOf、read 与 contentOf 函数；matches 可按需提供。",
     );
 }
 
@@ -127,7 +127,7 @@ export async function readTranslationFacts<
             { preserveValue: true, requireJson: true },
           );
           const identity = readTranslationIdentity(
-            adapter.identityOf(translation, language),
+            adapter.keyOf(translation, language),
             language,
           );
           assertUniqueTranslationIdentity(
@@ -163,7 +163,7 @@ export async function readTranslationFacts<
             { preserveValue: true, requireJson: true },
           );
           const identity = readTranslationIdentity(
-            adapter.identityOf(translation, language),
+            adapter.keyOf(translation, language),
             language,
           );
           assertUniqueTranslationIdentity(

@@ -55,7 +55,7 @@ function diagnosedEditScenario() {
     keyOf: ({ id }) => id,
     translations: {
       languages: ["fr"],
-      identityOf: fixtureTranslationIdentity,
+      keyOf: fixtureTranslationIdentity,
       schema: schemaFromExamples<Translation>(translation),
       contentSchema: jsonValueSchema,
       read: (_language, sourceUnits) => ({
@@ -172,7 +172,7 @@ void describe("configured analysis workflow", () => {
       keyOf: ({ id }) => id,
       translations: {
         languages: ["fr"],
-        identityOf: fixtureTranslationIdentity,
+        keyOf: fixtureTranslationIdentity,
         schema: schemaFromExamples({ id: "save", text: "Enregistrer" }),
         contentSchema: jsonValueSchema,
         read: (_language, sourceUnits) => ({
@@ -299,7 +299,7 @@ void describe("configured analysis workflow", () => {
       keyOf: ({ id }) => id,
       translations: {
         languages: ["fr", "ja"],
-        identityOf: fixtureTranslationIdentity,
+        keyOf: fixtureTranslationIdentity,
         schema: schemaFromExamples<Translation>({
           id: "example",
           text: "example",
@@ -483,7 +483,7 @@ void describe("configured analysis workflow", () => {
       keyOf: ({ id }) => id,
       translations: {
         languages: ["fr"],
-        identityOf: fixtureTranslationIdentity,
+        keyOf: fixtureTranslationIdentity,
         schema: schemaFromExamples<Translation>({
           id: "save",
           text: "Enregistrer",
@@ -564,7 +564,7 @@ void describe("configured analysis workflow", () => {
       keyOf: ({ id }) => id,
       translations: {
         languages: ["fr"],
-        identityOf: fixtureTranslationIdentity,
+        keyOf: fixtureTranslationIdentity,
         schema: schemaFromExamples<Translation>({
           id: "external",
           text: "外部",
