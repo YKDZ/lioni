@@ -168,6 +168,11 @@ export async function runJourneys(options: {
         productLink,
         process.platform === "win32" ? "junction" : "dir",
       );
+      await symlink(
+        path.join(packageRoot, "node_modules", "zod"),
+        path.join(workDir, "node_modules", "zod"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
       await journey.setup(context);
       const results: CliJourneyResult[] = [];
       for (const command of journey.commands(context)) {

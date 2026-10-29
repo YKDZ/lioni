@@ -1,137 +1,143 @@
-import { snapshotJsonValue } from "@lioni/core";
-import type { JsonValue, QualityLocation } from "@lioni/core";
-import type { TemplateSignature, TextRange } from "@lioni/text-analysis";
-import * as v from "valibot";
-
-import { isRecord } from "./object-guards.ts";
-
-const recordSchema = v.custom<Record<string, unknown>>(isRecord);
-const jsonValueSchema: v.BaseSchema<
-  unknown,
+import type {
   JsonValue,
-  v.BaseIssue<unknown>
-> = v.custom<JsonValue>(isJsonValue);
+  QualityLocation,
+  TranslationIdentity,
+} from "@lioni/core";
+import type { TemplateSignature, TextRange } from "@lioni/text-analysis";
+import { z } from "zod";
 
-const rangeSchema = v.pipe(
-  recordSchema,
-  v.object({
-    start: v.pipe(v.number(), v.integer(), v.minValue(0)),
-    end: v.pipe(v.number(), v.integer(), v.minValue(0)),
-  }),
-  v.check(({ start, end }) => end >= start),
-  v.readonly(),
-);
+const rangeSchema = z
+  .object({
+    start: z.number().int().nonnegative(),
+    end: z.number().int().nonnegative(),
+  })
+  .refine(({ start, end }) => end >= start, "范围终点不得早于起点。")
+  .readonly();
 
-const messageFamilyIssueSchema = v.pipe(
-  recordSchema,
-  v.object({
-    code: v.pipe(v.string(), v.minLength(1)),
-    message: v.string(),
-    language: v.optional(v.string()),
-    sourceKey: v.optional(v.string()),
-    ref: v.optional(jsonValueSchema),
-    range: v.optional(rangeSchema),
-  }),
-  v.readonly(),
-);
+const messageFamilyIssueSchema = z
+  .object({
+    code: z.string().min(1),
+    message: z.string(),
+    language: z.string().optional(),
+    sourceKey: z.string().optional(),
+    ref: z.json().optional(),
+    range: rangeSchema.optional(),
+  })
+  .readonly();
 
-const messageFragmentSchema = v.pipe(
-  recordSchema,
-  v.object({
-    ref: jsonValueSchema,
-    text: v.string(),
-    protectedRanges: v.optional(v.pipe(v.array(rangeSchema), v.readonly())),
-  }),
-  v.check(
+const messageFragmentSchema = z
+  .object({
+    ref: z.json(),
+    text: z.string(),
+    protectedRanges: z.array(rangeSchema).readonly().optional(),
+  })
+  .refine(
     ({ text, protectedRanges }) =>
       protectedRanges === undefined ||
       protectedRanges.every((range) => isTextRange(text, range)),
-  ),
-  v.readonly(),
-);
+    "保护范围必须落在文本中的完整 Unicode 字符边界上。",
+  )
+  .readonly();
 
-const messageTextSchema = v.pipe(
-  recordSchema,
-  v.object({
-    language: v.pipe(v.string(), v.minLength(1)),
-    fragments: v.pipe(v.array(messageFragmentSchema), v.readonly()),
-    complete: v.optional(v.boolean()),
-    issues: v.optional(v.pipe(v.array(messageFamilyIssueSchema), v.readonly())),
-  }),
-  v.readonly(),
-);
+const messageTextSchema = z
+  .object({
+    language: z.string().min(1),
+    fragments: z.array(messageFragmentSchema).readonly(),
+    complete: z.boolean().optional(),
+    issues: z.array(messageFamilyIssueSchema).readonly().optional(),
+  })
+  .readonly();
 
-const messageFamilyGroupSchema = v.pipe(
-  recordSchema,
-  v.object({
-    ref: jsonValueSchema,
+const messageFamilyGroupSchema = z
+  .object({
+    ref: z.json(),
     /** 宿主明确声明可相互参照的业务范围。 */
-    scope: v.pipe(v.string(), v.minLength(1)),
+    scope: z.string().min(1),
     source: messageTextSchema,
     target: messageTextSchema,
-  }),
-  v.readonly(),
-);
+  })
+  .readonly();
 
-const messageFamilyInputShapeSchema = v.pipe(
-  recordSchema,
-  v.object({
-    groups: v.pipe(v.array(messageFamilyGroupSchema), v.readonly()),
-    /** false 表示仍有未投影的消息组；已知 groups 继续参与检查。 */
-    complete: v.optional(v.boolean()),
-    issues: v.optional(v.pipe(v.array(messageFamilyIssueSchema), v.readonly())),
-  }),
-  v.readonly(),
-);
+const messageFamilyInputShapeSchema = z
+  .object({
+    groups: z.array(messageFamilyGroupSchema).readonly(),
+    /** false 表示仍有未投影的消息组；单个目标正文缺失由 target.complete 表达。 */
+    complete: z.boolean().optional(),
+    issues: z.array(messageFamilyIssueSchema).readonly().optional(),
+  })
+  .readonly() satisfies z.ZodType<MessageFamilyInput>;
 
-export type MessageFamilyIssue = v.InferOutput<typeof messageFamilyIssueSchema>;
-export type MessageFragment = v.InferOutput<typeof messageFragmentSchema>;
-export type MessageText = v.InferOutput<typeof messageTextSchema>;
-export type MessageFamilyGroup = v.InferOutput<typeof messageFamilyGroupSchema>;
-export type MessageFamilyInput = v.InferOutput<
-  typeof messageFamilyInputShapeSchema
->;
+export type MessageFamilyIssue = {
+  readonly code: string;
+  readonly message: string;
+  readonly language?: string | undefined;
+  readonly sourceKey?: string | undefined;
+  readonly ref?: JsonValue | undefined;
+  readonly range?: TextRange | undefined;
+};
+export type MessageFragment = {
+  readonly ref: JsonValue;
+  readonly text: string;
+  readonly protectedRanges?: readonly TextRange[] | undefined;
+};
+export type MessageText = {
+  readonly language: string;
+  readonly fragments: readonly MessageFragment[];
+  readonly complete?: boolean | undefined;
+  readonly issues?: readonly MessageFamilyIssue[] | undefined;
+};
+export type MessageFamilyGroup = {
+  readonly ref: JsonValue;
+  readonly scope: string;
+  readonly source: MessageText;
+  readonly target: MessageText;
+};
+export type MessageFamilyInput = {
+  readonly groups: readonly MessageFamilyGroup[];
+  readonly complete?: boolean | undefined;
+  readonly issues?: readonly MessageFamilyIssue[] | undefined;
+};
 
-/** 保留投影原对象的全部属性；形状 schema 只承担字段与业务约束验证。 */
-export const messageFamilyInputSchema = v.custom<MessageFamilyInput>(
-  (value): value is MessageFamilyInput =>
-    v.safeParse(messageFamilyInputShapeSchema, value).success,
-  "消息族投影必须包含有效的 groups。",
-);
+/** 投影包含宿主引用与扩展属性；验证契约后保留原值，不让对象解析裁剪它们。 */
+export const messageFamilyInputSchema = z
+  .unknown()
+  .transform((value, context) => {
+    const parsed = messageFamilyInputShapeSchema.safeParse(value);
+    if (!parsed.success) {
+      for (const issue of parsed.error.issues)
+        context.issues.push({
+          code: "custom",
+          message: issue.message,
+          path: issue.path,
+          input: value,
+        });
+      return z.NEVER;
+    }
+    return value as MessageFamilyInput;
+  });
 export type MessageFamilySignature = {
   readonly familyKey: string;
   readonly targetKey: string;
 };
 export type MessageFamilyReference = MessageFamilySignature & {
   readonly translationIndex: number;
+  readonly translationIdentity: TranslationIdentity;
   readonly sourceKey: string;
   readonly group: MessageFamilyGroup;
   readonly sourceSignatures: readonly TemplateSignature[];
   readonly targetSignatures: readonly TemplateSignature[];
   readonly translationLocation?: QualityLocation;
 };
-export const messageFamilyLimitsSchema = v.pipe(
-  v.custom<Record<string, unknown>>(isRecord, "消息族展示配置无效。"),
-  v.object(
-    {
-      maxCategories: v.pipe(
-        v.number("消息族展示上限必须为正整数。"),
-        v.integer("消息族展示上限必须为正整数。"),
-        v.minValue(1, "消息族展示上限必须为正整数。"),
-      ),
-      maxSourcesPerCategory: v.pipe(
-        v.number("消息族展示上限必须为正整数。"),
-        v.integer("消息族展示上限必须为正整数。"),
-        v.minValue(1, "消息族展示上限必须为正整数。"),
-      ),
-    },
-    "消息族展示上限必须为正整数。",
-  ),
-  v.readonly(),
-);
-export type MessageFamilyLimits = v.InferOutput<
-  typeof messageFamilyLimitsSchema
->;
+export const messageFamilyLimitsSchema = z
+  .object({
+    maxCategories: z.number().int().positive(),
+    maxSourcesPerCategory: z.number().int().positive(),
+  })
+  .readonly();
+export type MessageFamilyLimits = {
+  readonly maxCategories: number;
+  readonly maxSourcesPerCategory: number;
+};
 type Category = {
   readonly key: string;
   readonly references: Map<number, MessageFamilyReference>;
@@ -158,15 +164,6 @@ export type MessageFamilyComparison = {
   }[];
 };
 
-function isJsonValue(value: unknown): value is JsonValue {
-  try {
-    snapshotJsonValue(value, "消息族投影引用");
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function isTextRange(text: string, range: TextRange): boolean {
   if (range.end > text.length) return false;
   return (
@@ -192,7 +189,20 @@ export function indexMessageFamilies(
   references: readonly MessageFamilyReference[],
 ): MessageFamilyIndex {
   const families = new Map<string, Family>();
-  for (const reference of references) {
+  // 类别与代表来源都按稳定身份排序，资源遍历顺序不改变报告证据。
+  const ordered = [...references].sort((left, right) => {
+    const key = (value: MessageFamilyReference) =>
+      JSON.stringify([
+        value.targetKey,
+        value.translationIdentity,
+        value.sourceKey,
+        value.group.ref,
+      ]);
+    const leftKey = key(left);
+    const rightKey = key(right);
+    return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+  });
+  for (const reference of ordered) {
     let family = families.get(reference.familyKey);
     if (family === undefined) {
       family = {
@@ -227,7 +237,7 @@ export function compareMessageFamily(
   excludedRecordIndexes: ReadonlySet<number>,
   limits: MessageFamilyLimits,
 ): MessageFamilyComparison {
-  if (!v.safeParse(messageFamilyLimitsSchema, limits).success)
+  if (!messageFamilyLimitsSchema.safeParse(limits).success)
     throw new TypeError("消息族展示上限必须为正整数。");
   const family = index.families.get(candidate.familyKey);
   if (family === undefined)

@@ -13,9 +13,9 @@ import {
   type QualityExceptionStore,
   type SemanticEditCandidate,
   type SourceUnitFact,
-  type StandardSchemaV1,
 } from "@lioni/core";
 import type { TermbaseData } from "@lioni/terminology";
+import { z } from "zod";
 
 export type Unit = {
   readonly key: string;
@@ -30,7 +30,7 @@ export type Translation = {
 
 export type Body = {
   readonly text: string;
-  readonly resourceStatus?: "missing" | "unavailable";
+  readonly resourceStatus?: "missing" | "unavailable" | undefined;
 };
 
 export const checkIds = {
@@ -168,28 +168,19 @@ export function createQualityFixture(input: {
     });
   };
 
-  const sourceSchema = schema<Unit>(
-    (value): value is Unit =>
-      isRecord(value) &&
-      typeof value.key === "string" &&
-      isRecord(value.source) &&
-      typeof value.source.text === "string",
-  );
-  const translationSchema = schema<Translation>(
-    (value): value is Translation =>
-      isRecord(value) &&
-      typeof value.key === "string" &&
-      typeof value.text === "string" &&
-      typeof value.language === "string",
-  );
-  const bodySchema = schema<Body>(
-    (value): value is Body =>
-      isRecord(value) &&
-      typeof value.text === "string" &&
-      (value.resourceStatus === undefined ||
-        value.resourceStatus === "missing" ||
-        value.resourceStatus === "unavailable"),
-  );
+  const sourceSchema = z.object({
+    key: z.string(),
+    source: z.object({ text: z.string() }),
+  });
+  const translationSchema = z.object({
+    key: z.string(),
+    text: z.string(),
+    language: z.string(),
+  });
+  const bodySchema = z.object({
+    text: z.string(),
+    resourceStatus: z.enum(["missing", "unavailable"]).optional(),
+  });
 
   const config = defineConfig({
     source: {
@@ -300,23 +291,4 @@ function projection(input: {
       },
     },
   };
-}
-
-function schema<T>(
-  validate: (value: unknown) => value is T,
-): StandardSchemaV1<T, T> {
-  return {
-    "~standard": {
-      version: 1,
-      vendor: "vue-i18n-quality-fixture",
-      validate: (value) =>
-        validate(value)
-          ? { value }
-          : { issues: [{ message: "测试资料结构无效。" }] },
-    },
-  };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }

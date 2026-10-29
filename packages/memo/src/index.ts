@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 /** 键函数只描述计算的实际依赖，不读取或修改外部可变状态。 */
 export type MemoOptions<TArguments extends readonly unknown[]> = {
   readonly key?: (...args: TArguments) => readonly unknown[];
@@ -34,6 +36,7 @@ type Computation = {
   readonly invoke: unknown;
 };
 
+const memoKeysSchema = z.array(z.unknown());
 const negativeZero = Symbol("负零键");
 const argumentKeys = (...args: readonly unknown[]): readonly unknown[] => args;
 
@@ -73,7 +76,7 @@ export function createMemoScope(): MemoScope {
     const invoke = (...args: TArguments): TResult => {
       ensureOpen();
       const keys = keyOf(...args);
-      if (!Array.isArray(keys))
+      if (!memoKeysSchema.safeParse(keys).success)
         throw new TypeError("计算缓存的键函数必须返回参数元组。");
       let node = root;
       for (const value of keys) {

@@ -1,9 +1,11 @@
+import type { StandardSchemaV1 } from "@standard-schema/spec";
+import { z } from "zod";
+
 import {
   contractIssue,
-  isRecord,
+  contractIssues,
   TermContractError,
   type TermConceptData,
-  type TermSchema,
 } from "./data.ts";
 import {
   comparisonSnapshot,
@@ -19,10 +21,17 @@ import {
   type TermRuntime,
 } from "./matching.ts";
 
+export const termRuleIdSchema = z.enum([
+  "require-allowed-translation",
+  "reject-forbidden-translation",
+]);
+const termRuleSchema = z.object({ id: termRuleIdSchema }).readonly();
 export type TermRuleId =
   | "require-allowed-translation"
   | "reject-forbidden-translation";
 export type TermRule = { readonly id: TermRuleId };
+
+const termRulesSchema = z.array(termRuleSchema);
 
 const allowedRule: TermRule = Object.freeze({
   id: "require-allowed-translation",
@@ -39,33 +48,13 @@ export function rejectForbiddenTranslation(): TermRule {
   return forbiddenRule;
 }
 
+export const rulesConfigurationContract = z
+  .object({ rules: z.array(termRuleIdSchema).readonly() })
+  .readonly();
 export type TermRulesConfiguration = { readonly rules: readonly TermRuleId[] };
-
-export const termRulesConfigurationSchema: TermSchema<TermRulesConfiguration> =
+export const termRulesConfigurationSchema: StandardSchemaV1<TermRulesConfiguration> =
   {
-    "~standard": {
-      version: 1,
-      vendor: "lioni-terminology",
-      validate(value) {
-        if (
-          !isRecord(value) ||
-          !Array.isArray(value.rules) ||
-          value.rules.some(
-            (id: unknown) => id !== allowedRule.id && id !== forbiddenRule.id,
-          )
-        )
-          return {
-            issues: [
-              contractIssue(
-                "invalid-rules",
-                "术语规则配置必须包含受支持的规则身份数组。",
-                ["rules"],
-              ),
-            ],
-          };
-        return { value: value as TermRulesConfiguration };
-      },
-    },
+    "~standard": rulesConfigurationContract["~standard"],
   };
 
 export type TermGroupAnalysis = {
@@ -135,11 +124,9 @@ export type EvaluateTermsOptions = TermAssessmentOptions & TermRuntime;
 
 function selectedRules(options: TermAssessmentOptions): readonly TermRule[] {
   const rules = options.rules ?? defaultRules;
-  const result = termRulesConfigurationSchema["~standard"].validate({
-    rules: rules.map((rule) => rule.id),
-  });
-  if (result.issues !== undefined)
-    throw new TermContractError("input", result.issues);
+  const result = termRulesSchema.safeParse(rules);
+  if (!result.success)
+    throw new TermContractError("input", contractIssues(result.error));
   return [...new Map(rules.map((rule) => [rule.id, rule])).values()];
 }
 

@@ -1,59 +1,78 @@
+import { createTermbase } from "@lioni/terminology";
 import type {
   TermComparisonInput,
   TermDiscoveryCorpus,
   TermbaseData,
 } from "@lioni/terminology";
+import { z } from "zod";
+
+import { discoverySnapshot } from "#/discovery";
+import { comparisonSnapshot } from "#/input";
 
 import { canonicalJson, sha256 } from "../support/json.ts";
 
-export type PerformanceWorkloadFacts = {
-  readonly comparisonGroups: number;
-  readonly concepts: number;
-  readonly expressions: number;
-  readonly sourceTexts: number;
-  readonly targetTexts: number;
-  readonly uniqueTexts: number;
-  readonly sourceCodepoints: number;
-  readonly targetCodepoints: number;
-  readonly sourceUtf16Units: number;
-  readonly targetUtf16Units: number;
-  readonly hardShapes: Readonly<Record<string, number>>;
-};
-
-export type PerformanceMemoMode = "no-memo" | "new-scope" | "reused-scope";
-
-export type PerformancePreparedInput = {
-  readonly schemaVersion: 1;
-  readonly id: "controlled-scale";
-  readonly termbase: TermbaseData;
-  readonly comparison: TermComparisonInput;
-  readonly discovery: TermDiscoveryCorpus;
-  readonly facts: PerformanceWorkloadFacts;
-  readonly generation?: {
-    readonly algorithm: "lioni-terminology-scale-v1";
-    readonly seed: number;
-    readonly conceptStride: number;
-    readonly groupCount: number;
-    readonly conceptCount: number;
-    readonly expressionsPerConcept: number;
-    readonly shapeCounts: Readonly<Record<string, number>>;
-  };
-};
-
-export type ControlledWorkloadOptions = {
-  readonly groupCount?: number;
-  readonly conceptCount?: number;
-  readonly seed?: number;
-};
+export const performanceFactsSchema = z
+  .object({
+    comparisonGroups: z.int().nonnegative(),
+    concepts: z.int().nonnegative(),
+    expressions: z.int().nonnegative(),
+    sourceTexts: z.int().nonnegative(),
+    targetTexts: z.int().nonnegative(),
+    uniqueTexts: z.int().nonnegative(),
+    sourceCodepoints: z.int().nonnegative(),
+    targetCodepoints: z.int().nonnegative(),
+    sourceUtf16Units: z.int().nonnegative(),
+    targetUtf16Units: z.int().nonnegative(),
+    hardShapes: z.record(z.string(), z.int().nonnegative()).readonly(),
+  })
+  .readonly();
+export type PerformanceWorkloadFacts = z.infer<typeof performanceFactsSchema>;
+export const performanceMemoModeSchema = z.enum([
+  "no-memo",
+  "new-scope",
+  "reused-scope",
+]);
+export type PerformanceMemoMode = z.infer<typeof performanceMemoModeSchema>;
+export const performanceInputSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    id: z.literal("controlled-scale"),
+    termbase: z.transform((value) => createTermbase(value).data),
+    comparison: z.transform(comparisonSnapshot),
+    discovery: z.transform(discoverySnapshot),
+    facts: performanceFactsSchema,
+    generation: z
+      .object({
+        algorithm: z.literal("lioni-terminology-scale-v1"),
+        seed: z.int().nonnegative(),
+        conceptStride: z.int().positive(),
+        groupCount: z.int().positive(),
+        conceptCount: z.int().positive(),
+        expressionsPerConcept: z.int().positive(),
+        shapeCounts: z.record(z.string(), z.int().nonnegative()).readonly(),
+      })
+      .readonly()
+      .exactOptional(),
+  })
+  .readonly();
+export type PerformancePreparedInput = z.infer<typeof performanceInputSchema>;
+const workloadOptionsSchema = z
+  .object({
+    groupCount: z.int().min(1).max(100_000).default(10_000),
+    conceptCount: z.int().positive().default(1_000),
+    seed: z.int().nonnegative().default(20_261_025),
+  })
+  .refine(({ conceptCount, groupCount }) => conceptCount <= groupCount, {
+    message: "规模场景概念数不得超过比较组数。",
+    path: ["conceptCount"],
+  });
+export type ControlledWorkloadOptions = z.input<typeof workloadOptionsSchema>;
 
 export type PreparedPerformanceWorkload = {
   readonly input: PerformancePreparedInput;
   readonly inputSha256: string;
 };
 
-const defaultGroupCount = 10_000;
-const defaultConceptCount = 1_000;
-const defaultSeed = 20_261_025;
 const discoveryPolicy = Object.freeze({
   maxWords: 3,
   maxCharacters: 80,
@@ -172,23 +191,8 @@ function contextSuffix(
 export function createControlledPerformanceWorkload(
   options: ControlledWorkloadOptions = {},
 ): PreparedPerformanceWorkload {
-  const groupCount = options.groupCount ?? defaultGroupCount;
-  const conceptCount = options.conceptCount ?? defaultConceptCount;
-  const seed = options.seed ?? defaultSeed;
-  if (
-    !Number.isSafeInteger(groupCount) ||
-    groupCount < 1 ||
-    groupCount > 100_000
-  )
-    throw new RangeError("规模场景比较组数必须在 1 到 100000 之间。");
-  if (
-    !Number.isSafeInteger(conceptCount) ||
-    conceptCount < 1 ||
-    conceptCount > groupCount
-  )
-    throw new RangeError("规模场景概念数必须在 1 到比较组数之间。");
-  if (!Number.isSafeInteger(seed) || seed < 0)
-    throw new RangeError("规模场景种子必须是非负安全整数。");
+  const { groupCount, conceptCount, seed } =
+    workloadOptionsSchema.parse(options);
 
   const stride = conceptStride(conceptCount, seed);
   const concepts = Array.from({ length: conceptCount }, (_, conceptIndex) => {

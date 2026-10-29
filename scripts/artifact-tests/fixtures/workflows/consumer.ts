@@ -17,12 +17,11 @@ import {
   createFileComparisonBaselineStore,
   createFileUpdatePlanStore,
 } from "@lioni/lioni/node";
+import * as z from "zod";
 
 import config, { type Translation, type Unit } from "./lioni.config.ts";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+const fileLocatorSchema = z.object({ file: z.string() });
 
 type BatchAdapter = TranslationWritebackAdapter<Unit, Translation, string>;
 type BatchWriteInput = Parameters<NonNullable<BatchAdapter["writeBatch"]>>[0];
@@ -126,9 +125,7 @@ else if (mode === "plan") {
       async writeBatch({ requests: writes }: BatchWriteInput) {
         const groups = new Map<string, Array<(typeof writes)[number]>>();
         for (const write of writes) {
-          const locator = write.target.locator;
-          if (!isRecord(locator) || typeof locator.file !== "string")
-            throw new TypeError("测试写回需要文件定位。");
+          const locator = fileLocatorSchema.parse(write.target.locator);
           const group = groups.get(locator.file) ?? [];
           group.push(write);
           groups.set(locator.file, group);

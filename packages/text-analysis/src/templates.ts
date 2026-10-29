@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import { validateRange } from "./ranges.ts";
 import { TextAnalysisContractError } from "./types.ts";
 import type { StructureAnalysis, TextRange, TextToken } from "./types.ts";
@@ -26,6 +28,11 @@ export type TemplateOptions = {
   readonly abstract: (token: TextToken) => SlotIdentity | undefined;
 };
 
+const slotIdentitySchema = z.object({
+  kind: z.string().min(1),
+  identity: z.string().min(1),
+}) satisfies z.ZodType<SlotIdentity>;
+
 /** 只抽象明确选中的 token；保护区间和未抽象内容仍作为原样文本参与比较。 */
 export function createTemplateSignature(
   analysis: StructureAnalysis,
@@ -50,14 +57,7 @@ export function createTemplateSignature(
     previousEnd = token.end;
     const identity = options.abstract(token);
     if (identity === undefined) continue;
-    if (
-      identity === null ||
-      typeof identity !== "object" ||
-      typeof identity.kind !== "string" ||
-      identity.kind.length === 0 ||
-      typeof identity.identity !== "string" ||
-      identity.identity.length === 0
-    )
+    if (!slotIdentitySchema.safeParse(identity).success)
       throw new TextAnalysisContractError(
         "invalid-slot",
         "槽位种类与身份必须非空。",

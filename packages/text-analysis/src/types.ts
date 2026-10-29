@@ -1,4 +1,5 @@
 import type { MemoScope } from "@lioni/memo";
+import { z } from "zod";
 
 /** 原文中的 UTF-16 半开区间，不切开代理对。 */
 export type TextRange = {
@@ -85,4 +86,67 @@ export class TextAnalysisContractError extends Error {
     this.name = "TextAnalysisContractError";
     this.code = code;
   }
+}
+
+export const textRangeSchema = z
+  .object({ start: z.int().nonnegative(), end: z.int().nonnegative() })
+  .readonly() satisfies z.ZodType<TextRange>;
+export const textInputSchema = z
+  .object({
+    text: z.string(),
+    language: z.string().min(1),
+    protectedRanges: z.array(textRangeSchema).readonly().exactOptional(),
+  })
+  .readonly() satisfies z.ZodType<TextInput>;
+export const analysisIssueSchema = z
+  .object({
+    code: z.string().min(1),
+    message: z.string(),
+    range: textRangeSchema.exactOptional(),
+  })
+  .readonly() satisfies z.ZodType<TextAnalysisIssue>;
+export const textTokenSchema = textRangeSchema
+  .unwrap()
+  .extend({
+    kind: z.string().min(1),
+    identity: z.string().min(1).exactOptional(),
+    value: z.unknown().exactOptional(),
+    /** 显式保护该区间；种类名称不隐式决定保护行为。 */
+    protect: z.boolean().exactOptional(),
+  })
+  .readonly() satisfies z.ZodType<TextToken>;
+export const recognitionSchema = z
+  .object({
+    tokens: z.array(textTokenSchema).readonly(),
+    complete: z.boolean(),
+    issues: z.array(analysisIssueSchema).readonly(),
+  })
+  .readonly() satisfies z.ZodType<RecognitionResult>;
+export const wordTokenSchema = textRangeSchema
+  .unwrap()
+  .extend({ text: z.string() })
+  .readonly() satisfies z.ZodType<WordToken>;
+export const wordAnalysisSchema = z
+  .object({
+    words: z.array(wordTokenSchema).readonly(),
+    boundaries: z.array(z.int().nonnegative()).readonly(),
+    /** 结构和词界阶段均完整时为 true；两阶段的问题按顺序合并。 */
+    complete: z.boolean(),
+    issues: z.array(analysisIssueSchema).readonly(),
+  })
+  .readonly() satisfies z.ZodType<WordAnalysis>;
+
+export function analysisError(
+  code: string,
+  error: z.ZodError,
+): TextAnalysisContractError {
+  return new TextAnalysisContractError(
+    code,
+    error.issues
+      .map(
+        (issue) =>
+          `${issue.path.map(String).join(".") || "输入"}：${issue.message}`,
+      )
+      .join("；"),
+  );
 }

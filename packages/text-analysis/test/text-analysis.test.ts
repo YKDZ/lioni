@@ -327,3 +327,15 @@ await test("自定义分析失败按 scope 共享，独立新 scope 才重新尝
   memo.dispose();
   next.dispose();
 });
+
+await test("分词器的非法结构通过领域异常指出输入问题", async () => {
+  await assert.rejects(
+    createTextAnalysis({
+      segmenter: (() => null) as unknown as WordSegmenter,
+    }).words({ text: "word", language: "en" }),
+    (error) =>
+      error instanceof TextAnalysisContractError &&
+      error.code === "invalid-segmentation" &&
+      error.message.length > 0,
+  );
+});

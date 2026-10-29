@@ -3,14 +3,14 @@ import { cp, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 
+import * as z from "zod";
+
 import { productPackageName } from "../product.ts";
 import { externalInterruptSignal } from "./external-interrupt.ts";
 import { runCommand, runSubprocess, type ProcessResult } from "./process.ts";
 
-export type Artifact = {
-  readonly name: string;
-  readonly filename: string;
-};
+const artifactSchema = z.object({ name: z.string(), filename: z.string() });
+export type Artifact = z.infer<typeof artifactSchema>;
 
 type ConsumerCommand = (
   command: string,
@@ -37,16 +37,20 @@ function requiredEnvironment(name: string): string {
   return value;
 }
 
-/** 在工作区外只安装本次打包的 @lioni/lioni 产品。 */
+/** 在工作区外安装本次产品制品及消费项目自行选择的开发依赖。 */
 export function testArtifactConsumer(
   options: ConsumerScenarioOptions,
   execute: (consumer: Consumer) => Promise<void>,
 ): void {
   void test(options.name, { timeout: 10 * 60 * 1000 }, async (context) => {
     const runRoot = requiredEnvironment("LIONI_ARTIFACT_RUN_ROOT");
-    const artifacts = JSON.parse(
-      await readFile(path.join(runRoot, "artifacts.json"), "utf8"),
-    ) as readonly Artifact[];
+    const artifacts = z
+      .array(artifactSchema)
+      .parse(
+        JSON.parse(
+          await readFile(path.join(runRoot, "artifacts.json"), "utf8"),
+        ),
+      );
     const product = artifacts.find(({ name }) => name === productPackageName);
     assert.ok(product, `本次未打包 ${productPackageName} 产品。`);
     const dependencies = { [productPackageName]: `file:${product.filename}` };
@@ -73,7 +77,7 @@ export function testArtifactConsumer(
           type: "module",
           packageManager: "pnpm@12.9.1",
           dependencies,
-          devDependencies: { "@types/node": "24.19.2" },
+          devDependencies: { "@types/node": "24.19.2", zod: "4.6.7" },
         }),
       );
       await writeFile(

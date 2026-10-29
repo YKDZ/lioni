@@ -6,7 +6,7 @@ import {
   createMessageFamilyChecker,
   indexMessageFamilies,
 } from "@lioni/checks";
-import type { MessageFamilyLimits } from "@lioni/checks";
+import type { MessageFamilyInput, MessageFamilyLimits } from "@lioni/checks";
 import {
   analyzeQuality,
   createQualityException,
@@ -16,7 +16,9 @@ import {
   type QualityExceptionStore,
   type SourceUnitFact,
   StandardSchemaContractError,
-  type StandardSchemaV1,
+  QualityCheckBindingError,
+  snapshotJsonValue,
+  type QualityCheckResultCache,
 } from "@lioni/core";
 import { asciiNumbers, createTextAnalysis } from "@lioni/text-analysis";
 import type {
@@ -24,84 +26,32 @@ import type {
   TextAnalysis,
   TextRange,
 } from "@lioni/text-analysis";
-import { safeParse } from "valibot";
+import { z } from "zod";
 
-type Unit = { readonly id: string; readonly source: string };
-type Translation = {
-  readonly id: string;
-  readonly text: string;
-  readonly targetKey?: string;
-};
-
-const unitSchema: StandardSchemaV1<Unit, Unit> = {
-  "~standard": {
-    version: 1,
-    vendor: "lioni-message-family-test",
-    validate(value) {
-      if (
-        typeof value !== "object" ||
-        value === null ||
-        Array.isArray(value) ||
-        !("id" in value) ||
-        typeof value.id !== "string" ||
-        !("source" in value) ||
-        typeof value.source !== "string"
-      )
-        return { issues: [{ message: "原文单元结构不匹配。" }] };
-      return { value: { id: value.id, source: value.source } };
-    },
-  },
-};
-
-const translationSchema: StandardSchemaV1<Translation, Translation> = {
-  "~standard": {
-    version: 1,
-    vendor: "lioni-message-family-test",
-    validate(value) {
-      if (
-        typeof value !== "object" ||
-        value === null ||
-        Array.isArray(value) ||
-        !("id" in value) ||
-        typeof value.id !== "string" ||
-        !("text" in value) ||
-        typeof value.text !== "string" ||
-        ("targetKey" in value && typeof value.targetKey !== "string")
-      )
-        return { issues: [{ message: "译文记录结构不匹配。" }] };
-      const targetKey =
-        "targetKey" in value && typeof value.targetKey === "string"
-          ? value.targetKey
-          : undefined;
-      return {
-        value: {
-          id: value.id,
-          text: value.text,
-          ...(targetKey === undefined ? {} : { targetKey }),
-        },
-      };
-    },
-  },
-};
-
-const stringSchema: StandardSchemaV1<string, string> = {
-  "~standard": {
-    version: 1,
-    vendor: "lioni-message-family-test",
-    validate(value) {
-      return typeof value === "string"
-        ? { value }
-        : { issues: [{ message: "译文正文必须是字符串。" }] };
-    },
-  },
-};
+const unitSchema = z.object({ id: z.string(), source: z.string() }).readonly();
+const translationSchema = z
+  .object({
+    id: z.string(),
+    text: z.string(),
+    targetKey: z.string().optional(),
+  })
+  .readonly();
+const stringSchema = z.string();
+type Unit = z.output<typeof unitSchema>;
+type Translation = z.output<typeof translationSchema>;
 
 function checkerFor(
   options: {
     readonly partialCandidate?: boolean;
+    readonly candidateProjection?: MessageFamilyInput;
+    readonly explicitBasis?: boolean;
     readonly referenceProjections?: { count: number };
     readonly analysis?: TextAnalysis;
-    readonly targetEquivalence?: (signature: TemplateSignature) => string;
+    readonly targetEquivalence?: (
+      signature: TemplateSignature,
+      language: string,
+      input: QualityCheckInput<Unit, Translation, unknown, string>,
+    ) => string;
     readonly limits?: Partial<MessageFamilyLimits>;
     readonly separateScopeFor?: string;
     readonly protectedRanges?: readonly TextRange[];
@@ -156,7 +106,7 @@ function checkerFor(
           {
             ref: isCandidate
               ? `candidate:${sourceKey}`
-              : `translation:${input.translation.index}:${sourceKey}`,
+              : `translation:${input.translation.identity.key}:${sourceKey}`,
             scope: options.separateScopeFor === sourceKey ? "domain" : "ui",
             source: {
               language: "en",
@@ -191,8 +141,23 @@ function checkerFor(
               ]
             : [],
       };
-      return result;
+      return isCandidate && options.candidateProjection !== undefined
+        ? options.candidateProjection
+        : result;
     },
+    ...(options.explicitBasis
+      ? {
+          fingerprintInput: ({ projected, subject }) =>
+            snapshotJsonValue(
+              {
+                projected,
+                sourceKey: subject.sourceKey,
+                language: subject.language,
+              },
+              "测试消息族依据",
+            ),
+        }
+      : {}),
     analysis:
       options.analysis ?? createTextAnalysis({ recognizers: [asciiNumbers()] }),
     sourceTemplate: slotPolicy,
@@ -204,29 +169,19 @@ function checkerFor(
   });
 }
 
-void test("消息族检查 schema 保留配置语义与投影值", () => {
-  const checker = checkerFor();
-  assert.deepEqual(checker.configuration, {
-    limits: { maxCategories: 6, maxSourcesPerCategory: 3 },
-  });
-  const configuration = safeParse(checker.configurationSchema, {
-    limits: {
-      maxCategories: 4,
-      maxSourcesPerCategory: 2,
-      ignored: "nested",
-    },
-    ignored: "root",
-  });
-  assert.equal(configuration.success, true);
-  if (configuration.success)
-    assert.deepEqual(configuration.output, {
-      limits: { maxCategories: 4, maxSourcesPerCategory: 2 },
-    });
-  assert.equal(
-    safeParse(checker.configurationSchema, {
-      limits: { maxCategories: 0, maxSourcesPerCategory: 2 },
-    }).success,
-    false,
+void test("消息族正式入口验证展示上限并保留投影证据", async () => {
+  await assert.rejects(
+    analyzeQuality(
+      configFor(
+        [{ id: "editing", source: "Save" }],
+        [],
+        checkerFor({ limits: { maxCategories: 0 } }),
+      ),
+      {
+        candidates: [{ sourceKey: "editing", language: "zh", content: "保存" }],
+      },
+    ),
+    StandardSchemaContractError,
   );
   assert.throws(
     () =>
@@ -236,9 +191,7 @@ void test("消息族检查 schema 保留配置语义与投影值", () => {
         new Set(),
         { maxCategories: 1.5, maxSourcesPerCategory: 2 },
       ),
-    (error: unknown) =>
-      error instanceof TypeError &&
-      error.message === "消息族展示上限必须为正整数。",
+    TypeError,
   );
 
   const specialReference = JSON.parse('{"__proto__":{"retained":true}}');
@@ -259,8 +212,6 @@ void test("消息族检查 schema 保留配置语义与投影值", () => {
         extra: "group",
       },
     ],
-    complete: false,
-    issues: [],
     extra: "input",
   };
   Object.defineProperty(projection, "__proto__", {
@@ -268,38 +219,29 @@ void test("消息族检查 schema 保留配置语义与投影值", () => {
     enumerable: true,
     value: { retained: true },
   });
-  const parsedProjection = safeParse(checker.inputSchema, projection);
-  assert.equal(parsedProjection.success, true);
-  if (parsedProjection.success) {
-    assert.equal(parsedProjection.output, projection);
-    assert.equal(Object.hasOwn(parsedProjection.output, "__proto__"), true);
-    assert.equal(parsedProjection.output.groups[0]?.extra, "group");
-    assert.equal(parsedProjection.output.groups[0]?.source.extra, "text");
-    assert.equal(parsedProjection.output.groups[0]?.ref, specialReference);
-  }
-
-  assert.equal(
-    safeParse(checker.inputSchema, {
-      groups: [
-        {
-          ref: "candidate",
-          scope: "ui",
-          source: { language: "en", fragments: [] },
-          target: {
-            language: "zh",
-            fragments: [
-              {
-                ref: "target",
-                text: "😀",
-                protectedRanges: [{ start: 0, end: 1 }],
-              },
-            ],
-          },
-        },
+  const result = await analyzeQuality(
+    configFor(
+      [
+        { id: "editing", source: "Save" },
+        { id: "saved", source: "Save" },
       ],
-    }).success,
-    false,
+      [{ id: "saved", text: "储存" }],
+      checkerFor({ candidateProjection: projection }),
+    ),
+    { candidates: [{ sourceKey: "editing", language: "zh", content: "保存" }] },
   );
+  assert.equal(result.status, "complete");
+  const evidence = result.diagnostics[0]?.evidence.find(
+    ({ role }) => role === "candidate",
+  )?.value;
+  assert.ok(
+    evidence &&
+      typeof evidence === "object" &&
+      "groupRef" in evidence &&
+      "source" in evidence,
+  );
+  assert.deepEqual(evidence.groupRef, specialReference);
+  assert.deepEqual(evidence.source, projection.groups[0]!.source);
 });
 
 function configFor(
@@ -307,6 +249,7 @@ function configFor(
   translations: readonly Translation[],
   qualityChecker: ReturnType<typeof checkerFor>,
   exceptionStore?: QualityExceptionStore,
+  resultCache?: QualityCheckResultCache,
 ) {
   return defineConfig({
     source: {
@@ -353,6 +296,7 @@ function configFor(
       checks: [qualityChecker],
       buildCandidates: () => [],
       ...(exceptionStore === undefined ? {} : { exceptionStore }),
+      ...(resultCache === undefined ? {} : { resultCache }),
     },
   });
 }
@@ -366,6 +310,11 @@ function reference(
     familyKey: "ui|en|zh|Error Code {number}",
     targetKey,
     translationIndex,
+    translationIdentity: {
+      language: "zh",
+      namespace: "messages",
+      key: `record-${translationIndex}`,
+    },
     sourceKey,
     group: {
       ref: `${sourceKey}:${translationIndex}`,
@@ -449,7 +398,7 @@ void test("排除当前替代记录并保留其他内容相同的事实", async 
   assert.equal(result.diagnostics.length, 1);
   assert.equal(
     result.checks[0]?.version,
-    "checks.message-family-consistency/v1+message-families-test-v1",
+    "checks.message-family-consistency/v2+message-families-test-v1",
   );
   assert.equal(result.diagnostics[0]?.severity, "warning");
   assert.equal(result.diagnostics[0]?.checkId, "message-family-consistency");
@@ -462,8 +411,8 @@ void test("排除当前替代记录并保留其他内容相同的事实", async 
       ({ value }) =>
         typeof value === "object" &&
         value !== null &&
-        "translationIndex" in value &&
-        value.translationIndex === 0,
+        "sourceKey" in value &&
+        value.sourceKey === "editing",
     ),
     false,
   );
@@ -487,7 +436,7 @@ void test("排除当前替代记录并保留其他内容相同的事实", async 
     start: 4,
     end: 7,
   });
-  assert.equal(projected.count, 3);
+  assert.equal(projected.count, 2);
 });
 
 void test("声明的目标等价表达可合并，未声明签名仍独立计类", async () => {
@@ -685,12 +634,12 @@ void test("关联冲突时保留全部已知记录并标记不完整", async () 
       .map(({ value }) =>
         typeof value === "object" &&
         value !== null &&
-        "translationIndex" in value
-          ? value.translationIndex
+        "translationIdentity" in value
+          ? (value.translationIdentity as { key: string }).key
           : null,
       )
-      .sort((left, right) => Number(left) - Number(right)),
-    [0, 1, 2],
+      .sort(),
+    ["editing.one", "editing.two", "other"],
   );
   assert.ok(
     result.checks[0]?.issues.some(
@@ -730,8 +679,10 @@ void test("非法 UTF-16 保护范围作为投影契约错误拒绝", async () =
         candidates: [{ sourceKey: "editing", language: "zh", content: "😀" }],
       }),
       (error: unknown) =>
-        error instanceof StandardSchemaContractError &&
-        error.kind === "schema-mismatch",
+        error instanceof QualityCheckBindingError &&
+        error.cause instanceof StandardSchemaContractError &&
+        error.cause.kind === "schema-mismatch" &&
+        error.cause.message.includes("保护范围"),
     );
   }
 });
@@ -818,7 +769,7 @@ void test("目标结构分析不完整时保留已知参照差异并标记不完
   );
 });
 
-void test("例外保留警告发现及处理状态", async () => {
+void test("例外保留警告处理状态，未声明依据的通用工厂仍保守对待其他事实", async () => {
   let exceptions: readonly QualityException[] = [];
   const exceptionStore: QualityExceptionStore = {
     async load() {
@@ -872,4 +823,269 @@ void test("例外保留警告发现及处理状态", async () => {
     exceptionId: "known-family-variation",
     reason: "保留现有界面用语。",
   });
+  const changed = await analyzeQuality(
+    configFor(
+      [
+        { id: "editing", source: "Error Code 404" },
+        { id: "different", source: "Error Code 504" },
+        { id: "unrelated", source: "Save" },
+      ],
+      [
+        { id: "editing", text: "错误码 404" },
+        { id: "different", text: "错误 504" },
+        { id: "unrelated", text: "保存" },
+      ],
+      checkerFor(),
+      exceptionStore,
+    ),
+    { candidates },
+  );
+  assert.equal(changed.exceptionApplicability[0]?.status, "basis-changed");
+});
+
+void test("同次候选的等价回调分别接收当前候选，参照不共享首次结果", async () => {
+  const result = await analyzeQuality(
+    configFor(
+      [
+        { id: "first", source: "Error Code 404" },
+        { id: "second", source: "Error Code 504" },
+        { id: "saved", source: "Error Code 304" },
+      ],
+      [{ id: "saved", text: "错误码 304" }],
+      checkerFor({
+        targetEquivalence: (_signature, _language, input) =>
+          input.candidate.sourceKey,
+      }),
+    ),
+    {
+      candidates: [
+        { sourceKey: "first", language: "zh", content: "错误码 404" },
+        { sourceKey: "second", language: "zh", content: "错误码 504" },
+      ],
+    },
+  );
+  assert.equal(result.status, "complete");
+  assert.deepEqual(result.diagnostics, []);
+});
+
+void test("显式消息族依据复用无关编辑的缓存和例外，并跟随全部同族成员与位置变化", async () => {
+  const units: Unit[] = [
+    { id: "editing", source: "Error Code 404" },
+    { id: "saved-a", source: "Error Code 504" },
+    { id: "saved-b", source: "Error Code 304" },
+    { id: "other", source: "Good morning" },
+  ];
+  const translations: Translation[] = [
+    { id: "editing", text: "旧译文" },
+    { id: "saved-a", text: "错误 504" },
+    { id: "saved-b", text: "告警 304" },
+    { id: "other", text: "早上好" },
+  ];
+  const initialUnits = [...units];
+  const initialTranslations = [...translations];
+  const stored = new Map<
+    string,
+    Awaited<ReturnType<QualityCheckResultCache["get"]>>
+  >();
+  let hits = 0;
+  const cache: QualityCheckResultCache = {
+    async get(key) {
+      const value = stored.get(key);
+      if (value !== undefined) hits++;
+      return value;
+    },
+    async set(key, value) {
+      stored.set(key, value);
+    },
+  };
+  let exceptions: readonly QualityException[] = [];
+  const exceptionStore: QualityExceptionStore = {
+    async load() {
+      return exceptions;
+    },
+    async upsert(value) {
+      exceptions = [value];
+    },
+  };
+  const checker = checkerFor({
+    explicitBasis: true,
+    limits: { maxCategories: 1, maxSourcesPerCategory: 1 },
+  });
+  const candidates = [
+    { sourceKey: "editing", language: "zh", content: "错误码 404" },
+  ];
+  const run = () =>
+    analyzeQuality(
+      configFor(units, translations, checker, exceptionStore, cache),
+      { candidates },
+    );
+  const initial = await run();
+  assert.equal(initial.diagnostics.length, 1);
+  await exceptionStore.upsert(
+    createQualityException({
+      id: "family",
+      reason: "保留已有表达。",
+      execution: initial.checks[0]!.executions[0]!,
+    }),
+  );
+  const assertRestored = async () => {
+    const result = await run();
+    assert.equal(result.exceptionApplicability[0]?.status, "applicable");
+    assert.equal(result.diagnostics[0]?.handling.status, "excepted");
+    assert.deepEqual(
+      result.diagnostics[0]?.evidence,
+      initial.diagnostics[0]?.evidence,
+    );
+  };
+
+  translations[3] = { id: "other", text: "上午好" };
+  units.reverse();
+  translations.reverse();
+  await assertRestored();
+  assert.equal(hits, 1);
+  units.unshift({ id: "inserted", source: "Save" });
+  translations.unshift({ id: "inserted", text: "保存" });
+  await assertRestored();
+  assert.equal(hits, 2);
+  units.splice(
+    units.findIndex(({ id }) => id === "other"),
+    1,
+  );
+  translations.splice(
+    translations.findIndex(({ id }) => id === "other"),
+    1,
+  );
+  await assertRestored();
+  assert.equal(hits, 3);
+
+  // 展示只有一个代表，修改未显示参照的正文（类别不变）仍须重判。
+  const shown = initial.diagnostics[0]!.evidence.find(
+    ({ role }) => role === "saved-reference",
+  )!.object.key;
+  const hidden = shown === "saved-a" ? "saved-b" : "saved-a";
+  const hiddenIndex = translations.findIndex(({ id }) => id === hidden);
+  translations[hiddenIndex] = {
+    ...translations[hiddenIndex]!,
+    text: hidden === "saved-a" ? "错误 505" : "告警 305",
+  };
+  assert.equal(
+    (await run()).exceptionApplicability[0]?.status,
+    "basis-changed",
+  );
+  assert.equal(hits, 3);
+  units.splice(0, units.length, ...initialUnits);
+  translations.splice(0, translations.length, ...initialTranslations);
+  await assertRestored();
+  assert.equal(hits, 4);
+
+  units.push({ id: "new-member", source: "Error Code 204" });
+  translations.push({ id: "new-member", text: "错误 204" });
+  assert.equal(
+    (await run()).exceptionApplicability[0]?.status,
+    "basis-changed",
+  );
+  assert.equal(hits, 4);
+  units.pop();
+  translations.pop();
+  units[3] = { id: "other", source: "Error Code 104" };
+  assert.equal(
+    (await run()).exceptionApplicability[0]?.status,
+    "basis-changed",
+  );
+  assert.equal(hits, 4);
+  units[3] = initialUnits[3]!;
+  await assertRestored();
+  assert.equal(hits, 5);
+
+  const moved = configFor(units, translations, checker, exceptionStore, cache);
+  const originalAdapter = moved.translations!;
+  const movedConfig = defineConfig({
+    ...moved,
+    translations: {
+      ...moved.translations!,
+      read: async (language, sourceUnits) => {
+        const read = await originalAdapter.read(language, sourceUnits);
+        return {
+          ...read,
+          scopes: read.scopes.map((scope) => ({
+            ...scope,
+            range: "relocated/zh.json",
+          })),
+        };
+      },
+    },
+  });
+  assert.equal(
+    (await analyzeQuality(movedConfig, { candidates }))
+      .exceptionApplicability[0]?.status,
+    "basis-changed",
+  );
+  assert.equal(hits, 5);
+});
+
+void test("已知其他族的关联冲突局部化，相关冲突与未知源结构仍限制当前族", async () => {
+  const units: Unit[] = [
+    { id: "editing", source: "Error Code 404" },
+    { id: "saved", source: "Error Code 504" },
+    { id: "broken", source: "Save" },
+  ];
+  const translations: Translation[] = [
+    { id: "saved", text: "错误 504" },
+    { id: "broken", targetKey: "broken.one", text: "保存" },
+    { id: "broken", targetKey: "broken.two", text: "储存" },
+  ];
+  const numbers = asciiNumbers();
+  const analysis = createTextAnalysis({
+    recognizers: [
+      async (input) =>
+        input.text === "Unknown source"
+          ? {
+              tokens: [],
+              complete: false,
+              issues: [
+                { code: "sourceStructureUnknown", message: "未知源结构。" },
+              ],
+            }
+          : numbers(input),
+    ],
+  });
+  const run = () =>
+    analyzeQuality(
+      configFor(
+        units,
+        translations,
+        checkerFor({ analysis, explicitBasis: true }),
+      ),
+      {
+        candidates: [
+          { sourceKey: "editing", language: "zh", content: "错误码 404" },
+        ],
+      },
+    );
+  const unrelated = await run();
+  assert.equal(unrelated.status, "complete");
+  assert.equal(
+    unrelated.checks[0]?.issues.some(
+      ({ code }) => code === "translationAssociationConflict",
+    ),
+    false,
+  );
+  units[2] = { id: "broken", source: "Error Code 304" };
+  const related = await run();
+  assert.equal(related.status, "incomplete");
+  assert.equal(
+    related.checks[0]?.issues.some(
+      ({ code }) => code === "translationAssociationConflict",
+    ),
+    true,
+  );
+  units[2] = { id: "broken", source: "Unknown source" };
+  const unknown = await run();
+  assert.equal(unknown.status, "incomplete");
+  assert.equal(
+    unknown.checks[0]?.issues.some(
+      ({ code }) => code === "sourceStructureUnknown",
+    ),
+    true,
+  );
 });

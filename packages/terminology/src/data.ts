@@ -1,3 +1,6 @@
+import type { StandardSchemaV1 } from "@standard-schema/spec";
+import { z } from "zod";
+
 export type JsonValue =
   | null
   | boolean
@@ -6,6 +9,7 @@ export type JsonValue =
   | readonly JsonValue[]
   | { readonly [key: string]: JsonValue };
 
+// SDK 边界保持普通结构类型；内部 schema 通过 satisfies 对照公开契约。
 export type TermUsage = "preferred" | "allowed" | "forbidden";
 export type TermType =
   | "fullForm"
@@ -46,6 +50,117 @@ export type TermConceptData = TermMetadata & {
 export type TermbaseData = TermMetadata & {
   readonly concepts: readonly TermConceptData[];
 };
+
+const jsonScalarSchema = z.union([
+  z.string(),
+  z.number().refine((value) => !Object.is(value, -0), "JSON 数值不能为负零。"),
+  z.boolean(),
+  z.null(),
+]);
+export const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
+  z.union([
+    jsonScalarSchema,
+    z.array(jsonValueSchema),
+    // record/object 会跳过 __proto__；按键值项验证以保留合法 JSON 身份。
+    z
+      .custom<Record<string, unknown>>(
+        (value) =>
+          value !== null &&
+          typeof value === "object" &&
+          !Array.isArray(value) &&
+          (Object.getPrototypeOf(value) === Object.prototype ||
+            Object.getPrototypeOf(value) === null),
+      )
+      .transform(Object.entries)
+      .pipe(z.array(z.tuple([z.string(), jsonValueSchema])))
+      .transform((entries) => Object.fromEntries(entries)),
+  ]),
+);
+export const nonemptyTextSchema = z
+  .string()
+  .refine((value) => value.trim() !== "", "文本不得为空或仅有空白。");
+const termUsageSchema = z.enum(["preferred", "allowed", "forbidden"]);
+const termTypeSchema = z.enum([
+  "fullForm",
+  "abbreviation",
+  "acronym",
+  "shortForm",
+  "variant",
+  "phrase",
+]);
+const metadataShape = {
+  note: z.string().exactOptional(),
+  metadata: jsonValueSchema.exactOptional(),
+  sourceRefs: z.array(jsonValueSchema).readonly().exactOptional(),
+};
+const expressionSchema = z
+  .object({
+    ...metadataShape,
+    id: nonemptyTextSchema,
+    text: nonemptyTextSchema,
+    usage: termUsageSchema,
+    termType: termTypeSchema.exactOptional(),
+    variants: z.never().exactOptional(),
+  })
+  .readonly() satisfies z.ZodType<TermExpressionData>;
+const languageSchema = z
+  .object({
+    ...metadataShape,
+    language: nonemptyTextSchema,
+    definition: z
+      .object({ ...metadataShape, text: z.string() })
+      .readonly()
+      .exactOptional(),
+    expressions: z.array(expressionSchema).min(1).readonly(),
+  })
+  .readonly() satisfies z.ZodType<TermLanguageData>;
+const conceptSchema = z
+  .object({
+    ...metadataShape,
+    id: nonemptyTextSchema,
+    languages: z.array(languageSchema).min(1).readonly(),
+    subjectFields: z.array(z.string()).readonly().exactOptional(),
+  })
+  .readonly() satisfies z.ZodType<TermConceptData>;
+export const termbaseContract = z
+  .object({
+    ...metadataShape,
+    concepts: z.array(conceptSchema).readonly(),
+  })
+  .superRefine((data, context) => {
+    const conceptIds = new Set<string>();
+    for (const [ci, concept] of data.concepts.entries()) {
+      if (conceptIds.has(concept.id))
+        context.addIssue({
+          code: "custom",
+          message: "概念身份重复。",
+          path: ["concepts", ci, "id"],
+        });
+      conceptIds.add(concept.id);
+      const languages = new Set<string>();
+      const expressions = new Set<string>();
+      for (const [li, language] of concept.languages.entries()) {
+        const path = ["concepts", ci, "languages", li];
+        if (languages.has(language.language))
+          context.addIssue({
+            code: "custom",
+            message: "概念内语言段重复。",
+            path: [...path, "language"],
+          });
+        languages.add(language.language);
+        for (const [ei, expression] of language.expressions.entries()) {
+          if (expressions.has(expression.id))
+            context.addIssue({
+              code: "custom",
+              message: "概念内表达身份重复。",
+              path: [...path, "expressions", ei, "id"],
+            });
+          expressions.add(expression.id);
+        }
+      }
+    }
+  })
+  .readonly() satisfies z.ZodType<TermbaseData>;
 
 /** 查询用的平面视图；规范资料仍保留概念、语言和表达三层。 */
 export type TermExpression = {
@@ -91,20 +206,6 @@ export class TermContractError extends TypeError {
   }
 }
 
-/** 与 Standard Schema v1 结构兼容，不依赖 core。 */
-export type TermSchema<T> = {
-  readonly "~standard": {
-    readonly version: 1;
-    readonly vendor: string;
-    readonly types?: { readonly input: T; readonly output: T };
-    readonly validate: (
-      value: unknown,
-    ) =>
-      | { readonly value: T; readonly issues?: undefined }
-      | { readonly issues: readonly TermContractIssue[] };
-  };
-};
-
 export function contractIssue(
   code: string,
   message: string,
@@ -113,229 +214,78 @@ export function contractIssue(
   return { code, message, path };
 }
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
+/** 输入异常只公开字段位置与原因，调用方无需识别具体验证库。 */
+export function contractIssues(
+  error: z.ZodError,
+): readonly TermContractIssue[] {
+  return error.issues.map((issue) => ({
+    code: "invalid-input",
+    message: issue.message,
+    path: issue.path.map((part) =>
+      typeof part === "symbol" ? String(part) : part,
+    ),
+  }));
 }
 
-/** 拒绝 JSON 会静默丢失的值，且不执行 getter。 */
+/** 先复制再验证，保留特殊键；Zod 的对象输出不作为领域快照。 */
 export function copyJson(
   value: unknown,
   stage: TermContractError["stage"],
 ): JsonValue {
   const active = new Set<object>();
-  function visit(
-    current: unknown,
-    path: readonly (string | number)[],
-  ): JsonValue {
-    const fail = (): never => {
+  function copy(current: unknown, path: readonly (string | number)[]): unknown {
+    if (current === null || typeof current !== "object") {
+      const result = jsonScalarSchema.safeParse(current);
+      if (!result.success)
+        throw new TermContractError(
+          stage,
+          contractIssues(result.error).map((issue) => ({
+            ...issue,
+            path: [...path, ...issue.path],
+          })),
+        );
+      return result.data;
+    }
+    const prototype = Object.getPrototypeOf(current);
+    if (
+      active.has(current) ||
+      (prototype !== Object.prototype &&
+        prototype !== Array.prototype &&
+        prototype !== null)
+    )
       throw new TermContractError(stage, [
         contractIssue("invalid-json", "资料必须可无损保存为 JSON。", path),
       ]);
-    };
-    if (
-      current === null ||
-      typeof current === "boolean" ||
-      typeof current === "string"
-    )
-      return current;
-    if (typeof current === "number")
-      return Number.isFinite(current) && !Object.is(current, -0)
-        ? current
-        : fail();
-    if (typeof current !== "object" || active.has(current)) return fail();
-    const array = Array.isArray(current);
-    const prototype = Object.getPrototypeOf(current);
-    if (
-      array
-        ? prototype !== Array.prototype
-        : prototype !== Object.prototype && prototype !== null
-    )
-      return fail();
     active.add(current);
     try {
-      const result: Record<string, JsonValue> = {};
-      for (const key of Reflect.ownKeys(current)) {
-        if (array && key === "length") continue;
-        if (typeof key !== "string") return fail();
-        const descriptor = Object.getOwnPropertyDescriptor(current, key)!;
-        if (!descriptor.enumerable || !("value" in descriptor)) return fail();
-        if (
-          array &&
-          (!Number.isInteger(Number(key)) ||
-            Number(key) < 0 ||
-            String(Number(key)) !== key ||
-            Number(key) >= current.length)
-        )
-          return fail();
-        Object.defineProperty(result, key, {
-          value: visit(descriptor.value, [...path, array ? Number(key) : key]),
-          enumerable: true,
-        });
-      }
-      if (array) {
-        const items: JsonValue[] = [];
-        for (let index = 0; index < current.length; index += 1) {
-          if (!Object.hasOwn(result, index)) return fail();
-          items.push(result[String(index)]!);
-        }
-        return Object.freeze(items);
-      }
+      const result = Array.isArray(current)
+        ? Array.from(current, (item, index) => copy(item, [...path, index]))
+        : Object.fromEntries(
+            Object.entries(current).map(([key, item]) => [
+              key,
+              copy(item, [...path, key]),
+            ]),
+          );
       return Object.freeze(result);
     } finally {
       active.delete(current);
     }
   }
-  return visit(value, []);
+  const snapshot = copy(value, []);
+  return snapshot as JsonValue;
 }
 
-const usages = new Set(["preferred", "allowed", "forbidden"]);
-const termTypes = new Set([
-  "fullForm",
-  "abbreviation",
-  "acronym",
-  "shortForm",
-  "variant",
-  "phrase",
-]);
-
-function validateData(value: unknown): readonly TermContractIssue[] {
-  const issues: TermContractIssue[] = [];
-  const add = (
-    code: string,
-    message: string,
-    path: readonly (string | number)[],
-  ) => issues.push(contractIssue(code, message, path));
-  const nonempty = (item: unknown) =>
-    typeof item === "string" && item.trim() !== "";
-  function metadata(
-    item: Record<string, unknown>,
-    path: readonly (string | number)[],
-  ) {
-    if (item.note !== undefined && typeof item.note !== "string")
-      add("invalid-note", "说明必须是文本。", [...path, "note"]);
-    if (item.sourceRefs !== undefined && !Array.isArray(item.sourceRefs))
-      add("invalid-sources", "来源引用必须是数组。", [...path, "sourceRefs"]);
-  }
-  if (!isRecord(value) || !Array.isArray(value.concepts))
-    return [
-      contractIssue("invalid-termbase", "术语库必须包含 concepts 数组。", [
-        "concepts",
-      ]),
-    ];
-  metadata(value, []);
-  const conceptIds = new Set<string>();
-  value.concepts.forEach((concept: unknown, ci: number) => {
-    const path = ["concepts", ci];
-    if (!isRecord(concept)) {
-      add("invalid-concept", "概念必须是对象。", path);
-      return;
-    }
-    metadata(concept, path);
-    if (!nonempty(concept.id))
-      add("invalid-id", "概念身份必须非空。", [...path, "id"]);
-    else if (conceptIds.has(concept.id as string))
-      add("duplicate-concept-id", "概念身份重复。", [...path, "id"]);
-    else conceptIds.add(concept.id as string);
-    if (
-      concept.subjectFields !== undefined &&
-      (!Array.isArray(concept.subjectFields) ||
-        concept.subjectFields.some((item: unknown) => typeof item !== "string"))
-    )
-      add("invalid-subject-fields", "领域标签必须是文本数组。", [
-        ...path,
-        "subjectFields",
-      ]);
-    if (!Array.isArray(concept.languages) || concept.languages.length === 0) {
-      add("invalid-languages", "概念至少需要一个语言段。", [
-        ...path,
-        "languages",
-      ]);
-      return;
-    }
-    const languages = new Set<string>();
-    const expressionIds = new Set<string>();
-    concept.languages.forEach((language: unknown, li: number) => {
-      const lp = [...path, "languages", li];
-      if (!isRecord(language)) {
-        add("invalid-language", "语言段必须是对象。", lp);
-        return;
-      }
-      metadata(language, lp);
-      if (!nonempty(language.language))
-        add("invalid-language", "语言标识必须非空。", [...lp, "language"]);
-      else if (languages.has(language.language as string))
-        add("duplicate-language", "概念内语言段重复。", [...lp, "language"]);
-      else languages.add(language.language as string);
-      if (language.definition !== undefined) {
-        if (
-          !isRecord(language.definition) ||
-          typeof language.definition.text !== "string"
-        )
-          add("invalid-definition", "定义必须包含文本。", [
-            ...lp,
-            "definition",
-          ]);
-        else metadata(language.definition, [...lp, "definition"]);
-      }
-      if (
-        !Array.isArray(language.expressions) ||
-        language.expressions.length === 0
-      ) {
-        add("invalid-expressions", "语言段至少需要一个表达。", [
-          ...lp,
-          "expressions",
-        ]);
-        return;
-      }
-      language.expressions.forEach((expression: unknown, ei: number) => {
-        const ep = [...lp, "expressions", ei];
-        if (!isRecord(expression)) {
-          add("invalid-expression", "表达必须是对象。", ep);
-          return;
-        }
-        metadata(expression, ep);
-        if (!nonempty(expression.id))
-          add("invalid-id", "表达身份必须非空。", [...ep, "id"]);
-        else if (expressionIds.has(expression.id as string))
-          add("duplicate-expression-id", "概念内表达身份重复。", [...ep, "id"]);
-        else expressionIds.add(expression.id as string);
-        if (!nonempty(expression.text))
-          add("invalid-text", "术语表达不得为空或仅有空白。", [...ep, "text"]);
-        if (
-          typeof expression.usage !== "string" ||
-          !usages.has(expression.usage)
-        )
-          add(
-            "invalid-usage",
-            "表达必须指定 preferred、allowed 或 forbidden。",
-            [...ep, "usage"],
-          );
-        if (
-          expression.termType !== undefined &&
-          (typeof expression.termType !== "string" ||
-            !termTypes.has(expression.termType))
-        )
-          add("invalid-term-type", "表达类型无效。", [...ep, "termType"]);
-        if (Object.hasOwn(expression, "variants"))
-          add("unsupported-variants", "资料变体必须独立登记为表达。", [
-            ...ep,
-            "variants",
-          ]);
-      });
-    });
-  });
-  return issues;
-}
-
-export const termbaseDataSchema: TermSchema<TermbaseData> = {
+export const termbaseDataSchema: StandardSchemaV1<TermbaseData> = {
   "~standard": {
     version: 1,
     vendor: "lioni-terminology",
     validate(value) {
       try {
         const snapshot = copyJson(value, "create");
-        const issues = validateData(snapshot);
-        return issues.length ? { issues } : { value: snapshot as TermbaseData };
+        const result = termbaseContract.safeParse(snapshot);
+        return result.success
+          ? { value: snapshot as unknown as TermbaseData }
+          : { issues: contractIssues(result.error) };
       } catch (error) {
         if (error instanceof TermContractError) return { issues: error.issues };
         throw error;
@@ -346,10 +296,11 @@ export const termbaseDataSchema: TermSchema<TermbaseData> = {
 
 /** 创建独立、不可改写的资料快照；使用地位冲突在有效选择之后检查。 */
 export function createTermbase(value: unknown): Termbase {
-  const result = termbaseDataSchema["~standard"].validate(value);
-  if (result.issues !== undefined)
-    throw new TermContractError("create", result.issues);
-  const data = result.value;
+  const snapshot = copyJson(value, "create");
+  const result = termbaseContract.safeParse(snapshot);
+  if (!result.success)
+    throw new TermContractError("create", contractIssues(result.error));
+  const data = snapshot as unknown as TermbaseData;
   const expressions = Object.freeze(
     data.concepts.flatMap((concept) =>
       concept.languages.flatMap((languageData) =>

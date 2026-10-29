@@ -1,11 +1,13 @@
+import type { StandardSchemaV1 } from "@standard-schema/spec";
+import { z } from "zod";
+
 import {
   copyJson,
-  contractIssue,
-  isRecord,
+  contractIssues,
+  jsonValueSchema,
+  nonemptyTextSchema,
   TermContractError,
   type JsonValue,
-  type TermContractIssue,
-  type TermSchema,
 } from "./data.ts";
 
 export type TermRange = { readonly start: number; readonly end: number };
@@ -33,6 +35,10 @@ export type TermComparisonInput = {
   readonly groups: readonly TermComparisonGroup[];
 };
 
+export const termRangeSchema = z
+  .object({ start: z.int().nonnegative(), end: z.int().nonnegative() })
+  .readonly();
+
 export function splitsSurrogatePair(text: string, boundary: number): boolean {
   if (boundary <= 0 || boundary >= text.length) return false;
   const before = text.charCodeAt(boundary - 1);
@@ -42,126 +48,84 @@ export function splitsSurrogatePair(text: string, boundary: number): boolean {
   );
 }
 
-export function textInputIssues(
-  value: unknown,
-  path: readonly (string | number)[] = [],
-): readonly TermContractIssue[] {
-  const issues: TermContractIssue[] = [];
-  const add = (
-    code: string,
-    message: string,
-    suffix: readonly (string | number)[] = [],
-  ) => issues.push(contractIssue(code, message, [...path, ...suffix]));
-  if (!isRecord(value))
-    return [contractIssue("invalid-text-input", "文本输入必须是对象。", path)];
-  if (typeof value.language !== "string" || value.language.trim() === "")
-    add("invalid-language", "文本语言必须非空。", ["language"]);
-  if (value.complete !== undefined && typeof value.complete !== "boolean")
-    add("invalid-completeness", "范围完整性必须是布尔值。", ["complete"]);
-  if (!Array.isArray(value.fragments)) {
-    add("invalid-fragments", "文本输入需要 fragments 数组。", ["fragments"]);
-    return issues;
-  }
-  value.fragments.forEach((fragment: unknown, index: number) => {
-    const fp = ["fragments", index];
-    if (
-      !isRecord(fragment) ||
-      !Object.hasOwn(fragment, "ref") ||
-      typeof fragment.text !== "string"
-    ) {
-      add("invalid-fragment", "片段必须包含 ref 与 text。", fp);
-      return;
-    }
-    if (fragment.protectedRanges !== undefined) {
-      if (!Array.isArray(fragment.protectedRanges)) {
-        add("invalid-range", "保护区间必须是数组。", [
-          ...fp,
-          "protectedRanges",
-        ]);
-        return;
-      }
-      fragment.protectedRanges.forEach((range: unknown, ri: number) => {
-        if (
-          !isRecord(range) ||
-          typeof range.start !== "number" ||
-          typeof range.end !== "number" ||
-          !Number.isInteger(range.start) ||
-          !Number.isInteger(range.end) ||
-          range.start < 0 ||
-          range.end <= range.start ||
-          range.end > (fragment.text as string).length ||
-          splitsSurrogatePair(fragment.text as string, range.start) ||
-          splitsSurrogatePair(fragment.text as string, range.end)
-        )
-          add("invalid-range", "保护区间必须是正文内非空的 UTF-16 半开区间。", [
-            ...fp,
-            "protectedRanges",
-            ri,
-          ]);
-      });
-    }
-  });
-  return issues;
+export function validTermRange(text: string, range: TermRange): boolean {
+  return (
+    range.end > range.start &&
+    range.end <= text.length &&
+    !splitsSurrogatePair(text, range.start) &&
+    !splitsSurrogatePair(text, range.end)
+  );
 }
+
+export const termFragmentSchema = z
+  .object({
+    ref: jsonValueSchema,
+    text: z.string(),
+    protectedRanges: z.array(termRangeSchema).readonly().exactOptional(),
+  })
+  .superRefine((fragment, context) => {
+    fragment.protectedRanges?.forEach((range, index) => {
+      if (!validTermRange(fragment.text, range))
+        context.addIssue({
+          code: "custom",
+          message: "保护区间必须是正文内非空的 UTF-16 半开区间。",
+          path: ["protectedRanges", index],
+        });
+    });
+  })
+  .readonly() satisfies z.ZodType<TermFragment>;
+export const termTextInputSchema = z
+  .object({
+    language: nonemptyTextSchema,
+    fragments: z.array(termFragmentSchema).readonly(),
+    /** 省略表示宿主已提供此侧完整的比较范围。 */
+    complete: z.boolean().exactOptional(),
+  })
+  .readonly() satisfies z.ZodType<TermTextInput>;
+const comparisonGroupSchema = z
+  .object({
+    ref: jsonValueSchema.exactOptional(),
+    source: termTextInputSchema,
+    target: termTextInputSchema,
+  })
+  .readonly();
+export const comparisonContract = z
+  .object({ groups: z.array(comparisonGroupSchema).readonly() })
+  .readonly() satisfies z.ZodType<TermComparisonInput>;
 
 export function validateTextInput(value: TermTextInput): void {
-  const issues = textInputIssues(value);
-  if (issues.length) throw new TermContractError("input", issues);
+  const result = termTextInputSchema.safeParse(value);
+  if (!result.success)
+    throw new TermContractError("input", contractIssues(result.error));
 }
 
-export const termComparisonInputSchema: TermSchema<TermComparisonInput> = {
-  "~standard": {
-    version: 1,
-    vendor: "lioni-terminology",
-    validate(value) {
-      try {
-        const snapshot = copyJson(value, "input");
-        if (!isRecord(snapshot) || !Array.isArray(snapshot.groups))
-          return {
-            issues: [
-              contractIssue(
-                "invalid-comparison",
-                "比较输入需要 groups 数组。",
-                ["groups"],
-              ),
-            ],
-          };
-        const issues: TermContractIssue[] = [];
-        snapshot.groups.forEach((group: unknown, index: number) => {
-          if (!isRecord(group)) {
-            issues.push(
-              contractIssue("invalid-group", "比较组必须是对象。", [
-                "groups",
-                index,
-              ]),
-            );
-            return;
-          }
-          issues.push(
-            ...textInputIssues(group.source, ["groups", index, "source"]),
-          );
-          issues.push(
-            ...textInputIssues(group.target, ["groups", index, "target"]),
-          );
-        });
-        return issues.length
-          ? { issues }
-          : { value: snapshot as TermComparisonInput };
-      } catch (error) {
-        if (error instanceof TermContractError) return { issues: error.issues };
-        throw error;
-      }
+export const termComparisonInputSchema: StandardSchemaV1<TermComparisonInput> =
+  {
+    "~standard": {
+      version: 1,
+      vendor: "lioni-terminology",
+      validate(value) {
+        try {
+          const snapshot = copyJson(value, "input");
+          const result = comparisonContract.safeParse(snapshot);
+          return result.success
+            ? { value: snapshot as TermComparisonInput }
+            : { issues: contractIssues(result.error) };
+        } catch (error) {
+          if (error instanceof TermContractError)
+            return { issues: error.issues };
+          throw error;
+        }
+      },
     },
-  },
-};
+  };
 
-export function comparisonSnapshot(
-  value: TermComparisonInput,
-): TermComparisonInput {
-  const result = termComparisonInputSchema["~standard"].validate(value);
-  if (result.issues !== undefined)
-    throw new TermContractError("input", result.issues);
-  return result.value;
+export function comparisonSnapshot(value: unknown): TermComparisonInput {
+  const snapshot = copyJson(value, "input");
+  const result = comparisonContract.safeParse(snapshot);
+  if (!result.success)
+    throw new TermContractError("input", contractIssues(result.error));
+  return snapshot as TermComparisonInput;
 }
 
 export function sameJson(left: unknown, right: unknown): boolean {

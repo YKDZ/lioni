@@ -13,6 +13,7 @@ testArtifactConsumer(
   },
   async ({ root, runNode, runCommand, runProcess, typecheck }) => {
     await typecheck();
+    await runNode("standard-schema-consumer.ts");
     const sdk = await runNode("consumer.ts");
     const executable = path.join(
       root,
@@ -110,6 +111,26 @@ testArtifactConsumer(
       await readFile(path.join(root, "lioni.exceptions.yaml"), "utf8"),
       /approved-number/u,
     );
+    await writeFile(
+      path.join(root, "fr.json"),
+      JSON.stringify([
+        { id: "catalog", body: "Enregistrer 1 fichier" },
+        { id: "guide", body: { text: "Consulter 3 pages" } },
+      ]),
+    );
+    const unrelatedEdit = await runProcess(executable, [
+      "qa",
+      "lioni.config.ts",
+      "--output-format",
+      "structured",
+    ]);
+    assert.equal(unrelatedEdit.status, 0);
+    assert.partialDeepStrictEqual(JSON.parse(unrelatedEdit.stdout), {
+      data: {
+        exceptionApplicability: [{ status: "applicable" }],
+        diagnostics: [{ handling: { status: "excepted" } }],
+      },
+    });
     assert.deepEqual(await readFile(baselinePath), baseline);
   },
 );

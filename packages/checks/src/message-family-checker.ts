@@ -2,6 +2,8 @@ import type {
   ActualTranslationFact,
   Awaitable,
   FrameworkFacts,
+  QualityCheckDefinition,
+  QualityInputBasis,
   QualityCheckInput,
   QualityCheckOutcome,
   QualityCheckProjectionInput,
@@ -19,6 +21,7 @@ import {
   QualityCheckBindingError,
   bindQualityCheck,
   StandardSchemaContractError,
+  snapshotJsonValue,
 } from "@lioni/core";
 import type { MemoScope } from "@lioni/memo";
 import type {
@@ -27,7 +30,7 @@ import type {
   TextAnalysis,
 } from "@lioni/text-analysis";
 import { createTextAnalysis, signatureKey } from "@lioni/text-analysis";
-import * as v from "valibot";
+import { z } from "zod";
 
 import {
   messageFamilyInputSchema,
@@ -47,15 +50,10 @@ import {
   compareMessageFamily,
   indexMessageFamilies,
 } from "./message-families.ts";
-import { isRecord } from "./object-guards.ts";
-
-const configurationSchema = v.pipe(
-  v.custom<Record<string, unknown>>(isRecord, "消息族展示配置无效。"),
-  v.object({ limits: messageFamilyLimitsSchema }, "消息族展示配置无效。"),
-  v.readonly(),
-);
-
-type Configuration = v.InferOutput<typeof configurationSchema>;
+const configurationSchema = z
+  .object({ limits: messageFamilyLimitsSchema })
+  .readonly();
+type Configuration = z.output<typeof configurationSchema>;
 
 export type MessageFamilySubject<
   TSelectedUnit extends TranslationUnitInput,
@@ -151,6 +149,21 @@ export type MessageFamilyCheckerOptions<
       TUnavailable
     >,
   ) => Awaitable<MessageFamilyInput>;
+  /**
+   * 显式声明宿主投影、选择及等价策略所用的额外依据。
+   * 工厂自动补入全部同族参照、候选签名、关联、位置及完整性；未声明时沿用核心完整事实默认值。
+   */
+  readonly fingerprintInput?: (
+    input: QualityCheckRuleInput<
+      TUnit,
+      TTranslation,
+      unknown,
+      TSubject,
+      MessageFamilyInput,
+      TBody,
+      TUnavailable
+    >,
+  ) => QualityInputBasis;
   readonly analysis?: TextAnalysis;
   readonly sourceTemplate?: TemplateOptions;
   readonly targetTemplate?: TemplateOptions;
@@ -173,11 +186,10 @@ type SignedMessageGroup = {
 };
 
 type ProjectedReferences = {
-  readonly references: readonly MessageFamilyReference[];
   readonly index: MessageFamilyIndex;
   readonly incomplete: boolean;
-  readonly incompleteFamilies: ReadonlySet<string>;
   readonly issues: readonly MessageFamilyIssue[];
+  readonly basis: readonly unknown[];
 };
 
 const defaultLimits: MessageFamilyLimits = {
@@ -207,7 +219,13 @@ export function createMessageFamilyChecker<
     TUnavailable,
     TSubject
   >,
-) {
+): QualityCheckDefinition<
+  TUnit,
+  TTranslation,
+  QualityObject,
+  TBody,
+  TUnavailable
+> {
   const checkId = options.id ?? "message-family-consistency";
   const analysis = options.analysis ?? createTextAnalysis();
   const sourceTemplate = options.sourceTemplate ?? defaultTemplate;
@@ -222,22 +240,23 @@ export function createMessageFamilyChecker<
   async function projectReferences(
     input: QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
     language: string,
-    memo: MemoScope,
+    candidateSourceKey: string,
+    familyKeys: ReadonlySet<string>,
   ): Promise<ProjectedReferences> {
     const facts = input.facts;
     const issues: MessageFamilyIssue[] = [];
-    const incompleteFamilies = new Set<string>();
     const references: MessageFamilyReference[] = [];
+    const basis: unknown[] = [];
     let incomplete = false;
     const sourceByKey = new Map(
       facts.source.units.map((unit) => [unit.key, unit]),
     );
-    const sourceComplete =
-      facts.source.read.status === "complete" &&
-      facts.source.read.scopes.every(
-        ({ enumeration }) => enumeration === "complete",
-      );
-    if (!sourceComplete) {
+    if (
+      facts.source.read.status !== "complete" ||
+      facts.source.read.scopes.some(
+        ({ enumeration }) => enumeration !== "complete",
+      )
+    ) {
       incomplete = true;
       issues.push(
         issue(
@@ -245,17 +264,20 @@ export function createMessageFamilyChecker<
           "原文读取不完整，可能缺少消息族参照。",
         ),
       );
+      basis.push({ sourceRead: facts.source.read });
     }
-
     const translationRead = facts.translations.reads.find(
       (read) => read.language === language,
     );
-    const languageComplete =
-      translationRead?.status === "complete" &&
-      translationRead.scopes.every(
-        ({ enumeration }) => enumeration === "complete",
-      );
-    if (!languageComplete) {
+    // 有明确 covers 的缺口由对应关联处理；没有范围归属的读取失败可能隐藏任意同族参照。
+    if (
+      translationRead === undefined ||
+      translationRead.error !== undefined ||
+      translationRead.scopes.some(
+        (scope) =>
+          scope.enumeration !== "complete" && scope.covers.length === 0,
+      )
+    ) {
       incomplete = true;
       issues.push(
         issue(
@@ -264,46 +286,57 @@ export function createMessageFamilyChecker<
           { language },
         ),
       );
+      basis.push({ translationRead: translationRead ?? null });
     }
 
+    const replacedIndex = candidateRecordIndex(
+      facts,
+      candidateSourceKey,
+      language,
+    );
     for (const association of facts.associations) {
       if (association.language !== language) continue;
-      const sourceUnit = sourceByKey.get(association.sourceKey);
+      const sourceKey = association.sourceKey;
+      const sourceUnit = sourceByKey.get(sourceKey);
+      const associationBasis = {
+        sourceKey,
+        language,
+        status: association.status,
+        coverageStatus: association.coverageStatus,
+        translations: association.translationIndexes
+          .map((index) => facts.translations.records[index]?.identity ?? null)
+          .sort(stableCompare),
+      };
       if (sourceUnit === undefined) {
         incomplete = true;
         issues.push(
           issue(
             "sourceAssociationUnavailable",
             "消息族关联缺少对应原文单元。",
-            {
-              language,
-              sourceKey: association.sourceKey,
-            },
+            { language, sourceKey },
           ),
         );
+        basis.push(associationBasis);
         continue;
       }
-      if (sourceUnit.bodyAvailability !== "available") {
-        incomplete = true;
-        issues.push(
+      const associationIssues: MessageFamilyIssue[] = [];
+      let associationIncomplete =
+        sourceUnit.bodyAvailability !== "available" ||
+        association.coverageStatus !== "complete" ||
+        ["unknown", "conflict", "unavailable"].includes(association.status);
+      if (sourceUnit.bodyAvailability !== "available")
+        associationIssues.push(
           issue(
             "sourceBodyUnavailable",
             "原文正文不可用，无法完整投影消息族。",
-            {
-              language,
-              sourceKey: association.sourceKey,
-            },
+            { language, sourceKey },
           ),
         );
-      }
       if (
         association.coverageStatus !== "complete" ||
-        association.status === "unknown" ||
-        association.status === "conflict" ||
-        association.status === "unavailable"
-      ) {
-        incomplete = true;
-        issues.push(
+        ["unknown", "conflict", "unavailable"].includes(association.status)
+      )
+        associationIssues.push(
           issue(
             association.status === "conflict"
               ? "translationAssociationConflict"
@@ -312,182 +345,286 @@ export function createMessageFamilyChecker<
                 : association.status === "unavailable"
                   ? "translationBodyUnavailable"
                   : "translationAssociationIncomplete",
-            `原文 ${association.sourceKey} 的目标译文关联不完整（${association.status}）。`,
-            { language, sourceKey: association.sourceKey },
+            `原文 ${sourceKey} 的目标译文关联不完整（${association.status}）。`,
+            { language, sourceKey },
           ),
         );
-      }
-      if (
-        association.status === "missing" &&
-        association.translationIndexes.length === 0
-      )
-        continue;
-
+      let knownFamilies = association.translationIndexes.length > 0;
+      let relevant = false;
+      const projectedBasis: unknown[] = [];
       for (const translationIndex of association.translationIndexes) {
+        if (translationIndex === replacedIndex) continue;
         const translation = facts.translations.records[translationIndex];
         if (translation === undefined || translation.language !== language) {
-          incomplete = true;
-          issues.push(
+          knownFamilies = false;
+          associationIncomplete = true;
+          associationIssues.push(
             issue(
               "translationRecordUnavailable",
-              `译文记录 ${translationIndex} 不在目标语言 ${language} 的读取事实中。`,
-              { language, sourceKey: association.sourceKey },
+              `目标语言 ${language} 的关联译文记录不可用。`,
+              { language, sourceKey },
             ),
           );
           continue;
         }
-        const context: MessageFamilyReferenceProjection<
-          TUnit,
-          TTranslation,
-          TBody,
-          TUnavailable
-        > = {
-          kind: "reference",
-          sourceUnit,
-          sourceKey: association.sourceKey,
-          language,
-          association,
-          translation,
-        };
         let projected: MessageFamilyInput;
         try {
-          projected = await options.project(context, input);
+          projected = validateProjection(
+            await options.project(
+              {
+                kind: "reference",
+                sourceUnit,
+                sourceKey,
+                language,
+                association,
+                translation,
+              },
+              input,
+            ),
+            sourceKey,
+            language,
+            checkId,
+          );
         } catch (error) {
           throw new QualityCheckBindingError(checkId, "projection", error);
         }
-        projected = validateProjection(
-          projected,
-          association.sourceKey,
+        const projectionIssues = withSource(
+          projected.issues ?? [],
+          sourceKey,
           language,
-          checkId,
         );
         if (projected.complete === false) {
-          incomplete = true;
-          if ((projected.issues?.length ?? 0) === 0)
-            issues.push(
+          knownFamilies = false;
+          associationIncomplete = true;
+          if (projectionIssues.length === 0)
+            projectionIssues.push(
               issue(
                 "referenceProjectionIncomplete",
                 "保存参照投影仍有未提供的消息组。",
-                { language, sourceKey: association.sourceKey },
+                { language, sourceKey },
               ),
             );
         }
-        issues.push(
-          ...withSource(
-            projected.issues ?? [],
-            association.sourceKey,
-            language,
-          ),
+        const signedGroups = await Promise.all(
+          projected.groups.map(async (group) => {
+            assertProjectedLanguage(group, language, checkId);
+            return signGroup(
+              group,
+              analysis,
+              sourceTemplate,
+              targetTemplate,
+              options.targetEquivalence,
+              language,
+              { sourceKey },
+              input.memo,
+              input,
+            );
+          }),
         );
-
-        for (const group of projected.groups) {
-          assertProjectedLanguage(group, language, checkId);
-          const signed = await signGroup(
-            group,
-            analysis,
-            sourceTemplate,
-            targetTemplate,
-            options.targetEquivalence,
-            group.target.language,
-            { sourceKey: association.sourceKey },
-            memo,
-            input,
-          );
-          issues.push(...signed.issues);
-          if (signed.familyKey === "") {
-            incomplete = true;
+        const projectionRelevant = signedGroups.some(({ familyKey }) =>
+          familyKeys.has(familyKey),
+        );
+        if (signedGroups.some(({ familyKey }) => familyKey === ""))
+          knownFamilies = false;
+        relevant ||= projectionRelevant;
+        if (!knownFamilies || projectionRelevant) {
+          associationIssues.push(...projectionIssues);
+          projectedBasis.push({
+            identity: translation.identity,
+            location: translation.range,
+            complete: projected.complete ?? true,
+            issues: projectionIssues,
+          });
+        }
+        for (const signed of signedGroups) {
+          if (signed.familyKey !== "" && !familyKeys.has(signed.familyKey))
             continue;
-          }
+          issues.push(...signed.issues);
+          projectedBasis.push({
+            identity: translation.identity,
+            location: translation.range,
+            ...signedBasis(signed),
+          });
           if (
+            signed.familyKey === "" ||
             signed.targetKey === undefined ||
             signed.targetSignatures === undefined
           ) {
             incomplete = true;
-            incompleteFamilies.add(signed.familyKey);
             continue;
           }
           references.push({
             familyKey: signed.familyKey,
             targetKey: signed.targetKey,
             translationIndex,
-            sourceKey: association.sourceKey,
-            group,
+            translationIdentity: translation.identity,
+            sourceKey,
+            group: signed.group,
             sourceSignatures: signed.sourceSignatures,
             targetSignatures: signed.targetSignatures,
             translationLocation: {
               language,
               range: translation.range,
-              key: association.sourceKey,
+              key: sourceKey,
             },
           });
         }
       }
+      if (
+        relevant ||
+        (!knownFamilies &&
+          (associationIssues.length > 0 || projectedBasis.length > 0))
+      ) {
+        issues.push(...associationIssues);
+        incomplete ||= associationIncomplete;
+        basis.push({
+          association: associationBasis,
+          sourceAvailability: sourceUnit.bodyAvailability,
+          projections: projectedBasis.sort(stableCompare),
+        });
+      }
     }
-
-    const index = indexMessageFamilies(references);
-    return { references, index, incomplete, incompleteFamilies, issues };
+    return {
+      index: indexMessageFamilies(references),
+      incomplete,
+      issues: issues.sort(stableCompare),
+      basis: basis.sort(stableCompare),
+    };
   }
 
-  const memoKeyReferences = (
-    input: QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
-    language: string,
-    _memo: MemoScope,
-  ): readonly unknown[] => [input.facts, language, input.dependencies];
-  function getReferences(
-    memo: MemoScope,
-    input: QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
-    language: string,
-  ): Promise<ProjectedReferences> {
-    const memoized = memo.memo(projectReferences, {
-      key: memoKeyReferences,
-    });
-    return memoized(input, language, memo);
-  }
+  type PreparedSubject = {
+    readonly value: TSubject;
+    readonly projected: MessageFamilyInput;
+    readonly groups: readonly SignedMessageGroup[];
+    readonly references: ProjectedReferences;
+  };
 
   return bindQualityCheck<
     TUnit,
     TTranslation,
     typeof configurationSchema,
     typeof inputSchema,
-    TSubject,
+    PreparedSubject,
     QualityObject,
     TBody,
     TUnavailable
   >({
     id: checkId,
-    version: `checks.message-family-consistency/v1+${options.hostVersion}`,
+    version: `checks.message-family-consistency/v2+${options.hostVersion}`,
     configurationSchema,
     configuration: { limits },
     inputSchema,
-    select: options.select,
-    project: async (
-      input: QualityCheckProjectionInput<
-        TUnit,
-        TTranslation,
-        Configuration,
-        TSubject,
-        TBody,
-        TUnavailable
-      >,
-    ) => ({
-      status: "ready",
-      value:
+    select: async (input) => {
+      const selection = await options.select(input);
+      if (selection.status !== "selected") return selection;
+      const subject = selection.subject;
+      const projected = validateProjection(
         options.projectCandidate === undefined
-          ? await options.project(
+          ? await options.project({ kind: "candidate", subject }, input)
+          : await options.projectCandidate({ ...input, subject }),
+        subject.sourceKey,
+        subject.language,
+        checkId,
+      );
+      const groups = await Promise.all(
+        projected.groups.map(async (group) => {
+          assertProjectedLanguage(group, subject.language, checkId);
+          return signGroup(
+            group,
+            analysis,
+            sourceTemplate,
+            targetTemplate,
+            options.targetEquivalence,
+            subject.language,
+            { sourceKey: subject.sourceKey },
+            input.memo,
+            input,
+          );
+        }),
+      );
+      // 宿主回调可读取当前候选，参照准备不可按 facts/language 错误共享首次候选的结果。
+      const references = await projectReferences(
+        input,
+        subject.language,
+        subject.sourceKey,
+        new Set(groups.map(({ familyKey }) => familyKey)),
+      );
+      return {
+        status: "selected",
+        subject: { value: subject, projected, groups, references },
+      };
+    },
+    project: ({ subject }) => ({ status: "ready", value: subject.projected }),
+    ...(options.fingerprintInput === undefined
+      ? {}
+      : {
+          fingerprintInput: (
+            input: QualityCheckRuleInput<
+              TUnit,
+              TTranslation,
+              Configuration,
+              PreparedSubject,
+              MessageFamilyInput,
+              TBody,
+              TUnavailable
+            >,
+          ) => {
+            const subject = input.subject.value;
+            const association = findAssociation(
+              input.facts,
+              subject.sourceKey,
+              subject.language,
+            );
+            return snapshotJsonValue(
               {
-                kind: "candidate",
-                subject: input.subject,
+                input: options.fingerprintInput!({ ...input, subject }),
+                candidate: {
+                  sourceKey: subject.sourceKey,
+                  language: subject.language,
+                  complete: input.projected.complete ?? true,
+                  issues: input.projected.issues ?? [],
+                  groups: input.subject.groups.map(signedBasis),
+                },
+                candidateSourceAvailability:
+                  subject.sourceUnit.bodyAvailability,
+                candidateLocation: translationLocation(
+                  input.facts,
+                  subject.sourceKey,
+                  subject.language,
+                  candidateRecordIndex(
+                    input.facts,
+                    subject.sourceKey,
+                    subject.language,
+                  ),
+                ),
+                replacement:
+                  association === undefined
+                    ? null
+                    : {
+                        status: association.status,
+                        coverageStatus: association.coverageStatus,
+                        translations: association.translationIndexes
+                          .map(
+                            (index) =>
+                              input.facts.translations.records[index]
+                                ?.identity ?? null,
+                          )
+                          .sort(stableCompare),
+                      },
+                references: input.subject.references.basis,
+                issues: input.subject.references.issues,
+                incomplete: input.subject.references.incomplete,
               },
-              input,
-            )
-          : await options.projectCandidate(input),
-    }),
+              "消息族检查依据",
+            );
+          },
+        }),
     check: async (
       input: QualityCheckRuleInput<
         TUnit,
         TTranslation,
         Configuration,
-        TSubject,
+        PreparedSubject,
         MessageFamilyInput,
         TBody,
         TUnavailable
@@ -495,31 +632,31 @@ export function createMessageFamilyChecker<
     ): Promise<QualityCheckOutcome<QualityObject>> => {
       const object: QualityObject = {
         kind: "translation-unit",
-        key: input.subject.sourceKey,
-        language: input.subject.language,
+        key: input.subject.value.sourceKey,
+        language: input.subject.value.language,
       };
       const candidateLocation = translationLocation(
         input.facts,
-        input.subject.sourceKey,
-        input.subject.language,
+        input.subject.value.sourceKey,
+        input.subject.value.language,
         candidateRecordIndex(
           input.facts,
-          input.subject.sourceKey,
-          input.subject.language,
+          input.subject.value.sourceKey,
+          input.subject.value.language,
         ),
       );
       const candidateIssues: MessageFamilyIssue[] = withSource(
         input.projected.issues ?? [],
-        input.subject.sourceKey,
-        input.subject.language,
+        input.subject.value.sourceKey,
+        input.subject.value.language,
       );
       let incomplete = input.projected.complete === false;
-      if (input.subject.sourceUnit.bodyAvailability !== "available") {
+      if (input.subject.value.sourceUnit.bodyAvailability !== "available") {
         incomplete = true;
         candidateIssues.push(
           issue("candidateSourceUnavailable", "候选对应的原文正文不可用。", {
-            language: input.subject.language,
-            sourceKey: input.subject.sourceKey,
+            language: input.subject.value.language,
+            sourceKey: input.subject.value.sourceKey,
           }),
         );
       }
@@ -529,16 +666,16 @@ export function createMessageFamilyChecker<
             "candidateProjectionIncomplete",
             "候选投影仍有未提供的消息组。",
             {
-              language: input.subject.language,
-              sourceKey: input.subject.sourceKey,
+              language: input.subject.value.language,
+              sourceKey: input.subject.value.sourceKey,
             },
           ),
         );
 
       const association = findAssociation(
         input.facts,
-        input.subject.sourceKey,
-        input.subject.language,
+        input.subject.value.sourceKey,
+        input.subject.value.language,
       );
       const excludedRecordIndexes = new Set<number>();
       if (
@@ -563,23 +700,23 @@ export function createMessageFamilyChecker<
               : "candidateAssociationUnknown",
             "无法唯一确认候选替代的已保存译文，保留关联限制。",
             {
-              language: input.subject.language,
-              sourceKey: input.subject.sourceKey,
+              language: input.subject.value.language,
+              sourceKey: input.subject.value.sourceKey,
             },
           ),
         );
       }
 
-      const references = await getReferences(
-        input.memo,
-        input,
-        input.subject.language,
-      );
+      const references = input.subject.references;
       const initialCandidateIssueCount = candidateIssues.length;
       incomplete = incomplete || references.incomplete;
       const allIssues = [
         ...candidateIssues,
-        ...withSource(references.issues, undefined, input.subject.language),
+        ...withSource(
+          references.issues,
+          undefined,
+          input.subject.value.language,
+        ),
       ];
       const diagnostics: {
         readonly severity: "warning";
@@ -590,28 +727,13 @@ export function createMessageFamilyChecker<
       }[] = [];
       let comparable = false;
 
-      for (const group of input.projected.groups) {
-        assertProjectedLanguage(group, input.subject.language, checkId);
-        const signed = await signGroup(
-          group,
-          analysis,
-          sourceTemplate,
-          targetTemplate,
-          options.targetEquivalence,
-          group.target.language,
-          { sourceKey: input.subject.sourceKey },
-          input.memo,
-          input,
-        );
+      for (const signed of input.subject.groups) {
+        const group = signed.group;
         candidateIssues.push(...signed.issues);
         if (signed.familyKey === "") {
           incomplete = true;
           continue;
         }
-        const familyIncomplete = references.incompleteFamilies.has(
-          signed.familyKey,
-        );
-        if (familyIncomplete) incomplete = true;
         const candidateTargetKey = signed.targetKey;
         const comparison = compareMessageFamily(
           references.index,
@@ -635,7 +757,7 @@ export function createMessageFamilyChecker<
                 "保存参照中已知存在多种消息表达；候选结构不完整，尚不能确定其目标类别。",
                 comparison,
                 signed,
-                input.subject,
+                input.subject.value,
               ),
             );
           }
@@ -643,14 +765,14 @@ export function createMessageFamilyChecker<
         }
 
         if (comparison.status === "no-comparison") {
-          if (!references.incomplete && !familyIncomplete) {
+          if (!references.incomplete) {
             allIssues.push(
               issue(
                 "noComparableReference",
                 "完整保存证据中没有与该消息族相同的参照。",
                 {
-                  language: input.subject.language,
-                  sourceKey: input.subject.sourceKey,
+                  language: input.subject.value.language,
+                  sourceKey: input.subject.value.sourceKey,
                   ref: group.ref,
                 },
               ),
@@ -669,7 +791,7 @@ export function createMessageFamilyChecker<
               "同一消息族的已保存译文存在不同表达；此发现不裁定当前候选错误。",
               comparison,
               signed,
-              input.subject,
+              input.subject.value,
             ),
           );
       }
@@ -678,8 +800,8 @@ export function createMessageFamilyChecker<
       if (input.projected.groups.length === 0 && !comparable) {
         allIssues.push(
           issue("noComparableReference", "候选投影没有提供可比较的消息组。", {
-            language: input.subject.language,
-            sourceKey: input.subject.sourceKey,
+            language: input.subject.value.language,
+            sourceKey: input.subject.value.sourceKey,
           }),
         );
       }
@@ -910,7 +1032,7 @@ function createDiagnostic<TSelectedUnit extends TranslationUnitInput, TBody>(
           key: reference.sourceKey,
         },
         value: {
-          translationIndex: reference.translationIndex,
+          translationIdentity: reference.translationIdentity,
           sourceKey: reference.sourceKey,
           groupRef: reference.group.ref,
           scope: reference.group.scope,
@@ -946,6 +1068,23 @@ function createDiagnostic<TSelectedUnit extends TranslationUnitInput, TBody>(
         },
       },
     ],
+  };
+}
+
+function stableCompare(left: unknown, right: unknown): number {
+  const leftKey = JSON.stringify(left);
+  const rightKey = JSON.stringify(right);
+  return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+}
+
+function signedBasis(signed: SignedMessageGroup) {
+  return {
+    group: signed.group,
+    familyKey: signed.familyKey,
+    sourceSignatures: signed.sourceSignatures.map(sanitizeSignature),
+    targetSignatures: signed.targetSignatures?.map(sanitizeSignature) ?? null,
+    targetKey: signed.targetKey ?? null,
+    issues: signed.issues,
   };
 }
 
@@ -1111,15 +1250,11 @@ function validateProjection(
       new TypeError("消息族投影 schema 必须同步验证。"),
     );
   if (result.issues !== undefined)
-    throw new QualityCheckBindingError(
-      checkId,
-      "projection",
-      new StandardSchemaContractError(
-        `消息族投影 ${sourceKey}/${language}`,
-        "schema-mismatch",
-        result.issues.map(({ message }) => message).join("；"),
-        result.issues,
-      ),
+    throw new StandardSchemaContractError(
+      `消息族投影 ${sourceKey}/${language}`,
+      "schema-mismatch",
+      result.issues.map(({ message }) => message).join("；"),
+      result.issues,
     );
   return result.value;
 }

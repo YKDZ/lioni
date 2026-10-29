@@ -10,7 +10,6 @@ import {
   type JsonValue,
   type QualityException,
   type QualityCheckResultCache,
-  type StandardSchemaV1,
   writeTranslationRequests,
   type TranslationWriteRequest,
 } from "@lioni/core";
@@ -24,6 +23,7 @@ import {
   type CompiledTerms,
 } from "@lioni/terminology";
 import { createTextAnalysis, segmentWords } from "@lioni/text-analysis";
+import { z } from "zod";
 
 import { createTermChecker } from "../src/index.ts";
 
@@ -35,55 +35,22 @@ type Unit = { readonly id: string; readonly source: SourceMessage };
 type Body = { readonly visible: string; readonly hidden: string };
 type Translation = { readonly id: string; readonly body: Body };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isSourceMessage(value: unknown): value is SourceMessage {
-  return (
-    isRecord(value) &&
-    typeof value.title === "string" &&
-    Array.isArray(value.notes) &&
-    value.notes.every((note) => typeof note === "string")
-  );
-}
-
-function isUnit(value: unknown): value is Unit {
-  return (
-    isRecord(value) &&
-    typeof value.id === "string" &&
-    isSourceMessage(value.source)
-  );
-}
-
-function isBody(value: unknown): value is Body {
-  return (
-    isRecord(value) &&
-    typeof value.visible === "string" &&
-    typeof value.hidden === "string"
-  );
-}
-
-function isTranslation(value: unknown): value is Translation {
-  return isRecord(value) && typeof value.id === "string" && isBody(value.body);
-}
-
-function schema<T>(
-  vendor: string,
-  isValue: (value: unknown) => value is T,
-): StandardSchemaV1<T, T> {
-  return {
-    "~standard": {
-      version: 1,
-      vendor,
-      validate(value) {
-        return isValue(value)
-          ? { value }
-          : { issues: [{ message: `invalid ${vendor} value` }] };
-      },
-    },
-  };
-}
+const sourceMessageSchema = z.object({
+  title: z.string(),
+  notes: z.array(z.string()).readonly(),
+});
+const unitSchema: z.ZodType<Unit, Unit> = z.object({
+  id: z.string(),
+  source: sourceMessageSchema,
+});
+const bodySchema: z.ZodType<Body, Body> = z.object({
+  visible: z.string(),
+  hidden: z.string(),
+});
+const translationSchema: z.ZodType<Translation, Translation> = z.object({
+  id: z.string(),
+  body: bodySchema,
+});
 
 function createScenario(
   options: {
@@ -273,7 +240,7 @@ function createScenario(
 
   const config = defineConfig({
     source: {
-      schema: schema<Unit>("term-check-source", isUnit),
+      schema: unitSchema,
       read: () => ({
         scopes: [
           {
@@ -306,8 +273,8 @@ function createScenario(
         namespace: "messages",
         key: translation.id,
       }),
-      schema: schema<Translation>("term-check-translation", isTranslation),
-      contentSchema: schema<Body>("term-check-body", isBody),
+      schema: translationSchema,
+      contentSchema: bodySchema,
       contentOf: ({ body }) => body,
       read: (_language, sourceUnits) => ({
         scopes: [

@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import {
   complementRanges,
   emptyRanges,
@@ -8,7 +10,14 @@ import {
 } from "./ranges.ts";
 import { createTemplateSignature } from "./templates.ts";
 import type { TemplateOptions, TemplateSignature } from "./templates.ts";
-import { TextAnalysisContractError } from "./types.ts";
+import {
+  TextAnalysisContractError,
+  analysisError,
+  analysisIssueSchema,
+  recognitionSchema,
+  textTokenSchema,
+  wordAnalysisSchema,
+} from "./types.ts";
 import type {
   AnalysisRuntime,
   RecognitionResult,
@@ -23,64 +32,33 @@ import type {
 } from "./types.ts";
 import { segmentWords } from "./words.ts";
 
+const analysisIssuesSchema = z.array(analysisIssueSchema);
+
 function copyIssues(
   text: string,
   value: unknown,
   code: string,
 ): readonly TextAnalysisIssue[] {
-  if (!Array.isArray(value))
-    throw new TextAnalysisContractError(code, "分析问题必须是数组。");
+  const result = analysisIssuesSchema.safeParse(value);
+  if (!result.success) throw analysisError(code, result.error);
   return Object.freeze(
-    value.map((issue: unknown) => {
-      if (typeof issue !== "object" || issue === null || Array.isArray(issue))
-        throw new TextAnalysisContractError(code, "分析问题格式无效。");
-      const record = issue as Record<string, unknown>;
-      if (
-        typeof record.code !== "string" ||
-        record.code.length === 0 ||
-        typeof record.message !== "string"
-      )
-        throw new TextAnalysisContractError(code, "分析问题格式无效。");
-      let range: TextRange | undefined;
-      if (record.range !== undefined) {
-        if (
-          typeof record.range !== "object" ||
-          record.range === null ||
-          Array.isArray(record.range)
-        )
-          throw new TextAnalysisContractError(code, "分析问题区间无效。");
-        range = record.range as TextRange;
-        validateRange(text, range);
-      }
-      return Object.freeze({
-        code: record.code,
-        message: record.message,
-        ...(range === undefined
-          ? {}
-          : { range: Object.freeze({ start: range.start, end: range.end }) }),
-      });
+    result.data.map((issue) => {
+      if (issue.range !== undefined) validateRange(text, issue.range);
+      return issue;
     }),
   );
 }
 
+const recognizedSchema = z.union([z.array(textTokenSchema), recognitionSchema]);
 function recognitionResult(
   value: readonly TextToken[] | RecognitionResult,
 ): RecognitionResult {
-  if (Array.isArray(value))
-    return { tokens: value, complete: true, issues: [] };
-  const result = value as RecognitionResult;
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    !Array.isArray(result.tokens) ||
-    typeof result.complete !== "boolean" ||
-    !Array.isArray(result.issues)
-  )
-    throw new TextAnalysisContractError(
-      "invalid-recognition",
-      "识别器必须返回 token 数组或带完整性与问题的分析结果。",
-    );
-  return result;
+  const result = recognizedSchema.safeParse(value);
+  if (!result.success) throw analysisError("invalid-recognition", result.error);
+  // 验证输出只判断契约；保留宿主 token 的附加字段和值身份。
+  return Array.isArray(value)
+    ? { tokens: value, complete: true, issues: [] }
+    : (value as RecognitionResult);
 }
 
 export type TextAnalysisOptions = {
@@ -116,7 +94,6 @@ export function createTextAnalysis(
     language: string,
     inputProtectedRanges: readonly TextRange[],
   ): Promise<StructureAnalysis> {
-    validateInput({ text, language });
     const protectedRanges = mergeRanges(text, inputProtectedRanges);
     const tokens: TextToken[] = [];
     const issues: TextAnalysisIssue[] = [];
@@ -133,32 +110,12 @@ export function createTextAnalysis(
       issues.push(
         ...copyIssues(text, recognized.issues, "invalid-recognition"),
       );
-      for (const token of recognized.tokens) {
-        if (typeof token !== "object" || token === null || Array.isArray(token))
-          throw new TextAnalysisContractError(
-            "invalid-token",
-            "识别结果中的 token 格式无效。",
-          );
-        validateRange(text, token);
-      }
       const sorted = [...recognized.tokens].sort(
         (a, b) => a.start - b.start || a.end - b.end,
       );
       let previousEnd = -1;
       for (const token of sorted) {
         validateRange(text, token);
-        if (
-          typeof token.kind !== "string" ||
-          token.kind.length === 0 ||
-          (token.identity !== undefined &&
-            (typeof token.identity !== "string" ||
-              token.identity.length === 0)) ||
-          (token.protect !== undefined && typeof token.protect !== "boolean")
-        )
-          throw new TextAnalysisContractError(
-            "invalid-token",
-            "token 种类、身份或保护标志不符合契约。",
-          );
         if (!fitsRange(token, availableRanges) || token.start < previousEnd)
           throw new TextAnalysisContractError(
             "overlapping-token",
@@ -192,16 +149,9 @@ export function createTextAnalysis(
       language: analysis.language,
       protectedRanges: analysis.protectedRanges,
     });
-    if (
-      !Array.isArray(result.words) ||
-      !Array.isArray(result.boundaries) ||
-      !Array.isArray(result.issues) ||
-      typeof result.complete !== "boolean"
-    )
-      throw new TextAnalysisContractError(
-        "invalid-segmentation",
-        "分词器必须返回词、边界、完整性与问题。",
-      );
+    const validated = wordAnalysisSchema.safeParse(result);
+    if (!validated.success)
+      throw analysisError("invalid-segmentation", validated.error);
     let previousEnd = -1;
     for (const word of result.words) {
       validateRange(analysis.text, word);
@@ -275,6 +225,7 @@ export function createTextAnalysis(
     input: TextInput,
     runtime: AnalysisRuntime = {},
   ): Promise<StructureAnalysis> {
+    validateInput(input);
     const compute =
       runtime.memo?.memo(computeStructures, { key: structureKey }) ??
       computeStructures;

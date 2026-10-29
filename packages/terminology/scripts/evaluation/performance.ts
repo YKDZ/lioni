@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { summarizeMeasurements } from "./performance/statistics.ts";
+import { performanceWorkerResultSchema } from "./performance/types.ts";
 import type {
   PerformanceAttempt,
   PerformanceModeReport,
@@ -39,34 +40,6 @@ type ScaleState = {
   readonly facts: PerformanceWorkerResult["inputFacts"];
   readonly attempts: Record<PerformanceMemoMode, PerformanceAttempt[]>;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isWorkerResult(value: unknown): value is PerformanceWorkerResult {
-  if (!isRecord(value)) return false;
-  const timings = value["timingsMs"];
-  const results = value["results"];
-  const discovery = isRecord(results) ? results["discovery"] : undefined;
-  const evaluation = isRecord(results) ? results["evaluation"] : undefined;
-  return (
-    typeof value["comparisonGroups"] === "number" &&
-    typeof value["concepts"] === "number" &&
-    typeof value["memoMode"] === "string" &&
-    typeof value["sample"] === "number" &&
-    isRecord(timings) &&
-    typeof timings["discoverTerms"] === "number" &&
-    typeof timings["evaluateTerms"] === "number" &&
-    isRecord(discovery) &&
-    typeof discovery["sha256"] === "string" &&
-    isRecord(evaluation) &&
-    typeof evaluation["sha256"] === "string" &&
-    typeof value["lifecycleMaxRssBytes"] === "number" &&
-    typeof value["publicEntry"] === "string" &&
-    isRecord(value["inputFacts"])
-  );
-}
 
 function outputAttempts(state: ScaleState): readonly {
   readonly mode: PerformanceMemoMode;
@@ -352,9 +325,9 @@ async function runPerformance(
             processResult.status;
           if (processResult.status === "passed") {
             try {
-              const value: unknown = JSON.parse(processResult.stdout);
-              if (!isWorkerResult(value))
-                throw new Error("子进程没有返回有效的性能样本。");
+              const value = performanceWorkerResultSchema.parse(
+                JSON.parse(processResult.stdout),
+              );
               if (
                 value.comparisonGroups !== state.comparisonGroups ||
                 value.concepts !== state.concepts ||

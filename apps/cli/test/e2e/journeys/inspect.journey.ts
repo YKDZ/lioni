@@ -12,18 +12,11 @@ const journey: CliJourney = {
     await writeFile(
       path.join(workDir, "lioni.config.ts"),
       `import { defineConfig } from "${sdkImport}";
+import * as z from "zod";
 
 export default defineConfig({
   source: {
-    schema: { "~standard": { version: 1, vendor: "inspect-journey", validate(value) {
-      const context = value?.context;
-      return typeof value === "object" && value !== null && !Array.isArray(value) &&
-        typeof value.source === "string" && typeof context === "object" && context !== null &&
-        typeof context.file === "string" && typeof context.line === "number" &&
-        typeof context.screenshot === "string"
-        ? { value }
-        : { issues: [{ message: "原文单元结构不匹配。" }] };
-    } } },
+    schema: z.looseObject({ source: z.string(), context: z.looseObject({ file: z.string(), line: z.number(), screenshot: z.string() }) }),
     read: () => ({ scopes: [{
       range: "src/messages.ts",
       enumeration: "complete",
@@ -40,19 +33,8 @@ export default defineConfig({
   translations: {
     languages: ["fr"],
     keyOf: (translation) => ({ namespace: "messages", key: translation.id }),
-    schema: { "~standard": { version: 1, vendor: "inspect-journey-translation", validate(value) {
-      const context = value?.context;
-      return typeof value === "object" && value !== null && !Array.isArray(value) &&
-        typeof value.id === "string" && typeof value.text === "string" && typeof context === "object" && context !== null &&
-        typeof context.file === "string" && typeof context.line === "number"
-        ? { value }
-        : { issues: [{ message: "译文记录结构不匹配。" }] };
-    } } },
-    contentSchema: { "~standard": { version: 1, vendor: "inspect-journey-content", validate(value) {
-      return typeof value === "string"
-        ? { value }
-        : { issues: [{ message: "译文正文必须是字符串。" }] };
-    } } },
+    schema: z.looseObject({ id: z.string(), text: z.string(), context: z.looseObject({ file: z.string(), line: z.number() }) }),
+    contentSchema: z.string(),
     read: (_language, sourceUnits) => ({ scopes: [{
       range: "locales/fr.json",
       covers: sourceUnits.map(({ key }) => key),
@@ -79,17 +61,11 @@ export default defineConfig({
     await writeFile(
       path.join(workDir, "duplicate.config.ts"),
       `import { defineConfig } from "${sdkImport}";
+import * as z from "zod";
 
 export default defineConfig({
   source: {
-    schema: { "~standard": { version: 1, vendor: "inspect-journey", validate(value) {
-      const context = value?.context;
-      return typeof value === "object" && value !== null && !Array.isArray(value) &&
-        typeof value.source === "string" && typeof context === "object" && context !== null &&
-        typeof context.file === "string" && typeof context.line === "number"
-        ? { value }
-        : { issues: [{ message: "原文单元结构不匹配。" }] };
-    } } },
+    schema: z.looseObject({ source: z.string(), context: z.looseObject({ file: z.string(), line: z.number() }) }),
     read: () => ({ scopes: [{
       range: "src/messages.ts",
       enumeration: "complete",
@@ -106,19 +82,10 @@ export default defineConfig({
     await writeFile(
       path.join(workDir, "qa.config.ts"),
       `import { defineConfig, defineQualityCheck } from "${sdkImport}";
+import * as z from "zod";
 import baseConfig from "./lioni.config.ts";
 
-const enabledConfigurationSchema = {
-  "~standard": {
-    version: 1,
-    vendor: "inspect-journey-qa",
-    validate(value) {
-      return typeof value === "object" && value !== null && !Array.isArray(value) && typeof value.enabled === "boolean"
-        ? { value }
-        : { issues: [{ message: "检查器配置必须包含布尔型 enabled 字段。" }] };
-    }
-  }
-};
+const enabledConfigurationSchema = z.object({ enabled: z.boolean() });
 
 export default defineConfig({
   ...baseConfig,
@@ -508,7 +475,7 @@ export default defineConfig({
     assert.equal(results[6]?.exitCode, 0);
     assert.match(results[6]?.stdout ?? "", /inspect/u);
     assert.equal(results[7]?.exitCode, 0);
-    assert.equal(results[7]?.stdout, "lioni 0.1.2\n");
+    assert.equal(results[7]?.stdout, "lioni 0.2.0\n");
     assert.equal(results[8]?.exitCode, 2);
     assert.equal(results[8]?.stdout, "");
     assert.partialDeepStrictEqual(JSON.parse(results[8]?.stderr ?? ""), {

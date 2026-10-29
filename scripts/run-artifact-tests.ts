@@ -11,6 +11,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import * as z from "zod";
+
 import { productPackageName } from "./artifact-tests/product.ts";
 import type { Artifact } from "./artifact-tests/support/consumer.ts";
 import { externalInterruptSignal } from "./artifact-tests/support/external-interrupt.ts";
@@ -22,37 +24,36 @@ import {
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const scenarios = new URL("./artifact-tests/scenarios/", import.meta.url);
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+const publishPlanSchema = z.object({
+  version: z.literal(1),
+  plan: z.array(z.array(z.looseObject({ kind: z.string(), name: z.string() }))),
+});
+const publishedArtifactSchema = z.object({
+  tarball: z.object({ path: z.string() }),
+});
+const workspaceProductSchema = z
+  .array(
+    z.object({
+      name: z.literal(productPackageName),
+      private: z.literal(false),
+      version: z.string(),
+    }),
+  )
+  .length(1);
 
 /** 从 Changesets 正式发布计划定位已经打包的产品 tarball。 */
 async function artifactFromPublishPlan(planPath: string): Promise<Artifact> {
   const absolutePlanPath = path.resolve(repositoryRoot, planPath);
-  const parsed: unknown = JSON.parse(await readFile(absolutePlanPath, "utf8"));
-  assert.ok(isRecord(parsed), "Changesets 发布计划必须是对象。");
-  assert.equal(parsed.version, 1, "不支持此 Changesets 发布计划版本。");
-  assert.ok(Array.isArray(parsed.plan), "Changesets 发布计划缺少 plan 列表。");
-
-  const releases = parsed.plan.flatMap((group: unknown) =>
-    Array.isArray(group) ? group : [],
+  const parsed = publishPlanSchema.parse(
+    JSON.parse(await readFile(absolutePlanPath, "utf8")),
   );
-  const release = releases.find(
-    (entry: unknown) =>
-      isRecord(entry) &&
-      entry.kind === "publish" &&
-      entry.name === productPackageName,
-  );
-  assert.ok(isRecord(release), `发布计划中没有 ${productPackageName} 产品。`);
-  assert.ok(
-    isRecord(release.tarball),
-    `${productPackageName} 发布项缺少 tarball。`,
-  );
-  const tarballPath = release.tarball.path;
-  assert.ok(
-    typeof tarballPath === "string",
-    "Changesets tarball 路径必须是文本。",
-  );
+  const release = parsed.plan
+    .flat()
+    .find(
+      (entry) => entry.kind === "publish" && entry.name === productPackageName,
+    );
+  assert.ok(release, `发布计划中没有 ${productPackageName} 产品。`);
+  const tarballPath = publishedArtifactSchema.parse(release).tarball.path;
 
   const filename = path.resolve(path.dirname(absolutePlanPath), tarballPath);
   const file = await stat(filename);
@@ -70,17 +71,8 @@ async function artifactFromWorkspaceProduct(
     ["--filter", productPackageName, "list", "--depth", "-1", "--json"],
     commandOptions,
   );
-  const parsed: unknown = JSON.parse(listed.stdout);
-  assert.ok(Array.isArray(parsed), "pnpm workspace 查询必须返回包列表。");
-  assert.equal(parsed.length, 1, "pnpm workspace 查询必须只返回产品包。");
-  const product = parsed[0];
-  assert.ok(isRecord(product), "pnpm workspace 产品记录必须是对象。");
-  assert.equal(product.name, productPackageName);
-  assert.equal(product.private, false, "制品验收只接受公开产品包。");
-  assert.ok(
-    typeof product.version === "string",
-    "pnpm workspace 产品记录缺少版本号。",
-  );
+  const [product] = workspaceProductSchema.parse(JSON.parse(listed.stdout));
+  assert.ok(product);
 
   const inputPlanPath = path.join(root, "publish-input.json");
   const outputDirectory = path.join(root, "packed");

@@ -8,12 +8,10 @@ import type { QuantityOptions, QuantityProfile } from "@lioni/text-analysis";
 
 import { compareProtectedLiterals } from "../../protected-literals.ts";
 import { compareQuantityBranches } from "../../quantities.ts";
-import { vueI18nDependencies } from "../dependencies.ts";
 import { memoizedVueI18nMessage } from "../message-memo.ts";
 import type {
   VueI18nCheckIdentity,
   VueI18nMessageProjection,
-  VueI18nPolicy,
   VueI18nProjector,
   VueI18nQuantityPolicy,
 } from "../quality-types.ts";
@@ -47,7 +45,7 @@ export function createProtectedLiteralCheck<
 }) {
   const hostVersion = options.identity.hostVersion;
   const version = [
-    "vue-i18n-suite/protected-literals/v1",
+    "vue-i18n-suite/protected-literals/v2",
     VUE_I18N_PROTECTED_LITERAL_COMPARISON_VERSION,
     ...(hostVersion ? [hostVersion] : []),
   ].join("+");
@@ -59,12 +57,14 @@ export function createProtectedLiteralCheck<
     requiresTarget: true,
     targetMustContainText: true,
     applies: (projection, policy) =>
+      Object.hasOwn(policy.protectedLiterals, projection.key) &&
       (policy.protectedLiterals[projection.key]?.length ?? 0) > 0,
-    check: (input) =>
-      evaluateProtectedLiterals(
-        input.projected,
-        vueI18nDependencies(input).policies.get(input.projected.language)!,
-      ),
+    prepare: (projection, policy) =>
+      Object.hasOwn(policy.protectedLiterals, projection.key)
+        ? policy.protectedLiterals[projection.key]!
+        : [],
+    check: (input, _policy, literals) =>
+      evaluateProtectedLiterals(input.projected, literals),
   });
 }
 
@@ -79,7 +79,7 @@ export function createQuantityCheck<
 }) {
   const hostVersion = options.identity.hostVersion;
   const version = [
-    "vue-i18n-suite/quantities/v1",
+    "vue-i18n-suite/quantities/v2",
     `@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
     VUE_I18N_QUANTITY_COMPARISON_VERSION,
     ...(hostVersion ? [hostVersion] : []),
@@ -91,18 +91,28 @@ export function createQuantityCheck<
     requiresSource: true,
     requiresTarget: true,
     targetMustContainText: true,
-    check: (input) =>
-      evaluateQuantities(
-        input.projected,
-        vueI18nDependencies(input).policies.get(input.projected.language)!,
-        input.memo,
-      ),
+    prepare: (projection, policy) => ({
+      sourceLanguage: policy.sourceLanguage,
+      targetLanguage: policy.targetLanguage,
+      quantities: {
+        source: {
+          profile: policy.quantities?.source.profile ?? null,
+          ...quantityOptions(policy.quantities?.source ?? {}, projection.key),
+        },
+        target: {
+          profile: policy.quantities?.target.profile ?? null,
+          ...quantityOptions(policy.quantities?.target ?? {}, projection.key),
+        },
+      },
+    }),
+    check: (input, _policy, prepared) =>
+      evaluateQuantities(input.projected, prepared, input.memo),
   });
 }
 
 function evaluateProtectedLiterals(
   projection: VueI18nMessageProjection,
-  policy: VueI18nPolicy,
+  literals: readonly string[],
 ): QualityCheckOutcome {
   if (
     projection.source.status !== "available" ||
@@ -111,7 +121,6 @@ function evaluateProtectedLiterals(
     return incompleteOutcome([
       issue("messageBodyUnavailable", "原文或目标消息正文不可用。", projection),
     ]);
-  const literals = policy.protectedLiterals[projection.key] ?? [];
   const issues = compareProtectedLiterals({
     source: projection.source.text,
     target: projection.target.text,
@@ -155,7 +164,14 @@ function evaluateProtectedLiterals(
 
 function evaluateQuantities(
   projection: VueI18nMessageProjection,
-  policy: VueI18nPolicy,
+  policy: {
+    readonly sourceLanguage: string;
+    readonly targetLanguage: string;
+    readonly quantities: {
+      readonly source: QuantityOptions & { readonly profile: string | null };
+      readonly target: QuantityOptions & { readonly profile: string | null };
+    };
+  },
   memo: import("@lioni/memo").MemoScope,
 ): QualityCheckOutcome {
   if (
@@ -168,8 +184,14 @@ function evaluateQuantities(
   const quantityPolicy = policy.quantities;
   const sourceId = quantityPolicy?.source.profile;
   const targetId = quantityPolicy?.target.profile;
-  const sourceProfile = quantityProfile(sourceId, policy.sourceLanguage);
-  const targetProfile = quantityProfile(targetId, policy.targetLanguage);
+  const sourceProfile = quantityProfile(
+    sourceId ?? undefined,
+    policy.sourceLanguage,
+  );
+  const targetProfile = quantityProfile(
+    targetId ?? undefined,
+    policy.targetLanguage,
+  );
   if (!sourceProfile)
     return incompleteOutcome([
       issue(
@@ -198,8 +220,8 @@ function evaluateQuantities(
       ),
     ]);
 
-  const sourceOptions = quantityOptions(quantityPolicy!.source, projection.key);
-  const targetOptions = quantityOptions(quantityPolicy!.target, projection.key);
+  const sourceOptions = quantityPolicy.source;
+  const targetOptions = quantityPolicy.target;
   const sourceText = projection.source.text;
   const targetText = projection.target.text;
   const sourceBranches = source.branches.map((branch) => ({
@@ -258,7 +280,10 @@ function quantityOptions(
   policy: VueI18nQuantityPolicy,
   key: string,
 ): QuantityOptions {
-  const specific = policy.byKey?.[key];
+  const specific =
+    policy.byKey !== undefined && Object.hasOwn(policy.byKey, key)
+      ? policy.byKey[key]
+      : undefined;
   return {
     ...(policy.aliases === undefined && specific?.aliases === undefined
       ? {}

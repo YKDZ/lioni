@@ -1,7 +1,6 @@
 import type { QualityIssue, TranslationUnitInput } from "@lioni/core";
 import type { MemoScope } from "@lioni/memo";
 
-import { vueI18nDependencies } from "../dependencies.ts";
 import { memoizedVueI18nMessage } from "../message-memo.ts";
 import type {
   VueI18nCheckIdentity,
@@ -35,7 +34,23 @@ export function createLinkTargetExistsCheck<
     project: options.project,
     requiresSource: false,
     requiresTarget: true,
-    check: (input) => {
+    prepare: (projection, policy, memo) => {
+      if (projection.target.status !== "available") return [];
+      const message = memoizedVueI18nMessage(projection.target.text, memo);
+      return message.linkFacts.flatMap((link) =>
+        link.kind === "static"
+          ? [
+              {
+                key: link.key,
+                exists:
+                  hasOwn(policy.resources.source.messages, link.key) ||
+                  hasOwn(policy.resources.target.messages, link.key),
+              },
+            ]
+          : [],
+      );
+    },
+    check: (input, _policy, targets) => {
       const projection = input.projected;
       if (projection.target.status !== "available")
         return incompleteOutcome([
@@ -51,13 +66,9 @@ export function createLinkTargetExistsCheck<
             projection,
           ),
         ]);
-      const policy = vueI18nDependencies(input).policies.get(
-        projection.language,
-      )!;
       const diagnostics = message.linkFacts.flatMap((link) =>
         link.kind === "static" &&
-        !hasOwn(policy.resources.source.messages, link.key) &&
-        !hasOwn(policy.resources.target.messages, link.key)
+        !targets.some((target) => target.key === link.key && target.exists)
           ? [
               finding(
                 projection,
@@ -102,16 +113,13 @@ export function createLinkCycleCheck<
     project: options.project,
     requiresSource: false,
     requiresTarget: true,
-    check: (input) => {
+    prepare: reachableMessages,
+    check: (input, _policy, messages) => {
       if (input.projected.target.status !== "available")
         return incompleteOutcome([
           issue("targetUnavailable", "目标消息正文不可用。", input.projected),
         ]);
-      const search = findCycle(
-        input.projected,
-        vueI18nDependencies(input).policies.get(input.projected.language)!,
-        input.memo,
-      );
+      const search = findCycle(input.projected, messages, input.memo);
       const targetText = input.projected.target.text;
       const fallbackRange = fullRange(input.projected.target.text);
       const diagnostics =
@@ -152,6 +160,48 @@ export function createLinkCycleCheck<
   });
 }
 
+type ReachableMessage = {
+  readonly key: string;
+  readonly origin: "candidate" | "target" | "source" | "missing";
+  readonly text: string | null;
+};
+
+/** 先准备完整可达闭包，包括缺失键，避免首次发现循环后漏掉后续依赖。 */
+function reachableMessages(
+  projection: VueI18nMessageProjection,
+  policy: VueI18nPolicy,
+  memo: MemoScope,
+): readonly ReachableMessage[] {
+  const messages = new Map<string, ReachableMessage>();
+  function visit(key: string) {
+    if (messages.has(key)) return;
+    const origin =
+      key === projection.key
+        ? "candidate"
+        : hasOwn(policy.resources.target.messages, key)
+          ? "target"
+          : hasOwn(policy.resources.source.messages, key)
+            ? "source"
+            : "missing";
+    const text =
+      origin === "candidate"
+        ? projection.target.status === "available"
+          ? projection.target.text
+          : null
+        : origin === "missing"
+          ? null
+          : policy.resources[origin].messages[key]!;
+    messages.set(key, { key, origin, text });
+    if (text === null) return;
+    const message = memoizedVueI18nMessage(text, memo);
+    if (message.errors.length > 0) return;
+    for (const link of message.linkFacts)
+      if (link.kind === "static") visit(link.key);
+  }
+  visit(projection.key);
+  return [...messages.values()];
+}
+
 type CycleSearch = {
   readonly path?: readonly string[];
   readonly range?: { readonly start: number; readonly end: number };
@@ -160,9 +210,10 @@ type CycleSearch = {
 
 function findCycle(
   projection: VueI18nMessageProjection,
-  policy: VueI18nPolicy,
+  messages: readonly ReachableMessage[],
   memo: MemoScope,
 ): CycleSearch {
+  const byKey = new Map(messages.map((message) => [message.key, message.text]));
   const active = new Map<string, number>();
   const done = new Set<string>();
   const stack: string[] = [];
@@ -180,16 +231,7 @@ function findCycle(
 
     active.set(key, stack.length);
     stack.push(key);
-    const text =
-      key === projection.key
-        ? projection.target.status === "available"
-          ? projection.target.text
-          : undefined
-        : hasOwn(policy.resources.target.messages, key)
-          ? policy.resources.target.messages[key]
-          : hasOwn(policy.resources.source.messages, key)
-            ? policy.resources.source.messages[key]
-            : undefined;
+    const text = byKey.get(key) ?? undefined;
     if (text !== undefined) {
       const message = memoizedVueI18nMessage(text, memo);
       if (message.errors.length > 0) {
@@ -225,7 +267,7 @@ function findCycle(
 }
 
 function version(kind: string, identity: VueI18nCheckIdentity): string {
-  const base = `vue-i18n-suite/${kind}/v1+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`;
+  const base = `vue-i18n-suite/${kind}/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`;
   return identity.hostVersion ? `${base}+${identity.hostVersion}` : base;
 }
 

@@ -1,88 +1,53 @@
+import * as z from "zod";
+
 export type CliCommandIdentity = {
   readonly commandName: string;
   readonly version: string;
 };
 
+const commandNameSchema = z
+  .string()
+  .regex(
+    /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u,
+    "命令名必须由小写 ASCII 字母、数字和单个连字符组成，并以字母开头。",
+  );
+const manifestSchema = z.object({
+  bin: z
+    .record(z.string(), z.literal("./dist/cli.js"))
+    .refine(
+      (bin) => Object.keys(bin).length === 1,
+      "CLI 包必须恰好声明一个命令。",
+    ),
+  version: z.string().min(1).default("unpublished"),
+});
+
 export function validateCliCommandName(
   commandName: string,
   occupiedCommandNames: readonly string[] = [],
 ): string {
-  if (/[/\\]/u.test(commandName)) {
-    throw new Error(
-      `CLI command name must not be a path; received ${JSON.stringify(commandName)}`,
-    );
-  }
-  if (/\p{White_Space}/u.test(commandName)) {
-    throw new Error(
-      `CLI command name must not contain whitespace; received ${JSON.stringify(commandName)}`,
-    );
-  }
-  if (/\p{Control}/u.test(commandName)) {
-    throw new Error(
-      `CLI command name must not contain a control character; received ${JSON.stringify(commandName)}`,
-    );
-  }
-  if (commandName.startsWith("-")) {
-    throw new Error(
-      `CLI command name must not have a leading hyphen; received ${JSON.stringify(commandName)}`,
-    );
-  }
-  if (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u.test(commandName)) {
-    throw new Error(
-      `CLI command name must use lowercase ASCII letters, digits, and single hyphens; received ${JSON.stringify(commandName)}`,
-    );
-  }
+  const parsed = commandNameSchema.safeParse(commandName);
+  if (!parsed.success) throw new TypeError(parsed.error.issues[0]!.message);
   if (occupiedCommandNames.includes(commandName)) {
-    throw new Error(
-      `CLI command name is already used by another workspace package; received ${JSON.stringify(commandName)}`,
-    );
+    throw new Error(`CLI 命令名已被其他工作区包使用：${commandName}`);
   }
-  return commandName;
+  return parsed.data;
 }
 
 export function cliCommandIdentity(
   manifest: unknown,
   occupiedCommandNames: readonly string[] = [],
 ): CliCommandIdentity {
-  if (
-    typeof manifest !== "object" ||
-    manifest === null ||
-    Array.isArray(manifest)
-  ) {
-    throw new Error("CLI package manifest must be an object");
+  const parsed = manifestSchema.safeParse(manifest);
+  if (!parsed.success) {
+    throw new TypeError(
+      parsed.error.issues
+        .map(({ path, message }) => `${path.join(".")}: ${message}`)
+        .join("；"),
+    );
   }
-  const manifestFacts = manifest as Readonly<Record<string, unknown>>;
-  if (
-    typeof manifestFacts.bin !== "object" ||
-    manifestFacts.bin === null ||
-    Array.isArray(manifestFacts.bin)
-  ) {
-    throw new Error("CLI package manifest must declare exactly one bin");
-  }
-  const binEntries = Object.entries(manifestFacts.bin);
-  if (binEntries.length !== 1) {
-    throw new Error("CLI package manifest must declare exactly one bin");
-  }
-  const [commandName, executable] = binEntries[0]!;
-  if (executable !== "./dist/cli.js") {
-    throw new Error('CLI package manifest bin must execute "./dist/cli.js"');
-  }
-
-  let version = "unpublished";
-  if (manifestFacts.version !== undefined) {
-    if (
-      typeof manifestFacts.version !== "string" ||
-      manifestFacts.version.length === 0
-    ) {
-      throw new Error(
-        "CLI package manifest version must be a non-empty string when present",
-      );
-    }
-    version = manifestFacts.version;
-  }
-
+  const [commandName] = Object.keys(parsed.data.bin);
   return {
-    commandName: validateCliCommandName(commandName, occupiedCommandNames),
-    version,
+    commandName: validateCliCommandName(commandName!, occupiedCommandNames),
+    version: parsed.data.version,
   };
 }

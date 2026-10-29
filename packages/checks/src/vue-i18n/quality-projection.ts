@@ -1,71 +1,93 @@
-import type { QualityCheckInput, TranslationUnitInput } from "@lioni/core";
-import * as v from "valibot";
+import type {
+  QualityCheckInput,
+  StandardSchemaV1,
+  TranslationUnitInput,
+} from "@lioni/core";
+import { z } from "zod";
 
-const recordSchema = v.custom<Record<string, unknown>>(
-  (value) =>
-    value !== null && typeof value === "object" && !Array.isArray(value),
-);
-
-const sourceMessageSchema = v.pipe(
-  recordSchema,
-  v.variant("status", [
-    v.looseObject({ status: v.literal("available"), text: v.string() }),
-    v.looseObject({ status: v.literal("unavailable") }),
-    v.looseObject({ status: v.literal("absent") }),
-  ]),
-);
-
-const targetMessageSchema = v.pipe(
-  recordSchema,
-  v.variant("status", [
-    v.looseObject({ status: v.literal("available"), text: v.string() }),
-    v.looseObject({ status: v.literal("unavailable") }),
-    v.looseObject({ status: v.literal("missing") }),
-  ]),
-);
-
-const qualityLocationSchema = v.pipe(
-  recordSchema,
-  v.check(
-    (value) => Object.hasOwn(value, "range"),
-    "Vue I18n 消息位置必须显式提供 range。",
-  ),
-  v.looseObject({
-    language: v.nullable(v.string()),
-    range: v.unknown(),
-    key: v.exactOptional(v.string()),
-  }),
-);
-
-const locationsSchema = v.pipe(
-  recordSchema,
-  v.looseObject({
+const sourceMessageSchema = z.discriminatedUnion("status", [
+  z.looseObject({ status: z.literal("available"), text: z.string() }),
+  z.looseObject({ status: z.literal("unavailable") }),
+  z.looseObject({ status: z.literal("absent") }),
+]);
+const targetMessageSchema = z.discriminatedUnion("status", [
+  z.looseObject({ status: z.literal("available"), text: z.string() }),
+  z.looseObject({ status: z.literal("unavailable") }),
+  z.looseObject({ status: z.literal("missing") }),
+]);
+const qualityLocationSchema = z
+  .looseObject({
+    language: z.string().nullable(),
+    range: z.unknown(),
+    key: z.string().optional(),
+  })
+  .refine((value) => Object.hasOwn(value, "range"), {
+    path: ["range"],
+    message: "Vue I18n 消息位置必须显式提供 range。",
+  });
+const projectionShape = z.looseObject({
+  key: z.string(),
+  language: z.string(),
+  source: sourceMessageSchema,
+  target: targetMessageSchema,
+  locations: z.looseObject({
     source: qualityLocationSchema,
     target: qualityLocationSchema,
   }),
-);
+});
 
-const vueI18nMessageProjectionShapeSchema = v.pipe(
-  recordSchema,
-  v.looseObject({
-    key: v.string(),
-    language: v.string(),
-    source: sourceMessageSchema,
-    target: targetMessageSchema,
-    locations: locationsSchema,
-  }),
-);
+type MessageLocation = {
+  readonly language: string | null;
+  readonly range: unknown;
+  readonly key?: string;
+  readonly [key: string]: unknown;
+};
+export type VueI18nMessageProjection = {
+  readonly key: string;
+  readonly language: string;
+  readonly source: (
+    | { readonly status: "available"; readonly text: string }
+    | { readonly status: "unavailable" }
+    | { readonly status: "absent" }
+  ) &
+    Readonly<Record<string, unknown>>;
+  readonly target: (
+    | { readonly status: "available"; readonly text: string }
+    | { readonly status: "unavailable" }
+    | { readonly status: "missing" }
+  ) &
+    Readonly<Record<string, unknown>>;
+  readonly locations: {
+    readonly source: MessageLocation;
+    readonly target: MessageLocation;
+    readonly [key: string]: unknown;
+  };
+  readonly [key: string]: unknown;
+};
 
-export type VueI18nMessageProjection = v.InferOutput<
-  typeof vueI18nMessageProjectionShapeSchema
->;
-
-/** 验证投影形状但返回原值，避免宽松对象复制时丢弃宿主扩展键。 */
-export const vueI18nMessageProjectionSchema =
-  v.custom<VueI18nMessageProjection>(
-    (value) => v.safeParse(vueI18nMessageProjectionShapeSchema, value).success,
-    "Vue I18n 消息投影结构无效。",
-  );
+/** Zod 负责结构验证；保留原投影，避免对象复制丢失位置上的特殊扩展键。 */
+export const vueI18nMessageProjectionSchema: StandardSchemaV1<
+  VueI18nMessageProjection,
+  VueI18nMessageProjection
+> = {
+  "~standard": {
+    version: 1,
+    vendor: "lioni-vue-i18n",
+    validate(value) {
+      const result = projectionShape.safeParse(value);
+      return result.success
+        ? { value: value as VueI18nMessageProjection }
+        : {
+            issues: result.error.issues.map((issue) => ({
+              message: issue.message,
+              path: issue.path.map((key) =>
+                typeof key === "symbol" ? String(key) : key,
+              ),
+            })),
+          };
+    },
+  },
+};
 
 export type VueI18nSourceMessage = VueI18nMessageProjection["source"];
 export type VueI18nTargetMessage = VueI18nMessageProjection["target"];

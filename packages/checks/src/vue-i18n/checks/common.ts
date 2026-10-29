@@ -11,8 +11,8 @@ import type {
   QualityObject,
   TranslationUnitInput,
 } from "@lioni/core";
-import { bindQualityCheck } from "@lioni/core";
-import * as v from "valibot";
+import { bindQualityCheck, snapshotJsonValue } from "@lioni/core";
+import { z } from "zod";
 
 import { vueI18nDependencies } from "../dependencies.ts";
 import {
@@ -25,8 +25,8 @@ import type {
   VueI18nProjector,
 } from "../quality-types.ts";
 
-const configurationSchema = v.object({ version: v.literal(1) });
-type Configuration = v.InferOutput<typeof configurationSchema>;
+const configurationSchema = z.object({ version: z.literal(1) });
+type Configuration = z.output<typeof configurationSchema>;
 
 export type VueI18nMessageRuleInput<
   TUnit extends TranslationUnitInput,
@@ -48,6 +48,7 @@ export type VueI18nMessageRuleOptions<
   TTranslation,
   TBody,
   TUnavailable,
+  TPrepared,
 > = {
   readonly id: string;
   readonly version: string;
@@ -59,9 +60,15 @@ export type VueI18nMessageRuleOptions<
     projection: VueI18nMessageProjection,
     policy: VueI18nPolicy,
   ) => boolean;
+  readonly prepare: (
+    projection: VueI18nMessageProjection,
+    policy: VueI18nPolicy,
+    memo: import("@lioni/memo").MemoScope,
+  ) => TPrepared;
   readonly check: (
     input: VueI18nMessageRuleInput<TUnit, TTranslation, TBody, TUnavailable>,
     policy: VueI18nPolicy,
+    prepared: TPrepared,
   ) => QualityCheckOutcome;
 };
 
@@ -71,8 +78,15 @@ export function createVueI18nMessageCheck<
   TTranslation,
   TBody,
   TUnavailable = never,
+  TPrepared = unknown,
 >(
-  options: VueI18nMessageRuleOptions<TUnit, TTranslation, TBody, TUnavailable>,
+  options: VueI18nMessageRuleOptions<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable,
+    TPrepared
+  >,
 ): QualityCheckDefinition<
   TUnit,
   TTranslation,
@@ -80,7 +94,11 @@ export function createVueI18nMessageCheck<
   TBody,
   TUnavailable
 > {
-  type Subject = VueI18nMessageProjection;
+  type Subject = {
+    readonly projection: VueI18nMessageProjection;
+    readonly policy: VueI18nPolicy;
+    readonly prepared: TPrepared;
+  };
   return bindQualityCheck<
     TUnit,
     TTranslation,
@@ -147,7 +165,14 @@ export function createVueI18nMessageCheck<
         return { status: "not-applicable" };
       if (options.applies !== undefined && !options.applies(projection, policy))
         return { status: "not-applicable" };
-      return { status: "selected", subject: projection };
+      return {
+        status: "selected",
+        subject: {
+          projection,
+          policy,
+          prepared: options.prepare(projection, policy, input.memo),
+        },
+      };
     },
     project: (
       input: QualityCheckProjectionInput<
@@ -158,31 +183,17 @@ export function createVueI18nMessageCheck<
         TBody,
         TUnavailable
       >,
-    ) => ({ status: "ready", value: input.subject }),
-    check: (
-      input: QualityCheckRuleInput<
-        TUnit,
-        TTranslation,
-        Configuration,
-        Subject,
-        VueI18nMessageProjection,
-        TBody,
-        TUnavailable
-      >,
-    ) => {
-      const policy = vueI18nDependencies(input).policies.get(
-        input.projected.language,
-      );
-      if (policy === undefined)
-        return incompleteOutcome([
-          issue(
-            "languagePolicyUnavailable",
-            `未声明 ${input.projected.language} 的 Vue I18n 策略。`,
-            input.projected,
-          ),
-        ]);
-      return options.check(input, policy);
-    },
+    ) => ({ status: "ready", value: input.subject.projection }),
+    fingerprintInput: ({ projected, subject }) => ({
+      projection: snapshotJsonValue(projected, "Vue I18n 检查投影"),
+      dependencies: snapshotJsonValue(subject.prepared, "Vue I18n 检查依赖"),
+    }),
+    check: (input) =>
+      options.check(
+        { ...input, subject: input.subject.projection },
+        input.subject.policy,
+        input.subject.prepared,
+      ),
   });
 }
 

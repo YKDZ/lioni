@@ -1,6 +1,6 @@
 {
   "name": "@lioni/lioni",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "private": false,
   "description": "多语言项目资源检查与维护工具，提供命令行与 TypeScript SDK。",
   "homepage": "https://github.com/YKDZ/lioni",
@@ -43,17 +43,16 @@
     "format:write": "oxfmt --write .",
     "lint": "oxlint --quiet --format=unix --ignore-pattern node_modules .",
     "lint:fix": "oxlint --format=unix . --fix",
-    "test": "node --conditions=source --test --test-reporter=spec --test-reporter=./scripts/node-test-count-reporter.ts --test-reporter-destination=stdout --test-reporter-destination=stderr 'test/e2e/standard-schema.test.ts'",
+    "test": "node --conditions=source --test --test-reporter=spec --test-reporter=@lioni/tooling-config/node-test-count-reporter --test-reporter-destination=stdout --test-reporter-destination=stderr 'test/e2e/standard-schema.test.ts'",
     "typecheck": "tsc -p tsconfig.node.json --noEmit --pretty false",
-    "test:e2e": "node --conditions=source --test --test-timeout=180000 --test-reporter=spec --test-reporter=./scripts/node-test-count-reporter.ts --test-reporter-destination=stdout --test-reporter-destination=stderr 'test/e2e/run-journeys.test.ts'"
+    "test:e2e": "node --conditions=source --test --test-timeout=180000 --test-reporter=spec --test-reporter=@lioni/tooling-config/node-test-count-reporter --test-reporter-destination=stdout --test-reporter-destination=stderr 'test/e2e/run-journeys.test.ts'"
   },
   "dependencies": {
     "@intlify/message-compiler": "11.2.8",
     "@standard-schema/spec": "1.1.0",
-    "@valibot/to-json-schema": "catalog:",
     "@ykdz/cli-contract": "catalog:",
-    "valibot": "catalog:",
-    "yaml": "^2.9.1"
+    "yaml": "^2.9.1",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@lioni/checks": "workspace:*",

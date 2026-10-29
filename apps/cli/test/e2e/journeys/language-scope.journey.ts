@@ -19,13 +19,13 @@ const journey: CliJourney = {
       path.join(workDir, "lioni.config.ts"),
       `import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { defineConfig, defineQualityCheck } from "${sdkImport}";
+import * as z from "zod";
 
-const schema = { "~standard": { version: 1, vendor: "language-scope-journey", validate: (value) => ({ value }) } };
 const resource = (language) => new URL("./" + language + ".json", import.meta.url);
 const check = defineQualityCheck({
   id: "selected-language",
   version: "1",
-  configurationSchema: schema,
+  configurationSchema: z.object({}),
   configuration: {},
   check({ candidate }) {
     return {
@@ -45,7 +45,7 @@ const check = defineQualityCheck({
 
 export default defineConfig({
   source: {
-    schema,
+    schema: z.looseObject({ id: z.string(), source: z.string() }),
     read: () => ({ scopes: [{
       range: "source",
       enumeration: "complete",
@@ -57,8 +57,8 @@ export default defineConfig({
   createPlaceholderContent: (source) => source,
   translations: {
     languages: ["fr", "de"],
-    schema,
-    contentSchema: schema,
+    schema: z.looseObject({ id: z.string(), text: z.string() }),
+    contentSchema: z.string(),
     contentOf: (translation) => translation.text,
     keyOf: (translation) => ({ namespace: "messages", key: translation.id }),
     matches: (unit, translation) => unit.id === translation.id,

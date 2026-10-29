@@ -6,10 +6,12 @@ import {
   type TextAnalysis,
   type WordAnalysis,
 } from "@lioni/text-analysis";
+import { z } from "zod";
 
 import {
   assertUsageConflicts,
   contractIssue,
+  nonemptyTextSchema,
   selectTerms,
   TermContractError,
   type Termbase,
@@ -19,6 +21,7 @@ import {
 } from "./data.ts";
 import {
   splitsSurrogatePair,
+  termRangeSchema,
   validateTextInput,
   type TermRange,
   type TermTextInput,
@@ -81,6 +84,19 @@ export function defaultTermMatchingPolicy(
   return undefined;
 }
 
+const matchingPolicySchema = z.object({
+  id: z.string().min(1),
+  boundary: z.union([z.enum(["literal", "word"]), z.function()]),
+  normalize: z.function().exactOptional(),
+  forms: z.function().exactOptional(),
+});
+const normalizedTextSchema = z.object({
+  original: z.string(),
+  text: z.string(),
+  mapRange: z.function(),
+});
+const boundaryResultSchema = z.boolean();
+
 export function compileTerms(
   termbase: Termbase,
   options: CompileTermsOptions = {},
@@ -93,12 +109,7 @@ export function compileTerms(
       options.policy ??
       defaultTermMatchingPolicy(entry.language);
     if (!selectedPolicy) continue;
-    if (
-      !selectedPolicy.id ||
-      (selectedPolicy.boundary !== "literal" &&
-        selectedPolicy.boundary !== "word" &&
-        typeof selectedPolicy.boundary !== "function")
-    )
+    if (!matchingPolicySchema.safeParse(selectedPolicy).success)
       throw new TermContractError("compile", [
         contractIssue("invalid-policy", "匹配政策需要身份及有效边界政策。"),
       ]);
@@ -110,7 +121,7 @@ export function compileTerms(
     ];
     const seen = new Set<string>();
     for (const form of candidates) {
-      if (typeof form !== "string" || form.trim() === "")
+      if (!nonemptyTextSchema.safeParse(form).success)
         throw new TermContractError("compile", [
           contractIssue("invalid-form", "额外识别形式不得为空。", [
             entry.conceptId,
@@ -223,9 +234,8 @@ function validateNormalized(
   stage: "compile" | "input",
 ) {
   if (
-    value.original !== original ||
-    typeof value.text !== "string" ||
-    typeof value.mapRange !== "function"
+    !normalizedTextSchema.safeParse(value).success ||
+    value.original !== original
   )
     throw new TermContractError(stage, [
       contractIssue(
@@ -451,9 +461,7 @@ async function findTermsUncached(
           continue;
         }
         if (
-          !Number.isInteger(range.start) ||
-          !Number.isInteger(range.end) ||
-          range.start < 0 ||
+          !termRangeSchema.safeParse(range).success ||
           range.end <= range.start ||
           range.end > fragment.text.length
         )
@@ -491,7 +499,7 @@ async function findTermsUncached(
             range,
             entry,
           });
-          if (typeof accepted !== "boolean")
+          if (!boundaryResultSchema.safeParse(accepted).success)
             throw new TermContractError("input", [
               contractIssue(
                 "invalid-boundary-result",

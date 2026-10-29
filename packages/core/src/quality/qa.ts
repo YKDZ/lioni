@@ -508,6 +508,10 @@ export function defineQualityCheck<
   >;
 }
 
+/**
+ * 将选择、投影和检查绑定为共同检查器契约。
+ * 配置与验证器仅供执行准备使用，返回对象不暴露具体 schema 或配置内部成员。
+ */
 export function bindQualityCheck<
   TUnit extends TranslationUnitInput,
   TTranslation,
@@ -528,11 +532,7 @@ export function bindQualityCheck<
     TBody,
     TUnavailable
   >,
-): QualityCheckDefinition<TUnit, TTranslation, TObject, TBody, TUnavailable> & {
-  readonly configuration: StandardSchemaInput<TConfigurationSchema>;
-  readonly configurationSchema: TConfigurationSchema;
-  readonly inputSchema: TInputSchema;
-} {
+): QualityCheckDefinition<TUnit, TTranslation, TObject, TBody, TUnavailable> {
   const {
     id,
     version,
@@ -549,9 +549,6 @@ export function bindQualityCheck<
     [qualityCheckDefinitionBrand]: true,
     id,
     version,
-    configuration,
-    configurationSchema,
-    inputSchema,
   } as const;
   qualityCheckPreparers.set(qualityCheck, async () => {
     const configurationDescription = `QA 检查器 ${id} 的配置`;
@@ -649,11 +646,7 @@ export function bindQualityCheck<
     TObject,
     TBody,
     TUnavailable
-  > & {
-    readonly configuration: StandardSchemaInput<TConfigurationSchema>;
-    readonly configurationSchema: TConfigurationSchema;
-    readonly inputSchema: TInputSchema;
-  };
+  >;
 }
 
 function bindingOutcome<TObject extends QualityObject>(

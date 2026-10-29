@@ -240,7 +240,6 @@ export type {
   TermRule,
   TermRuleId,
   TermRulesConfiguration,
-  TermSchema,
   TermSelection,
   TermTextInput,
   TermType,

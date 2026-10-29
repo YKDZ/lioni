@@ -14,7 +14,6 @@ export {
   type Termbase,
   type TermSelection,
   type TermContractIssue,
-  type TermSchema,
 } from "./data.ts";
 export {
   termComparisonInputSchema,

@@ -7,7 +7,8 @@
     "./base.json": "./base.json",
     "./node.json": "./node.json",
     "./oxfmt": "./oxfmt.config.ts",
-    "./oxlint": "./oxlint.config.ts"
+    "./oxlint": "./oxlint.config.ts",
+    "./node-test-count-reporter": "./scripts/node-test-count-reporter.ts"
   },
   "scripts": {
     "format:check": "oxfmt --list-different .",
@@ -15,6 +16,9 @@
     "lint": "oxlint --quiet --format=unix --ignore-pattern node_modules .",
     "lint:fix": "oxlint --format=unix . --fix",
     "typecheck": "tsc -p tsconfig.json --noEmit --pretty false"
+  },
+  "dependencies": {
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",

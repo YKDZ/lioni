@@ -12,27 +12,18 @@ const journey: CliJourney = {
     await writeFile(
       path.join(workDir, "project", "lioni.config.ts"),
       `import { defineConfig } from "@lioni/core";
+import * as z from "zod";
 
 export default defineConfig({
   source: {
-    schema: { "~standard": { version: 1, vendor: "baseline-journey", validate(value) {
-      return typeof value === "object" && value !== null && typeof value.source === "string"
-        ? { value }
-        : { issues: [{ message: "原文单元结构不匹配。" }] };
-    } } },
+    schema: z.looseObject({ source: z.string() }),
     read: () => ({ scopes: [{ range: "src/messages.json", enumeration: "complete", records: [] }] })
   },
   keyOf: (unit) => unit.source,
   translations: {
     languages: ["fr"],
-    schema: { "~standard": { version: 1, vendor: "baseline-journey-translation", validate(value) {
-      return typeof value === "object" && value !== null && typeof value.id === "string" && typeof value.text === "string"
-        ? { value }
-        : { issues: [{ message: "译文记录结构不匹配。" }] };
-    } } },
-    contentSchema: { "~standard": { version: 1, vendor: "baseline-journey-content", validate(value) {
-      return typeof value === "string" ? { value } : { issues: [{ message: "译文正文必须是字符串。" }] };
-    } } },
+    schema: z.looseObject({ id: z.string(), text: z.string() }),
+    contentSchema: z.string(),
     read: () => ({ scopes: [{ range: "locales/fr.json", covers: [], enumeration: "complete", records: [] }] }),
     keyOf: (translation) => ({ namespace: "messages", key: translation.id }),
     contentOf: (translation) => translation.text
@@ -43,14 +34,11 @@ export default defineConfig({
     await writeFile(
       path.join(workDir, "project", "incomplete.config.ts"),
       `import { defineConfig } from "@lioni/core";
+import * as z from "zod";
 
 export default defineConfig({
   source: {
-    schema: { "~standard": { version: 1, vendor: "baseline-journey", validate(value) {
-      return typeof value === "object" && value !== null && typeof value.source === "string"
-        ? { value }
-        : { issues: [{ message: "原文单元结构不匹配。" }] };
-    } } },
+    schema: z.looseObject({ source: z.string() }),
     read: () => ({ scopes: [{ range: "src/messages.json", enumeration: "partial", records: [] }] })
   },
   keyOf: (unit) => unit.source

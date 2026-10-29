@@ -170,9 +170,6 @@ catalogs:
     '@types/node':
       specifier: ^24.13.3
       version: 24.19.2
-    '@valibot/to-json-schema':
-      specifier: ^1.8.0
-      version: 1.8.0
     '@ykdz/cli-contract':
       specifier: 0.3.0
       version: 0.3.0
@@ -191,9 +188,9 @@ catalogs:
     typescript-7:
       specifier: npm:typescript@^7.0.2
       version: 7.0.2
-    valibot:
-      specifier: ^1.4.2
-      version: 1.5.0
+    zod:
+      specifier: 4.6.7
+      version: 4.6.7
 
 importers:
 
@@ -238,6 +235,9 @@ importers:
       typescript-7:
         specifier: 'catalog:'
         version: typescript@7.0.2
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.7
 
   apps/cli:
     dependencies:
@@ -247,18 +247,15 @@ importers:
       '@standard-schema/spec':
         specifier: 1.1.0
         version: 1.1.0
-      '@valibot/to-json-schema':
-        specifier: 'catalog:'
-        version: 1.8.0(valibot@1.5.0(typescript@6.0.3))
       '@ykdz/cli-contract':
         specifier: 'catalog:'
         version: 0.3.0
-      valibot:
-        specifier: 'catalog:'
-        version: 1.5.0(typescript@6.0.3)
       yaml:
         specifier: ^2.9.1
         version: 2.9.1
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.7
     devDependencies:
       '@lioni/checks':
         specifier: workspace:*
@@ -317,9 +314,9 @@ importers:
       '@lioni/text-analysis':
         specifier: workspace:*
         version: link:../text-analysis
-      valibot:
+      zod:
         specifier: 'catalog:'
-        version: 1.5.0(typescript@7.0.2)
+        version: 4.6.7
     devDependencies:
       '@lioni/tooling-config':
         specifier: workspace:*
@@ -372,6 +369,10 @@ importers:
         version: typescript@7.0.2
 
   packages/memo:
+    dependencies:
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.7
     devDependencies:
       '@lioni/tooling-config':
         specifier: workspace:*
@@ -400,9 +401,15 @@ importers:
       '@lioni/text-analysis':
         specifier: workspace:*
         version: link:../text-analysis
+      '@standard-schema/spec':
+        specifier: 1.1.0
+        version: 1.1.0
       yaml:
         specifier: ^2.9.1
         version: 2.9.1
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.7
     devDependencies:
       '@lioni/tooling-config':
         specifier: workspace:*
@@ -428,6 +435,9 @@ importers:
       '@lioni/memo':
         specifier: workspace:*
         version: link:../memo
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.7
     devDependencies:
       '@lioni/tooling-config':
         specifier: workspace:*
@@ -449,6 +459,10 @@ importers:
         version: typescript@7.0.2
 
   packages/tooling-config:
+    dependencies:
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.7
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
@@ -1145,11 +1159,6 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@valibot/to-json-schema@1.8.0':
-    resolution: {integrity: sha512-a0M+uwCuQZEPAo65NYkFSJ14O5c213KoSZmPdoCfuFvUhfULi4T2Z6Tpjv6lTVMW9RoLm74RpRAjNEa43KcN+g==}
-    peerDependencies:
-      valibot: ^1.5.0
-
   '@ykdz/cli-contract@0.3.0':
     resolution: {integrity: sha512-0SYE3OHjAmDpqS54yPOUgBqkF6ywJ5CNZ86BACGAWpMx9q5+m8au8xx2SyLoj956SjqrkzOtzUujQ2MvlThivQ==}
     engines: {node: '>=24'}
@@ -1401,18 +1410,13 @@ packages:
   undici-types@7.24.6:
     resolution: {integrity: sha512-WRNW+sJgj5OBN4/0JpHFqtqzhpbnV0GuB+OozA9gCL7a993SmU+1JBZCzLNxYsbMfIeDL+lTsphD5jN5N+n0zg==}
 
-  valibot@1.5.0:
-    resolution: {integrity: sha512-nil6AkP2TChWL43Z5uJ6GTxX01CUA+g8LWUM+N/rB9NBbkUMaUsi9PUNzlUPgoKASgmx9f7eGOYpJ04/fSa6FQ==}
-    peerDependencies:
-      typescript: '>=5'
-    peerDependenciesMeta:
-      typescript:
-        optional: true
-
   yaml@2.9.1:
     resolution: {integrity: sha512-3NxN8+78OdzbT7C/WjGsyfPAtJaN3FNDsWxv7Y7mcDsT/oOmgW8BpyQQFFBnvZE3j9Y2Sdz1ULFLezL7Eb2yFw==}
     engines: {node: '>= 14.6'}
     hasBin: true
+
+  zod@4.6.7:
+    resolution: {integrity: sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==}
 
 snapshots:
 
@@ -1871,10 +1875,6 @@ snapshots:
   '@typescript/typescript-win32-x64@7.0.2':
     optional: true
 
-  '@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@6.0.3))':
-    dependencies:
-      valibot: 1.5.0(typescript@6.0.3)
-
   '@ykdz/cli-contract@0.3.0':
     dependencies:
       '@standard-schema/spec': 1.1.0
@@ -2131,12 +2131,6 @@ snapshots:
 
   undici-types@7.24.6: {}
 
-  valibot@1.5.0(typescript@6.0.3):
-    optionalDependencies:
-      typescript: 6.0.3
-
-  valibot@1.5.0(typescript@7.0.2):
-    optionalDependencies:
-      typescript: 7.0.2
-
   yaml@2.9.1: {}
+
+  zod@4.6.7: {}

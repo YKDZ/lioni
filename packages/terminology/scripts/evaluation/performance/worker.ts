@@ -10,30 +10,17 @@ import {
   discoverTerms,
   evaluateTerms,
 } from "@lioni/terminology";
+import { z } from "zod";
 
 import { canonicalJson, sha256 } from "../support/json.ts";
 import type { PerformanceWorkerResult } from "./types.ts";
 import {
   performanceDiscoveryPolicy,
+  performanceInputSchema,
+  performanceMemoModeSchema,
   type PerformancePreparedInput,
 } from "./workload.ts";
 import type { PerformanceMemoMode } from "./workload.ts";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isPerformanceInput(value: unknown): value is PerformancePreparedInput {
-  return (
-    isRecord(value) &&
-    value.id === "controlled-scale" &&
-    isRecord(value.termbase) &&
-    isRecord(value.comparison) &&
-    isRecord(value.discovery) &&
-    isRecord(value.facts) &&
-    isRecord(value.generation)
-  );
-}
 
 function fingerprint(value: unknown): string {
   return sha256(canonicalJson(value));
@@ -84,9 +71,7 @@ async function runSample(
   const value: unknown = JSON.parse(await readFile(inputPath, "utf8"));
   if (sha256(canonicalJson(value)) !== expectedInputSha256)
     throw new Error("性能输入文件与固定种子报告不一致。");
-  if (!isPerformanceInput(value)) throw new Error("性能输入结构无效。");
-
-  const input = value;
+  const input = performanceInputSchema.parse(value);
   const termbase = createTermbase(input.termbase);
   const terms = compileTerms(termbase);
   const entry = publicEntry();
@@ -156,17 +141,14 @@ async function runSample(
 }
 
 async function main(): Promise<void> {
-  const [inputPath, mode, sampleValue, inputSha256] = process.argv.slice(2);
-  if (
-    inputPath === undefined ||
-    (mode !== "no-memo" && mode !== "new-scope" && mode !== "reused-scope") ||
-    sampleValue === undefined ||
-    inputSha256 === undefined
-  )
-    throw new Error("子进程需要输入路径、memo 模式、样本序号和输入摘要。");
-  const sample = Number(sampleValue);
-  if (!Number.isSafeInteger(sample) || sample < 1)
-    throw new Error("样本序号必须是正整数。");
+  const [inputPath, mode, sample, inputSha256] = z
+    .tuple([
+      z.string().min(1),
+      performanceMemoModeSchema,
+      z.coerce.number().int().positive(),
+      z.string().min(1),
+    ])
+    .parse(process.argv.slice(2));
   const result = await runSample(inputPath, inputSha256, mode, sample);
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }

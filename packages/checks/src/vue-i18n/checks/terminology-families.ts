@@ -223,6 +223,9 @@ export function createVueI18nMessageFamilyCheck<
     analysis: options.analysis,
     sourceTemplate,
     targetTemplate,
+    // 工厂已纳入候选与参照采用的等价签名；未使用的等价声明不构成本次依据。
+    fingerprintInput: ({ subject }) =>
+      snapshotJsonValue(subject.projection, "消息族候选投影"),
     targetEquivalence: (signature, language, input) =>
       vueI18nDependencies(input).targetEquivalences.get(language)?.(
         signature,
@@ -348,12 +351,22 @@ function familyInput(
         },
       ],
     };
-  if (projection.target.status !== "available")
+  if (parseVueI18nMessage(projection.source.text).errors.length > 0)
     return {
       complete: false,
       groups: [],
       issues: [
         {
+          code: "sourceMessageSyntaxInvalid",
+          message: "原文语法无效，无法确定消息族。",
+          language: projection.language,
+          sourceKey: projection.key,
+        },
+      ],
+    };
+  const targetIssue =
+    projection.target.status !== "available"
+      ? {
           code:
             projection.target.status === "missing"
               ? "targetMissing"
@@ -361,14 +374,15 @@ function familyInput(
           message: "已保存译文正文不可用，无法完整投影消息族。",
           language: projection.language,
           sourceKey: projection.key,
-        },
-      ],
-    };
-  if (
-    parseVueI18nMessage(projection.source.text).errors.length > 0 ||
-    parseVueI18nMessage(projection.target.text).errors.length > 0
-  )
-    return { groups: [] };
+        }
+      : parseVueI18nMessage(projection.target.text).errors.length > 0
+        ? {
+            code: "targetMessageSyntaxInvalid",
+            message: "已保存译文语法无效，无法完整投影消息族。",
+            language: projection.language,
+            sourceKey: projection.key,
+          }
+        : undefined;
 
   const scope = createVueI18nScopeResolver(policy)(projection.key);
   return {
@@ -380,9 +394,17 @@ function familyInput(
           language: policy.sourceLanguage,
           fragments: [{ ref: projection.key, text: projection.source.text }],
         },
+        // 原文组已知时保留其族归属，目标缺口只限制对应族。
         target: {
           language: policy.targetLanguage,
-          fragments: [{ ref: projection.key, text: projection.target.text }],
+          fragments:
+            projection.target.status === "available" &&
+            targetIssue === undefined
+              ? [{ ref: projection.key, text: projection.target.text }]
+              : [],
+          ...(targetIssue === undefined
+            ? {}
+            : { complete: false, issues: [targetIssue] }),
         },
       },
     ],
@@ -402,7 +424,7 @@ function terminologyVersion(
 
 function familyVersion(identity: VueI18nCheckIdentity): string {
   return [
-    "vue-i18n-suite/message-family/v3",
+    "vue-i18n-suite/message-family/v4",
     `@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
     identity.hostVersion,
   ].join("+");

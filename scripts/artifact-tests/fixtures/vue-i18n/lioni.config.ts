@@ -5,35 +5,17 @@ import {
   defineConfig,
   type VueI18nMessageProjection,
   type VueI18nPolicy,
-  type StandardSchemaV1,
   type TermbaseData,
   type QualityException,
 } from "@lioni/lioni";
+import * as z from "zod";
 
-type Unit = { readonly key: string; readonly source: string };
-type Translation = { readonly key: string; readonly text: string };
 const source = "Hello {name}";
-const stringSchema = schema(
-  (value): value is string => typeof value === "string",
-);
-const unitSchema = schema(
-  (value): value is Unit =>
-    typeof value === "object" &&
-    value !== null &&
-    "key" in value &&
-    typeof value.key === "string" &&
-    "source" in value &&
-    typeof value.source === "string",
-);
-const translationSchema = schema(
-  (value): value is Translation =>
-    typeof value === "object" &&
-    value !== null &&
-    "key" in value &&
-    typeof value.key === "string" &&
-    "text" in value &&
-    typeof value.text === "string",
-);
+const stringSchema = z.string();
+const unitSchema = z.looseObject({ key: z.string(), source: z.string() });
+const translationSchema = z.looseObject({ key: z.string(), text: z.string() });
+type Unit = z.infer<typeof unitSchema>;
+type Translation = z.infer<typeof translationSchema>;
 export function createConfig(
   target: string,
   options: {
@@ -185,21 +167,6 @@ function projection(
     locations: {
       source: { key: "message", language: null, range: "en.json" },
       target: { key: "message", language: "zh-CN", range: "zh-CN.json" },
-    },
-  };
-}
-
-function schema<T>(
-  isValue: (value: unknown) => value is T,
-): StandardSchemaV1<T, T> {
-  return {
-    "~standard": {
-      version: 1,
-      vendor: "artifact-consumer",
-      validate: (value) =>
-        isValue(value)
-          ? { value }
-          : { issues: [{ message: "消费者资料结构无效。" }] },
     },
   };
 }

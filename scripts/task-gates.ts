@@ -2,6 +2,8 @@ import { spawn, spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import * as z from "zod";
+
 export type TaskGate = "check" | "check:heavy" | "check:full" | "fix";
 
 type ScriptRole =
@@ -63,13 +65,24 @@ const publicGateNames = new Set<TaskGate>([
 const defaultEntryCommand = "node --conditions=source scripts/task-gates.ts";
 const maxTurboOutputBytes = 16 * 1024 * 1024;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
+const nonEmptyString = z.string().refine((value) => value.trim().length > 0);
+const directorySchema = z.object({
+  data: z.object({ packages: z.object({ items: z.array(z.unknown()) }) }),
+});
+const packageSchema = z.object({
+  name: nonEmptyString,
+  tasks: z.object({ items: z.array(z.unknown()) }),
+});
+const taskSchema = z.object({
+  name: nonEmptyString,
+  fullName: nonEmptyString,
+  tags: z.array(z.string()),
+  script: z.unknown().optional(),
+  command: z.unknown().optional(),
+});
+const dryRunSchema = z.object({
+  tasks: z.array(z.object({ taskId: nonEmptyString })),
+});
 
 function report(message: string): void {
   process.stderr.write(`${message}\n`);
@@ -265,51 +278,32 @@ function readTaskDirectory(
     };
   }
 
-  const packages =
-    isRecord(response) && isRecord(response.data)
-      ? response.data.packages
-      : undefined;
-  const packageItems = isRecord(packages) ? packages.items : undefined;
-  if (!Array.isArray(packageItems)) {
+  const directory = directorySchema.safeParse(response);
+  if (!directory.success) {
     return {
       diagnostics: ["Turbo 原生任务目录缺少 packages.items"],
       tasks: [],
     };
   }
-
   const diagnostics: string[] = [];
   const tasks: TurboTask[] = [];
-  for (const packageItem of packageItems) {
-    if (!isRecord(packageItem) || !isNonEmptyString(packageItem.name)) {
-      diagnostics.push("Turbo 原生任务目录包含无法识别的工作区包");
+  for (const packageValue of directory.data.data.packages.items) {
+    const parsedPackage = packageSchema.safeParse(packageValue);
+    if (!parsedPackage.success) {
+      diagnostics.push("Turbo 原生任务目录包含无法识别的工作区包或任务列表");
       continue;
     }
-    const taskConnection = packageItem.tasks;
-    const taskItems = isRecord(taskConnection)
-      ? taskConnection.items
-      : undefined;
-    if (!Array.isArray(taskItems)) {
-      diagnostics.push(`${packageItem.name} 的 Turbo 任务目录缺少 tasks.items`);
-      continue;
-    }
-
-    for (const taskItem of taskItems) {
-      if (!isRecord(taskItem)) {
-        diagnostics.push(`${packageItem.name} 的 Turbo 任务目录包含无效任务`);
-        continue;
-      }
-      const { name, fullName, tags, script, command } = taskItem;
-      if (
-        !isNonEmptyString(name) ||
-        !isNonEmptyString(fullName) ||
-        !Array.isArray(tags) ||
-        !tags.every((tag) => typeof tag === "string")
-      ) {
+    const packageItem = parsedPackage.data;
+    for (const taskValue of packageItem.tasks.items) {
+      const parsedTask = taskSchema.safeParse(taskValue);
+      if (!parsedTask.success) {
         diagnostics.push(`${packageItem.name} 的 Turbo 任务条目缺少名称或标签`);
         continue;
       }
-
-      const executable = isNonEmptyString(script) || isNonEmptyString(command);
+      const { name, fullName, tags, script, command } = parsedTask.data;
+      const executable =
+        nonEmptyString.safeParse(script).success ||
+        nonEmptyString.safeParse(command).success;
       const taskWithoutRole = {
         name,
         fullName,
@@ -382,24 +376,17 @@ function parseDryRun(
       taskIds: [],
     };
   }
-  if (!isRecord(response) || !Array.isArray(response.tasks)) {
+  const parsed = dryRunSchema.safeParse(response);
+  if (!parsed.success) {
     return {
-      diagnostics: ["Turbo 执行图预览缺少 tasks"],
+      diagnostics: ["Turbo 执行图预览缺少有效的 tasks 或任务标识"],
       taskIds: [],
     };
   }
-
-  const taskIds: string[] = [];
-  const diagnostics: string[] = [];
-  for (const task of response.tasks) {
-    if (!isRecord(task) || !isNonEmptyString(task.taskId)) {
-      diagnostics.push("Turbo 执行图预览包含无法识别的任务标识");
-      continue;
-    }
-    taskIds.push(task.taskId);
-  }
-
-  return { diagnostics, taskIds };
+  return {
+    diagnostics: [],
+    taskIds: parsed.data.tasks.map(({ taskId }) => taskId),
+  };
 }
 
 function validateLayerClosure(

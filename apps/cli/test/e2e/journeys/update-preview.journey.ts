@@ -25,17 +25,14 @@ function configSource(
   return `import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "@lioni/core";
+import * as z from "zod";
 
 const translationsPath = fileURLToPath(new URL("./lioni.translations.json", import.meta.url));
 const writeLogPath = fileURLToPath(new URL("./lioni.writes.log", import.meta.url));
 
 export default defineConfig({
   source: {
-    schema: { "~standard": { version: 1, vendor: "update-preview-journey", validate(value) {
-      return typeof value === "object" && value !== null && typeof value.id === "string" && typeof value.source === "string"
-        ? { value }
-        : { issues: [{ message: "原文单元结构不匹配。" }] };
-    } } },
+    schema: z.looseObject({ id: z.string(), source: z.string() }),
     read: () => ({ scopes: [{
       range: "src/messages.json",
       enumeration: "complete",
@@ -47,14 +44,8 @@ export default defineConfig({
   ${options.noDecisions === true ? "updatePolicy: () => []," : ""}
   translations: {
     languages: ["fr"],
-    schema: { "~standard": { version: 1, vendor: "update-preview-translation", validate(value) {
-      return typeof value === "object" && value !== null && typeof value.targetId === "string" && typeof value.sourceId === "string" && typeof value.text === "string"
-        ? { value }
-        : { issues: [{ message: "译文记录结构不匹配。" }] };
-    } } },
-    contentSchema: { "~standard": { version: 1, vendor: "update-preview-content", validate(value) {
-      return typeof value === "string" ? { value } : { issues: [{ message: "译文正文必须是字符串。" }] };
-    } } },
+    schema: z.looseObject({ targetId: z.string(), sourceId: z.string(), text: z.string() }),
+    contentSchema: z.string(),
     keyOf: (translation) => ({ namespace: "messages", key: translation.targetId }),
     contentOf: (translation) => translation.text,
     matches: (unit, translation) => unit.id === translation.sourceId,

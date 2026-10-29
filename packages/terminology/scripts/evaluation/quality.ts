@@ -9,21 +9,22 @@ import {
   createTermbase,
   discoverTerms,
   type JsonValue,
-  type DiscoverTermsOptions,
   type TermAssessment,
   type TermAssessmentIssue,
-  type TermComparisonInput,
   type TermMatch,
   type TermProblem,
   type TermRange,
   type TermRuleId,
   type TermMatches,
   type TermUseAnalysis,
-  type TermUsage,
-  type TermbaseData,
   type TermDiscovery,
-  type TermDiscoveryCorpus,
 } from "@lioni/terminology";
+import { z } from "zod";
+
+import { termRuleIdSchema } from "#/assessment";
+import { jsonValueSchema, nonemptyTextSchema } from "#/data";
+import { discoveryParametersSchema, discoverySnapshot } from "#/discovery";
+import { comparisonSnapshot, termRangeSchema } from "#/input";
 
 import { canonicalJson, resolvePath, sha256 } from "./support/json.ts";
 
@@ -35,87 +36,139 @@ const discoveryParameterNames = [
   "limit",
 ] as const;
 
-type DiscoveryParameters = Pick<
-  DiscoverTermsOptions,
-  (typeof discoveryParameterNames)[number]
->;
-
-type DiscoveryReference = {
-  readonly id: string;
-  readonly terms: readonly string[];
-};
-
-type DiscoveryDataset = {
-  readonly schemaVersion: 1;
-  readonly dataset: {
-    readonly id: string;
-    readonly version: string;
-    readonly reviewStatus: string;
-  };
-  readonly task: "discovery";
-  readonly input: TermDiscoveryCorpus;
-  readonly options: DiscoveryParameters;
-  readonly references: readonly DiscoveryReference[];
-};
-
-type QaMatchSide = "source" | "target";
-type QaMatchCertainty = "certain" | "ambiguous" | "suppressed";
-
-type QaExpectedMatch = {
-  readonly id: string;
-  readonly groupIndex: number;
-  readonly side: QaMatchSide;
-  readonly certainty: QaMatchCertainty;
-  readonly conceptId: string;
-  readonly expressionId: string;
-  readonly language: string;
-  readonly usage: TermUsage;
-  readonly fragmentIndex: number;
-  readonly ref: JsonValue;
-  readonly range: TermRange;
-  readonly text: string;
-  readonly expressionText: string;
-  readonly form: string;
-  readonly policyId: string;
-};
-
-type QaExpectedProblem = {
-  readonly groupIndex: number;
-  readonly conceptId: string;
-  readonly ruleId: TermRuleId;
-  readonly code: TermProblem["code"];
-  readonly sourceMatches: readonly string[];
-  readonly targetMatches: readonly string[];
-};
-
-type QaExpectedIssue = {
-  readonly groupIndex: number;
-  readonly code: string;
-  readonly conceptId?: string;
-  readonly ruleId?: TermRuleId;
-};
-
-type QaReference = {
-  readonly id: string;
-  readonly matches: readonly QaExpectedMatch[];
-  readonly problems: readonly QaExpectedProblem[];
-  readonly issues: readonly QaExpectedIssue[];
-};
-
-type QaDataset = {
-  readonly schemaVersion: 1;
-  readonly dataset: {
-    readonly id: string;
-    readonly version: string;
-    readonly reviewStatus: string;
-  };
-  readonly task: "qa";
-  readonly termbase: TermbaseData;
-  readonly input: TermComparisonInput;
-  readonly options: { readonly rules?: readonly TermRuleId[] };
-  readonly references: readonly QaReference[];
-};
-
+const discoveryOptionsSchema = discoveryParametersSchema
+  .pick({
+    maxWords: true,
+    maxCharacters: true,
+    minOccurrences: true,
+    limit: true,
+  })
+  .partial();
+type DiscoveryParameters = z.input<typeof discoveryOptionsSchema>;
+const datasetMetadataSchema = z
+  .object({
+    id: nonemptyTextSchema,
+    version: nonemptyTextSchema,
+    reviewStatus: nonemptyTextSchema,
+  })
+  .readonly();
+const discoveryReferenceSchema = z
+  .object({
+    id: nonemptyTextSchema,
+    terms: z.array(nonemptyTextSchema).readonly(),
+  })
+  .readonly();
+const discoveryDatasetSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    dataset: datasetMetadataSchema,
+    task: z.literal("discovery"),
+    input: z.transform(discoverySnapshot),
+    options: discoveryOptionsSchema.default({}),
+    references: z
+      .array(discoveryReferenceSchema)
+      .min(1)
+      .refine(
+        (items) => new Set(items.map(({ id }) => id)).size === items.length,
+        "参考答案身份不得重复。",
+      )
+      .readonly(),
+  })
+  .readonly();
+type DiscoveryReference = z.infer<typeof discoveryReferenceSchema>;
+type DiscoveryDataset = z.infer<typeof discoveryDatasetSchema>;
+const qaMatchSchema = z
+  .object({
+    id: nonemptyTextSchema,
+    groupIndex: z.int().nonnegative(),
+    side: z.enum(["source", "target"]),
+    certainty: z.enum(["certain", "ambiguous", "suppressed"]),
+    conceptId: nonemptyTextSchema,
+    expressionId: nonemptyTextSchema,
+    language: nonemptyTextSchema,
+    usage: z.enum(["preferred", "allowed", "forbidden"]),
+    fragmentIndex: z.int().nonnegative(),
+    ref: jsonValueSchema,
+    range: termRangeSchema.refine(
+      (range) => range.end > range.start,
+      "区间必须非空。",
+    ),
+    text: nonemptyTextSchema,
+    expressionText: nonemptyTextSchema,
+    form: nonemptyTextSchema,
+    policyId: nonemptyTextSchema,
+  })
+  .readonly();
+type QaExpectedMatch = z.infer<typeof qaMatchSchema>;
+type QaMatchSide = QaExpectedMatch["side"];
+type QaMatchCertainty = QaExpectedMatch["certainty"];
+const referenceIdsSchema = z
+  .array(nonemptyTextSchema)
+  .refine((ids) => new Set(ids).size === ids.length, "不得重复引用同一命中。")
+  .readonly();
+const qaProblemSchema = z
+  .object({
+    groupIndex: z.int().nonnegative(),
+    conceptId: nonemptyTextSchema,
+    ruleId: termRuleIdSchema,
+    code: z.enum(["missing-allowed-translation", "forbidden-translation"]),
+    sourceMatches: referenceIdsSchema,
+    targetMatches: referenceIdsSchema,
+  })
+  .refine(
+    (problem) =>
+      problem.code ===
+      (problem.ruleId === "require-allowed-translation"
+        ? "missing-allowed-translation"
+        : "forbidden-translation"),
+    { message: "问题码与规则身份不匹配。", path: ["code"] },
+  )
+  .readonly();
+const qaIssueSchema = z
+  .object({
+    groupIndex: z.int().nonnegative(),
+    code: nonemptyTextSchema,
+    conceptId: nonemptyTextSchema.exactOptional(),
+    ruleId: termRuleIdSchema.exactOptional(),
+  })
+  .readonly();
+type QaExpectedIssue = z.infer<typeof qaIssueSchema>;
+const qaReferenceSchema = z
+  .object({
+    id: nonemptyTextSchema,
+    matches: z.array(qaMatchSchema).readonly(),
+    problems: z.array(qaProblemSchema).readonly(),
+    issues: z.array(qaIssueSchema).readonly(),
+  })
+  .readonly();
+type QaReference = z.infer<typeof qaReferenceSchema>;
+const qaDatasetSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    dataset: datasetMetadataSchema,
+    task: z.literal("qa"),
+    termbase: z.transform((value) => createTermbase(value).data),
+    input: z.transform(comparisonSnapshot),
+    options: z
+      .object({
+        rules: z
+          .array(termRuleIdSchema)
+          .transform((rules) => [...new Set(rules)])
+          .readonly()
+          .exactOptional(),
+      })
+      .default({}),
+    references: z
+      .array(qaReferenceSchema)
+      .min(1)
+      .refine(
+        (items) => new Set(items.map(({ id }) => id)).size === items.length,
+        "参考答案身份不得重复。",
+      )
+      .readonly(),
+  })
+  .readonly();
+type QaDataset = z.infer<typeof qaDatasetSchema>;
 type QualityDataset = DiscoveryDataset | QaDataset;
 
 type QaMatch = Omit<QaExpectedMatch, "id">;
@@ -207,217 +260,13 @@ export type QualityEvaluationOptions =
       readonly parameters?: Partial<DiscoveryParameters>;
     };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function requiredString(value: unknown, field: string): string {
-  if (typeof value !== "string" || value.trim() === "")
-    throw new Error(`${field} 必须是非空字符串。`);
-  return value;
-}
-
-function requiredIndex(value: unknown, field: string): number {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
-    throw new Error(`${field} 必须是非负安全整数。`);
-  return value;
-}
-
-function parseDiscoveryOptions(value: unknown): DiscoveryParameters {
-  if (value === undefined) return Object.freeze({});
-  if (!isRecord(value)) throw new Error("options 必须是对象。");
-  const options: Partial<DiscoveryParameters> = {};
-  for (const name of discoveryParameterNames) {
-    const parameter = value[name];
-    if (parameter !== undefined) {
-      if (typeof parameter !== "number" || !Number.isSafeInteger(parameter))
-        throw new Error(`options.${name} 必须是安全整数。`);
-      Object.assign(options, { [name]: parameter });
-    }
-  }
-  return Object.freeze(options);
-}
-
-function parseReferences(value: unknown): readonly DiscoveryReference[] {
-  if (!Array.isArray(value) || value.length === 0)
-    throw new Error("references 必须至少包含一套独立答案。");
-  const ids = new Set<string>();
-  return Object.freeze(
-    value.map((item, index) => {
-      if (!isRecord(item)) throw new Error(`references[${index}] 必须是对象。`);
-      const id = requiredString(item.id, `references[${index}].id`);
-      if (ids.has(id)) throw new Error(`参考答案身份重复：${id}`);
-      ids.add(id);
-      if (!Array.isArray(item.terms))
-        throw new Error(`references[${index}].terms 必须是数组。`);
-      const terms = item.terms.map((term, termIndex) => {
-        if (typeof term !== "string" || normalizeTerm(term) === "")
-          throw new Error(
-            `references[${index}].terms[${termIndex}] 必须是非空字符串。`,
-          );
-        return term;
-      });
-      return Object.freeze({ id, terms: Object.freeze(terms) });
-    }),
-  );
-}
-
-function parseQaMatch(value: unknown, referenceIndex: number, index: number) {
-  const field = `references[${referenceIndex}].matches[${index}]`;
-  if (!isRecord(value)) throw new Error(`${field} 必须是对象。`);
-  const groupIndex = requiredIndex(value.groupIndex, `${field}.groupIndex`);
-  if (value.side !== "source" && value.side !== "target")
-    throw new Error(`${field}.side 必须是 source 或 target。`);
-  if (
-    value.certainty !== "certain" &&
-    value.certainty !== "ambiguous" &&
-    value.certainty !== "suppressed"
-  )
-    throw new Error(`${field}.certainty 必须是支持的命中状态。`);
-  if (!isRecord(value.range)) throw new Error(`${field}.range 必须是对象。`);
-  const { start, end } = value.range;
-  if (
-    typeof start !== "number" ||
-    !Number.isSafeInteger(start) ||
-    start < 0 ||
-    typeof end !== "number" ||
-    !Number.isSafeInteger(end) ||
-    end <= start
-  )
-    throw new Error(`${field}.range 必须是非空半开区间。`);
-  if (!Object.hasOwn(value, "ref")) throw new Error(`${field}.ref 必须存在。`);
-  canonicalJson(value.ref);
-  if (
-    value.usage !== "preferred" &&
-    value.usage !== "allowed" &&
-    value.usage !== "forbidden"
-  )
-    throw new Error(`${field}.usage 必须是支持的使用地位。`);
-  const fragmentIndex = requiredIndex(
-    value.fragmentIndex,
-    `${field}.fragmentIndex`,
-  );
-
-  return Object.freeze({
-    id: requiredString(value.id, `${field}.id`),
-    groupIndex,
-    side: value.side,
-    certainty: value.certainty,
-    conceptId: requiredString(value.conceptId, `${field}.conceptId`),
-    expressionId: requiredString(value.expressionId, `${field}.expressionId`),
-    language: requiredString(value.language, `${field}.language`),
-    usage: value.usage,
-    fragmentIndex,
-    ref: value.ref as JsonValue,
-    range: Object.freeze({ start, end }),
-    text: requiredString(value.text, `${field}.text`),
-    expressionText: requiredString(
-      value.expressionText,
-      `${field}.expressionText`,
-    ),
-    form: requiredString(value.form, `${field}.form`),
-    policyId: requiredString(value.policyId, `${field}.policyId`),
-  }) satisfies QaExpectedMatch;
-}
-
-function parseTermRuleId(value: unknown, field: string): TermRuleId {
-  if (
-    value !== "require-allowed-translation" &&
-    value !== "reject-forbidden-translation"
-  )
-    throw new Error(`${field} 不是受支持的规则身份。`);
-  return value;
-}
-
-function parseReferenceIds(value: unknown, field: string): readonly string[] {
-  if (!Array.isArray(value)) throw new Error(`${field} 必须是数组。`);
-  const ids = value.map((id, index) =>
-    requiredString(id, `${field}[${index}]`),
-  );
-  if (new Set(ids).size !== ids.length)
-    throw new Error(`${field} 不得重复引用同一命中。`);
-  return Object.freeze(ids);
-}
-
-function parseQaProblem(
-  value: unknown,
-  referenceIndex: number,
-  index: number,
-): QaExpectedProblem {
-  const field = `references[${referenceIndex}].problems[${index}]`;
-  if (!isRecord(value)) throw new Error(`${field} 必须是对象。`);
-  const ruleId = parseTermRuleId(value.ruleId, `${field}.ruleId`);
-  let code: QaExpectedProblem["code"];
-  if (ruleId === "require-allowed-translation") {
-    if (value.code !== "missing-allowed-translation")
-      throw new Error(`${field}.code 与 ruleId 不匹配。`);
-    code = value.code;
-  } else {
-    if (value.code !== "forbidden-translation")
-      throw new Error(`${field}.code 与 ruleId 不匹配。`);
-    code = value.code;
-  }
-  const groupIndex = requiredIndex(value.groupIndex, `${field}.groupIndex`);
-  return Object.freeze({
-    groupIndex,
-    conceptId: requiredString(value.conceptId, `${field}.conceptId`),
-    ruleId,
-    code,
-    sourceMatches: parseReferenceIds(
-      value.sourceMatches,
-      `${field}.sourceMatches`,
-    ),
-    targetMatches: parseReferenceIds(
-      value.targetMatches,
-      `${field}.targetMatches`,
-    ),
-  });
-}
-
-function parseQaIssue(
-  value: unknown,
-  referenceIndex: number,
-  index: number,
-): QaExpectedIssue {
-  const field = `references[${referenceIndex}].issues[${index}]`;
-  if (!isRecord(value)) throw new Error(`${field} 必须是对象。`);
-  const groupIndex = requiredIndex(value.groupIndex, `${field}.groupIndex`);
-  return Object.freeze({
-    groupIndex,
-    code: requiredString(value.code, `${field}.code`),
-    ...(value.conceptId === undefined
-      ? {}
-      : { conceptId: requiredString(value.conceptId, `${field}.conceptId`) }),
-    ...(value.ruleId === undefined
-      ? {}
-      : { ruleId: parseTermRuleId(value.ruleId, `${field}.ruleId`) }),
-  });
-}
-
 function parseQaReferences(
-  value: unknown,
+  value: readonly QaReference[],
   groupCount: number,
 ): readonly QaReference[] {
-  if (!Array.isArray(value) || value.length === 0)
-    throw new Error("references 必须至少包含一套独立答案。");
-  const referenceIds = new Set<string>();
   return Object.freeze(
-    value.map((item, referenceIndex) => {
-      if (!isRecord(item))
-        throw new Error(`references[${referenceIndex}] 必须是对象。`);
-      const id = requiredString(item.id, `references[${referenceIndex}].id`);
-      if (referenceIds.has(id)) throw new Error(`参考答案身份重复：${id}`);
-      referenceIds.add(id);
-      if (!Array.isArray(item.matches))
-        throw new Error(`references[${referenceIndex}].matches 必须是数组。`);
-      if (!Array.isArray(item.problems))
-        throw new Error(`references[${referenceIndex}].problems 必须是数组。`);
-      if (!Array.isArray(item.issues))
-        throw new Error(`references[${referenceIndex}].issues 必须是数组。`);
-
-      const matches = item.matches.map((match, index) =>
-        parseQaMatch(match, referenceIndex, index),
-      );
+    value.map((item) => {
+      const { id, matches, problems, issues } = item;
       const matchIds = new Map<string, QaExpectedMatch>();
       const matchIdentities = new Set<string>();
       for (const match of matches) {
@@ -434,9 +283,6 @@ function parseQaReferences(
         matchIds.set(match.id, match);
       }
 
-      const problems = item.problems.map((problem, index) =>
-        parseQaProblem(problem, referenceIndex, index),
-      );
       const problemIdentities = new Set<string>();
       for (const problem of problems) {
         if (problem.groupIndex >= groupCount)
@@ -465,9 +311,6 @@ function parseQaReferences(
         }
       }
 
-      const issues = item.issues.map((issue, index) =>
-        parseQaIssue(issue, referenceIndex, index),
-      );
       const issueIdentities = issues.map(qaIssueIdentity);
       if (new Set(issueIdentities).size !== issueIdentities.length)
         throw new Error("参考答案重复列出同一未完成原因。");
@@ -482,46 +325,6 @@ function parseQaReferences(
       });
     }),
   );
-}
-
-function parseQaDataset(value: Record<string, unknown>): QaDataset {
-  if (value.schemaVersion !== 1)
-    throw new Error("评测输入 schemaVersion 必须为 1。");
-  if (!isRecord(value.dataset)) throw new Error("dataset 必须是对象。");
-  if (!isRecord(value.termbase)) throw new Error("termbase 必须是对象。");
-  if (!isRecord(value.input) || !Array.isArray(value.input.groups))
-    throw new Error("input.groups 必须是数组。");
-  if (value.options !== undefined && !isRecord(value.options))
-    throw new Error("options 必须是对象。");
-  const options = (value.options ?? {}) as Record<string, unknown>;
-  let rules: readonly TermRuleId[] | undefined;
-  if (options.rules !== undefined) {
-    if (!Array.isArray(options.rules))
-      throw new Error("options.rules 必须是规则身份数组。");
-    rules = Object.freeze([
-      ...new Set(
-        options.rules.map((rule, index) =>
-          parseTermRuleId(rule, `options.rules[${index}]`),
-        ),
-      ),
-    ]);
-  }
-  return Object.freeze({
-    schemaVersion: 1,
-    dataset: Object.freeze({
-      id: requiredString(value.dataset.id, "dataset.id"),
-      version: requiredString(value.dataset.version, "dataset.version"),
-      reviewStatus: requiredString(
-        value.dataset.reviewStatus,
-        "dataset.reviewStatus",
-      ),
-    }),
-    task: "qa",
-    termbase: value.termbase as unknown as TermbaseData,
-    input: value.input as unknown as TermComparisonInput,
-    options: Object.freeze(rules === undefined ? {} : { rules }),
-    references: parseQaReferences(value.references, value.input.groups.length),
-  });
 }
 
 function qaMatchIdentity(match: {
@@ -581,30 +384,18 @@ function qaIssueIdentity(issue: QaExpectedIssue | TermAssessmentIssue): string {
 }
 
 function parseDataset(value: unknown): QualityDataset {
-  if (!isRecord(value)) throw new Error("评测输入必须是 JSON 对象。");
-  if (value.task === "qa") return parseQaDataset(value);
-  if (value.schemaVersion !== 1)
-    throw new Error("评测输入 schemaVersion 必须为 1。");
-  if (!isRecord(value.dataset)) throw new Error("dataset 必须是对象。");
-  if (value.task !== "discovery")
-    throw new Error("本入口只接受 task: discovery 或 qa 的数据。");
-  if (!isRecord(value.input)) throw new Error("input 必须是对象。");
-
-  return Object.freeze({
-    schemaVersion: 1,
-    dataset: Object.freeze({
-      id: requiredString(value.dataset.id, "dataset.id"),
-      version: requiredString(value.dataset.version, "dataset.version"),
-      reviewStatus: requiredString(
-        value.dataset.reviewStatus,
-        "dataset.reviewStatus",
-      ),
-    }),
-    task: "discovery",
-    input: value.input as unknown as TermDiscoveryCorpus,
-    options: parseDiscoveryOptions(value.options),
-    references: parseReferences(value.references),
-  });
+  const dataset = z
+    .discriminatedUnion("task", [discoveryDatasetSchema, qaDatasetSchema])
+    .parse(value);
+  return dataset.task === "qa"
+    ? {
+        ...dataset,
+        references: parseQaReferences(
+          dataset.references,
+          dataset.input.groups.length,
+        ),
+      }
+    : dataset;
 }
 
 function parseArguments(args: readonly string[]): QualityCliOptions {
@@ -621,18 +412,14 @@ function parseArguments(args: readonly string[]): QualityCliOptions {
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     if (argument === "--input" || argument === "--output") {
-      const value = args[++index];
-      if (value === undefined || value.trim() === "")
-        throw new Error(`${argument} 需要路径。`);
+      const value = nonemptyTextSchema.parse(args[++index]);
       if (argument === "--input") inputPath = value;
       else outputPath = value;
       continue;
     }
     const parameterName = cliNames.get(String(argument));
     if (parameterName !== undefined) {
-      const value = Number(args[++index]);
-      if (!Number.isSafeInteger(value))
-        throw new Error(`${argument} 需要安全整数。`);
+      const value = z.coerce.number().int().parse(args[++index]);
       Object.assign(parameters, { [parameterName]: value });
       continue;
     }

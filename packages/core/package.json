@@ -31,7 +31,7 @@
     "format:write": "oxfmt --write .",
     "lint": "oxlint --quiet --format=unix --ignore-pattern node_modules .",
     "lint:fix": "oxlint --format=unix . --fix",
-    "test": "node --conditions=source --test --test-reporter=spec --test-reporter=./scripts/node-test-count-reporter.ts --test-reporter-destination=stdout --test-reporter-destination=stderr 'test/**/*.test.ts'",
+    "test": "node --conditions=source --test --test-reporter=spec --test-reporter=@lioni/tooling-config/node-test-count-reporter --test-reporter-destination=stdout --test-reporter-destination=stderr 'test/**/*.test.ts'",
     "typecheck": "tsc -p tsconfig.node.json --noEmit --pretty false"
   },
   "dependencies": {

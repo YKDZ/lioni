@@ -6,9 +6,9 @@ import type {
   QualityObject,
   TranslationUnitInput,
 } from "@lioni/core";
-import { bindQualityCheck } from "@lioni/core";
+import { bindQualityCheck, snapshotJsonValue } from "@lioni/core";
 import type { MemoScope } from "@lioni/memo";
-import * as v from "valibot";
+import { z } from "zod";
 
 import { vueI18nDependencies } from "./dependencies.ts";
 import { memoizedVueI18nMessage } from "./message-memo.ts";
@@ -44,11 +44,11 @@ export type VueI18nVariableCorrespondenceCheckerOptions<
   readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
 };
 
-const configurationSchema = v.object({
-  compilerVersion: v.literal(VUE_I18N_MESSAGE_COMPILER_VERSION),
-  comparison: v.literal("branch-variable-count-patterns-v1"),
+const configurationSchema = z.object({
+  compilerVersion: z.literal(VUE_I18N_MESSAGE_COMPILER_VERSION),
+  comparison: z.literal("branch-variable-count-patterns-v1"),
 });
-type Configuration = v.InferOutput<typeof configurationSchema>;
+type Configuration = z.output<typeof configurationSchema>;
 
 const configuration: Configuration = {
   compilerVersion: VUE_I18N_MESSAGE_COMPILER_VERSION,
@@ -81,7 +81,7 @@ export function createVueI18nVariableCorrespondenceChecker<
     TUnavailable
   >({
     id: options.id ?? "vue-i18n/variable-correspondence",
-    version: `checks.vue-i18n/variable-correspondence/v1+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}+${options.hostVersion}`,
+    version: `checks.vue-i18n/variable-correspondence/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}+${options.hostVersion}`,
     configurationSchema,
     configuration,
     inputSchema: vueI18nMessageProjectionSchema,
@@ -118,6 +118,8 @@ export function createVueI18nVariableCorrespondenceChecker<
         TUnavailable
       >,
     ) => ({ status: "ready", value: input.subject }),
+    fingerprintInput: ({ projected }) =>
+      snapshotJsonValue(projected, "Vue I18n 检查投影"),
     check: (input) => compareVariables(input.projected, input.memo),
   });
 }

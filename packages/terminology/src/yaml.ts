@@ -1,6 +1,7 @@
 import { isMap, isPair, isScalar, isSeq, parseDocument } from "yaml";
+import { z } from "zod";
 
-import { createTermbase, isRecord, type Termbase } from "./data.ts";
+import { createTermbase, type Termbase } from "./data.ts";
 
 export type TermbaseYamlFiles = {
   readonly concepts: string;
@@ -52,10 +53,7 @@ export function parseTermbaseYaml(files: TermbaseYamlFiles): Termbase {
   const declaredLanguages = Object.entries(parsed.languages).flatMap(
     ([language, declarations]) =>
       Object.entries(declarations)
-        .filter(
-          ([, declaration]) =>
-            isRecord(declaration) && Object.hasOwn(declaration, "language"),
-        )
+        .filter(([, declaration]) => Object.hasOwn(declaration, "language"))
         .map(([id]) => ({
           code: "language-in-file",
           file: `${language}.yaml`,
@@ -68,14 +66,10 @@ export function parseTermbaseYaml(files: TermbaseYamlFiles): Termbase {
 
   const assembledConcepts = Object.entries(parsed.concepts).map(
     ([id, metadata]) => {
-      if (!isRecord(metadata))
-        throw new TypeError(`concepts.yaml 中的概念 ${id} 必须是映射。`);
       const languages = Object.entries(parsed.languages).flatMap(
         ([language, declarations]) => {
           if (!Object.hasOwn(declarations, id)) return [];
-          const declaration = declarations[id];
-          if (!isRecord(declaration))
-            throw new TypeError(`${language}.yaml 中的概念 ${id} 必须是映射。`);
+          const declaration = declarations[id]!;
           return [{ ...declaration, language }];
         },
       );
@@ -85,11 +79,14 @@ export function parseTermbaseYaml(files: TermbaseYamlFiles): Termbase {
   return createTermbase({ concepts: assembledConcepts });
 }
 
+const mappingSchema = z.record(z.string(), z.record(z.string(), z.unknown()));
+const documentSchema = z.object({ concepts: mappingSchema });
+
 function parseMapping(
   contents: string,
   file: string,
   emptyAllowed = false,
-): Readonly<Record<string, unknown>> {
+): Readonly<Record<string, Record<string, unknown>>> {
   const document = parseDocument(contents, {
     uniqueKeys: true,
     version: "1.2",
@@ -107,20 +104,20 @@ function parseMapping(
   if (emptyAllowed && document.contents === null) return {};
   rejectNonStringMappingKeys(document.contents, file);
   const value: unknown = document.toJS({ maxAliasCount: 100 });
-  if (!isRecord(value))
-    throw new TermbaseYamlError("parse", [
-      { code: "invalid-document", file, message: `${file} 顶层必须是映射。` },
-    ]);
-  if (emptyAllowed && Object.keys(value).length === 0) return {};
-  if (!isRecord(value.concepts))
-    throw new TermbaseYamlError("parse", [
-      {
-        code: "invalid-concepts",
+  if (emptyAllowed && z.record(z.string(), z.never()).safeParse(value).success)
+    return {};
+  const result = documentSchema.safeParse(value);
+  if (!result.success)
+    throw new TermbaseYamlError(
+      "parse",
+      result.error.issues.map((issue) => ({
+        code: "invalid-document",
         file,
-        message: `${file} 必须包含 concepts 映射。`,
-      },
-    ]);
-  return value.concepts;
+        message: `${file} ${issue.path.join(".")}：${issue.message}`,
+      })),
+    );
+  // 保留映射中的特殊概念身份，领域内容统一交给 createTermbase。
+  return (value as z.infer<typeof documentSchema>).concepts;
 }
 
 function rejectNonStringMappingKeys(node: unknown, file: string): void {

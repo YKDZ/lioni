@@ -264,7 +264,10 @@ void describe("默认 YAML 术语库", () => {
         }),
       (error) =>
         error instanceof TermContractError &&
-        error.issues.some((issue) => issue.code === "duplicate-expression-id"),
+        error.issues.some(
+          (issue) =>
+            issue.path.join(".") === "concepts.0.languages.1.expressions.0.id",
+        ),
     );
 
     assert.throws(
@@ -275,7 +278,9 @@ void describe("默认 YAML 术语库", () => {
         }),
       (error) =>
         error instanceof TermContractError &&
-        error.issues.some((issue) => issue.code === "invalid-languages"),
+        error.issues.some(
+          (issue) => issue.path.join(".") === "concepts.0.languages",
+        ),
     );
 
     assert.throws(
@@ -286,7 +291,10 @@ void describe("默认 YAML 术语库", () => {
         }),
       (error) =>
         error instanceof TermContractError &&
-        error.issues.some((issue) => issue.code === "invalid-expressions"),
+        error.issues.some(
+          (issue) =>
+            issue.path.join(".") === "concepts.0.languages.0.expressions",
+        ),
     );
   });
 

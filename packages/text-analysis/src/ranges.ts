@@ -1,4 +1,9 @@
-import { TextAnalysisContractError } from "./types.ts";
+import {
+  TextAnalysisContractError,
+  analysisError,
+  textInputSchema,
+  textRangeSchema,
+} from "./types.ts";
 import type { TextInput, TextRange } from "./types.ts";
 
 export const emptyRanges: readonly TextRange[] = Object.freeze([]);
@@ -16,15 +21,8 @@ export function isCodePointBoundary(text: string, offset: number): boolean {
 }
 
 export function validateInput(input: TextInput): void {
-  if (
-    typeof input.text !== "string" ||
-    typeof input.language !== "string" ||
-    input.language.length === 0
-  )
-    throw new TextAnalysisContractError(
-      "invalid-input",
-      "文本必须是字符串，语言标识必须非空。",
-    );
+  const result = textInputSchema.safeParse(input);
+  if (!result.success) throw analysisError("invalid-input", result.error);
 }
 
 export function validateRange(
@@ -32,10 +30,9 @@ export function validateRange(
   range: TextRange,
   allowEmpty = false,
 ): void {
+  const result = textRangeSchema.safeParse(range);
+  if (!result.success) throw analysisError("invalid-range", result.error);
   if (
-    !Number.isInteger(range.start) ||
-    !Number.isInteger(range.end) ||
-    range.start < 0 ||
     range.end > text.length ||
     (allowEmpty ? range.start > range.end : range.start >= range.end) ||
     !isCodePointBoundary(text, range.start) ||

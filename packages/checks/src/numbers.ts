@@ -3,53 +3,36 @@ import type {
   QualityCheckDefinition,
   QualityCheckInput,
   QualityCheckOutcome,
-  QualityCheckProjection,
-  QualityCheckProjectionInput,
   QualityCheckRuleInput,
   QualityCheckSelection,
   QualityEvidence,
+  QualityInputBasis,
   QualityLocation,
   QualityObject,
   QualitySubject,
   SourceUnitFact,
   TranslationUnitInput,
 } from "@lioni/core";
-import { bindQualityCheck } from "@lioni/core";
-import * as v from "valibot";
+import { bindQualityCheck, snapshotJsonValue } from "@lioni/core";
+import { z } from "zod";
 
-import { isRecord } from "./object-guards.ts";
+const numberCheckerConfigurationSchema = z.object({
+  format: z.literal("ascii-decimal-v1"),
+  comparison: z.literal("exact-multiset"),
+});
+type NumberCheckerConfiguration = {
+  readonly format: "ascii-decimal-v1";
+  readonly comparison: "exact-multiset";
+};
 
-const numberCheckerConfigurationShapeSchema = v.object(
-  {
-    format: v.literal("ascii-decimal-v1", "数字检查器配置无效。"),
-    comparison: v.literal("exact-multiset", "数字检查器配置无效。"),
-  },
-  "数字检查器配置无效。",
-);
-
-type NumberCheckerConfiguration = v.InferOutput<
-  typeof numberCheckerConfigurationShapeSchema
->;
-
-const numberTextInputShapeSchema = v.object(
-  {
-    source: v.string("数字检查输入必须包含两段文本。"),
-    target: v.string("数字检查输入必须包含两段文本。"),
-  },
-  "数字检查输入必须包含两段文本。",
-);
-
-export type NumberTextInput = v.InferOutput<typeof numberTextInputShapeSchema>;
-
-const numberCheckerConfigurationSchema = v.pipe(
-  v.custom<NumberCheckerConfiguration>(isRecord, "数字检查器配置无效。"),
-  numberCheckerConfigurationShapeSchema,
-);
-
-export const numberTextInputSchema = v.pipe(
-  v.custom<NumberTextInput>(isRecord, "数字检查输入必须包含两段文本。"),
-  numberTextInputShapeSchema,
-);
+const numberTextInputSchema = z.object({
+  source: z.string(),
+  target: z.string(),
+});
+export type NumberTextInput = {
+  readonly source: string;
+  readonly target: string;
+};
 
 export type NumberCheckerSubject<
   TUnit extends TranslationUnitInput,
@@ -77,11 +60,7 @@ type NumberCheckerDefinition<
   QualityObject,
   TBody,
   TUnavailable
-> & {
-  readonly configuration: NumberCheckerConfiguration;
-  readonly configurationSchema: typeof numberCheckerConfigurationSchema;
-  readonly inputSchema: typeof numberTextInputSchema;
-};
+>;
 
 export type NumberCheckerOptions<
   TUnit extends TranslationUnitInput,
@@ -98,6 +77,18 @@ export type NumberCheckerOptions<
   ) => Awaitable<
     QualityCheckSelection<NumberCheckerSubject<TSelectedUnit, TContent>>
   >;
+  /** 声明显式宿主依赖；工厂另行纳入实际文本、关联、位置和诊断证据，省略时保留全事实默认。 */
+  readonly fingerprintInput?: (
+    input: QualityCheckRuleInput<
+      TUnit,
+      TTranslation,
+      NumberCheckerConfiguration,
+      NumberCheckerSubject<TSelectedUnit, TContent>,
+      NumberTextInput,
+      TBody,
+      TUnavailable
+    >,
+  ) => QualityInputBasis;
   readonly sourceText: (unit: TSelectedUnit) => unknown;
   readonly translationText: (content: TContent) => unknown;
   readonly sourceLocation?: (
@@ -130,7 +121,14 @@ export function createNumberChecker<
     TUnavailable
   >,
 ): NumberCheckerDefinition<TUnit, TTranslation, TBody, TUnavailable> {
-  type Subject = NumberCheckerSubject<TSelectedUnit, TContent>;
+  type Selected = NumberCheckerSubject<TSelectedUnit, TContent>;
+  type Subject = {
+    readonly value: Selected;
+    readonly projected: NumberTextInput;
+    readonly report: Parameters<typeof compareNumberText>[0];
+    readonly association: QualityInputBasis;
+  };
+  const fingerprintInput = options.fingerprintInput;
   return bindQualityCheck<
     TUnit,
     TTranslation,
@@ -142,22 +140,15 @@ export function createNumberChecker<
     TUnavailable
   >({
     id: "number-correspondence",
-    version: `checks.number-correspondence/v1+${options.hostVersion}`,
+    version: `checks.number-correspondence/v2+${options.hostVersion}`,
     configurationSchema: numberCheckerConfigurationSchema,
     configuration: numberCheckerConfiguration,
     inputSchema: numberTextInputSchema,
-    select: options.select,
-    project: (
-      input: QualityCheckProjectionInput<
-        TUnit,
-        TTranslation,
-        NumberCheckerConfiguration,
-        Subject,
-        TBody,
-        TUnavailable
-      >,
-    ): QualityCheckProjection<NumberTextInput> => {
-      if (input.subject.sourceUnit.bodyAvailability !== "available")
+    select: async (input) => {
+      const selection = await options.select(input);
+      if (selection.status !== "selected") return selection;
+      const selected = selection.subject;
+      if (selected.sourceUnit.bodyAvailability !== "available")
         return {
           status: "incomplete",
           issue: {
@@ -165,8 +156,8 @@ export function createNumberChecker<
             message: "原文正文不可用，无法核对数字。",
           },
         };
-      const source = options.sourceText(input.subject.sourceUnit.unit);
-      const target = options.translationText(input.subject.content);
+      const source = options.sourceText(selected.sourceUnit.unit);
+      const target = options.translationText(selected.content);
       if (typeof source !== "string" || typeof target !== "string")
         return {
           status: "incomplete",
@@ -175,22 +166,9 @@ export function createNumberChecker<
             message: "无法取得原文或候选译文的文本。",
           },
         };
-      return { status: "ready", value: { source, target } };
-    },
-    check: (
-      input: QualityCheckRuleInput<
-        TUnit,
-        TTranslation,
-        NumberCheckerConfiguration,
-        Subject,
-        NumberTextInput,
-        TBody,
-        TUnavailable
-      >,
-    ) => {
       const subject = {
-        key: input.subject.sourceKey,
-        language: input.subject.language,
+        key: selected.sourceKey,
+        language: selected.language,
       };
       const association = input.facts.associations.find(
         ({ sourceKey, language }) =>
@@ -208,8 +186,7 @@ export function createNumberChecker<
       const defaultSourceLocation: QualityLocation = {
         language: null,
         range:
-          input.facts.source.read.scopes[input.subject.sourceUnit.scopeIndex]
-            ?.range,
+          input.facts.source.read.scopes[selected.sourceUnit.scopeIndex]?.range,
       };
       const defaultTargetLocation: QualityLocation = {
         language: subject.language,
@@ -218,7 +195,7 @@ export function createNumberChecker<
       };
       const sourceLocation =
         options.sourceLocation?.(
-          input.subject.sourceUnit.unit,
+          selected.sourceUnit.unit,
           subject,
           defaultSourceLocation,
         ) ?? defaultSourceLocation;
@@ -228,14 +205,55 @@ export function createNumberChecker<
           subject,
           defaultTargetLocation,
         ) ?? defaultTargetLocation;
-      return compareNumberText({
-        ...input.projected,
-        subject,
-        sourceLocation,
-        targetLocation,
-        targetContent: input.subject.content,
-      });
+      return {
+        status: "selected",
+        subject: {
+          value: selected,
+          projected: { source, target },
+          report: {
+            source,
+            target,
+            subject,
+            sourceLocation,
+            targetLocation,
+            targetContent: selected.content,
+          },
+          association: {
+            status: association?.status ?? "missing",
+            translations: (association?.translationIndexes ?? []).map(
+              (index) => {
+                const translation = input.facts.translations.records[index]!;
+                return {
+                  identity: translation.identity ?? null,
+                  availability: translation.bodyAvailability,
+                };
+              },
+            ),
+          },
+        },
+      };
     },
+    project: ({ subject }) => ({ status: "ready", value: subject.projected }),
+    ...(fingerprintInput === undefined
+      ? {}
+      : {
+          fingerprintInput: (
+            input: QualityCheckRuleInput<
+              TUnit,
+              TTranslation,
+              NumberCheckerConfiguration,
+              Subject,
+              NumberTextInput,
+              TBody,
+              TUnavailable
+            >,
+          ) => ({
+            input: fingerprintInput({ ...input, subject: input.subject.value }),
+            report: snapshotJsonValue(input.subject.report, "数字检查诊断依据"),
+            association: input.subject.association,
+          }),
+        }),
+    check: ({ subject }) => compareNumberText(subject.report),
   });
 }
 

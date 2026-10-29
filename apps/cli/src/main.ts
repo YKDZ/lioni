@@ -21,7 +21,6 @@ import {
   createFileComparisonBaselineStore,
   loadConfig,
 } from "@lioni/core/node";
-import { toStandardJsonSchema } from "@valibot/to-json-schema";
 import {
   CliWriteError,
   defineCli,
@@ -34,7 +33,7 @@ import {
   type WriteCliOutput,
 } from "@ykdz/cli-contract";
 import { isNodeBrokenPipe } from "@ykdz/cli-contract/node";
-import * as v from "valibot";
+import * as z from "zod";
 
 import type { CliCommandIdentity } from "./cli-command-identity.ts";
 
@@ -50,10 +49,11 @@ const languageOption = {
   description: "本次执行的目标语言；可重复指定，省略时执行全部已配置语言",
 } as const;
 
-const languagesSchema = v.optional(v.array(v.string()));
-const scopedConfigSchema = toStandardJsonSchema(
-  v.object({ config: v.string(), languages: languagesSchema }),
-);
+const languagesSchema = z.optional(z.array(z.string()));
+const scopedConfigSchema = z.object({
+  config: z.string(),
+  languages: languagesSchema,
+});
 
 function languageSelection(input: {
   readonly languages?: readonly string[] | undefined;
@@ -61,136 +61,128 @@ function languageSelection(input: {
   return input.languages === undefined ? {} : { languages: input.languages };
 }
 
-const enumerationSchema = v.picklist(["complete", "partial", "failed"]);
-const readStatusSchema = v.picklist([
+const enumerationSchema = z.enum(["complete", "partial", "failed"]);
+const readStatusSchema = z.enum([
   "complete",
   "incomplete",
   "failed",
   "notRead",
 ]);
 
-const factsSchema = toStandardJsonSchema(
-  v.object({
-    version: v.string(),
-    source: v.object({
-      version: v.string(),
-      read: v.object({
+const factsSchema = z.object({
+  version: z.string(),
+  source: z.object({
+    version: z.string(),
+    read: z.object({
+      status: readStatusSchema,
+      scopes: z.array(
+        z.object({
+          range: z.unknown(),
+          enumeration: enumerationSchema,
+          recordCount: z.number(),
+          error: z.optional(z.string()),
+        }),
+      ),
+      error: z.optional(z.string()),
+    }),
+    totalUnitCount: z.nullable(z.number()),
+    units: z.array(
+      z.object({
+        key: z.string(),
+        unit: z.unknown(),
+        bodyAvailability: z.enum(["available", "unavailable"]),
+        scopeIndex: z.number(),
+      }),
+    ),
+  }),
+  translations: z.object({
+    reads: z.array(
+      z.object({
+        language: z.string(),
         status: readStatusSchema,
-        scopes: v.array(
-          v.object({
-            range: v.unknown(),
+        scopes: z.array(
+          z.object({
+            range: z.unknown(),
+            covers: z.array(z.string()),
             enumeration: enumerationSchema,
-            recordCount: v.number(),
-            error: v.optional(v.string()),
+            translationIndexes: z.array(z.number()),
+            error: z.optional(z.string()),
           }),
         ),
-        error: v.optional(v.string()),
-      }),
-      totalUnitCount: v.nullable(v.number()),
-      units: v.array(
-        v.object({
-          key: v.string(),
-          unit: v.unknown(),
-          bodyAvailability: v.picklist(["available", "unavailable"]),
-          scopeIndex: v.number(),
-        }),
-      ),
-    }),
-    translations: v.object({
-      reads: v.array(
-        v.object({
-          language: v.string(),
-          status: readStatusSchema,
-          scopes: v.array(
-            v.object({
-              range: v.unknown(),
-              covers: v.array(v.string()),
-              enumeration: enumerationSchema,
-              translationIndexes: v.array(v.number()),
-              error: v.optional(v.string()),
-            }),
-          ),
-          error: v.optional(v.string()),
-        }),
-      ),
-      records: v.array(
-        v.variant("bodyAvailability", [
-          v.strictObject({
-            index: v.number(),
-            language: v.string(),
-            scopeIndex: v.number(),
-            range: v.unknown(),
-            identity: v.strictObject({
-              language: v.string(),
-              namespace: v.string(),
-              key: v.string(),
-            }),
-            translation: v.unknown(),
-            content: v.unknown(),
-            bodyAvailability: v.literal("available"),
-          }),
-          v.strictObject({
-            index: v.number(),
-            language: v.string(),
-            scopeIndex: v.number(),
-            range: v.unknown(),
-            identity: v.strictObject({
-              language: v.string(),
-              namespace: v.string(),
-              key: v.string(),
-            }),
-            translation: v.unknown(),
-            bodyAvailability: v.literal("unavailable"),
-          }),
-        ]),
-      ),
-    }),
-    associations: v.array(
-      v.object({
-        sourceKey: v.string(),
-        language: v.string(),
-        status: v.picklist([
-          "matched",
-          "missing",
-          "unavailable",
-          "unknown",
-          "conflict",
-        ]),
-        coverageStatus: readStatusSchema,
-        scopeIndexes: v.array(v.number()),
-        translationIndexes: v.array(v.number()),
+        error: z.optional(z.string()),
       }),
     ),
+    records: z.array(
+      z.discriminatedUnion("bodyAvailability", [
+        z.strictObject({
+          index: z.number(),
+          language: z.string(),
+          scopeIndex: z.number(),
+          range: z.unknown(),
+          identity: z.strictObject({
+            language: z.string(),
+            namespace: z.string(),
+            key: z.string(),
+          }),
+          translation: z.unknown(),
+          content: z.unknown(),
+          bodyAvailability: z.literal("available"),
+        }),
+        z.strictObject({
+          index: z.number(),
+          language: z.string(),
+          scopeIndex: z.number(),
+          range: z.unknown(),
+          identity: z.strictObject({
+            language: z.string(),
+            namespace: z.string(),
+            key: z.string(),
+          }),
+          translation: z.unknown(),
+          bodyAvailability: z.literal("unavailable"),
+        }),
+      ]),
+    ),
   }),
-);
+  associations: z.array(
+    z.object({
+      sourceKey: z.string(),
+      language: z.string(),
+      status: z.enum([
+        "matched",
+        "missing",
+        "unavailable",
+        "unknown",
+        "conflict",
+      ]),
+      coverageStatus: readStatusSchema,
+      scopeIndexes: z.array(z.number()),
+      translationIndexes: z.array(z.number()),
+    }),
+  ),
+});
 
-const baselineRecordSchema = toStandardJsonSchema(
-  v.object({
-    outcome: v.picklist(["saved", "unchanged"]),
-    path: v.string(),
-    sourceScopeCount: v.number(),
-    sourceUnitCount: v.number(),
-    translationScopeCount: v.number(),
-    translationRecordCount: v.number(),
-  }),
-);
-const updatePlanSchema = toStandardJsonSchema(
-  v.record(v.string(), v.unknown()),
-);
-const updateResultSchema = toStandardJsonSchema(
-  v.object({
-    plan: v.record(v.string(), v.unknown()),
-    status: v.picklist(["completed", "failed"]),
-    results: v.array(v.record(v.string(), v.unknown())),
-    baseline: v.optional(
-      v.object({
-        outcome: v.picklist(["saved", "unchanged", "notAdvanced", "failed"]),
-        message: v.optional(v.string()),
-      }),
-    ),
-    batchError: v.optional(v.object({ name: v.string(), message: v.string() })),
-  }),
-);
+const baselineRecordSchema = z.object({
+  outcome: z.enum(["saved", "unchanged"]),
+  path: z.string(),
+  sourceScopeCount: z.number(),
+  sourceUnitCount: z.number(),
+  translationScopeCount: z.number(),
+  translationRecordCount: z.number(),
+});
+const updatePlanSchema = z.record(z.string(), z.unknown());
+const updateResultSchema = z.object({
+  plan: z.record(z.string(), z.unknown()),
+  status: z.enum(["completed", "failed"]),
+  results: z.array(z.record(z.string(), z.unknown())),
+  baseline: z.optional(
+    z.object({
+      outcome: z.enum(["saved", "unchanged", "notAdvanced", "failed"]),
+      message: z.optional(z.string()),
+    }),
+  ),
+  batchError: z.optional(z.object({ name: z.string(), message: z.string() })),
+});
 
 function readStatusText(status: string): string {
   return (
@@ -481,7 +473,7 @@ function createCliContract(identity: CliCommandIdentity) {
         fields: {
           config: { kind: "positional", description: "宿主配置文件路径" },
         },
-        input: toStandardJsonSchema(v.object({ config: v.string() })),
+        input: z.object({ config: z.string() }),
         success: {
           kind: "data",
           variants: {
@@ -503,9 +495,7 @@ function createCliContract(identity: CliCommandIdentity) {
           recordFailed: {
             description: "记录比较基线失败",
             exitCode: 1,
-            schema: toStandardJsonSchema(
-              v.object({ path: v.string(), message: v.string() }),
-            ),
+            schema: z.object({ path: z.string(), message: z.string() }),
             text: ({ path: baselinePath, message }) =>
               text.line(
                 `记录比较基线失败（未保存 ${baselinePath}）：${message}`,
@@ -560,14 +550,12 @@ function createCliContract(identity: CliCommandIdentity) {
             description: "只预览更新决定",
           },
         },
-        input: toStandardJsonSchema(
-          v.object({
-            config: v.string(),
-            languages: languagesSchema,
-            recordBaseline: v.optional(v.boolean()),
-            dryRun: v.optional(v.boolean()),
-          }),
-        ),
+        input: z.object({
+          config: z.string(),
+          languages: languagesSchema,
+          recordBaseline: z.optional(z.boolean()),
+          dryRun: z.optional(z.boolean()),
+        }),
         success: {
           kind: "data",
           variants: {
@@ -589,7 +577,7 @@ function createCliContract(identity: CliCommandIdentity) {
           previewFailed: {
             description: "更新预览失败",
             exitCode: 1,
-            schema: toStandardJsonSchema(v.object({ message: v.string() })),
+            schema: z.object({ message: z.string() }),
             text: ({ message }) => text.line(`更新预览失败：${message}`),
           },
           applyFailed: {
@@ -703,13 +691,11 @@ function createCliContract(identity: CliCommandIdentity) {
           duplicateIdentity: {
             description: "原文身份重复",
             exitCode: 1,
-            schema: toStandardJsonSchema(
-              v.object({
-                key: v.string(),
-                firstIndex: v.number(),
-                duplicateIndex: v.number(),
-              }),
-            ),
+            schema: z.object({
+              key: z.string(),
+              firstIndex: z.number(),
+              duplicateIndex: z.number(),
+            }),
             text: ({ key, firstIndex, duplicateIndex }) =>
               text.line(
                 `原文身份重复：${key}（第 ${firstIndex + 1} 与第 ${duplicateIndex + 1} 个单元）。`,
@@ -718,7 +704,7 @@ function createCliContract(identity: CliCommandIdentity) {
           readFailed: {
             description: "读取原文事实失败",
             exitCode: 1,
-            schema: toStandardJsonSchema(v.object({ message: v.string() })),
+            schema: z.object({ message: z.string() }),
             text: ({ message }) => text.line(`读取原文事实失败：${message}`),
           },
         },
@@ -808,31 +794,27 @@ function createCliContract(identity: CliCommandIdentity) {
             description: "例外理由",
           },
         },
-        input: toStandardJsonSchema(
-          v.object({
-            config: v.string(),
-            report: v.string(),
-            checkId: v.string(),
-            executionId: v.string(),
-            id: v.string(),
-            reason: v.string(),
-          }),
-        ),
+        input: z.object({
+          config: z.string(),
+          report: z.string(),
+          checkId: z.string(),
+          executionId: z.string(),
+          id: z.string(),
+          reason: z.string(),
+        }),
         success: {
           kind: "data",
           variants: {
             upserted: {
               description: "例外已写入配置选定的存储",
               exitCode: 0,
-              schema: toStandardJsonSchema(
-                v.object({
-                  id: v.string(),
-                  checkId: v.string(),
-                  sourceKey: v.string(),
-                  language: v.string(),
-                  executionId: v.number(),
-                }),
-              ),
+              schema: z.object({
+                id: z.string(),
+                checkId: z.string(),
+                sourceKey: z.string(),
+                language: z.string(),
+                executionId: z.number(),
+              }),
               text: ({ id, checkId, sourceKey, language, executionId }) =>
                 text.line(
                   `例外 ${id} 已更新：${checkId} ${sourceKey} → ${language}（执行 ${executionId}）。`,
@@ -844,9 +826,7 @@ function createCliContract(identity: CliCommandIdentity) {
           upsertFailed: {
             description: "从 QA 报告创建或更新例外失败",
             exitCode: 1,
-            schema: toStandardJsonSchema(
-              v.object({ path: v.string(), message: v.string() }),
-            ),
+            schema: z.object({ path: z.string(), message: z.string() }),
             text: ({ path: reportPath, message }) =>
               text.line(`根据报告 ${reportPath} 更新 QA 例外失败：${message}`),
           },
@@ -903,13 +883,13 @@ function createCliContract(identity: CliCommandIdentity) {
             checked: {
               description: "质量检查结果",
               exitCode: 0,
-              schema: toStandardJsonSchema(v.record(v.string(), v.unknown())),
+              schema: z.record(z.string(), z.unknown()),
               text: qualityText,
             },
             notPassed: {
               description: "质量检查未通过",
               exitCode: 1,
-              schema: toStandardJsonSchema(v.record(v.string(), v.unknown())),
+              schema: z.record(z.string(), z.unknown()),
               text: qualityText,
             },
           },
@@ -918,7 +898,7 @@ function createCliContract(identity: CliCommandIdentity) {
           checkFailed: {
             description: "读取事实或执行质量检查失败",
             exitCode: 1,
-            schema: toStandardJsonSchema(v.object({ message: v.string() })),
+            schema: z.object({ message: z.string() }),
             text: ({ message }) => text.line(`质量检查失败：${message}`),
           },
         },

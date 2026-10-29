@@ -563,7 +563,7 @@ void test("无效的已保存译文不使其他消息族变为未完成", async 
     sourceMessages: {
       first: "Enabled",
       second: "Enabled",
-      broken: "Enabled",
+      broken: "Other",
     },
     targetMessages: { first: "A", second: "B", broken: "bad }" },
     scopes: [{ scope: "ui", keys: ["first", "second", "broken"] }],
@@ -905,4 +905,288 @@ void test("Vue 术语例外与缓存仅随当前消息、术语资料和诊断�
     (await run()).exceptionApplicability.map((item) => item.status),
     ["applicable", "applicable"],
   );
+});
+
+void test("局部规则复用无关消息和策略变更前的例外，相关输入和位置变化重新判断", async () => {
+  const cases = [
+    { id: checkIds.sourceSyntax, source: "bad } source", target: "正常" },
+    { id: checkIds.targetSyntax, source: "正常", target: "bad } target" },
+    {
+      id: checkIds.variableCorrespondence,
+      source: "Hello {name}",
+      target: "你好 {other}",
+    },
+    { id: checkIds.protectedLiterals, source: "Use API", target: "使用接口" },
+    {
+      id: checkIds.quantities,
+      source: "Wait 12 minutes",
+      target: "等待 13 分钟",
+    },
+  ];
+  for (const scenario of cases) {
+    const sourceMessages: Record<string, string> = {
+      a: scenario.source,
+      b: "Other",
+    };
+    const targetMessages: Record<string, string> = {
+      a: scenario.target,
+      b: "其他",
+    };
+    const literals: Record<string, readonly string[]> = { a: ["API"] };
+    const byKey: Record<string, { readonly defaultUnit: string }> = {};
+    const policy = policyFor({
+      sourceMessages,
+      targetMessages,
+      protectedLiterals: literals,
+      targetQuantities: { profile: "zh-CN", byKey },
+    });
+    let exceptions: readonly QualityException[] = [];
+    const values = new Map<
+      string,
+      Awaited<ReturnType<QualityCheckResultCache["get"]>>
+    >();
+    let hits = 0;
+    let targetRange = "target.json";
+    const fixture = createQualityFixture({
+      policies: [policy],
+      alterProjection: (projection) => ({
+        ...projection,
+        locations: {
+          ...projection.locations,
+          target: { ...projection.locations.target, range: targetRange },
+        },
+      }),
+      exceptionStore: {
+        load: async () => exceptions,
+        upsert: async (value) => {
+          exceptions = [...exceptions, value];
+        },
+      },
+      resultCache: {
+        get: async (key) => {
+          const value = values.get(key);
+          if (value) hits++;
+          return value;
+        },
+        set: async (key, value) => {
+          values.set(key, value);
+        },
+      },
+    });
+    const run = (text = scenario.target) => fixture.run([candidate("a", text)]);
+    const first = await run();
+    assert.equal(findings(first, scenario.id).length, 1, scenario.id);
+    exceptions = [
+      createQualityException({
+        id: scenario.id,
+        reason: "接受当前消息",
+        execution: check(first, scenario.id)!.executions[0]!,
+      }),
+    ];
+    sourceMessages.b = "Other changed";
+    targetMessages.b = "另一条消息";
+    literals.b = ["unrelated"];
+    byKey.b = { defaultUnit: "hour" };
+    const stable = await run();
+    assert.equal(
+      stable.exceptionApplicability[0]?.status,
+      "applicable",
+      scenario.id,
+    );
+    assert.equal(findings(stable, scenario.id)[0]?.handling.status, "excepted");
+    assert.ok(hits > 0, scenario.id);
+    assert.equal(
+      (await run(`${scenario.target} changed`)).exceptionApplicability[0]
+        ?.status,
+      "basis-changed",
+      scenario.id,
+    );
+    targetRange = "moved.json";
+    assert.equal(
+      (await run()).exceptionApplicability[0]?.status,
+      "basis-changed",
+      scenario.id,
+    );
+    targetRange = "target.json";
+    assert.equal(
+      (await run()).exceptionApplicability[0]?.status,
+      "applicable",
+      scenario.id,
+    );
+    if (scenario.id === checkIds.protectedLiterals) literals.a = ["API", "SDK"];
+    else if (scenario.id === checkIds.quantities)
+      byKey.a = { defaultUnit: "hour" };
+    else sourceMessages.a = `${scenario.source} changed`;
+    assert.equal(
+      (await run()).exceptionApplicability[0]?.status,
+      "basis-changed",
+      scenario.id,
+    );
+  }
+});
+
+void test("链接例外按直接键存在性和完整可达闭包复用缓存", async () => {
+  const sourceMessages: Record<string, string> = {
+    a: "Root",
+    b: "@:a",
+    unrelated: "Other",
+  };
+  const targetMessages: Record<string, string> = {
+    a: "@:b @:missing",
+    b: "@:a",
+    unrelated: "其他",
+  };
+  let exceptions: readonly QualityException[] = [];
+  const cache = new Map<
+    string,
+    Awaited<ReturnType<QualityCheckResultCache["get"]>>
+  >();
+  let hits = 0;
+  const fixture = createQualityFixture({
+    policies: [policyFor({ sourceMessages, targetMessages })],
+    exceptionStore: {
+      load: async () => exceptions,
+      upsert: async (value) => {
+        exceptions = [...exceptions, value];
+      },
+    },
+    resultCache: {
+      get: async (key) => {
+        const value = cache.get(key);
+        if (value) hits++;
+        return value;
+      },
+      set: async (key, value) => {
+        cache.set(key, value);
+      },
+    },
+  });
+  const text = "@:b @:missing";
+  const run = () => fixture.run([candidate("a", text)]);
+  const first = await run();
+  const ids = [checkIds.linkTargetExists, checkIds.linkCycle];
+  exceptions = ids.map((id) =>
+    createQualityException({
+      id,
+      reason: "接受当前关联",
+      execution: check(first, id)!.executions[0]!,
+    }),
+  );
+  const applicability = (result: Awaited<ReturnType<typeof run>>) =>
+    result.exceptionApplicability.map((value) => value.status);
+  targetMessages.unrelated = "@:unrelated";
+  targetMessages.a = "保存正文不覆盖候选";
+  assert.deepEqual(applicability(await run()), ["applicable", "applicable"]);
+  assert.ok(hits >= 2);
+  targetMessages.b = "No link";
+  const changedBody = await run();
+  assert.deepEqual(applicability(changedBody), ["applicable", "basis-changed"]);
+  assert.deepEqual(findings(changedBody, checkIds.linkCycle), []);
+  delete targetMessages.b;
+  const fallback = await run();
+  assert.deepEqual(applicability(fallback), ["applicable", "basis-changed"]);
+  assert.equal(findings(fallback, checkIds.linkCycle).length, 1);
+  targetMessages.b = "@:a";
+  assert.deepEqual(applicability(await run()), ["applicable", "applicable"]);
+  // 首个循环后的引用也属于完整闭包；新键即使不改变首个循环仍改变依据。
+  targetMessages.missing = "@:a";
+  const added = await run();
+  assert.deepEqual(applicability(added), ["basis-changed", "basis-changed"]);
+  assert.deepEqual(findings(added, checkIds.linkTargetExists), []);
+  delete targetMessages.missing;
+  targetMessages.b = "bad }";
+  const invalid = await run();
+  assert.equal(check(invalid, checkIds.linkCycle)?.status, "incomplete");
+  assert.deepEqual(applicability(invalid), ["applicable", "basis-changed"]);
+});
+
+void test("缺失关联键后来补全成循环会重新检查", async () => {
+  const sourceMessages = { a: "Root" };
+  const targetMessages: Record<string, string> = { a: "@:missing" };
+  let exceptions: readonly QualityException[] = [];
+  const fixture = createQualityFixture({
+    policies: [policyFor({ sourceMessages, targetMessages })],
+    exceptionStore: {
+      load: async () => exceptions,
+      upsert: async (value) => {
+        exceptions = [...exceptions, value];
+      },
+    },
+  });
+  const run = () => fixture.run([candidate("a", "@:missing")]);
+  const first = await run();
+  assert.deepEqual(findings(first, checkIds.linkCycle), []);
+  exceptions = [
+    createQualityException({
+      id: "cycle",
+      reason: "当前没有循环",
+      execution: check(first, checkIds.linkCycle)!.executions[0]!,
+    }),
+  ];
+  targetMessages.missing = "@:a";
+  const added = await run();
+  assert.equal(added.exceptionApplicability[0]?.status, "basis-changed");
+  assert.equal(findings(added, checkIds.linkCycle).length, 1);
+});
+
+void test("消息族按已知源族局部化目标语法缺口，未知源族仍保守未完成", async () => {
+  for (const [source, expected] of [
+    ["Enabled", "incomplete"],
+    ["Other", "complete"],
+    ["bad } source", "incomplete"],
+  ] as const) {
+    const fixture = createQualityFixture({
+      policies: [
+        policyFor({
+          sourceMessages: { a: "Enabled", b: "Enabled", broken: source },
+          targetMessages: { a: "启用", b: "开启", broken: "bad } target" },
+          scopes: [{ scope: "ui", keys: ["a", "b", "broken"] }],
+        }),
+      ],
+    });
+    const result = await fixture.run([candidate("a", "启用")]);
+    assert.equal(
+      check(result, checkIds.messageFamilyConsistency)?.status,
+      expected,
+      source,
+    );
+    assert.equal(findings(result, checkIds.messageFamilyConsistency).length, 1);
+  }
+});
+
+void test("消息族只随实际采用的目标等价变化重新判断", async () => {
+  const targetEquivalences: string[][] = [];
+  let exceptions: readonly QualityException[] = [];
+  const fixture = createQualityFixture({
+    policies: [
+      policyFor({
+        sourceMessages: { a: "Active", b: "Active" },
+        targetMessages: { a: "A", b: "B" },
+        scopes: [{ scope: "ui", keys: ["a", "b"] }],
+        targetEquivalences,
+      }),
+    ],
+    exceptionStore: {
+      load: async () => exceptions,
+      upsert: async (value) => {
+        exceptions = [...exceptions, value];
+      },
+    },
+  });
+  const run = () => fixture.run([candidate("a", "A")]);
+  const first = await run();
+  exceptions = [
+    createQualityException({
+      id: "family",
+      reason: "接受同族差异",
+      execution: check(first, checkIds.messageFamilyConsistency)!
+        .executions[0]!,
+    }),
+  ];
+  targetEquivalences.push(["Other", "Unrelated"]);
+  assert.equal((await run()).exceptionApplicability[0]?.status, "applicable");
+  targetEquivalences.push(["A", "B"]);
+  const related = await run();
+  assert.equal(related.exceptionApplicability[0]?.status, "basis-changed");
+  assert.deepEqual(findings(related, checkIds.messageFamilyConsistency), []);
 });

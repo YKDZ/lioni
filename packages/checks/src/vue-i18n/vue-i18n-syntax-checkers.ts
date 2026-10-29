@@ -5,9 +5,9 @@ import type {
   QualityObject,
   TranslationUnitInput,
 } from "@lioni/core";
-import { bindQualityCheck } from "@lioni/core";
+import { bindQualityCheck, snapshotJsonValue } from "@lioni/core";
 import type { MemoScope } from "@lioni/memo";
-import * as v from "valibot";
+import { z } from "zod";
 
 import { vueI18nDependencies } from "./dependencies.ts";
 import { memoizedVueI18nMessage } from "./message-memo.ts";
@@ -21,8 +21,8 @@ import type {
 } from "./quality-types.ts";
 import { VUE_I18N_MESSAGE_COMPILER_VERSION } from "./vue-i18n-messages.ts";
 
-const configurationSchema = v.object({ compilerVersion: v.string() });
-type Configuration = v.InferOutput<typeof configurationSchema>;
+const configurationSchema = z.object({ compilerVersion: z.string() });
+type Configuration = z.output<typeof configurationSchema>;
 
 const configuration: Configuration = {
   compilerVersion: VUE_I18N_MESSAGE_COMPILER_VERSION,
@@ -72,7 +72,7 @@ export function createVueI18nSourceSyntaxChecker<
     TUnavailable
   >({
     id: options.id ?? "vue-i18n/source-syntax",
-    version: `checks.vue-i18n/source-syntax/v1+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}+${options.hostVersion}`,
+    version: `checks.vue-i18n/source-syntax/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}+${options.hostVersion}`,
     configurationSchema,
     configuration,
     inputSchema: vueI18nMessageProjectionSchema,
@@ -109,6 +109,8 @@ export function createVueI18nSourceSyntaxChecker<
         TUnavailable
       >,
     ) => ({ status: "ready", value: input.subject }),
+    fingerprintInput: ({ projected }) =>
+      snapshotJsonValue(projected, "Vue I18n 检查投影"),
     check: (input) => {
       const text = input.projected.source;
       if (text.status !== "available")
@@ -144,7 +146,7 @@ export function createVueI18nTargetSyntaxChecker<
     TUnavailable
   >({
     id: options.id ?? "vue-i18n/target-syntax",
-    version: `checks.vue-i18n/target-syntax/v1+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}+${options.hostVersion}`,
+    version: `checks.vue-i18n/target-syntax/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}+${options.hostVersion}`,
     configurationSchema,
     configuration,
     inputSchema: vueI18nMessageProjectionSchema,
@@ -174,6 +176,8 @@ export function createVueI18nTargetSyntaxChecker<
         TUnavailable
       >,
     ) => ({ status: "ready", value: input.subject }),
+    fingerprintInput: ({ projected }) =>
+      snapshotJsonValue(projected, "Vue I18n 检查投影"),
     check: (input) => {
       const text = input.projected.target;
       if (text.status !== "available")

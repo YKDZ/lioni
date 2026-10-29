@@ -30,7 +30,8 @@
     "test": "node --conditions=source --test --test-reporter=spec 'test/**/*.test.ts'"
   },
   "dependencies": {
-    "@lioni/memo": "workspace:*"
+    "@lioni/memo": "workspace:*",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@lioni/tooling-config": "workspace:*",

@@ -3,15 +3,15 @@ import { describe, it } from "node:test";
 
 import {
   analyzeQuality,
+  createQualityException,
   defineConfig,
   type BodyAvailability,
   type JsonValue,
   type QualityCheckInput,
   type SemanticEditCandidate,
   type SourceUnitFact,
-  type StandardSchemaV1,
 } from "@lioni/core";
-import { safeParse } from "valibot";
+import { z } from "zod";
 
 import { createNumberChecker } from "../src/index.ts";
 
@@ -35,51 +35,15 @@ type MixedTranslation = {
   readonly nativeKey: string;
 };
 
-const sourceSchema: StandardSchemaV1<Unit, Unit> = {
-  "~standard": {
-    version: 1,
-    vendor: "lioni-number-check-test",
-    validate(value) {
-      return isUnit(value)
-        ? { value }
-        : { issues: [{ message: "原文单元结构不匹配。" }] };
-    },
-  },
-};
-
-const translationSchema: StandardSchemaV1<Translation, Translation> = {
-  "~standard": {
-    version: 1,
-    vendor: "lioni-number-check-test",
-    validate(value) {
-      if (
-        typeof value !== "object" ||
-        value === null ||
-        Array.isArray(value) ||
-        !("text" in value) ||
-        !isJsonValue(value.text) ||
-        !("nativeKey" in value) ||
-        typeof value.nativeKey !== "string"
-      )
-        return { issues: [{ message: "译文记录结构不匹配。" }] };
-      return {
-        value: { text: value.text, nativeKey: value.nativeKey },
-      };
-    },
-  },
-};
-
-const jsonValueSchema: StandardSchemaV1<JsonValue, JsonValue> = {
-  "~standard": {
-    version: 1,
-    vendor: "lioni-number-check-test",
-    validate(value) {
-      return isJsonValue(value)
-        ? { value }
-        : { issues: [{ message: "正文必须是 JSON 数据。" }] };
-    },
-  },
-};
+const jsonValueSchema: z.ZodType<JsonValue, JsonValue> = z.json();
+const sourceSchema: z.ZodType<Unit, Unit> = z.object({
+  identity: z.string(),
+  source: jsonValueSchema,
+});
+const translationSchema: z.ZodType<Translation, Translation> = z.object({
+  nativeKey: z.string(),
+  text: jsonValueSchema,
+});
 
 function selectNumberSubject(
   input: QualityCheckInput<Unit, Translation, unknown, JsonValue>,
@@ -101,78 +65,27 @@ function selectNumberSubject(
   };
 }
 
-function isMixedUnit(value: unknown): value is MixedUnit {
-  if (typeof value !== "object" || value === null || Array.isArray(value))
-    return false;
-  if (
-    !("kind" in value) ||
-    !("source" in value) ||
-    !("identity" in value) ||
-    typeof value.identity !== "string"
-  )
-    return false;
-  if (value.kind === "text") return typeof value.source === "string";
-  return (
-    value.kind === "list" &&
-    Array.isArray(value.source) &&
-    value.source.every((entry: unknown) => typeof entry === "string")
-  );
-}
-
-function isMixedBody(value: unknown): value is MixedBody {
-  return (
-    typeof value === "string" ||
-    (Array.isArray(value) &&
-      value.every((entry: unknown) => typeof entry === "string"))
-  );
-}
-
-const mixedUnitSchema: StandardSchemaV1<MixedUnit, MixedUnit> = {
-  "~standard": {
-    version: 1,
-    vendor: "lioni-number-check-test",
-    validate(value) {
-      return isMixedUnit(value)
-        ? { value }
-        : { issues: [{ message: "混合原文单元结构不匹配。" }] };
-    },
-  },
-};
-
-const mixedTranslationSchema: StandardSchemaV1<
-  MixedTranslation,
-  MixedTranslation
-> = {
-  "~standard": {
-    version: 1,
-    vendor: "lioni-number-check-test",
-    validate(value) {
-      if (
-        typeof value !== "object" ||
-        value === null ||
-        Array.isArray(value) ||
-        !("text" in value) ||
-        !isMixedBody(value.text) ||
-        !("nativeKey" in value) ||
-        typeof value.nativeKey !== "string"
-      )
-        return { issues: [{ message: "混合译文记录结构不匹配。" }] };
-      return { value: { text: value.text, nativeKey: value.nativeKey } };
-    },
-  },
-};
-
-const mixedBodySchema: StandardSchemaV1<MixedBody, MixedBody> = {
-  "~standard": {
-    version: 1,
-    vendor: "lioni-number-check-test",
-    validate(value) {
-      return isMixedBody(value)
-        ? { value }
-        : { issues: [{ message: "混合正文必须是字符串或字符串列表。" }] };
-    },
-  },
-};
+const mixedBodySchema: z.ZodType<MixedBody, MixedBody> = z.union([
+  z.string(),
+  z.array(z.string()),
+]);
+const mixedUnitSchema: z.ZodType<MixedUnit, MixedUnit> = z.discriminatedUnion(
+  "kind",
+  [
+    z.object({
+      kind: z.literal("text"),
+      source: z.string(),
+      identity: z.string(),
+    }),
+    z.object({
+      kind: z.literal("list"),
+      source: z.array(z.string()),
+      identity: z.string(),
+    }),
+  ],
+);
+const mixedTranslationSchema: z.ZodType<MixedTranslation, MixedTranslation> =
+  z.object({ nativeKey: z.string(), text: mixedBodySchema });
 
 function selectMixedText(
   input: QualityCheckInput<
@@ -296,33 +209,6 @@ function configFor(
   });
 }
 
-function isJsonValue(
-  value: unknown,
-  active = new Set<object>(),
-): value is JsonValue {
-  if (value === null || typeof value === "string" || typeof value === "boolean")
-    return true;
-  if (typeof value === "number") return Number.isFinite(value);
-  if (typeof value !== "object" || active.has(value)) return false;
-  active.add(value);
-  const valid = Array.isArray(value)
-    ? value.every((entry) => isJsonValue(entry, active))
-    : Object.values(value).every((entry) => isJsonValue(entry, active));
-  active.delete(value);
-  return valid;
-}
-
-function isUnit(value: unknown): value is Unit {
-  if (typeof value !== "object" || value === null || Array.isArray(value))
-    return false;
-  const unit = value as Record<string, unknown>;
-  return (
-    Object.hasOwn(unit, "source") &&
-    typeof unit.identity === "string" &&
-    isJsonValue(unit.source)
-  );
-}
-
 async function check(source: string, target: string) {
   return analyzeQuality(configFor(source, target));
 }
@@ -391,7 +277,7 @@ void describe("阿拉伯数字对应检查", () => {
     const diagnostic = result.diagnostics[0]!;
     assert.equal(
       result.checks[0]?.version,
-      "checks.number-correspondence/v1+number-test-v1",
+      "checks.number-correspondence/v2+number-test-v1",
     );
     assert.equal(diagnostic.checkId, "number-correspondence");
     assert.deepEqual(diagnostic.location, {
@@ -577,70 +463,123 @@ void describe("阿拉伯数字对应检查", () => {
   });
 });
 
-void describe("阿拉伯数字检查 schema", () => {
-  const checker = createNumberChecker({
-    hostVersion: "number-schema-test-v1",
-    select: selectNumberSubject,
-    sourceText: (unit) => unit.source,
-    translationText: (content) => content,
-  });
-
-  void it("接受配置与投影输入，并沿用未知字段处理", () => {
-    assert.deepEqual(checker.configuration, {
-      format: "ascii-decimal-v1",
-      comparison: "exact-multiset",
-    });
-    const configuration = safeParse(checker.configurationSchema, {
-      format: "ascii-decimal-v1",
-      comparison: "exact-multiset",
-      ignored: true,
-    });
-    const input = safeParse(checker.inputSchema, {
-      source: "Total 12",
-      target: "合计 12",
-      ignored: true,
-    });
-
-    assert.equal(configuration.success, true);
-    assert.equal(input.success, true);
-    if (configuration.success && input.success) {
-      assert.deepEqual(configuration.output, {
-        format: "ascii-decimal-v1",
-        comparison: "exact-multiset",
-      });
-      assert.deepEqual(input.output, { source: "Total 12", target: "合计 12" });
-    }
-  });
-
-  void it("拒绝无效配置和不完整的投影输入", () => {
-    assert.equal(
-      safeParse(checker.configurationSchema, {
-        format: "locale-number",
-        comparison: "exact-multiset",
-      }).success,
-      false,
-    );
-    assert.equal(
-      safeParse(checker.inputSchema, { source: "Total 12", target: 12 })
-        .success,
-      false,
-    );
-    assert.equal(
-      safeParse(
-        checker.configurationSchema,
-        Object.assign([], {
-          format: "ascii-decimal-v1",
-          comparison: "exact-multiset",
+void describe("数字检查的显式依据", () => {
+  void it("无关记录变化复用批准与缓存，实际位置或关联变化仍重新判断", async () => {
+    const sources = [
+      { identity: "message", source: "12" },
+      { identity: "other", source: "8" },
+    ];
+    const translations = [
+      { nativeKey: "message", text: "21" },
+      { nativeKey: "other", text: "8" },
+    ];
+    let range = "fr.json";
+    let exceptions: readonly import("@lioni/core").QualityException[] = [];
+    const cache = new Map<
+      string,
+      Awaited<ReturnType<import("@lioni/core").QualityCheckResultCache["get"]>>
+    >();
+    let hits = 0;
+    const config = defineConfig({
+      source: {
+        schema: sourceSchema,
+        read: () => ({
+          scopes: [
+            {
+              range: "source.json",
+              enumeration: "complete",
+              records: sources.map((value) => ({
+                value,
+                bodyAvailability: "available",
+              })),
+            },
+          ],
         }),
-      ).success,
-      false,
-    );
+      },
+      keyOf: (unit) => unit.identity,
+      translations: {
+        languages: ["fr"],
+        schema: translationSchema,
+        contentSchema: jsonValueSchema,
+        keyOf: (translation) => ({
+          namespace: "messages",
+          key: translation.nativeKey,
+        }),
+        contentOf: (translation) => translation.text,
+        matches: (unit, translation) =>
+          unit.identity === translation.nativeKey ||
+          (unit.identity === "message" &&
+            translation.nativeKey === "duplicate"),
+        read: (_language, units) => ({
+          scopes: [
+            {
+              range,
+              covers: units.map((unit) => unit.key),
+              enumeration: "complete",
+              records: translations.map((value) => ({
+                value,
+                bodyAvailability: "available",
+              })),
+            },
+          ],
+        }),
+      },
+      quality: {
+        checks: [
+          createNumberChecker({
+            hostVersion: "explicit-number-v1",
+            select: selectNumberSubject,
+            sourceText: (unit) => unit.source,
+            translationText: (content) => content,
+            fingerprintInput: ({ projected }) => projected,
+          }),
+        ],
+        exceptionStore: {
+          load: async () => exceptions,
+          upsert: async (value) => {
+            exceptions = [...exceptions, value];
+          },
+        },
+        resultCache: {
+          get: async (key) => {
+            const value = cache.get(key);
+            if (value) hits++;
+            return value;
+          },
+          set: async (key, value) => {
+            cache.set(key, value);
+          },
+        },
+      },
+    });
+    const run = () =>
+      analyzeQuality(config, {
+        candidates: [{ sourceKey: "message", language: "fr", content: "21" }],
+      });
+    const first = await run();
+    exceptions = [
+      createQualityException({
+        id: "number",
+        reason: "接受数字差异",
+        execution: first.checks[0]!.executions[0]!,
+      }),
+    ];
+    sources[1]!.source = "9";
+    translations.reverse();
+    const unrelated = await run();
+    assert.equal(unrelated.exceptionApplicability[0]?.status, "applicable");
+    assert.equal(unrelated.diagnostics[0]?.handling.status, "excepted");
+    assert.equal(hits, 1);
+    range = "moved.json";
+    const moved = await run();
+    assert.equal(moved.exceptionApplicability[0]?.status, "basis-changed");
+    assert.equal(moved.diagnostics[0]?.location.range, range);
+    range = "fr.json";
+    assert.equal((await run()).exceptionApplicability[0]?.status, "applicable");
+    translations.push({ nativeKey: "duplicate", text: "22" });
     assert.equal(
-      safeParse(
-        checker.inputSchema,
-        Object.assign([], { source: "Total 12", target: "合计 12" }),
-      ).success,
-      false,
+      (await run()).exceptionApplicability[0]?.status,
+      "basis-changed",
     );
   });
 });

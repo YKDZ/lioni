@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import { TextAnalysisContractError } from "./types.ts";
 import type { TextRecognizer, TextToken } from "./types.ts";
 
@@ -9,10 +11,13 @@ export type RegexTokenOptions = {
   readonly protect?: boolean;
 };
 
+const tokenKindSchema = z.string().min(1);
+const markersSchema = z.array(z.string().min(1));
+
 /** 每个可用原文区间独立扫描，不共享 RegExp.lastIndex。 */
 export function regexTokens(options: RegexTokenOptions): TextRecognizer {
   const { kind, identity, value, protect } = options;
-  if (kind.length === 0)
+  if (!tokenKindSchema.safeParse(kind).success)
     throw new TextAnalysisContractError("invalid-kind", "token 种类必须非空。");
   const source = options.pattern.source;
   const flags = options.pattern.flags.includes("g")
@@ -70,7 +75,7 @@ export function literalMarkers(
   markers: readonly string[],
   options: { readonly kind?: string; readonly protect?: boolean } = {},
 ): TextRecognizer {
-  if (markers.some((marker) => marker.length === 0))
+  if (!markersSchema.safeParse(markers).success)
     throw new TextAnalysisContractError("empty-marker", "字面标记不能是空串。");
   const literals = [...new Set(markers)].sort(
     (a, b) => b.length - a.length || a.localeCompare(b),

@@ -3,20 +3,24 @@ import {
   type TextAnalysis,
   type WordToken,
 } from "@lioni/text-analysis";
+import { z } from "zod";
 
 import {
   contractIssue,
   copyJson,
-  isRecord,
+  contractIssues,
+  jsonValueSchema,
+  nonemptyTextSchema,
   TermContractError,
   type JsonValue,
 } from "./data.ts";
 import { createDefaultCandidateGenerator } from "./discovery-generation.ts";
 import {
-  splitsSurrogatePair,
-  validateTextInput,
-  type TermFragment,
+  termFragmentSchema,
+  termRangeSchema,
+  validTermRange,
   type TermRange,
+  type TermFragment,
 } from "./input.ts";
 import { basicTermTextAnalysis, type TermRuntime } from "./matching.ts";
 
@@ -30,6 +34,31 @@ export type TermDiscoveryCorpus = {
   readonly entries: readonly TermCorpusEntry[];
   readonly complete?: boolean;
 };
+
+const corpusEntrySchema = z
+  .object({
+    ref: jsonValueSchema,
+    fragments: z.array(termFragmentSchema).readonly(),
+  })
+  .readonly();
+export const discoveryCorpusSchema = z
+  .object({
+    language: nonemptyTextSchema,
+    entries: z.array(corpusEntrySchema).readonly(),
+    complete: z.boolean().exactOptional(),
+  })
+  .readonly() satisfies z.ZodType<TermDiscoveryCorpus>;
+export const discoveryParametersSchema = z.object({
+  maxWords: z.int().min(1).max(8).default(3),
+  maxCharacters: z.int().positive().default(80),
+  minOccurrences: z.int().positive().default(1),
+  limit: z.int().nonnegative().default(100),
+  maxExamples: z.int().positive().default(3),
+});
+const candidateRangesSchema = z.array(termRangeSchema);
+const candidateRankSchema = z
+  .object({ method: nonemptyTextSchema, score: z.number() })
+  .readonly();
 
 export type TermCandidateOccurrence = {
   readonly entryIndex: number;
@@ -113,6 +142,14 @@ export type TermDiscovery = {
   };
 };
 
+export function discoverySnapshot(value: unknown): TermDiscoveryCorpus {
+  const snapshot = copyJson(value, "input");
+  const result = discoveryCorpusSchema.safeParse(snapshot);
+  if (!result.success)
+    throw new TermContractError("input", contractIssues(result.error));
+  return snapshot as unknown as TermDiscoveryCorpus;
+}
+
 function intersects(left: TermRange, right: TermRange): boolean {
   return left.start < right.end && right.start < left.end;
 }
@@ -125,45 +162,12 @@ export async function discoverTerms(
   corpus: TermDiscoveryCorpus,
   options: DiscoverTermsOptions = {},
 ): Promise<TermDiscovery> {
-  const snapshot = copyJson(corpus, "input");
-  if (
-    !isRecord(snapshot) ||
-    !Array.isArray(snapshot.entries) ||
-    typeof snapshot.language !== "string" ||
-    !snapshot.language.trim() ||
-    (snapshot.complete !== undefined && typeof snapshot.complete !== "boolean")
-  )
-    throw new TermContractError("input", [
-      contractIssue(
-        "invalid-corpus",
-        "发现语料需要语言、条目数组及明确的完整性。",
-      ),
-    ]);
-  const input = snapshot as unknown as TermDiscoveryCorpus;
-  const maxWords = options.maxWords ?? 3;
-  const maxCharacters = options.maxCharacters ?? 80;
-  const minOccurrences = options.minOccurrences ?? 1;
-  const limit = options.limit ?? 100;
-  const maxExamples = options.maxExamples ?? 3;
-  for (const [name, value] of Object.entries({
-    maxWords,
-    maxCharacters,
-    minOccurrences,
-    limit,
-    maxExamples,
-  }))
-    if (
-      !Number.isInteger(value) ||
-      value < (name === "limit" ? 0 : 1) ||
-      (name === "maxWords" && value > 8)
-    )
-      throw new TermContractError("input", [
-        contractIssue(
-          "invalid-discovery-options",
-          "候选参数必须为有效整数，词组长度最多为 8 个词。",
-          [name],
-        ),
-      ]);
+  const input = discoverySnapshot(corpus);
+  const parameters = discoveryParametersSchema.safeParse(options);
+  if (!parameters.success)
+    throw new TermContractError("input", contractIssues(parameters.error));
+  const { maxWords, maxCharacters, minOccurrences, limit, maxExamples } =
+    parameters.data;
   const issues: TermDiscoveryIssue[] = [];
   const issueKeys = new Set<string>();
   const addIssue = (issue: TermDiscoveryIssue) => {
@@ -205,22 +209,6 @@ export async function discoverTerms(
     options.candidateGenerator ??
     createDefaultCandidateGenerator(input.language);
   for (const [entryIndex, entry] of input.entries.entries()) {
-    if (
-      entry === null ||
-      typeof entry !== "object" ||
-      Array.isArray(entry) ||
-      !Object.hasOwn(entry, "ref")
-    )
-      throw new TermContractError("input", [
-        contractIssue("invalid-corpus-entry", "语料条目必须包含 ref。", [
-          "entries",
-          entryIndex,
-        ]),
-      ]);
-    validateTextInput({
-      language: input.language,
-      fragments: entry.fragments,
-    });
     for (const [fragmentIndex, fragment] of entry.fragments.entries()) {
       const textInput = {
         text: fragment.text,
@@ -257,13 +245,9 @@ export async function discoverTerms(
       let previousEnd = 0;
       for (const word of words) {
         if (
-          !Number.isInteger(word.start) ||
-          !Number.isInteger(word.end) ||
+          !termRangeSchema.safeParse(word).success ||
           word.start < previousEnd ||
-          word.end <= word.start ||
-          word.end > fragment.text.length ||
-          splitsSurrogatePair(fragment.text, word.start) ||
-          splitsSurrogatePair(fragment.text, word.end) ||
+          !validTermRange(fragment.text, word) ||
           fragment.text.slice(word.start, word.end) !== word.text
         )
           throw new TermContractError("input", [
@@ -287,7 +271,7 @@ export async function discoverTerms(
         maxCharacters,
       });
       const generatedRanges = generateCandidates(generationInput);
-      if (!Array.isArray(generatedRanges))
+      if (!candidateRangesSchema.safeParse(generatedRanges).success)
         throw new TermContractError("input", [
           contractIssue(
             "invalid-candidate-generation",
@@ -301,18 +285,7 @@ export async function discoverTerms(
       const wordEnds = new Map(words.map((word, index) => [word.end, index]));
       const seenRanges = new Set<string>();
       for (const [rangeIndex, candidateRange] of generatedRanges.entries()) {
-        if (
-          !isRecord(candidateRange) ||
-          typeof candidateRange.start !== "number" ||
-          typeof candidateRange.end !== "number" ||
-          !Number.isInteger(candidateRange.start) ||
-          !Number.isInteger(candidateRange.end) ||
-          candidateRange.start < 0 ||
-          candidateRange.end <= candidateRange.start ||
-          candidateRange.end > fragment.text.length ||
-          splitsSurrogatePair(fragment.text, candidateRange.start) ||
-          splitsSurrogatePair(fragment.text, candidateRange.end)
-        )
+        if (!validTermRange(fragment.text, candidateRange))
           throw new TermContractError("input", [
             contractIssue(
               "invalid-candidate-range",
@@ -432,12 +405,7 @@ export async function discoverTerms(
         options.candidateRanker === undefined
           ? draft.ranking
           : options.candidateRanker(draft);
-      if (
-        !isRecord(ranking) ||
-        typeof ranking.method !== "string" ||
-        !ranking.method.trim() ||
-        !Number.isFinite(ranking.score)
-      )
+      if (!candidateRankSchema.safeParse(ranking).success)
         throw new TermContractError("input", [
           contractIssue(
             "invalid-candidate-ranking",

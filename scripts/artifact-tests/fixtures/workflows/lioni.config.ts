@@ -4,29 +4,23 @@ import { fileURLToPath } from "node:url";
 import {
   defaultUpdatePolicy,
   defineConfig,
-  type StandardSchemaV1,
   type UpdatePolicy,
   type UpdatePlanItem,
 } from "@lioni/lioni";
+import * as z from "zod";
 
-export type Unit = { id: string; source: string };
-export type Translation = { id: string; text: string; writePath?: string };
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-function schema<T>(
-  accepts: (value: unknown) => value is T,
-): StandardSchemaV1<T, T> {
-  return {
-    "~standard": {
-      version: 1,
-      vendor: "workflow-consumer",
-      validate: (value) =>
-        accepts(value)
-          ? { value }
-          : { issues: [{ message: "工作流数据无效。" }] },
-    },
-  };
-}
+const unitSchema = z
+  .object({ id: z.string(), source: z.string() })
+  .catchall(z.json());
+const translationSchema = z
+  .object({
+    id: z.string(),
+    text: z.string(),
+    writePath: z.string().exactOptional(),
+  })
+  .catchall(z.json());
+export type Unit = z.infer<typeof unitSchema>;
+export type Translation = z.infer<typeof translationSchema>;
 const sourceUrl = new URL("./source.json", import.meta.url);
 const targetsUrl = new URL("./fr/", import.meta.url);
 const targetPath = (id: string) =>
@@ -89,12 +83,7 @@ const updatePolicy: UpdatePolicy<Unit, Translation, string> = async (input) => {
 
 export default defineConfig({
   source: {
-    schema: schema<Unit>(
-      (value): value is Unit =>
-        isRecord(value) &&
-        typeof value.id === "string" &&
-        typeof value.source === "string",
-    ),
+    schema: unitSchema,
     async read() {
       const values = JSON.parse(await readFile(sourceUrl, "utf8")) as Unit[];
       return {
@@ -114,16 +103,8 @@ export default defineConfig({
   keyOf: (unit) => unit.id,
   translations: {
     languages: ["fr"],
-    schema: schema<Translation>(
-      (value): value is Translation =>
-        isRecord(value) &&
-        typeof value.id === "string" &&
-        typeof value.text === "string" &&
-        (value.writePath === undefined || typeof value.writePath === "string"),
-    ),
-    contentSchema: schema(
-      (value): value is string => typeof value === "string",
-    ),
+    schema: translationSchema,
+    contentSchema: z.string(),
     keyOf: (translation) => ({ namespace: "files", key: translation.id }),
     contentOf: (translation) => translation.text,
     matches: (unit, translation) => unit.id === translation.id,

@@ -135,7 +135,7 @@ void describe("术语资料快照与分阶段校验", () => {
       (error) =>
         error instanceof TermContractError &&
         error.stage === "create" &&
-        error.issues.some((issue) => issue.code === "duplicate-concept-id"),
+        error.issues.some((issue) => issue.path.join(".") === "concepts.1.id"),
     );
     assert.throws(
       () =>
@@ -161,6 +161,30 @@ void describe("术语资料快照与分阶段校验", () => {
             },
           ],
         }),
+      TermContractError,
+    );
+  });
+
+  void it("快照保留扩展字段和特殊 JSON 键，并验证其嵌套值", () => {
+    const metadata = JSON.parse(
+      '{"__proto__":{"source":"review"},"constructor":7}',
+    ) as Record<string, unknown>;
+    const base = createTermbase({
+      concepts: [],
+      extension: { note: "kept" },
+      metadata,
+    });
+    assert.deepEqual(base.data.metadata, metadata);
+    assert.deepEqual(
+      (base.data as unknown as Record<string, unknown>).extension,
+      { note: "kept" },
+    );
+    Object.defineProperty(metadata, "__proto__", {
+      value: -0,
+      enumerable: true,
+    });
+    assert.throws(
+      () => createTermbase({ concepts: [], metadata }),
       TermContractError,
     );
   });

@@ -1,35 +1,16 @@
 import { readFile } from "node:fs/promises";
 
-import {
-  createNumberChecker,
-  defineConfig,
-  type StandardSchemaV1,
-} from "@lioni/lioni";
+import { createNumberChecker, defineConfig } from "@lioni/lioni";
+import * as z from "zod";
 
-type Body = string | { text: string };
-type Unit = { id: string; source: Body };
-type Translation = { id: string; body: Body };
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-const isBody = (value: unknown): value is Body =>
-  typeof value === "string" ||
-  (isRecord(value) && typeof value.text === "string");
+const bodySchema = z.union([z.string(), z.looseObject({ text: z.string() })]);
+const unitSchema = z.looseObject({ id: z.string(), source: bodySchema });
+const translationSchema = z.looseObject({ id: z.string(), body: bodySchema });
+type Body = z.infer<typeof bodySchema>;
+type Unit = z.infer<typeof unitSchema>;
+type Translation = z.infer<typeof translationSchema>;
 const textOf = (body: Body): string =>
   typeof body === "string" ? body : body.text;
-function schema<T>(
-  accepts: (value: unknown) => value is T,
-): StandardSchemaV1<T, T> {
-  return {
-    "~standard": {
-      version: 1,
-      vendor: "artifact-consumer",
-      validate: (value) =>
-        accepts(value)
-          ? { value }
-          : { issues: [{ message: "消费项目数据无效。" }] },
-    },
-  };
-}
 
 // 同一公开配置组合字符串和对象正文，验证发布声明仍允许宿主定义资源形态。
 const units: Unit[] = [
@@ -38,6 +19,7 @@ const units: Unit[] = [
 ];
 const numbers = createNumberChecker<Unit, Translation, Unit, Body, Body>({
   hostVersion: "artifact-consumer/v1",
+  fingerprintInput: ({ projected }) => projected,
   select: ({ sourceUnit, candidate }) =>
     sourceUnit?.bodyAvailability === "available"
       ? {
@@ -56,10 +38,7 @@ const numbers = createNumberChecker<Unit, Translation, Unit, Body, Body>({
 
 export default defineConfig({
   source: {
-    schema: schema<Unit>(
-      (value): value is Unit =>
-        isRecord(value) && typeof value.id === "string" && isBody(value.source),
-    ),
+    schema: unitSchema,
     read: () => ({
       scopes: [
         {
@@ -80,11 +59,8 @@ export default defineConfig({
       namespace: "catalog",
       key: translation.id,
     }),
-    schema: schema<Translation>(
-      (value): value is Translation =>
-        isRecord(value) && typeof value.id === "string" && isBody(value.body),
-    ),
-    contentSchema: schema(isBody),
+    schema: translationSchema,
+    contentSchema: bodySchema,
     contentOf: (translation) => translation.body,
     matches: (unit, translation) => unit.id === translation.id,
     async read(language, sourceUnits) {
