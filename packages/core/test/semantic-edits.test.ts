@@ -766,7 +766,7 @@ void describe("translation write requests", () => {
     assert.equal(result.batchError, failure);
   });
 
-  void it("写入后架构验证失败时保留批次异常和未确认项", async () => {
+  void it("写入后正文 schema 校验失败时保留批次异常和未确认项", async () => {
     const failure = new Error("batch writer failed");
     const readFailure = new StandardSchemaContractError(
       "host translations",
