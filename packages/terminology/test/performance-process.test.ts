@@ -4,14 +4,20 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { runProcess } from "../scripts/evaluation/support/process.ts";
 
-const childSource =
-  "process.stdout.write(`child=${process.pid}\\n`); setInterval(() => {}, 1000);";
+const childSource = "setInterval(() => {}, 1000);";
 
 function longRunningProcess(): readonly string[] {
   const spawnChild =
     process.platform === "win32"
       ? ""
-      : `spawn(process.execPath, ["-e", ${JSON.stringify(childSource)}], { stdio: ["ignore", "inherit", "inherit"] });`;
+      : [
+          `const child = spawn(
+  process.execPath,
+  ["-e", ${JSON.stringify(childSource)}],
+  { stdio: ["ignore", "inherit", "inherit"] },
+);`,
+          'process.stdout.write("child=" + child.pid + "\\n");',
+        ].join("\n");
   const source = [
     'const { spawn } = require("node:child_process");',
     spawnChild,
