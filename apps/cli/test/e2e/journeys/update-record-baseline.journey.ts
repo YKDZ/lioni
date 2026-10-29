@@ -35,7 +35,7 @@ export default defineConfig({
     languages: ["fr", "ja"],
     schema,
     contentSchema: schema,
-    identityOf: (translation) => ({ namespace: "messages", key: translation.id }),
+    keyOf: (translation) => ({ namespace: "messages", key: translation.id }),
     contentOf: (translation) => translation.text,
     matches: (unit, translation) => unit.id === translation.id,
     read: (language, sourceUnits) => ({ scopes: [{

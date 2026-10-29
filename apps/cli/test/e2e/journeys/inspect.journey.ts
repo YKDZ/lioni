@@ -39,7 +39,7 @@ export default defineConfig({
   keyOf: (unit) => unit.context.file + ":" + unit.context.line,
   translations: {
     languages: ["fr"],
-    identityOf: (translation) => ({ namespace: "messages", key: translation.id }),
+    keyOf: (translation) => ({ namespace: "messages", key: translation.id }),
     schema: { "~standard": { version: 1, vendor: "inspect-journey-translation", validate(value) {
       const context = value?.context;
       return typeof value === "object" && value !== null && !Array.isArray(value) &&
@@ -508,7 +508,7 @@ export default defineConfig({
     assert.equal(results[6]?.exitCode, 0);
     assert.match(results[6]?.stdout ?? "", /inspect/u);
     assert.equal(results[7]?.exitCode, 0);
-    assert.equal(results[7]?.stdout, "lioni 0.1.0\n");
+    assert.equal(results[7]?.stdout, "lioni 0.1.1\n");
     assert.equal(results[8]?.exitCode, 2);
     assert.equal(results[8]?.stdout, "");
     assert.partialDeepStrictEqual(JSON.parse(results[8]?.stderr ?? ""), {

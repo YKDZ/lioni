@@ -49,7 +49,7 @@ void describe("quality checks", () => {
         keyOf: () => "message:hello",
         translations: {
           languages: ["fr"],
-          identityOf: fixtureTranslationIdentity,
+          keyOf: fixtureTranslationIdentity,
           schema: schemaFromExamples(translation),
           contentSchema: jsonValueSchema,
           contentOf: ({ text }) => text,
@@ -138,7 +138,7 @@ void describe("quality checks", () => {
         keyOf: () => "message:save",
         translations: {
           languages: ["fr"],
-          identityOf: fixtureTranslationIdentity,
+          keyOf: fixtureTranslationIdentity,
           schema: schemaFromExamples(translation),
           contentSchema: jsonValueSchema,
           read: (_language, sourceUnits) => ({

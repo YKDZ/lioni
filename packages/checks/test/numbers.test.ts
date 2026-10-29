@@ -252,7 +252,7 @@ function configFor(
     keyOf: ({ identity }) => `hash:${identity}`,
     translations: {
       languages: ["fr"],
-      identityOf: (translation) => ({
+      keyOf: (translation) => ({
         namespace: "messages",
         key: translation.nativeKey,
       }),
@@ -528,7 +528,7 @@ void describe("阿拉伯数字对应检查", () => {
       keyOf: ({ identity }) => `hash:${identity}`,
       translations: {
         languages: ["fr"],
-        identityOf: (translation) => ({
+        keyOf: (translation) => ({
           namespace: "messages",
           key: translation.nativeKey,
         }),

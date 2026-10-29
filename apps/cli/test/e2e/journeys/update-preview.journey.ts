@@ -19,6 +19,7 @@ function configSource(
   options: {
     readonly noDecisions?: boolean;
     readonly writeUnconfirmed?: boolean;
+    readonly batchFailure?: boolean;
   } = {},
 ): string {
   return `import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
@@ -54,7 +55,7 @@ export default defineConfig({
     contentSchema: { "~standard": { version: 1, vendor: "update-preview-content", validate(value) {
       return typeof value === "string" ? { value } : { issues: [{ message: "译文正文必须是字符串。" }] };
     } } },
-    identityOf: (translation) => ({ namespace: "messages", key: translation.targetId }),
+    keyOf: (translation) => ({ namespace: "messages", key: translation.targetId }),
     contentOf: (translation) => translation.text,
     matches: (unit, translation) => unit.id === translation.sourceId,
     read: (_language, sourceUnits) => ({ scopes: [{
@@ -67,6 +68,22 @@ export default defineConfig({
   translationWriteback: {
     locateExistingTarget: ({ translation }) => ({ status: "located", locator: translation.translation.targetId }),
     locateNewTarget: ({ sourceKey }) => ({ status: "located", locator: sourceKey }),
+    ${
+      options.batchFailure === true
+        ? `writeBatch: ({ requests }) => {
+      const records = JSON.parse(readFileSync(translationsPath, "utf8"));
+      for (const { request } of requests) {
+        if (request.operation !== "write") throw new Error("仅支持译文写入。");
+        const id = "sourceKey" in request.target ? request.target.sourceKey : request.target.identity.key;
+        const existing = records.find((record) => record.targetId === id);
+        if (existing === undefined) records.push({ targetId: id, sourceId: id, text: request.content });
+        else existing.text = request.content;
+      }
+      writeFileSync(translationsPath, JSON.stringify(records) + "\\n");
+      throw new Error("共享文件写回收尾失败。");
+    },`
+        : ""
+    }
     write: ({ request, target }) => {
       if (request.operation !== "write") throw new Error("仅支持译文写入。");
       if (${options.writeUnconfirmed === true}) return;
@@ -215,6 +232,23 @@ const journey: CliJourney = {
       path.join(unconfirmedDir, "lioni.translations.json"),
       "[]\n",
     );
+
+    for (const directory of ["batch-structured", "batch-text"]) {
+      const batchDir = path.join(workDir, directory);
+      await mkdir(batchDir);
+      await writeFile(
+        path.join(batchDir, "lioni.config.ts"),
+        configSource(
+          [
+            { id: "welcome", source: "Welcome" },
+            { id: "save", source: "Save" },
+          ],
+          [],
+          { batchFailure: true },
+        ),
+      );
+      await writeFile(path.join(batchDir, "lioni.translations.json"), "[]\n");
+    }
   },
   commands() {
     return [
@@ -287,6 +321,19 @@ const journey: CliJourney = {
         name: "execute the modified source reset through the host adapter",
         args: ["update", "modified/lioni.config.ts"],
       },
+      {
+        name: "report partial success and the original batch error in structured results",
+        args: ["update", "batch-structured/lioni.config.ts"],
+      },
+      {
+        name: "show partial success and the batch error in text output",
+        args: [
+          "update",
+          "batch-text/lioni.config.ts",
+          "--output-format",
+          "text",
+        ],
+      },
     ];
   },
   async assertions({ context, results }) {
@@ -300,6 +347,8 @@ const journey: CliJourney = {
     const unconfirmedStructured = results[7];
     const modifiedPreview = results[8];
     const modifiedApplied = results[9];
+    const batchStructured = results[10];
+    const batchText = results[11];
     const baselinePath = path.join(context.workDir, "lioni.baseline.json");
 
     assert.equal(structured?.exitCode, 0, structured?.stderr);
@@ -437,6 +486,42 @@ const journey: CliJourney = {
       ),
       expectedModifiedBaselineByWorkDir.get(context.workDir),
     );
+
+    assert.equal(batchStructured?.exitCode, 1);
+    const batchFailure = JSON.parse(
+      batchStructured?.stdout || batchStructured?.stderr || "unknown",
+    );
+    assert.equal(batchFailure.variant, "applyFailed");
+    assert.equal(batchFailure.data.status, "failed");
+    assert.deepStrictEqual(
+      batchFailure.data.results.map((item: { status: string }) => item.status),
+      ["written", "written"],
+    );
+    assert.deepStrictEqual(batchFailure.data.batchError, {
+      name: "Error",
+      message: "共享文件写回收尾失败。",
+    });
+    assert.deepStrictEqual(
+      JSON.parse(
+        await readFile(
+          path.join(
+            context.workDir,
+            "batch-structured/lioni.translations.json",
+          ),
+          "utf8",
+        ),
+      ),
+      [
+        { targetId: "welcome", sourceId: "welcome", text: "待译：Welcome" },
+        { targetId: "save", sourceId: "save", text: "待译：Save" },
+      ],
+    );
+
+    assert.equal(batchText?.exitCode, 1);
+    assert.equal(batchText?.stdout, "");
+    assert.ok(batchText?.stderr.includes("已写入"));
+    assert.ok(batchText?.stderr.includes("批量写回抛出异常"));
+    assert.ok(batchText?.stderr.includes("共享文件写回收尾失败。"));
   },
 };
 

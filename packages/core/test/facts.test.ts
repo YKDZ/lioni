@@ -443,7 +443,7 @@ void describe("framework facts", () => {
         keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
         translations: {
           languages: ["fr"],
-          identityOf: fixtureTranslationIdentity,
+          keyOf: fixtureTranslationIdentity,
           read(language, sourceUnits) {
             reads += 1;
             assert.equal(language, "fr");
@@ -566,7 +566,7 @@ void describe("framework facts", () => {
             languages: ["fr"],
             schema: schemaFromExamples(translations[0]!),
             contentSchema: jsonValueSchema,
-            identityOf: (translation) => ({
+            keyOf: (translation) => ({
               namespace: "messages",
               key: translation.id,
             }),
@@ -630,7 +630,7 @@ void describe("framework facts", () => {
         languages: ["fr"],
         schema: schemaFromExamples(translation),
         contentSchema: jsonValueSchema,
-        identityOf: (value) => ({ namespace: "messages", key: value.id }),
+        keyOf: (value) => ({ namespace: "messages", key: value.id }),
         read: () => ({
           scopes: [
             {
@@ -660,7 +660,7 @@ void describe("framework facts", () => {
     ];
     const configFor = (
       values: readonly (typeof records)[number][],
-      identityOf: (translation: (typeof records)[number]) => unknown,
+      keyOf: (translation: (typeof records)[number]) => unknown,
     ) =>
       defineConfig({
         source: {
@@ -672,7 +672,7 @@ void describe("framework facts", () => {
           languages: ["fr"],
           schema: schemaFromExamples(records[0]!),
           contentSchema: jsonValueSchema,
-          identityOf: (translation) => identityOf(translation) as never,
+          keyOf: (translation) => keyOf(translation) as never,
           read: () => ({
             scopes: [
               {
@@ -724,7 +724,7 @@ void describe("framework facts", () => {
         schema: schemaFromExamples({ id: "save", text: "Enregistrer" }),
         unavailableSchema: schemaFromExamples({ id: "old" }),
         contentSchema: jsonValueSchema,
-        identityOf: (translation) => ({
+        keyOf: (translation) => ({
           namespace: "targets",
           key: translation.id,
         }),
@@ -825,7 +825,7 @@ void describe("framework facts", () => {
         keyOf: (unit) => `message:${unit.context.line}`,
         translations: {
           languages: ["fr"],
-          identityOf: fixtureTranslationIdentity,
+          keyOf: fixtureTranslationIdentity,
           schema: schemaFromExamples({
             text: "Enregistrer",
             context: { line: 18 },
@@ -944,7 +944,7 @@ void describe("framework facts", () => {
         keyOf: (unit) => `message:${unit.context.line}`,
         translations: {
           languages: ["fr", "de"],
-          identityOf: fixtureTranslationIdentity,
+          keyOf: fixtureTranslationIdentity,
           schema: schemaFromExamples<Translation>({
             id: "shared-fr",
             text: "Enregistrer",
@@ -1151,7 +1151,7 @@ void describe("framework facts", () => {
       keyOf: () => "save",
       translations: {
         languages: ["fr"],
-        identityOf: fixtureTranslationIdentity,
+        keyOf: fixtureTranslationIdentity,
         schema: translationSchema,
         contentSchema: jsonValueSchema,
         read: () => ({
@@ -1184,7 +1184,7 @@ void describe("framework facts", () => {
       keyOf: () => "save",
       translations: {
         languages: ["fr"],
-        identityOf: fixtureTranslationIdentity,
+        keyOf: fixtureTranslationIdentity,
         schema: translationSchema,
         contentSchema: jsonValueSchema,
         async read() {
@@ -1223,7 +1223,7 @@ void describe("framework facts", () => {
         keyOf: () => "save",
         translations: {
           languages: ["fr"],
-          identityOf: fixtureTranslationIdentity,
+          keyOf: fixtureTranslationIdentity,
           schema: schemaFromExamples(translation),
           contentSchema: jsonValueSchema,
           read() {
@@ -1254,7 +1254,7 @@ void describe("framework facts", () => {
         keyOf: (unit) => `message:${unit.context.line}`,
         translations: {
           languages: ["fr"],
-          identityOf: fixtureTranslationIdentity,
+          keyOf: fixtureTranslationIdentity,
           schema: schemaFromExamples({ text: "Example" }),
           contentSchema: jsonValueSchema,
           read: () => ({ scopes: [] }),
@@ -1318,7 +1318,7 @@ void describe("framework facts", () => {
         keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
         translations: {
           languages: ["fr"],
-          identityOf: fixtureTranslationIdentity,
+          keyOf: fixtureTranslationIdentity,
           schema: schemaFromExamples<AvailableTranslation>(available),
           unavailableSchema:
             schemaFromExamples<UnavailableTranslation>(unavailable),
@@ -1393,7 +1393,7 @@ void describe("framework facts", () => {
       keyOf: (value) => `message:${value.context.line}`,
       translations: {
         languages: ["fr"],
-        identityOf: fixtureTranslationIdentity,
+        keyOf: fixtureTranslationIdentity,
         schema: schemaFromExamples<Translation>(validTranslation),
         contentSchema: schemaFromExamples<string>("Enregistrer"),
         read: () => ({
@@ -1436,7 +1436,7 @@ void describe("framework facts", () => {
       keyOf: (value) => `message:${value.context.line}`,
       translations: {
         languages: ["fr"],
-        identityOf: fixtureTranslationIdentity,
+        keyOf: fixtureTranslationIdentity,
         schema: schemaFromExamples<Translation>(translation),
         contentSchema: schemaFromExamples<string>("Enregistrer"),
         read: () => ({
@@ -1485,7 +1485,7 @@ void describe("framework facts", () => {
       keyOf: (value) => `message:${value.context.line}`,
       translations: {
         languages: ["fr"],
-        identityOf: fixtureTranslationIdentity,
+        keyOf: fixtureTranslationIdentity,
         schema: schemaFromExamples<Translation>(translation),
         contentSchema: changedContentSchema,
         read: () => ({
@@ -1515,7 +1515,7 @@ void describe("framework facts", () => {
       keyOf: (value: typeof unit) => `message:${value.context.line}`,
       translations: {
         languages: ["fr"],
-        identityOf: fixtureTranslationIdentity,
+        keyOf: fixtureTranslationIdentity,
         schema: schemaFromExamples<Translation>(translation),
         contentSchema: schemaFromExamples<string>("Enregistrer"),
         read: () => ({

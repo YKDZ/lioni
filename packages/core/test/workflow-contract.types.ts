@@ -117,6 +117,16 @@ const writeback: TranslationWritebackAdapter<Unit, Translation, Body> = {
       void actualBody;
     }
   },
+  writeBatch({ requests }) {
+    const firstRequest = requests[0]?.request;
+    if (firstRequest?.operation === "write") {
+      const body: Body = firstRequest.content;
+      void body;
+    }
+    const firstTargetBody: Body | undefined =
+      requests[0]?.currentTranslation?.content;
+    void firstTargetBody;
+  },
 };
 
 const config = defineConfig<
@@ -131,7 +141,7 @@ const config = defineConfig<
   createPlaceholderContent: (source) => ({ message: source, state: "draft" }),
   translations: {
     languages: ["fr"],
-    identityOf: (translation) => ({
+    keyOf: (translation) => ({
       namespace: "fixture",
       key: translation.id,
     }),

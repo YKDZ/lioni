@@ -58,6 +58,7 @@ export type {
   TranslationWritebackTarget,
   TranslationWritebackResolution,
   TranslationWritebackAdapter,
+  TranslationWritebackInput,
   TranslationWriteConditionInput,
   TranslationWriteConditionResult,
   TranslationWriteCondition,
@@ -275,8 +276,8 @@ export type TranslationAdapter<
     StandardSchemaV1<TBody, TBody> &
     PreservingStandardSchema<TBody, TContentSchema>;
   readonly contentOf: (translation: NoInfer<TTranslation>) => NoInfer<TBody>;
-  /** 从译文记录提取稳定目标身份，不依赖正文或本次读取索引。 */
-  readonly identityOf: (
+  /** 从译文记录提取稳定目标身份的 namespace 与 key；语言由框架补入，且不依赖正文或本次读取索引。 */
+  readonly keyOf: (
     translation: NoInfer<TTranslation | TUnavailable>,
     language: string,
   ) => TranslationIdentityParts;
@@ -427,7 +428,7 @@ type TranslationAdapterInput<
   readonly contentOf: (
     translation: NoInfer<SchemaOutput<TTranslationSchema>>,
   ) => NoInfer<SchemaOutput<TContentSchema>>;
-  readonly identityOf: (
+  readonly keyOf: (
     translation: NoInfer<
       SchemaOutput<TTranslationSchema> | SchemaOutput<TUnavailableSchema>
     >,

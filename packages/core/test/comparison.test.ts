@@ -106,7 +106,7 @@ function snapshotConfig(
       unavailableSchema: schemaFromExamples(unavailableTranslationExample),
       contentSchema: schemaFromExamples("example"),
       contentOf: ({ text }) => text,
-      identityOf: (translation, language) => ({
+      keyOf: (translation, language) => ({
         language,
         namespace: translation.namespace,
         key: translation.id,

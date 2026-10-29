@@ -113,7 +113,10 @@ function createScenario(
     },
     translations: {
       languages: ["fr"],
-      identityOf: ({ id }) => ({ namespace: "messages", key: id }),
+      keyOf: ({ id }) => ({
+        namespace: "messages",
+        key: id,
+      }),
       schema: translationSchema,
       contentSchema: jsonValueSchema,
       contentOf: ({ text }) => text,
@@ -564,6 +567,59 @@ void describe("apply update plan", () => {
     assert.equal(result.baseline?.outcome, "notAdvanced");
     assert.deepEqual(scenario.currentBaseline(), previousBaseline);
     assert.deepEqual(translationsByLanguage.ja, [sampleTranslation()]);
+  });
+
+  void it("keeps the baseline when a batch throws even after all targets are confirmed", async () => {
+    const scenario = createScenario({
+      sources: [sampleSource("A"), sampleSource("B")],
+      translations: [sampleTranslation("A"), sampleTranslation("B")],
+    });
+    await recordComparisonBaseline(scenario.config, scenario.baselineStore);
+    const previousBaseline = structuredClone(scenario.currentBaseline());
+    scenario.state.sources = [
+      { id: "A", source: "Updated source A" },
+      { id: "B", source: "Updated source B" },
+    ];
+    const writer = scenario.config.translationWriteback!;
+    const config: FrameworkConfig<Unit, Translation, JsonValue> = {
+      ...scenario.config,
+      translationWriteback: {
+        ...writer,
+        writeBatch({ requests }) {
+          for (const { request } of requests) {
+            if (request.operation !== "write")
+              throw new Error("expected a write request");
+            const key =
+              "identity" in request.target
+                ? request.target.identity.key
+                : request.target.sourceKey;
+            const existing = scenario.state.translations.find(
+              ({ id }) => id === key,
+            );
+            if (existing !== undefined) existing.text = request.content;
+          }
+          throw undefined;
+        },
+      },
+    };
+
+    const result = await update(config, scenario.baselineStore, {
+      recordBaseline: true,
+    });
+
+    assert.equal(result.status, "failed");
+    assert.equal(Object.hasOwn(result, "batchError"), true);
+    assert.equal(result.batchError, undefined);
+    assert.deepEqual(
+      result.results.map(({ status }) => status),
+      ["written", "written"],
+    );
+    assert.equal(result.baseline?.outcome, "notAdvanced");
+    assert.deepEqual(scenario.currentBaseline(), previousBaseline);
+    assert.deepEqual(scenario.state.translations, [
+      { id: "A", text: "Updated source A", sourceId: "A" },
+      { id: "B", text: "Updated source B", sourceId: "B" },
+    ]);
   });
 
   void it("requires a decision for confirmed missing translations", async () => {

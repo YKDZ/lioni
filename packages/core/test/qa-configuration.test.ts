@@ -154,7 +154,7 @@ function qualityConfig(
     keyOf: ({ id }) => id,
     translations: {
       languages: ["fr"],
-      identityOf: fixtureTranslationIdentity,
+      keyOf: fixtureTranslationIdentity,
       schema: unitSchema,
       contentSchema: stringBodySchema,
       read(_language, sourceUnits) {

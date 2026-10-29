@@ -10,6 +10,7 @@ import {
   validateUpdatePlan,
   writeTranslationRequests,
   type TranslationWriteRequest,
+  type TranslationWritebackAdapter,
   type UpdatePlan,
 } from "@lioni/lioni";
 import {
@@ -18,6 +19,16 @@ import {
 } from "@lioni/lioni/node";
 
 import config, { type Translation, type Unit } from "./lioni.config.ts";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+type BatchAdapter = TranslationWritebackAdapter<Unit, Translation, string>;
+type BatchWriteInput = Parameters<NonNullable<BatchAdapter["writeBatch"]>>[0];
+type LocateExistingInput = Parameters<
+  NonNullable<BatchAdapter["locateExistingTarget"]>
+>[0];
 
 const baseline = createFileComparisonBaselineStore<Unit, Translation, string>(
   "baseline.json",
@@ -76,5 +87,77 @@ else if (mode === "plan") {
     config,
   );
   result = await writeTranslationRequests([request], config);
+} else if (mode === "batch-edit") {
+  const facts = await readFacts(config);
+  const requests: TranslationWriteRequest<string, Unit>[] = ["A", "B"].map(
+    (id) => {
+      const target = facts.translations.records.find(
+        ({ translation }) => translation.id === id,
+      );
+      assert.ok(target?.bodyAvailability === "available");
+      return {
+        operation: "write",
+        target: { identity: target.identity },
+        content: `批量译文 ${id}`,
+        expectedTarget: {
+          status: "present",
+          identity: target.identity,
+          content: target.content,
+          record: target.translation,
+        },
+      };
+    },
+  );
+  const batchConfig = {
+    ...config,
+    translationWriteback: {
+      ...config.translationWriteback!,
+      locateExistingTarget({ translation }: LocateExistingInput) {
+        return {
+          status: "located" as const,
+          locator: {
+            file:
+              translation.translation.writePath ??
+              `fr/${translation.translation.id}.json`,
+            key: translation.translation.id,
+          },
+        };
+      },
+      async writeBatch({ requests: writes }: BatchWriteInput) {
+        const groups = new Map<string, Array<(typeof writes)[number]>>();
+        for (const write of writes) {
+          const locator = write.target.locator;
+          if (!isRecord(locator) || typeof locator.file !== "string")
+            throw new TypeError("测试写回需要文件定位。");
+          const group = groups.get(locator.file) ?? [];
+          group.push(write);
+          groups.set(locator.file, group);
+        }
+        for (const [filename, group] of groups) {
+          const records = JSON.parse(
+            await readFile(filename, "utf8"),
+          ) as Translation[];
+          for (const { request } of group) {
+            if (!("identity" in request.target))
+              throw new TypeError("测试写回需要现有译文身份。");
+            const id = request.target.identity.key;
+            const index = records.findIndex(
+              (translation) => translation.id === id,
+            );
+            if (request.operation === "delete") records.splice(index, 1);
+            else if (index === -1)
+              records.push({ id, text: request.content, writePath: filename });
+            else {
+              const current = records[index];
+              assert.ok(current);
+              records[index] = { ...current, text: request.content };
+            }
+          }
+          await writeFile(filename, JSON.stringify(records));
+        }
+      },
+    },
+  };
+  result = await writeTranslationRequests(requests, batchConfig);
 } else throw new Error(`未知工作流操作：${String(mode)}`);
 process.stdout.write(JSON.stringify(result ?? null));

@@ -128,6 +128,7 @@ export type {
   TranslationWriteTarget,
   TranslationWriteTargetExpectation,
   TranslationWritebackAdapter,
+  TranslationWritebackInput,
   TranslationWritebackResolution,
   TranslationWritebackTarget,
   UpdatePlan,

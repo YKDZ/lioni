@@ -188,6 +188,7 @@ const updateResultSchema = toStandardJsonSchema(
         message: v.optional(v.string()),
       }),
     ),
+    batchError: v.optional(v.object({ name: v.string(), message: v.string() })),
   }),
 );
 
@@ -378,6 +379,7 @@ function updateResultText(value: unknown): ReturnType<typeof text.lines> {
       readonly outcome: "saved" | "unchanged" | "notAdvanced" | "failed";
       readonly message?: string;
     };
+    readonly batchError?: { readonly name: string; readonly message: string };
   };
   const statusNames: Readonly<Record<string, string>> = {
     written: "已写入",
@@ -410,7 +412,31 @@ function updateResultText(value: unknown): ReturnType<typeof text.lines> {
               ? "比较基线没有变化。"
               : (result.baseline.message ?? "比较基线未推进。"),
         ]),
+    ...(result.batchError === undefined
+      ? []
+      : [
+          `批量写回抛出异常（逐项实际结果见上）：${result.batchError.name}: ${result.batchError.message}`,
+        ]),
   ]);
+}
+
+function cliUpdateResult<TResult extends { readonly batchError?: unknown }>(
+  result: TResult,
+): Omit<TResult, "batchError"> & {
+  readonly batchError?: { readonly name: string; readonly message: string };
+} {
+  if (!Object.hasOwn(result, "batchError"))
+    return result as Omit<TResult, "batchError"> & {
+      readonly batchError?: { readonly name: string; readonly message: string };
+    };
+  const error = result.batchError;
+  return {
+    ...result,
+    batchError: {
+      name: error instanceof Error ? error.name : "ThrownValue",
+      message: error instanceof Error ? error.message : String(error),
+    },
+  };
 }
 
 function displayJson(value: unknown): string {
@@ -594,9 +620,10 @@ function createCliContract(identity: CliCommandIdentity) {
               baselinePath,
               updateSelection(input),
             );
+            const cliResult = cliUpdateResult(result);
             return result.status === "completed"
-              ? outcome.data.applied(result)
-              : outcome.failure.applyFailed(result);
+              ? outcome.data.applied(cliResult)
+              : outcome.failure.applyFailed(cliResult);
           } catch (error) {
             return outcome.failure.previewFailed({
               message: error instanceof Error ? error.message : String(error),

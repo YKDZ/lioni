@@ -76,7 +76,7 @@ export default defineConfig({
   keyOf: (unit) => unit.id,
   translations: {
     languages: ["fr", "de"],
-    identityOf: (translation) => ({
+    keyOf: (translation) => ({
       namespace: "catalog",
       key: translation.id,
     }),
