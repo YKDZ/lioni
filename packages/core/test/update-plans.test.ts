@@ -38,7 +38,8 @@ function makeConfig(
   translations: readonly Translation[],
   options: {
     readonly sourceBodyAvailability?: "available" | "unavailable";
-    readonly sourceToContent?: (source: string) => string;
+    readonly createPlaceholderContent?: (source: string) => string;
+    readonly contentSchema?: typeof stringSchema;
     readonly updatePolicy?: Config["updatePolicy"];
     readonly compare?: Config["compare"];
     readonly onQuality?: () => void;
@@ -77,7 +78,7 @@ function makeConfig(
         sourceId: "example",
         text: "example",
       }),
-      contentSchema: stringSchema,
+      contentSchema: options.contentSchema ?? stringSchema,
       identityOf: ({ targetId }) => ({ namespace: "messages", key: targetId }),
       contentOf: ({ text }) => text,
       matches: (unit, translation) => unit.id === translation.sourceId,
@@ -95,9 +96,9 @@ function makeConfig(
         ],
       }),
     },
-    ...(options.sourceToContent === undefined
+    ...(options.createPlaceholderContent === undefined
       ? {}
-      : { sourceToContent: options.sourceToContent }),
+      : { createPlaceholderContent: options.createPlaceholderContent }),
     ...(options.compare === undefined ? {} : { compare: options.compare }),
     ...(options.updatePolicy === undefined
       ? {}
@@ -144,12 +145,24 @@ void describe("业务更新计划与预览", () => {
   void it("无基线时为充分确认的缺译生成原文占位，并只返回可恢复计划", async () => {
     const store = new MemoryBaselineStore();
     let qualityCalls = 0;
-    const config = makeConfig([{ id: "welcome", source: "Welcome" }], [], {
-      sourceToContent: (source) => `待译：${source}`,
-      onQuality: () => {
-        qualityCalls += 1;
+    const config = makeConfig(
+      [
+        { id: "welcome", source: "Welcome" },
+        { id: "already-translated", source: "Existing source" },
+      ],
+      [
+        {
+          targetId: "target-existing",
+          sourceId: "already-translated",
+          text: "人工译文",
+        },
+      ],
+      {
+        onQuality: () => {
+          qualityCalls += 1;
+        },
       },
-    });
+    );
 
     const plan = await previewUpdate(config, store);
     const item = plan.items.find(({ action }) => action === "write");
@@ -159,7 +172,7 @@ void describe("业务更新计划与预览", () => {
     assert.deepStrictEqual(item?.request, {
       operation: "write",
       target: { sourceKey: "welcome", language: "fr" },
-      content: "待译：Welcome",
+      content: "Welcome",
       expectedSource: {
         presence: "present",
         key: "welcome",
@@ -170,6 +183,11 @@ void describe("业务更新计划与预览", () => {
       expectedTarget: { status: "missing" },
     });
     assert.equal(item?.reason.length > 0, true);
+    const existing = plan.items.find(
+      ({ sourceKey }) => sourceKey === "already-translated",
+    );
+    assert.equal(existing?.action, "retain");
+    assert.equal(existing?.request, undefined);
     assert.equal(qualityCalls, 0);
     assert.equal(store.saves, 0);
 
@@ -184,7 +202,7 @@ void describe("业务更新计划与预览", () => {
   void it("原文正文不可用时默认策略不生成占位写入", async () => {
     const config = makeConfig([{ id: "welcome", source: "Welcome" }], [], {
       sourceBodyAvailability: "unavailable",
-      sourceToContent: (source) => `待译：${source}`,
+      createPlaceholderContent: (source) => `待译：${source}`,
     });
 
     const plan = await previewUpdate(config);
@@ -196,7 +214,63 @@ void describe("业务更新计划与预览", () => {
     assert.match(item?.reason ?? "", /原文正文不可用/);
   });
 
-  void it("原文变化时保留已有译文，包括仍等于旧原文的正文", async () => {
+  void it("原文变化时用当前原文重置已有人工译文", async () => {
+    const store = await storedSnapshot(
+      [{ id: "welcome", source: "Welcome" }],
+      [{ targetId: "target-welcome", sourceId: "welcome", text: "人工译文" }],
+    );
+    const config = makeConfig(
+      [{ id: "welcome", source: "Welcome back" }],
+      [{ targetId: "target-welcome", sourceId: "welcome", text: "人工译文" }],
+    );
+
+    const plan = await previewUpdate(config, store);
+    const item = plan.items.find(
+      ({ target }) => target?.key === "target-welcome",
+    );
+
+    assert.equal(item?.action, "write");
+    assert.match(item?.reason ?? "", /原文已变化.*待译占位/);
+    assert.equal(item?.after?.content, "Welcome back");
+    assert.deepStrictEqual(item?.request, {
+      operation: "write",
+      target: {
+        identity: {
+          language: "fr",
+          namespace: "messages",
+          key: "target-welcome",
+        },
+      },
+      content: "Welcome back",
+      expectedSource: {
+        presence: "present",
+        key: "welcome",
+        unit: { id: "welcome", source: "Welcome back" },
+        content: "Welcome back",
+        range: "source/messages.json",
+      },
+      expectedTarget: {
+        status: "present",
+        identity: {
+          language: "fr",
+          namespace: "messages",
+          key: "target-welcome",
+        },
+        content: "人工译文",
+        range: "locales/fr.json",
+        record: {
+          targetId: "target-welcome",
+          sourceId: "welcome",
+          text: "人工译文",
+        },
+      },
+    });
+    assert.equal(item?.changes.source?.status, "modified");
+    assert.equal(item?.changes.source?.previous?.unit.source, "Welcome");
+    assert.equal(item?.changes.source?.current?.unit.source, "Welcome back");
+  });
+
+  void it("原文变化时也重置仍等于旧原文的占位", async () => {
     const store = await storedSnapshot(
       [{ id: "welcome", source: "Welcome" }],
       [{ targetId: "target-welcome", sourceId: "welcome", text: "Welcome" }],
@@ -204,7 +278,25 @@ void describe("业务更新计划与预览", () => {
     const config = makeConfig(
       [{ id: "welcome", source: "Welcome back" }],
       [{ targetId: "target-welcome", sourceId: "welcome", text: "Welcome" }],
-      { sourceToContent: (source) => source },
+    );
+
+    const plan = await previewUpdate(config, store);
+    const item = plan.items.find(
+      ({ target }) => target?.key === "target-welcome",
+    );
+
+    assert.equal(item?.action, "write");
+    assert.equal(item?.request?.content, "Welcome back");
+  });
+
+  void it("原文未变化时保留已有译文", async () => {
+    const store = await storedSnapshot(
+      [{ id: "welcome", source: "Welcome" }],
+      [{ targetId: "target-welcome", sourceId: "welcome", text: "人工译文" }],
+    );
+    const config = makeConfig(
+      [{ id: "welcome", source: "Welcome" }],
+      [{ targetId: "target-welcome", sourceId: "welcome", text: "新人工译文" }],
     );
 
     const plan = await previewUpdate(config, store);
@@ -213,10 +305,151 @@ void describe("业务更新计划与预览", () => {
     );
 
     assert.equal(item?.action, "retain");
-    assert.match(item?.reason ?? "", /保留/);
-    assert.equal(item?.changes.source?.status, "modified");
-    assert.equal(item?.changes.source?.previous?.unit.source, "Welcome");
-    assert.equal(item?.changes.source?.current?.unit.source, "Welcome back");
+    assert.equal(item?.changes.source?.status, "unchanged");
+    assert.equal(item?.request, undefined);
+  });
+
+  void it("待译占位不符合目标正文 schema 时阻止重置", async () => {
+    const store = await storedSnapshot(
+      [{ id: "welcome", source: "Welcome" }],
+      [{ targetId: "target-welcome", sourceId: "welcome", text: "Bienvenue" }],
+    );
+    const rejectingSchema: typeof stringSchema = {
+      "~standard": {
+        version: 1,
+        vendor: "reject-placeholder-content",
+        validate(value) {
+          if (typeof value !== "string")
+            return { issues: [{ message: "正文必须是字符串。" }] };
+          return value === "Welcome back"
+            ? { issues: [{ message: "该占位格式不可保存。" }] }
+            : { value };
+        },
+      },
+    };
+    const config = makeConfig(
+      [{ id: "welcome", source: "Welcome back" }],
+      [{ targetId: "target-welcome", sourceId: "welcome", text: "Bienvenue" }],
+      { contentSchema: rejectingSchema },
+    );
+
+    const plan = await previewUpdate(config, store);
+    const item = plan.items.find(
+      ({ target }) => target?.key === "target-welcome",
+    );
+
+    assert.equal(item?.action, "blocked");
+    assert.equal(item?.request, undefined);
+    assert.match(item?.reason ?? "", /目标正文校验.*未写入/);
+  });
+
+  void it("默认填充完整保留符合 schema 的对象与数组正文", async () => {
+    type StructuredUnit = { readonly id: string; readonly source: JsonValue };
+    type StructuredTranslation = {
+      readonly targetId: string;
+      readonly sourceId: string;
+      readonly text: JsonValue;
+    };
+    const units: readonly StructuredUnit[] = [
+      {
+        id: "object",
+        source: { message: "Welcome", parts: ["Hello", "there"] },
+      },
+      { id: "array", source: [{ kind: "text", value: "Welcome" }, "end"] },
+    ];
+    const sourceSchema = sourceSchemaFromExamples<StructuredUnit>(...units);
+    const translationSchema = schemaFromExamples<StructuredTranslation>({
+      targetId: "example",
+      sourceId: "example",
+      text: null,
+    });
+    const config = defineConfig<
+      StructuredUnit,
+      typeof sourceSchema,
+      typeof translationSchema,
+      never,
+      typeof jsonValueSchema
+    >({
+      source: {
+        schema: sourceSchema,
+        read: () => ({
+          scopes: [
+            {
+              range: "source.json",
+              enumeration: "complete",
+              records: units.map((value) => ({
+                value,
+                bodyAvailability: "available" as const,
+              })),
+            },
+          ],
+        }),
+      },
+      keyOf: ({ id }) => id,
+      translations: {
+        languages: ["fr"],
+        schema: translationSchema,
+        contentSchema: jsonValueSchema,
+        identityOf: ({ targetId }) => ({
+          namespace: "messages",
+          key: targetId,
+        }),
+        contentOf: ({ text }) => text,
+        matches: (unit, translation) => unit.id === translation.sourceId,
+        read: (_language, sourceUnits) => ({
+          scopes: [
+            {
+              range: "fr.json",
+              covers: sourceUnits.map(({ key }) => key),
+              enumeration: "complete",
+              records: [],
+            },
+          ],
+        }),
+      },
+    });
+
+    const plan = await previewUpdate(config);
+
+    assert.deepStrictEqual(
+      plan.items.map((item) => item.after?.content),
+      units.map(({ source }) => source),
+    );
+  });
+
+  void it("目标读取依据不足时不运行填充函数或规划写入", async () => {
+    let placeholderCalls = 0;
+    const complete = makeConfig([{ id: "welcome", source: "Welcome" }], [], {
+      createPlaceholderContent: (source) => {
+        placeholderCalls += 1;
+        return source;
+      },
+    });
+    const adapter = complete.translations;
+    if (adapter === undefined) throw new Error("测试配置缺少目标适配器。");
+    const config: Config = {
+      ...complete,
+      translations: {
+        ...adapter,
+        read: () => ({
+          scopes: [
+            {
+              range: "locales/fr.json",
+              covers: [],
+              enumeration: "partial",
+              records: [],
+            },
+          ],
+        }),
+      },
+    };
+
+    const plan = await previewUpdate(config);
+    const item = plan.items.find(({ sourceKey }) => sourceKey === "welcome");
+
+    assert.equal(item?.action, "review");
+    assert.equal(item?.request, undefined);
+    assert.equal(placeholderCalls, 0);
   });
 
   void it("只为有历史关联且原文充分确认移除的未改目标规划删除", async () => {
@@ -310,7 +543,7 @@ void describe("业务更新计划与预览", () => {
         { targetId: "second", sourceId: "welcome", text: "二" },
         { targetId: "orphan", sourceId: "missing", text: "孤立项" },
       ],
-      { sourceToContent: (source) => source },
+      { createPlaceholderContent: (source) => source },
     );
 
     const plan = await previewUpdate(config);
@@ -366,7 +599,7 @@ void describe("业务更新计划与预览", () => {
       ],
       [],
       {
-        sourceToContent: (source) => source,
+        createPlaceholderContent: (source) => source,
         updatePolicy: (input) => {
           batchSize = input.current.source.units.length;
           return input.current.associations.map((association) => {
@@ -448,7 +681,7 @@ void describe("业务更新计划与预览", () => {
         }),
       },
       keyOf: ({ id }) => id,
-      sourceToContent: () => ({ safe: "yes" }),
+      createPlaceholderContent: () => ({ safe: "yes" }),
       updatePolicy: async (input) => {
         const items = await defaultUpdatePolicy(input);
         return items.map((item) =>
@@ -494,9 +727,9 @@ void describe("业务更新计划与预览", () => {
   });
 
   void it("可组合读取事实、显式比较与纯计划计算入口", async () => {
-    const sourceToContent = (source: string) => `待译：${source}`;
+    const createPlaceholderContent = (source: string) => `待译：${source}`;
     const config = makeConfig([{ id: "welcome", source: "Welcome" }], [], {
-      sourceToContent,
+      createPlaceholderContent,
     });
     const current = await readFacts(config);
     const comparisons = defaultCompare({
@@ -512,7 +745,7 @@ void describe("业务更新计划与预览", () => {
       current,
       comparisons,
       associations: { previous: [], current: current.associations },
-      sourceToContent,
+      createPlaceholderContent,
       contentSchema: stringSchema,
     });
 

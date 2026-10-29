@@ -273,9 +273,11 @@ function updatePlanText(value: unknown): ReturnType<typeof text.lines> {
         item.sourceKey === undefined
           ? `${item.target?.namespace ?? "目标"}:${item.target?.key ?? "多条"}（${item.language}）`
           : `${item.sourceKey} → ${item.language}`;
-      const lines = [
-        `${updateActionNames[item.action] ?? "更新"} ${subject}：${item.reason}`,
-      ];
+      const actionName =
+        item.action === "write" && item.changes.source?.status === "modified"
+          ? "重置待译占位"
+          : (updateActionNames[item.action] ?? "更新");
+      const lines = [`${actionName} ${subject}：${item.reason}`];
       if (item.changes.source !== undefined) {
         const { previous, current, status } = item.changes.source;
         lines.push(

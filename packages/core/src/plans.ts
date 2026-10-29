@@ -222,7 +222,8 @@ export type UpdatePlanInput<
     TUnavailable
   >;
   readonly associations: UpdatePlanAssociations;
-  readonly sourceToContent?: (source: TUnit["source"]) => TBody;
+  /** 默认直接复制原文正文；自定义函数仅接收正文，不接收目标语言或读取包装。 */
+  readonly createPlaceholderContent?: (source: TUnit["source"]) => TBody;
   readonly contentSchema?: StandardSchemaV1<TBody, TBody>;
 };
 
@@ -276,10 +277,12 @@ export async function createUpdatePlan<
   );
   assertUpdatePlanAssociations(options.associations);
   if (
-    options.sourceToContent !== undefined &&
-    typeof options.sourceToContent !== "function"
+    options.createPlaceholderContent !== undefined &&
+    typeof options.createPlaceholderContent !== "function"
   )
-    throw new TypeError("sourceToContent 必须是纯原文到目标正文的投影函数。");
+    throw new TypeError(
+      "createPlaceholderContent 必须是同步的原文正文到目标正文函数。",
+    );
   if (
     options.updatePolicy !== undefined &&
     typeof options.updatePolicy !== "function"
@@ -384,14 +387,84 @@ export async function defaultUpdatePolicy<
           });
           continue;
         }
+        if (changes.source?.status === "modified") {
+          if (target.bodyAvailability !== "available") {
+            items.push({
+              ...base,
+              action: "blocked",
+              target: target.identity,
+              reason: "目标译文正文不可用，无法安全重置为待译占位。",
+            });
+            continue;
+          }
+          if (sourceUnit.bodyAvailability !== "available") {
+            items.push({
+              ...base,
+              action: "blocked",
+              target: target.identity,
+              reason: "当前原文正文不可用，无法生成待译占位。",
+            });
+            continue;
+          }
+          const sourceRange =
+            current.source.read.scopes[sourceUnit.scopeIndex]?.range;
+          if (sourceRange === undefined) {
+            items.push({
+              ...base,
+              action: "blocked",
+              target: target.identity,
+              reason: "原文读取事实缺少可验证的范围，无法保留写入依据。",
+            });
+            continue;
+          }
+
+          let content: TBody;
+          try {
+            content = await placeholderContent(input, sourceUnit.unit.source);
+          } catch {
+            items.push({
+              ...base,
+              action: "blocked",
+              target: target.identity,
+              reason: "生成待译占位失败或未通过目标正文校验，未写入。",
+            });
+            continue;
+          }
+
+          const request: UpdatePlanWriteRequest<TUnit, TBody> = {
+            operation: "write",
+            target: { identity: target.identity },
+            content,
+            expectedSource: {
+              presence: "present",
+              key: sourceUnit.key,
+              unit: sourceUnit.unit,
+              content: sourceUnit.unit.source as JsonValue,
+              range: sourceRange as JsonValue,
+            },
+            expectedTarget: {
+              status: "present",
+              identity: target.identity,
+              content: target.content,
+              range: target.range as JsonValue,
+              record: target.translation as JsonValue,
+            },
+          };
+          items.push({
+            ...base,
+            action: "write",
+            target: target.identity,
+            after: { content },
+            request,
+            reason: "原文已变化；使用当前原文生成待译占位并重置现有译文。",
+          });
+          continue;
+        }
         items.push({
           ...base,
           action: "retain",
           target: target.identity,
-          reason:
-            changes.source?.status === "modified"
-              ? "原文已变化；保留现有译文，避免覆盖人工内容。"
-              : "保留已存在的译文。",
+          reason: "保留已存在的译文。",
         });
         continue;
       }
@@ -405,25 +478,17 @@ export async function defaultUpdatePolicy<
           });
           continue;
         }
-        if (input.sourceToContent === undefined) {
+        let content: TBody;
+        try {
+          content = await placeholderContent(input, sourceUnit.unit.source);
+        } catch {
           items.push({
             ...base,
             action: "blocked",
-            reason: "宿主没有提供原文到目标正文的投影，无法生成待译占位。",
+            reason: "生成待译占位失败或未通过目标正文校验，未写入。",
           });
           continue;
         }
-        const projected = input.sourceToContent(sourceUnit.unit.source);
-        const content =
-          input.contentSchema === undefined
-            ? projected
-            : await validateWithStandardSchema(
-                input.contentSchema,
-                projected,
-                "更新占位正文",
-                { preserveValue: true, requireJson: true },
-              );
-        assertJsonValue(content, "更新占位正文");
         const range = current.source.read.scopes[sourceUnit.scopeIndex]?.range;
         if (range === undefined) {
           items.push({
@@ -454,7 +519,8 @@ export async function defaultUpdatePolicy<
           action: "write",
           after: { content },
           request,
-          reason: "目标范围已完整读取且没有对应译文；复制原文作为待译占位。",
+          reason:
+            "目标范围已完整读取且没有对应译文；使用当前原文生成待译占位。",
         });
         continue;
       }
@@ -650,6 +716,32 @@ export async function defaultUpdatePolicy<
   return items;
 }
 
+async function placeholderContent<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  input: UpdatePlanInput<TUnit, TTranslation, TBody, TUnavailable>,
+  source: TUnit["source"],
+): Promise<TBody> {
+  const candidate =
+    input.createPlaceholderContent === undefined
+      ? (source as TBody)
+      : input.createPlaceholderContent(source);
+  const content =
+    input.contentSchema === undefined
+      ? candidate
+      : await validateWithStandardSchema(
+          input.contentSchema,
+          candidate,
+          "更新占位正文",
+          { preserveValue: true, requireJson: true },
+        );
+  assertJsonValue(content, "更新占位正文");
+  return content;
+}
+
 /**
  * 读取当前事实、选用配置比较器并生成业务计划；不写资源或推进基线。
  * 显式选择语言时，历史事实、比较器和策略均限定在该范围，策略不得扩大范围。
@@ -677,10 +769,12 @@ export async function previewUpdate<
       "defineConfig 的 updatePolicy 必须是集合更新策略函数。",
     );
   if (
-    config.sourceToContent !== undefined &&
-    typeof config.sourceToContent !== "function"
+    config.createPlaceholderContent !== undefined &&
+    typeof config.createPlaceholderContent !== "function"
   )
-    throw new TypeError("defineConfig 的 sourceToContent 必须是纯投影函数。");
+    throw new TypeError(
+      "defineConfig 的 createPlaceholderContent 必须是同步填充函数。",
+    );
 
   const baseline = await store?.load();
   if (baseline !== undefined) validateComparisonBaseline(baseline);
@@ -726,9 +820,9 @@ export async function previewUpdate<
       current,
       comparisons,
       associations,
-      ...(config.sourceToContent === undefined
+      ...(config.createPlaceholderContent === undefined
         ? {}
-        : { sourceToContent: config.sourceToContent }),
+        : { createPlaceholderContent: config.createPlaceholderContent }),
       ...(config.translations === undefined
         ? {}
         : { contentSchema: config.translations.contentSchema }),
