@@ -65,7 +65,7 @@
     "oxfmt": "catalog:",
     "oxlint": "catalog:",
     "oxlint-tsgolint": "catalog:",
-    "tsdown": "0.22.1",
+    "tsdown": "0.23.2",
     "typescript": "6.0.3",
     "typescript-7": "catalog:"
   },
