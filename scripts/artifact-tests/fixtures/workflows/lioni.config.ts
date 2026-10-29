@@ -128,16 +128,19 @@ export default defineConfig({
     contentOf: (translation) => translation.text,
     matches: (unit, translation) => unit.id === translation.id,
     async read(_language, sourceUnits) {
-      const files = (await readdir(targetsUrl))
+      const filenames = (await readdir(targetsUrl))
         .filter((file) => file.endsWith(".json"))
         .sort();
-      const values = await Promise.all(
-        files.map(
+      const fileContents = await Promise.all(
+        filenames.map(
           async (file) =>
-            JSON.parse(
-              await readFile(new URL(file, targetsUrl), "utf8"),
-            ) as Translation,
+            JSON.parse(await readFile(new URL(file, targetsUrl), "utf8")) as
+              | Translation
+              | Translation[],
         ),
+      );
+      const values = fileContents.flatMap((value) =>
+        Array.isArray(value) ? value : [value],
       );
       return {
         scopes: [

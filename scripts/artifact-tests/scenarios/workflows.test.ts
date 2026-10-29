@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { testArtifactConsumer } from "../support/consumer.ts";
@@ -85,6 +85,27 @@ testArtifactConsumer(
     assert.partialDeepStrictEqual(JSON.parse(await read("fr/A.json")), {
       text: "人工修订 A",
     });
+
+    const sharedFile = path.join(root, "fr/shared.json");
+    await rm(path.join(root, "fr/A.json"));
+    await rm(path.join(root, "fr/B.json"));
+    await writeFile(
+      sharedFile,
+      JSON.stringify([
+        { id: "A", text: "旧译文 A", writePath: sharedFile },
+        { id: "B", text: "旧译文 B", writePath: sharedFile },
+      ]),
+    );
+    assert.partialDeepStrictEqual(await run("batch-edit"), {
+      results: [{ status: "written" }, { status: "written" }],
+    });
+    assert.deepEqual(JSON.parse(await read("fr/shared.json")), [
+      { id: "A", text: "批量译文 A", writePath: sharedFile },
+      { id: "B", text: "批量译文 B", writePath: sharedFile },
+    ]);
+    await rm(sharedFile);
+    await json("fr/A.json", { id: "A", text: "人工修订 A" });
+    await json("fr/B.json", { id: "B", text: "更新译文 B" });
 
     await json(
       "source.json",

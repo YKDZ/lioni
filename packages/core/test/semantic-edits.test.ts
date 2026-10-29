@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  StandardSchemaContractError,
   defineConfig,
   writeTranslationRequests,
   type JsonValue,
@@ -19,6 +20,9 @@ type Unit = { id: string; source: string };
 type Translation = { id: string; text: string; sourceId?: string };
 type WriteInput = Parameters<
   NonNullable<TranslationWritebackAdapter<Unit, Translation>["write"]>
+>[0];
+type BatchWriteInput = Parameters<
+  NonNullable<TranslationWritebackAdapter<Unit, Translation>["writeBatch"]>
 >[0];
 
 function identity(id: string): TranslationIdentity {
@@ -522,6 +526,301 @@ void describe("translation write requests", () => {
       result.results.map(({ status }) => status),
       ["conflict", "conflict"],
     );
+
+    let batchWrites = 0;
+    const batchConfig = {
+      ...config,
+      translationWriteback: {
+        ...config.translationWriteback!,
+        writeBatch() {
+          batchWrites += 1;
+        },
+      },
+    };
+    const batchResult = await writeTranslationRequests(requests, batchConfig);
+
+    assert.equal(batchWrites, 0);
+    assert.deepEqual(
+      batchResult.results.map(({ status }) => status),
+      ["conflict", "conflict"],
+    );
+  });
+
+  void it("prechecks a batch against one snapshot and confirms each requested result after writing", async () => {
+    const targetA: Translation = { id: "A", text: "Old A" };
+    const targetB: Translation = { id: "B", text: "Old B" };
+    const config = configFor({
+      translations: [targetA, targetB],
+      onWrite: () => {
+        throw new Error("the batch writer should be used");
+      },
+    });
+    const batchConfig = {
+      ...config,
+      translationWriteback: {
+        ...config.translationWriteback!,
+        writeBatch: ({ requests }: BatchWriteInput) => {
+          assert.equal(requests.length, 2);
+          assert.deepEqual(
+            requests.map(
+              ({ currentTranslation }) => currentTranslation?.content,
+            ),
+            ["Old A", "Old B"],
+          );
+          targetA.text = "New A";
+          targetB.text = "New B";
+        },
+      },
+    };
+    const requests: TranslationWriteRequest<JsonValue, Unit>[] = [
+      {
+        operation: "write",
+        target: { identity: identity("A") },
+        content: "New A",
+        expectedTarget: {
+          status: "present",
+          identity: identity("A"),
+          content: "Old A",
+        },
+      },
+      {
+        operation: "write",
+        target: { identity: identity("B") },
+        content: "New B",
+        expectedTarget: {
+          status: "present",
+          identity: identity("B"),
+          content: "Old B",
+        },
+      },
+    ];
+
+    const result = await writeTranslationRequests(requests, batchConfig);
+
+    assert.deepEqual(
+      result.results.map(({ status }) => status),
+      ["written", "written"],
+    );
+  });
+
+  void it("applies a compatible duplicate physical target only once", async () => {
+    const records: Translation[] = [];
+    const config = configFor({
+      sources: [{ id: "A", source: "Source A" }],
+      translations: records,
+      matches: (unit, translation) => unit.id === translation.id,
+      onWrite: () => {
+        throw new Error("the batch writer should be used");
+      },
+    });
+    const batchConfig = {
+      ...config,
+      translationWriteback: {
+        ...config.translationWriteback!,
+        writeBatch({ requests }: BatchWriteInput) {
+          for (const { request } of requests) {
+            const target = request.target;
+            if (request.operation !== "write" || !("sourceKey" in target))
+              throw new Error("unexpected request");
+            if (records.some(({ id }) => id === target.sourceKey))
+              throw new Error("new target was sent more than once");
+            if (typeof request.content !== "string")
+              throw new Error("unexpected body");
+            records.push({
+              id: target.sourceKey,
+              text: request.content,
+            });
+          }
+        },
+      },
+    };
+    const request: TranslationWriteRequest<JsonValue, Unit> = {
+      operation: "write",
+      target: { sourceKey: "A", language: "fr" },
+      content: "New A",
+      expectedTarget: { status: "missing" },
+    };
+
+    const result = await writeTranslationRequests(
+      [request, request],
+      batchConfig,
+    );
+
+    assert.deepEqual(
+      result.results.map(({ status }) => status),
+      ["written", "written"],
+    );
+    assert.equal(Object.hasOwn(result, "batchError"), false);
+  });
+
+  void it("retains confirmed partial success and the original batch exception", async () => {
+    const failure = new StandardSchemaContractError(
+      "host batch",
+      "invalid-schema-result",
+      "shared file could not be saved",
+    );
+    const targetA: Translation = { id: "A", text: "Old A" };
+    const targetB: Translation = { id: "B", text: "Old B" };
+    const config = configFor({
+      translations: [targetA, targetB],
+      onWrite: () => {
+        throw new Error("the batch writer should be used");
+      },
+    });
+    const batchConfig = {
+      ...config,
+      translationWriteback: {
+        ...config.translationWriteback!,
+        writeBatch: () => {
+          targetA.text = "New A";
+          throw failure;
+        },
+      },
+    };
+    const requests: TranslationWriteRequest<JsonValue, Unit>[] = [
+      {
+        operation: "write",
+        target: { identity: identity("A") },
+        content: "New A",
+        expectedTarget: {
+          status: "present",
+          identity: identity("A"),
+          content: "Old A",
+        },
+      },
+      {
+        operation: "write",
+        target: { identity: identity("B") },
+        content: "New B",
+        expectedTarget: {
+          status: "present",
+          identity: identity("B"),
+          content: "Old B",
+        },
+      },
+    ];
+
+    const result = await writeTranslationRequests(requests, batchConfig);
+
+    assert.deepEqual(
+      result.results.map(({ status }) => status),
+      ["written", "writeFailed"],
+    );
+    assert.equal(result.batchError, failure);
+  });
+
+  void it("leaves a failed batch item unconfirmed when post-write reads are incomplete", async () => {
+    const failure = new Error("batch write failed");
+    const target: Translation = { id: "A", text: "Old" };
+    const base = configFor({
+      translations: [target],
+      onWrite: () => {
+        throw new Error("the batch writer should be used");
+      },
+    });
+    let batchFailed = false;
+    type SourceUnits = Parameters<
+      NonNullable<typeof base.translations>["read"]
+    >[1];
+    const config = {
+      ...base,
+      translations: {
+        ...base.translations!,
+        read(language: string, sourceUnits: SourceUnits) {
+          if (batchFailed)
+            return {
+              scopes: [
+                {
+                  range: `${language}.json`,
+                  covers: [],
+                  enumeration: "partial" as const,
+                  records: [],
+                },
+              ],
+            };
+          return base.translations!.read(language, sourceUnits);
+        },
+      },
+      translationWriteback: {
+        ...base.translationWriteback!,
+        writeBatch() {
+          batchFailed = true;
+          throw failure;
+        },
+      },
+    };
+    const request: TranslationWriteRequest<JsonValue, Unit> = {
+      operation: "write",
+      target: { identity: identity("A") },
+      content: "New",
+      expectedTarget: {
+        status: "present",
+        identity: identity("A"),
+        content: "Old",
+      },
+    };
+
+    const result = await writeTranslationRequests([request], config);
+
+    assert.equal(result.results[0]?.status, "writeUnconfirmed");
+    assert.equal(result.batchError, failure);
+  });
+
+  void it("preserves a batch error and unconfirmed items when post-write schema validation fails", async () => {
+    const failure = new Error("batch writer failed");
+    const readFailure = new StandardSchemaContractError(
+      "host translations",
+      "invalid-schema-result",
+      "post-write records are malformed",
+    );
+    const target: Translation = { id: "A", text: "Old" };
+    const base = configFor({
+      translations: [target],
+      onWrite: () => {
+        throw new Error("the batch writer should be used");
+      },
+    });
+    let batchFailed = false;
+    type SourceUnits = Parameters<
+      NonNullable<typeof base.translations>["read"]
+    >[1];
+    const config = {
+      ...base,
+      translations: {
+        ...base.translations!,
+        read(language: string, sourceUnits: SourceUnits) {
+          if (batchFailed) throw readFailure;
+          return base.translations!.read(language, sourceUnits);
+        },
+      },
+      translationWriteback: {
+        ...base.translationWriteback!,
+        writeBatch() {
+          batchFailed = true;
+          target.text = "New";
+          throw failure;
+        },
+      },
+    };
+    const request: TranslationWriteRequest<JsonValue, Unit> = {
+      operation: "write",
+      target: { identity: identity("A") },
+      content: "New",
+      expectedTarget: {
+        status: "present",
+        identity: identity("A"),
+        content: "Old",
+      },
+    };
+
+    const result = await writeTranslationRequests([request], config);
+
+    assert.equal(result.results[0]?.status, "writeUnconfirmed");
+    assert.match(
+      result.results[0]?.reason ?? "",
+      /post-write records are malformed/u,
+    );
+    assert.equal(result.batchError, failure);
   });
 
   void it("continues independent requests after a writer throws", async () => {

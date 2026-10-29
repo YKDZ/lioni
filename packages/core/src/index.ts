@@ -58,6 +58,7 @@ export type {
   TranslationWritebackTarget,
   TranslationWritebackResolution,
   TranslationWritebackAdapter,
+  TranslationWritebackInput,
   TranslationWriteConditionInput,
   TranslationWriteConditionResult,
   TranslationWriteCondition,

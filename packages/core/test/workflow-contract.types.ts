@@ -117,6 +117,16 @@ const writeback: TranslationWritebackAdapter<Unit, Translation, Body> = {
       void actualBody;
     }
   },
+  writeBatch({ requests }) {
+    const firstRequest = requests[0]?.request;
+    if (firstRequest?.operation === "write") {
+      const body: Body = firstRequest.content;
+      void body;
+    }
+    const firstTargetBody: Body | undefined =
+      requests[0]?.currentTranslation?.content;
+    void firstTargetBody;
+  },
 };
 
 const config = defineConfig<

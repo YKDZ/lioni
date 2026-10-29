@@ -411,6 +411,48 @@ void describe("apply update plan", () => {
     assert.equal(scenario.counts.baselineSaves, 0);
   });
 
+  void it("fails the overall update when a batch throws after every write is confirmed", async () => {
+    const scenario = createScenario({
+      sources: [sampleSource("A"), sampleSource("B")],
+    });
+    const failure = new Error("host finished writes but could not finalize");
+    const writer = scenario.config.translationWriteback!;
+    const config: FrameworkConfig<Unit, Translation, JsonValue> = {
+      ...scenario.config,
+      translationWriteback: {
+        ...writer,
+        writeBatch({ requests }) {
+          for (const { request } of requests) {
+            const key =
+              "identity" in request.target
+                ? request.target.identity.key
+                : request.target.sourceKey;
+            const existing = scenario.state.translations.find(
+              (translation) => translation.id === key,
+            );
+            if (existing === undefined)
+              scenario.state.translations.push({
+                id: key,
+                text: request.operation === "write" ? request.content : "",
+              });
+            else if (request.operation === "write")
+              existing.text = request.content;
+          }
+          throw failure;
+        },
+      },
+    };
+
+    const result = await update(config, scenario.baselineStore);
+
+    assert.equal(result.status, "failed");
+    assert.deepEqual(
+      result.results.map(({ status }) => status),
+      ["written", "written"],
+    );
+    assert.equal(result.batchError, failure);
+  });
+
   void it("rejects a restored delete plan when its expected source is present again", async () => {
     const source = sampleSource();
     const scenario = createScenario({
