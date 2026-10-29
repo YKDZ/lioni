@@ -207,6 +207,7 @@ export type {
 } from "./plans.ts";
 export { applyUpdatePlan, update } from "./apply-plans.ts";
 export type {
+  UpdateBaselineResult,
   UpdatePlanApplyResult,
   UpdatePlanExecutionItemResult,
   UpdatePlanExecutionStatus,
