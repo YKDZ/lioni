@@ -5,7 +5,6 @@ import {
   analyzeQuality,
   defineConfig,
   readComparisonSnapshot,
-  readCompletion,
   readFacts,
   type FrameworkConfig,
   type QualityConfiguration,
@@ -72,10 +71,6 @@ function fixture(quality?: QualityConfiguration<Unit, Translation, string>) {
         };
       },
     },
-    completion: {
-      criterion: "存在译文",
-      resolveCompletion: ({ translations }) => translations.length > 0,
-    },
     ...(quality === undefined ? {} : { quality }),
   });
   return { config, reads };
@@ -115,23 +110,8 @@ void describe("本次执行的语言范围", () => {
     assert.equal(selected.translations.records[0]?.identity.language, "ja");
   });
 
-  void it("完成度只覆盖选中语言，空资源仍产生待译义务", async () => {
-    const { config, reads } = fixture();
-    const result = await readCompletion(config, { languages: ["de"] });
-    assert.deepStrictEqual(reads, ["source", "de"]);
-    assert.deepStrictEqual(result.completion.scope.targetLanguages, ["de"]);
-    assert.equal(result.completion.scope.obligationCount, 1);
-    assert.equal(result.completion.confirmedIncompleteCount, 1);
-    assert.equal(result.completion.completionRate, 0);
-  });
-
   void it("无效范围在读取源译资源前失败", async () => {
-    for (const run of [
-      readFacts,
-      readComparisonSnapshot,
-      readCompletion,
-      analyzeQuality,
-    ]) {
+    for (const run of [readFacts, readComparisonSnapshot, analyzeQuality]) {
       for (const languages of [[], ["es"], ["fr", "es"]]) {
         const { config, reads } = fixture();
         await assert.rejects(run(config, { languages }), {

@@ -108,27 +108,6 @@ const config = defineConfig({
       return text;
     },
   },
-  completion: {
-    criterion: "typed target facts",
-    resolveCompletion({ translations }) {
-      const translation = translations[0];
-      if (translation?.bodyAvailability === "available") {
-        const text: string = translation.translation.text;
-        const body: string = translation.content;
-        void text;
-        void body;
-        return true;
-      }
-      if (translation?.bodyAvailability === "unavailable") {
-        const id: string = translation.translation.id;
-        // @ts-expect-error 正文不可用的记录不包含 content 字段。
-        const body: string = translation.content;
-        void id;
-        void body;
-      }
-      return false;
-    },
-  },
 });
 
 const configuredBody: string = config.translations!.contentOf({
