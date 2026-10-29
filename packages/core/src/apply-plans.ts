@@ -379,6 +379,8 @@ function allUpdateChangesProcessed<
         (item) =>
           item.sourceKey === source.key && item.language === read.language,
       );
+      // 明确保留只处理更新决定，不能消除实际源译关联冲突对基线的影响。
+      if (association?.status === "conflict") return false;
       const requiresDecision =
         changedSourceKeys.has(source.key) ||
         association === undefined ||

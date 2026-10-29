@@ -308,7 +308,7 @@ const journey: CliJourney = {
         args: ["update", "unconfirmed/lioni.config.ts"],
       },
       {
-        name: "preview a modified source reset",
+        name: "预览原文变化后的重置",
         args: [
           "update",
           "modified/lioni.config.ts",
@@ -318,15 +318,15 @@ const journey: CliJourney = {
         ],
       },
       {
-        name: "execute the modified source reset through the host adapter",
+        name: "通过宿主适配器执行原文变化后的重置",
         args: ["update", "modified/lioni.config.ts"],
       },
       {
-        name: "report partial success and the original batch error in structured results",
+        name: "以结构化结果报告部分成功和原始批次异常",
         args: ["update", "batch-structured/lioni.config.ts"],
       },
       {
-        name: "show partial success and the batch error in text output",
+        name: "以文本形式显示部分成功和批次异常",
         args: [
           "update",
           "batch-text/lioni.config.ts",

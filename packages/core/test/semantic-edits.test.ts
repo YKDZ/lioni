@@ -546,7 +546,7 @@ void describe("translation write requests", () => {
     );
   });
 
-  void it("prechecks a batch against one snapshot and confirms each requested result after writing", async () => {
+  void it("按同一快照预检批次并在写入后逐项确认结果", async () => {
     const targetA: Translation = { id: "A", text: "Old A" };
     const targetB: Translation = { id: "B", text: "Old B" };
     const config = configFor({
@@ -603,7 +603,7 @@ void describe("translation write requests", () => {
     );
   });
 
-  void it("applies a compatible duplicate physical target only once", async () => {
+  void it("兼容的重复物理目标只应用一次", async () => {
     const records: Translation[] = [];
     const config = configFor({
       sources: [{ id: "A", source: "Source A" }],
@@ -653,7 +653,7 @@ void describe("translation write requests", () => {
     assert.equal(Object.hasOwn(result, "batchError"), false);
   });
 
-  void it("retains confirmed partial success and the original batch exception", async () => {
+  void it("保留已确认的部分成功结果和原始批次异常", async () => {
     const failure = new StandardSchemaContractError(
       "host batch",
       "invalid-schema-result",
@@ -709,7 +709,7 @@ void describe("translation write requests", () => {
     assert.equal(result.batchError, failure);
   });
 
-  void it("leaves a failed batch item unconfirmed when post-write reads are incomplete", async () => {
+  void it("写入后读取不完整时将失败批次项保留为未确认", async () => {
     const failure = new Error("batch write failed");
     const target: Translation = { id: "A", text: "Old" };
     const base = configFor({
@@ -766,7 +766,7 @@ void describe("translation write requests", () => {
     assert.equal(result.batchError, failure);
   });
 
-  void it("preserves a batch error and unconfirmed items when post-write schema validation fails", async () => {
+  void it("写入后架构验证失败时保留批次异常和未确认项", async () => {
     const failure = new Error("batch writer failed");
     const readFailure = new StandardSchemaContractError(
       "host translations",

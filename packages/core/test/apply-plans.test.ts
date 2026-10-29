@@ -472,7 +472,7 @@ void describe("apply update plan", () => {
     assert.equal(scenario.counts.baselineSaves, 0);
   });
 
-  void it("records the post-write facts as the comparison baseline when requested", async () => {
+  void it("按要求将写入后的事实记录为比较基线", async () => {
     const scenario = createScenario({ sources: [sampleSource()] });
 
     const result = await update(scenario.config, scenario.baselineStore, {
@@ -496,7 +496,7 @@ void describe("apply update plan", () => {
     );
   });
 
-  void it("records a baseline after a complete update that made no write", async () => {
+  void it("完整更新未写入时仍记录基线", async () => {
     const scenario = createScenario({
       sources: [sampleSource()],
       translations: [{ id: "A", text: "Source A", sourceId: "A" }],
@@ -518,7 +518,7 @@ void describe("apply update plan", () => {
     ]);
   });
 
-  void it("rejects partial-language baseline advancement before writing", async () => {
+  void it("写入前拒绝部分语言更新推进基线", async () => {
     const scenario = createScenario({ sources: [sampleSource()] });
     const translations = scenario.config.translations!;
     const config: FrameworkConfig<Unit, Translation, JsonValue> = {
@@ -537,7 +537,7 @@ void describe("apply update plan", () => {
     assert.deepEqual(scenario.state.translations, []);
   });
 
-  void it("keeps the baseline when a custom policy omits one language for a changed source", async () => {
+  void it("自定义策略遗漏原文变化语言时保留基线", async () => {
     const scenario = createScenario({ sources: [sampleSource()] });
     const translationsByLanguage: Record<string, Translation[]> = {
       fr: [sampleTranslation()],
@@ -569,7 +569,7 @@ void describe("apply update plan", () => {
     assert.deepEqual(translationsByLanguage.ja, [sampleTranslation()]);
   });
 
-  void it("keeps the baseline when a batch throws even after all targets are confirmed", async () => {
+  void it("批次异常时即使确认所有目标也保留基线", async () => {
     const scenario = createScenario({
       sources: [sampleSource("A"), sampleSource("B")],
       translations: [sampleTranslation("A"), sampleTranslation("B")],
@@ -622,7 +622,7 @@ void describe("apply update plan", () => {
     ]);
   });
 
-  void it("requires a decision for confirmed missing translations", async () => {
+  void it("要求为已确认的缺译作出处理决定", async () => {
     const scenario = createScenario({ sources: [sampleSource()] });
     const translationsByLanguage: Record<string, Translation[]> = {
       fr: [sampleTranslation()],
@@ -653,7 +653,7 @@ void describe("apply update plan", () => {
     assert.deepEqual(translationsByLanguage.ja, []);
   });
 
-  void it("allows an explicit retain decision for a changed source language", async () => {
+  void it("允许明确保留原文变化语言的译文", async () => {
     const scenario = createScenario({ sources: [sampleSource()] });
     const translationsByLanguage: Record<string, Translation[]> = {
       fr: [sampleTranslation()],
@@ -689,7 +689,75 @@ void describe("apply update plan", () => {
     assert.deepEqual(translationsByLanguage.ja, [sampleTranslation()]);
   });
 
-  void it("does not advance a baseline when an update decision needs review", async () => {
+  void it("关联冲突即使明确保留也会阻止基线推进", async () => {
+    const scenario = createScenario({
+      sources: [{ id: "A", source: "Old" }],
+      translations: [{ id: "fr-old", text: "Old French", sourceId: "A" }],
+      additionalTranslationExamples: [
+        { id: "fr-old", text: "Old French", sourceId: "A" },
+        { id: "fr-extra", text: "Old French", sourceId: "A" },
+      ],
+    });
+    const translations = scenario.config.translations!;
+    const baseConfig: FrameworkConfig<Unit, Translation, JsonValue> = {
+      ...scenario.config,
+      translations: {
+        ...translations,
+        matches: (unit, translation) => unit.id === translation.sourceId,
+      },
+    };
+    const config: FrameworkConfig<Unit, Translation, JsonValue> = {
+      ...baseConfig,
+      updatePolicy: async (input) =>
+        (await defaultUpdatePolicy(input)).map((item) => {
+          if (item.action !== "review") return item;
+          const { request: _request, after: _after, ...retained } = item;
+          return {
+            ...retained,
+            action: "retain" as const,
+            reason: "项目规则明确保留法语译文。",
+          };
+        }),
+    };
+    await recordComparisonBaseline(config, scenario.baselineStore);
+    const previousBaseline = structuredClone(scenario.currentBaseline());
+    scenario.state.sources = [{ id: "A", source: "New" }];
+    scenario.state.translations.push({
+      id: "fr-extra",
+      text: "Old French",
+      sourceId: "A",
+    });
+
+    const result = await update(config, scenario.baselineStore, {
+      recordBaseline: true,
+    });
+
+    assert.equal(
+      result.plan.associations.current.some(
+        ({ status }) => status === "conflict",
+      ),
+      true,
+    );
+    assert.equal(
+      result.plan.comparisons.sourceChanges.some(
+        ({ key, status }) => key === "A" && status === "modified",
+      ),
+      true,
+    );
+    assert.deepEqual(
+      result.results.map(({ status }) => status),
+      ["retained"],
+    );
+    assert.equal(result.status, "failed");
+    assert.equal(result.baseline?.outcome, "notAdvanced");
+    assert.deepEqual(scenario.currentBaseline(), previousBaseline);
+    assert.deepEqual(scenario.state.translations, [
+      { id: "fr-old", text: "Old French", sourceId: "A" },
+      { id: "fr-extra", text: "Old French", sourceId: "A" },
+    ]);
+  });
+
+  void it("更新决定待复核时不推进基线", async () => {
     const scenario = createScenario({
       sources: [sampleSource()],
       translations: [sampleTranslation()],
@@ -716,7 +784,7 @@ void describe("apply update plan", () => {
     assert.deepEqual(scenario.state.translations, [sampleTranslation()]);
   });
 
-  void it("keeps the baseline after a failed translation write", async () => {
+  void it("译文写入失败后保留基线", async () => {
     const scenario = createScenario({ sources: [sampleSource()] });
     await recordComparisonBaseline(scenario.config, scenario.baselineStore);
     const previousBaseline = structuredClone(scenario.currentBaseline());
@@ -736,7 +804,7 @@ void describe("apply update plan", () => {
     assert.deepEqual(scenario.currentBaseline(), previousBaseline);
   });
 
-  void it("keeps the baseline when a complete post-update read finds changed source facts", async () => {
+  void it("完整回读发现原文事实变化时保留基线", async () => {
     const scenario = createScenario({
       sources: [sampleSource()],
       translations: [sampleTranslation()],
@@ -770,7 +838,7 @@ void describe("apply update plan", () => {
     assert.deepEqual(scenario.currentBaseline(), previousBaseline);
   });
 
-  void it("keeps the baseline when a post-update language read is incomplete", async () => {
+  void it("更新后语言回读不完整时保留基线", async () => {
     const scenario = createScenario({
       sources: [sampleSource()],
       translations: [sampleTranslation()],
@@ -816,7 +884,7 @@ void describe("apply update plan", () => {
     assert.deepEqual(scenario.currentBaseline(), previousBaseline);
   });
 
-  void it("advances after processing a confirmed source-removal deletion", async () => {
+  void it("处理已确认的原文移除删除后推进基线", async () => {
     const scenario = createScenario({
       sources: [sampleSource()],
       translations: [sampleTranslation()],
@@ -838,7 +906,7 @@ void describe("apply update plan", () => {
     assert.deepEqual(scenario.currentBaseline()?.snapshot.source.units, []);
   });
 
-  void it("records a target-only fact while retaining it after source removal", async () => {
+  void it("原文移除后保留并记录目标独有事实", async () => {
     const scenario = createScenario({ sources: [sampleSource()] });
     await recordComparisonBaseline(scenario.config, scenario.baselineStore);
     scenario.state.sources = [];
@@ -857,7 +925,7 @@ void describe("apply update plan", () => {
     assert.deepEqual(scenario.state.translations, [sampleTranslation("B")]);
   });
 
-  void it("reports baseline persistence failure separately after a confirmed write", async () => {
+  void it("确认译文写入后单独报告基线保存失败", async () => {
     const scenario = createScenario({ sources: [sampleSource()] });
     scenario.faults.baselineSave = true;
 
