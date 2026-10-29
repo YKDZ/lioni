@@ -103,6 +103,22 @@ type AvailableTranslationFact<TTranslation, TBody, TUnavailable> = Extract<
   { readonly bodyAvailability: "available" }
 >;
 
+export type TranslationWritebackInput<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody = JsonValue,
+  TUnavailable = never,
+> = {
+  readonly request: TranslationWriteRequest<TBody, TUnit>;
+  readonly target: TranslationWritebackTarget;
+  readonly sourceUnit?: SourceUnitFact<TUnit>;
+  readonly currentTranslation?: AvailableTranslationFact<
+    TTranslation,
+    TBody,
+    TUnavailable
+  >;
+};
+
 export type TranslationWritebackAdapter<
   TUnit extends TranslationUnitInput,
   TTranslation,
@@ -122,15 +138,22 @@ export type TranslationWritebackAdapter<
     readonly sourceUnit: SourceUnitFact<TUnit>;
     readonly language: string;
   }) => Awaitable<TranslationWritebackResolution>;
-  readonly write?: (input: {
-    readonly request: TranslationWriteRequest<TBody, TUnit>;
-    readonly target: TranslationWritebackTarget;
-    readonly sourceUnit?: SourceUnitFact<TUnit>;
-    readonly currentTranslation?: AvailableTranslationFact<
+  /** 单目标写回；未配置 writeBatch 时按物理目标组调用。 */
+  readonly write?: (
+    input: TranslationWritebackInput<TUnit, TTranslation, TBody, TUnavailable>,
+  ) => Awaitable<void>;
+  /**
+   * 配置后优先使用。一次接收同一份初始事实下完成预检的独立请求；
+   * 同一物理目标的兼容请求只传一个代表项，但回读仍逐项确认。批次不承诺执行顺序或事务；
+   * 返回或抛错后，框架会统一回读资源并逐项确认实际结果。
+   */
+  readonly writeBatch?: (input: {
+    readonly requests: readonly TranslationWritebackInput<
+      TUnit,
       TTranslation,
       TBody,
       TUnavailable
-    >;
+    >[];
   }) => Awaitable<void>;
 };
 
@@ -197,6 +220,8 @@ export type TranslationWriteBatchResult<
   TUnit extends TranslationUnitInput = TranslationUnitInput,
 > = {
   readonly results: readonly TranslationWriteResult<TBody, TUnit>[];
+  /** 批量适配器抛出的原始异常；逐项回读结果仍然有效且单独表达。 */
+  readonly batchError?: unknown;
 };
 
 type PreparedWrite<
@@ -381,7 +406,10 @@ export async function writeTranslationRequests<
   const results: (TranslationWriteResult<TBody, TUnit> | undefined)[] =
     validated.map((request) => ({ request, status: "notWritable" }));
   const adapter = config.translationWriteback;
-  if (adapter === undefined || adapter.write === undefined) {
+  if (
+    adapter === undefined ||
+    (adapter.write === undefined && adapter.writeBatch === undefined)
+  ) {
     return {
       results: validated.map((request) => ({
         request,
@@ -390,7 +418,16 @@ export async function writeTranslationRequests<
       })),
     };
   }
-  if (typeof adapter.write !== "function")
+  if (
+    adapter.writeBatch !== undefined &&
+    typeof adapter.writeBatch !== "function"
+  )
+    throw new StandardSchemaContractError(
+      "译文写回适配器",
+      "schema-mismatch",
+      "translationWriteback.writeBatch 必须是函数。",
+    );
+  if (adapter.writeBatch === undefined && typeof adapter.write !== "function")
     throw new StandardSchemaContractError(
       "译文写回适配器",
       "schema-mismatch",
@@ -504,6 +541,14 @@ export async function writeTranslationRequests<
   }
 
   const groups = groupByPhysicalTarget(prepared);
+  const writableGroups: PreparedWrite<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable
+  >[][] = [];
+  const writable: PreparedWrite<TUnit, TTranslation, TBody, TUnavailable>[] =
+    [];
   for (const group of groups) {
     if (!compatibleRequests(group)) {
       for (const item of group) {
@@ -515,10 +560,87 @@ export async function writeTranslationRequests<
       }
       continue;
     }
+    writableGroups.push(group);
+    writable.push(...group);
+  }
+
+  if (adapter.writeBatch !== undefined) {
+    if (writable.length === 0)
+      return { results: completeWriteResults(validated, results) };
+
+    const batchRequests = writableGroups.flatMap(([first]) =>
+      first === undefined ? [] : [first],
+    );
+    let batchFailed = false;
+    let batchError: unknown;
+    try {
+      await adapter.writeBatch({
+        requests: batchRequests.map((item) => ({
+          request: item.request,
+          target: item.target,
+          ...(item.sourceUnit === undefined
+            ? {}
+            : { sourceUnit: item.sourceUnit }),
+          ...(item.currentTranslation === undefined
+            ? {}
+            : { currentTranslation: item.currentTranslation }),
+        })),
+      });
+    } catch (error) {
+      batchFailed = true;
+      batchError = error;
+    }
+
+    let after: WriteSnapshot<TUnit, TTranslation, TBody, TUnavailable>;
+    try {
+      after = await readCurrent();
+    } catch (error) {
+      const reason = `批量写入后回读失败：${errorMessage(error)}`;
+      for (const item of writable) {
+        results[item.index] = {
+          request: item.request,
+          status: "writeUnconfirmed",
+          reason,
+        };
+      }
+      return {
+        results: completeWriteResults(validated, results),
+        ...(batchFailed ? { batchError } : {}),
+      };
+    }
+
+    for (const item of writable) {
+      if (confirmsWrite(item, after, config)) {
+        results[item.index] = { request: item.request, status: "written" };
+        continue;
+      }
+      if (batchFailed && canConfirmWriteFailure(item, after, config)) {
+        results[item.index] = {
+          request: item.request,
+          status: "writeFailed",
+          reason: `批量写入失败：${errorMessage(batchError)}`,
+        };
+        continue;
+      }
+      results[item.index] = {
+        request: item.request,
+        status: "writeUnconfirmed",
+        reason: batchFailed
+          ? `批量写入失败，且回读不足以确认此项：${errorMessage(batchError)}`
+          : "批量写入已返回，但回读未确认预期目标结果。",
+      };
+    }
+    return {
+      results: completeWriteResults(validated, results),
+      ...(batchFailed ? { batchError } : {}),
+    };
+  }
+
+  for (const group of writableGroups) {
     const [first] = group;
     if (first === undefined) continue;
     try {
-      await adapter.write({
+      await adapter.write!({
         request: first.request,
         target: first.target,
         ...(first.sourceUnit === undefined
@@ -569,18 +691,25 @@ export async function writeTranslationRequests<
   }
 
   return {
-    results: results.map((result, index) => {
-      if (result !== undefined) return result;
-      const request = validated[index];
-      if (request === undefined)
-        throw new StandardSchemaContractError(
-          "译文写入结果",
-          "invalid-schema-result",
-          "执行结果缺少对应请求。",
-        );
-      return { request, status: "notWritable", reason: "写入项未处理。" };
-    }),
+    results: completeWriteResults(validated, results),
   };
+}
+
+function completeWriteResults<TBody, TUnit extends TranslationUnitInput>(
+  validated: readonly TranslationWriteRequest<TBody, TUnit>[],
+  results: readonly (TranslationWriteResult<TBody, TUnit> | undefined)[],
+): TranslationWriteResult<TBody, TUnit>[] {
+  return results.map((result, index) => {
+    if (result !== undefined) return result;
+    const request = validated[index];
+    if (request === undefined)
+      throw new StandardSchemaContractError(
+        "译文写入结果",
+        "invalid-schema-result",
+        "执行结果缺少对应请求。",
+      );
+    return { request, status: "notWritable", reason: "写入项未处理。" };
+  });
 }
 
 async function readWriteSnapshot<
@@ -1005,6 +1134,63 @@ function confirmsWrite<
     matching.length === 1 &&
     matching[0]?.bodyAvailability === "available" &&
     isDeepStrictEqual(matching[0].content, request.content)
+  );
+}
+
+function canConfirmWriteFailure<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  prepared: PreparedWrite<TUnit, TTranslation, TBody, TUnavailable>,
+  after: WriteSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
+  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
+): boolean {
+  const { request } = prepared;
+  if ("identity" in request.target) {
+    const target = findTranslationByIdentity(after, request.target.identity);
+    if (request.operation === "delete") return target !== undefined;
+    if (target === undefined)
+      return isTranslationReadComplete(after, request.target.identity.language);
+    return (
+      target.bodyAvailability === "available" &&
+      !isDeepStrictEqual(target.content, request.content)
+    );
+  }
+
+  if (request.operation !== "write") return false;
+  const sourceTarget = request.target;
+  if (!("sourceKey" in sourceTarget)) return false;
+  const currentSource = findSourceUnit(after, sourceTarget.sourceKey);
+  const adapter = config.translations;
+  if (currentSource === undefined || adapter?.matches === undefined)
+    return false;
+  const languageRead = after.translations.reads.find(
+    ({ language }) => language === sourceTarget.language,
+  );
+  if (languageRead === undefined) return false;
+  const relevantScopes = languageRead.scopes.filter((scope) =>
+    scope.covers.includes(sourceTarget.sourceKey),
+  );
+  if (
+    relevantScopes.length === 0 ||
+    relevantScopes.some(({ enumeration }) => enumeration !== "complete")
+  )
+    return false;
+  const scopeIndexes = new Set(
+    relevantScopes.map((scope) => languageRead.scopes.indexOf(scope)),
+  );
+  const matching = after.translations.records.filter(
+    (translation) =>
+      translation.language === sourceTarget.language &&
+      scopeIndexes.has(translation.scopeIndex) &&
+      adapter.matches!(currentSource.unit, translation.translation),
+  );
+  return (
+    matching.length !== 1 ||
+    (matching[0]?.bodyAvailability === "available" &&
+      !isDeepStrictEqual(matching[0].content, request.content))
   );
 }
 

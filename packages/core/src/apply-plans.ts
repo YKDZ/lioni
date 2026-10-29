@@ -57,6 +57,8 @@ export type UpdatePlanApplyResult<
     TBody,
     TUnavailable
   >[];
+  /** 批量写回抛出的原始异常；逐项结果仍保留回读确认的实际状态。 */
+  readonly batchError?: unknown;
 };
 
 export type UpdateResult<
@@ -134,6 +136,8 @@ export async function applyUpdatePlan<
           condition,
           options,
         );
+  const batchFailed = Object.hasOwn(writes, "batchError");
+  const batchError = "batchError" in writes ? writes.batchError : undefined;
   const writesByPlanIndex = new Map(
     requestIndexes.map((planIndex, writeIndex) => [
       planIndex,
@@ -170,14 +174,20 @@ export async function applyUpdatePlan<
       reason: item.reason,
     };
   });
-  const failed = results.some(
-    ({ status }) =>
-      status === "conflict" ||
-      status === "notWritable" ||
-      status === "writeFailed" ||
-      status === "writeUnconfirmed",
-  );
-  return { status: failed ? "failed" : "completed", results };
+  const failed =
+    batchFailed ||
+    results.some(
+      ({ status }) =>
+        status === "conflict" ||
+        status === "notWritable" ||
+        status === "writeFailed" ||
+        status === "writeUnconfirmed",
+    );
+  return {
+    status: failed ? "failed" : "completed",
+    results,
+    ...(batchFailed ? { batchError } : {}),
+  };
 }
 
 /**
