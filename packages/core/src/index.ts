@@ -1,3 +1,16 @@
+import {
+  beginQualityProfile,
+  type QualityProfiler,
+} from "./quality/profiler.ts";
+export { createQualityProfiler } from "./quality/profiler.ts";
+export type {
+  QualityProfiler,
+  QualityProfilerOptions,
+  QualityProfileReport,
+  QualityProfileCheck,
+  QualityProfileCandidate,
+  QualityProfileTiming,
+} from "./quality/profiler.ts";
 import { createHash } from "node:crypto";
 
 import { createMemoScope, type MemoScope } from "@lioni/memo";
@@ -894,77 +907,118 @@ export async function analyzeQuality<
       candidates: readonly SemanticEditCandidate<TBody>[],
     ) => readonly SemanticEditCandidate<TBody>[];
     readonly memo?: MemoScope;
+    readonly profiler?: QualityProfiler;
   } = {},
 ): Promise<QualityRunResult<QualityObject, TBody>> {
-  validateFrameworkConfig(config);
-  const exceptions = await loadQualityExceptions(config);
-  const facts = await readFacts(config, options);
-  const memo = options.memo ?? createMemoScope();
+  const profile =
+    options.profiler === undefined
+      ? undefined
+      : beginQualityProfile(options.profiler);
+  let completed = false;
+  let stage = profile?.stage("configuration");
   try {
-    const quality = config.quality;
-    const dependencies =
-      quality?.loadDependencies === undefined
-        ? {}
-        : await quality.loadDependencies({ facts, memo });
-    const defaultCandidates = defaultQualityCandidates(facts);
-    const candidateSource =
-      options.candidates ??
-      (quality?.buildCandidates === undefined
-        ? defaultCandidates
-        : await quality.buildCandidates({
-            facts,
-            defaultCandidates,
-            dependencies,
-            memo,
-          }));
-    if (!Array.isArray(candidateSource))
-      throw new TypeError(
-        "defineConfig 的 quality.buildCandidates 必须返回候选数组。",
-      );
-
-    const languages = new Set(
-      facts.translations.reads.map(({ language }) => language),
-    );
-    const candidates: SemanticEditCandidate<TBody>[] = [];
-    for (const candidate of candidateSource) {
-      const validated = await validateSemanticEditCandidate(candidate, config);
-      if (options.languages !== undefined && !languages.has(validated.language))
-        throw new TypeError(
-          `译文候选语言 ${JSON.stringify(validated.language)} 不在本次执行范围内。`,
-        );
-      candidates.push(validated);
-    }
-
-    const selection =
-      options.selectCandidates === undefined
-        ? candidates
-        : options.selectCandidates(Object.freeze(candidates.slice()));
-    if (!Array.isArray(selection))
-      throw new TypeError("selectCandidates 必须返回候选数组。");
-    const candidateSet = new Set(candidates);
-    if (selection.some((candidate) => !candidateSet.has(candidate)))
-      throw new TypeError(
-        "selectCandidates 只能筛选或重排传入的候选；请通过 candidates 或 quality.buildCandidates 构造候选。",
-      );
-
-    return await runQualityChecks(
-      facts,
-      {
-        candidates: selection,
-        dependencies,
-        relationships: quality?.relationships ?? [],
-        exceptions,
-      },
-      quality?.checks ?? [],
-      {
-        memo,
-        ...(quality?.resultCache === undefined
+    validateFrameworkConfig(config);
+    stage?.();
+    stage = profile?.stage("exceptions");
+    const exceptions = await loadQualityExceptions(config);
+    stage?.();
+    stage = profile?.stage("facts");
+    const facts = await readFacts(config, options);
+    stage?.();
+    const memo = options.memo ?? createMemoScope();
+    try {
+      const quality = config.quality;
+      stage = profile?.stage("dependencies");
+      const dependencies =
+        quality?.loadDependencies === undefined
           ? {}
-          : { qualityCheckResultCache: quality.resultCache }),
-      },
-    );
+          : await quality.loadDependencies({ facts, memo });
+      stage?.();
+      stage = profile?.stage("candidates");
+      const defaultCandidates = defaultQualityCandidates(facts);
+      const candidateSource =
+        options.candidates ??
+        (quality?.buildCandidates === undefined
+          ? defaultCandidates
+          : await quality.buildCandidates({
+              facts,
+              defaultCandidates,
+              dependencies,
+              memo,
+            }));
+      if (!Array.isArray(candidateSource))
+        throw new TypeError(
+          "defineConfig 的 quality.buildCandidates 必须返回候选数组。",
+        );
+
+      const languages = new Set(
+        facts.translations.reads.map(({ language }) => language),
+      );
+      const candidates: SemanticEditCandidate<TBody>[] = [];
+      for (const candidate of candidateSource) {
+        const validated = await validateSemanticEditCandidate(
+          candidate,
+          config,
+        );
+        if (
+          options.languages !== undefined &&
+          !languages.has(validated.language)
+        )
+          throw new TypeError(
+            `译文候选语言 ${JSON.stringify(validated.language)} 不在本次执行范围内。`,
+          );
+        candidates.push(validated);
+      }
+
+      const selection =
+        options.selectCandidates === undefined
+          ? candidates
+          : options.selectCandidates(Object.freeze(candidates.slice()));
+      if (!Array.isArray(selection))
+        throw new TypeError("selectCandidates 必须返回候选数组。");
+      const candidateSet = new Set(candidates);
+      if (selection.some((candidate) => !candidateSet.has(candidate)))
+        throw new TypeError(
+          "selectCandidates 只能筛选或重排传入的候选；请通过 candidates 或 quality.buildCandidates 构造候选。",
+        );
+
+      stage?.();
+      stage = profile?.stage("checks");
+      const result = await runQualityChecks(
+        facts,
+        {
+          candidates: selection,
+          dependencies,
+          relationships: quality?.relationships ?? [],
+          exceptions,
+        },
+        quality?.checks ?? [],
+        {
+          memo,
+          ...(profile === undefined ? {} : { profile }),
+          ...(quality?.resultCache === undefined
+            ? {}
+            : { qualityCheckResultCache: quality.resultCache }),
+        },
+      );
+      stage?.();
+      completed = true;
+      return result;
+    } finally {
+      stage?.();
+      stage = profile?.stage("cleanup");
+      try {
+        if (options.memo === undefined) memo.dispose();
+      } finally {
+        stage?.();
+      }
+    }
+  } catch (error) {
+    completed = false;
+    throw error;
   } finally {
-    if (options.memo === undefined) memo.dispose();
+    stage?.();
+    profile?.finish(completed ? "completed" : "interrupted");
   }
 }
 

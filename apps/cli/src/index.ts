@@ -294,3 +294,13 @@ export type {
   WordSegmenter,
   WordToken,
 } from "@lioni/text-analysis";
+
+export { createQualityProfiler } from "@lioni/core";
+export type {
+  QualityProfiler,
+  QualityProfilerOptions,
+  QualityProfileReport,
+  QualityProfileCheck,
+  QualityProfileCandidate,
+  QualityProfileTiming,
+} from "@lioni/core";

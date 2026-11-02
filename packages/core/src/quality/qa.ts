@@ -20,6 +20,10 @@ import {
   validateWithStandardSchema,
 } from "../standard-schema.ts";
 import type { StandardSchemaV1 } from "../standard-schema.ts";
+import type {
+  QualityProfileSession,
+  QualityProfileCandidateSession,
+} from "./profiler.ts";
 import {
   isCacheableQualityCheckOutcome,
   type CacheableQualityCheckOutcome,
@@ -753,6 +757,8 @@ export type QualityRunResult<
 };
 
 export type QualityExecutionOptions = {
+  /** 由正式 QA 入口持有的内部采集运行。 */
+  readonly profile?: QualityProfileSession;
   /** 传入的范围由调用方管理；省略时由本次 QA 创建并关闭。 */
   readonly memo?: MemoScope;
   /** 只复用已完成检查的原始结果；例外仍按本次运行重新处理。 */
@@ -798,6 +804,10 @@ export async function runQualityChecks<
     }[] = [];
     const checkIds = new Set<string>();
     for (const definition of checks) {
+      options.profile?.configure(
+        definition.id,
+        options.qualityCheckResultCache !== undefined,
+      );
       if (checkIds.has(definition.id))
         throw new TypeError(`QA 检查项 id ${definition.id} 重复。`);
       checkIds.add(definition.id);
@@ -806,16 +816,24 @@ export async function runQualityChecks<
         throw new TypeError(
           `QA 检查项 ${definition.id} 必须由 defineQualityCheck 或 bindQualityCheck 创建。`,
         );
-      preparedChecks.push({
-        id: definition.id,
-        prepared: (await prepare()) as PreparedQualityCheck<
-          TUnit,
-          TTranslation,
-          QualityObject,
-          TBody,
-          TUnavailable
-        >,
-      });
+      const endPreparation = options.profile?.checkStage(
+        definition.id,
+        "configurationPreparation",
+      );
+      try {
+        preparedChecks.push({
+          id: definition.id,
+          prepared: (await prepare()) as PreparedQualityCheck<
+            TUnit,
+            TTranslation,
+            QualityObject,
+            TBody,
+            TUnavailable
+          >,
+        });
+      } finally {
+        endPreparation?.();
+      }
     }
 
     const results: QualityCheckResult[] = [];
@@ -854,10 +872,15 @@ export async function runQualityChecks<
     }
     let nextExecutionId = 0;
     for (const { id, prepared } of preparedChecks) {
+      const endConfiguration = options.profile?.checkStage(
+        id,
+        "configurationFingerprint",
+      );
       const configuration = snapshotQualityData(prepared.configuration);
       const configurationFingerprint = fingerprintQualityInputBasis(
         configuration as JsonValue,
       );
+      endConfiguration?.();
       const diagnostics: QualityDiagnostic[] = [];
       const issues: QualityIssue[] = [];
       const executions: QualityCheckExecution[] = [];
@@ -874,6 +897,15 @@ export async function runQualityChecks<
         candidateIndex,
         candidate,
       ] of boundRequest.candidates.entries()) {
+        const candidateProfile = options.profile?.candidate(
+          id,
+          {
+            candidateIndex,
+            sourceKey: candidate.sourceKey,
+            language: candidate.language,
+          },
+          options.qualityCheckResultCache !== undefined,
+        );
         const executionId = nextExecutionId;
         nextExecutionId += 1;
         let fingerprint: QualityInputFingerprint | undefined;
@@ -882,15 +914,22 @@ export async function runQualityChecks<
         let outcome: QualityCheckOutcome;
         try {
           const sourceUnit = sourceUnits.get(candidate.sourceKey) ?? null;
-          const preparation = await prepared.prepareInput({
-            facts,
-            candidate,
-            sourceUnit,
-            memo,
-            dependencies: boundRequest.dependencies,
-            relationships: boundRequest.relationships,
-          });
+          const endPreparation = candidateProfile?.stage("prepareInput");
+          let preparation;
+          try {
+            preparation = await prepared.prepareInput({
+              facts,
+              candidate,
+              sourceUnit,
+              memo,
+              dependencies: boundRequest.dependencies,
+              relationships: boundRequest.relationships,
+            });
+          } finally {
+            endPreparation?.();
+          }
           if (preparation.status === "ready") {
+            const endFingerprint = candidateProfile?.stage("fingerprint");
             const currentFingerprint = qualityInputFingerprint(
               id,
               prepared.version,
@@ -900,6 +939,7 @@ export async function runQualityChecks<
                 ? getDefaultInputComponents()
                 : undefined,
             );
+            endFingerprint?.();
             fingerprint = currentFingerprint;
             const key = qualityCheckCacheKey(
               id,
@@ -915,9 +955,16 @@ export async function runQualityChecks<
                 : await readCachedQualityOutcome(
                     options.qualityCheckResultCache,
                     key,
+                    candidateProfile,
                   );
             if (cachedOutcome === undefined) {
-              outcome = await preparation.execute();
+              candidateProfile?.executed();
+              const endExecute = candidateProfile?.stage("execute");
+              try {
+                outcome = await preparation.execute();
+              } finally {
+                endExecute?.();
+              }
               shouldCacheOutcome = true;
             } else outcome = cachedOutcome;
           } else {
@@ -949,7 +996,9 @@ export async function runQualityChecks<
           };
         }
 
+        const endSnapshot = candidateProfile?.stage("snapshot");
         const stableOutcome = snapshotQualityData(outcome);
+        endSnapshot?.();
         if (
           shouldCacheOutcome &&
           cacheKey !== undefined &&
@@ -960,7 +1009,9 @@ export async function runQualityChecks<
             options.qualityCheckResultCache,
             cacheKey,
             stableOutcome,
+            candidateProfile,
           );
+        const endResults = candidateProfile?.stage("results");
         const findings = stableOutcome.diagnostics;
         issues.push(...stableOutcome.issues);
         statuses.push(stableOutcome.status);
@@ -986,6 +1037,8 @@ export async function runQualityChecks<
             handling: handlingFor(execution, exceptions),
           })),
         );
+        endResults?.();
+        candidateProfile?.finish(stableOutcome.status);
       }
 
       results.push({
@@ -1024,6 +1077,7 @@ export async function runQualityChecks<
       checks: results,
     };
   } finally {
+    options.profile?.endChecks();
     if (options.memo === undefined) memo.dispose();
   }
 }
@@ -1106,13 +1160,27 @@ function qualityCheckCacheKey(
 async function readCachedQualityOutcome(
   cache: QualityCheckResultCache,
   key: string,
+  profile?: QualityProfileCandidateSession,
 ): Promise<QualityCheckOutcome | undefined> {
+  const end = profile?.stage("cacheRead");
   try {
     const outcome = await cache.get(key);
-    if (!isCacheableQualityCheckOutcome(outcome)) return undefined;
-    return snapshotQualityData(outcome);
+    if (outcome === undefined) {
+      profile?.read("miss");
+      return undefined;
+    }
+    if (!isCacheableQualityCheckOutcome(outcome)) {
+      profile?.read("invalid");
+      return undefined;
+    }
+    const stable = snapshotQualityData(outcome);
+    profile?.read("hit");
+    return stable;
   } catch {
+    profile?.read("error");
     return undefined;
+  } finally {
+    end?.();
   }
 }
 
@@ -1120,11 +1188,17 @@ async function writeCachedQualityOutcome(
   cache: QualityCheckResultCache,
   key: string,
   outcome: CacheableQualityCheckOutcome,
+  profile?: QualityProfileCandidateSession,
 ): Promise<void> {
+  const end = profile?.stage("cacheWrite");
   try {
     await cache.set(key, outcome);
+    profile?.write("completed");
   } catch {
+    profile?.write("error");
     // 缓存写入失败只会增加后续检查成本。
+  } finally {
+    end?.();
   }
 }
 

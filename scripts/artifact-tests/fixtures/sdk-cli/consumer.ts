@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { analyzeQuality, readFacts } from "@lioni/lioni";
+import { analyzeQuality, createQualityProfiler, readFacts } from "@lioni/lioni";
 
 import config from "./lioni.config.ts";
 
@@ -92,3 +92,30 @@ assert.ok(
   selectedQuality.candidates.every(({ language }) => language === "de"),
 );
 process.stdout.write(JSON.stringify(facts));
+
+const profiler = createQualityProfiler({ slowestCandidates: 1 });
+assert.deepEqual(await analyzeQuality(config, { profiler }), quality);
+const evidence = profiler.report();
+assert.equal(evidence.status, "completed");
+assert.ok(evidence.totalMs >= 0);
+assert.deepEqual(JSON.parse(JSON.stringify(evidence)), evidence);
+assert.ok(
+  evidence.checks.every((check) => check.slowestCandidates.length <= 1),
+);
+const interrupted = createQualityProfiler();
+await assert.rejects(
+  analyzeQuality(
+    {
+      ...config,
+      quality: {
+        ...config.quality,
+        loadDependencies() {
+          throw new Error("依赖加载中断");
+        },
+      },
+    },
+    { profiler: interrupted },
+  ),
+  /依赖加载中断/u,
+);
+assert.equal(interrupted.report().status, "interrupted");
