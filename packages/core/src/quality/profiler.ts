@@ -1,6 +1,44 @@
+import type { QualityCheckStatus } from "./qa.ts";
+
+/**
+ * 框架阶段、检查项准备及候选处理子阶段；同名阶段按所在层级解释。
+ * facts 包含资源读取与关联；checks 包含公共准备、检查计算和例外汇总。
+ * prepareInput 包含选择、投影、验证及依据回调；fingerprint 仅为摘要与缓存键计算。
+ * snapshot 为检查结果快照，results 为候选诊断及执行记录整理。
+ */
+export type QualityProfileStage =
+  | "configuration"
+  | "exceptions"
+  | "facts"
+  | "dependencies"
+  | "candidates"
+  | "checks"
+  | "cleanup"
+  | "configurationPreparation"
+  | "configurationFingerprint"
+  | "prepareInput"
+  | "fingerprint"
+  | "cacheRead"
+  | "execute"
+  | "snapshot"
+  | "cacheWrite"
+  | "results";
+/** 候选中断独立于规则返回状态；not-run 只沿用质量检查状态词汇。 */
+export type QualityProfileCandidateStatus = QualityCheckStatus | "interrupted";
+type CacheReads = Record<"hit" | "miss" | "invalid" | "error", number>;
+type CacheWrites = Record<"completed" | "error", number>;
+/** 缓存接口可见证据；适配器内部吞掉的错误不计入 error。 */
+export type QualityProfileCache = {
+  readonly enabled: boolean;
+  /** miss 仅表示 get 返回 undefined，不能证明底层存储不存在。 */
+  readonly reads: Readonly<CacheReads>;
+  /** completed 仅表示 set 正常返回，不保证已落盘。 */
+  readonly writes: Readonly<CacheWrites>;
+};
+
 /** 性能证据只描述毫秒经过时间，包含异步等待；父阶段包含子阶段，不可跨层相加。 */
 export type QualityProfileTiming = {
-  readonly stage: string;
+  readonly stage: QualityProfileStage;
   readonly durationMs: number;
   readonly calls: number;
 };
@@ -8,7 +46,7 @@ export type QualityProfileCandidate = {
   readonly candidateIndex: number;
   readonly sourceKey: string;
   readonly language: string;
-  readonly status: string;
+  readonly status: QualityProfileCandidateStatus;
   readonly completed: boolean;
   readonly durationMs: number;
   readonly timings: readonly QualityProfileTiming[];
@@ -19,19 +57,18 @@ export type QualityProfileCheck = {
   readonly durationMs: number;
   readonly candidateCount: number;
   readonly executedRules: number;
+  /** candidates 汇总包含准备、指纹、缓存、执行及结果整理；其子项不可重复相加。 */
   readonly timings: readonly QualityProfileTiming[];
-  /** 仅表示缓存接口可见结果；正常返回不保证持久化成功。 */
-  readonly cache: {
-    readonly enabled: boolean;
-    readonly reads: Readonly<
-      Record<"hit" | "miss" | "invalid" | "error", number>
-    >;
-    readonly writes: Readonly<Record<"completed" | "error", number>>;
-  };
+  /** 已进入处理的候选结果计数；缺少的状态表示 0，含中断候选。 */
+  readonly outcomes: Readonly<
+    Partial<Record<QualityProfileCandidateStatus, number>>
+  >;
+  readonly cache: QualityProfileCache;
   readonly slowestCandidates: readonly QualityProfileCandidate[];
 };
 export type QualityProfileReport = {
   readonly schemaVersion: 1;
+  /** completed 表示调用正常返回（包括 QA 失败）；interrupted 表示调用抛错。 */
   readonly status: "completed" | "interrupted";
   readonly totalMs: number;
   readonly stages: readonly QualityProfileTiming[];
@@ -46,19 +83,20 @@ export type QualityProfiler = {
   readonly report: () => QualityProfileReport;
 };
 type Timings = Map<
-  string,
-  { stage: string; durationMs: number; calls: number }
+  QualityProfileStage,
+  { stage: QualityProfileStage; durationMs: number; calls: number }
 >;
 type MutableCheck = {
   checkId: string;
   durationMs: number;
   candidateCount: number;
   executedRules: number;
+  outcomes: Partial<Record<QualityProfileCandidateStatus, number>>;
   timings: Timings;
   cache: {
     enabled: boolean;
-    reads: Record<"hit" | "miss" | "invalid" | "error", number>;
-    writes: Record<"completed" | "error", number>;
+    reads: CacheReads;
+    writes: CacheWrites;
   };
   slowestCandidates: QualityProfileCandidate[];
 };
@@ -106,6 +144,7 @@ export function beginQualityProfile(profiler: QualityProfiler) {
         durationMs: 0,
         candidateCount: 0,
         executedRules: 0,
+        outcomes: {},
         timings: new Map(),
         cache: {
           enabled: false,
@@ -118,20 +157,26 @@ export function beginQualityProfile(profiler: QualityProfiler) {
     }
     return entry;
   }
-  function span(target: Timings, stage: string, total?: MutableCheck) {
+  function span(
+    target: Timings,
+    stage: QualityProfileStage,
+    total?: MutableCheck,
+  ) {
     const start = performance.now();
     let closed = false;
+    let duration = 0;
     const end = () => {
-      if (closed) return;
+      if (closed) return duration;
       closed = true;
       open.delete(end);
       checkSpans.delete(end);
-      const duration = performance.now() - start;
+      duration = performance.now() - start;
       const timing = target.get(stage) ?? { stage, durationMs: 0, calls: 0 };
       timing.durationMs += duration;
       timing.calls++;
       target.set(stage, timing);
       if (total !== undefined) total.durationMs += duration;
+      return duration;
     };
     open.add(end);
     if (target !== stages) checkSpans.add(end);
@@ -146,8 +191,8 @@ export function beginQualityProfile(profiler: QualityProfiler) {
     configure(id: string, enabled: boolean) {
       check(id).cache.enabled = enabled;
     },
-    stage: (stage: string) => span(stages, stage),
-    checkStage(id: string, stage: string) {
+    stage: (stage: QualityProfileStage) => span(stages, stage),
+    checkStage(id: string, stage: QualityProfileStage) {
       const entry = check(id);
       return span(entry.timings, stage, entry);
     },
@@ -159,21 +204,24 @@ export function beginQualityProfile(profiler: QualityProfiler) {
       const entry = check(id);
       entry.candidateCount++;
       entry.cache.enabled = enabled;
-      const start = performance.now();
       const timings: Timings = new Map();
       const endTotal = span(entry.timings, "candidates", entry);
       let closed = false;
-      const finish = (status: string, completed: boolean) => {
+      const finish = (
+        status: QualityProfileCandidateStatus,
+        completed: boolean,
+      ) => {
         if (closed) return;
         closed = true;
         candidates.delete(interrupt);
-        endTotal();
+        entry.outcomes[status] = (entry.outcomes[status] ?? 0) + 1;
+        const durationMs = endTotal();
         if (state.limit === 0) return;
         const record = {
           ...identity,
           status,
           completed,
-          durationMs: performance.now() - start,
+          durationMs,
           timings: [...timings.values()],
         };
         entry.slowestCandidates.push(record);
@@ -187,7 +235,7 @@ export function beginQualityProfile(profiler: QualityProfiler) {
       const interrupt = () => finish("interrupted", false);
       candidates.add(interrupt);
       return {
-        stage(stage: string) {
+        stage(stage: QualityProfileStage) {
           const local = span(timings, stage);
           const aggregate = span(entry.timings, stage);
           return () => {
@@ -204,7 +252,7 @@ export function beginQualityProfile(profiler: QualityProfiler) {
         write(result: "completed" | "error") {
           entry.cache.writes[result]++;
         },
-        finish: (status: string) => finish(status, true),
+        finish: (status: QualityProfileCandidateStatus) => finish(status, true),
       };
     },
     finish(status: "completed" | "interrupted") {

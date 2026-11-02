@@ -930,25 +930,29 @@ export async function runQualityChecks<
           }
           if (preparation.status === "ready") {
             const endFingerprint = candidateProfile?.stage("fingerprint");
-            const currentFingerprint = qualityInputFingerprint(
-              id,
-              prepared.version,
-              configurationFingerprint,
-              preparation.fingerprintInput,
-              preparation.fingerprintInput.kind === "default"
-                ? getDefaultInputComponents()
-                : undefined,
-            );
-            endFingerprint?.();
-            fingerprint = currentFingerprint;
-            const key = qualityCheckCacheKey(
-              id,
-              candidateIndex,
-              candidate.sourceKey,
-              candidate.language,
-              currentFingerprint.inputFingerprint,
-            );
-            cacheKey = key;
+            let key: string;
+            try {
+              const currentFingerprint = qualityInputFingerprint(
+                id,
+                prepared.version,
+                configurationFingerprint,
+                preparation.fingerprintInput,
+                preparation.fingerprintInput.kind === "default"
+                  ? getDefaultInputComponents()
+                  : undefined,
+              );
+              fingerprint = currentFingerprint;
+              key = qualityCheckCacheKey(
+                id,
+                candidateIndex,
+                candidate.sourceKey,
+                candidate.language,
+                currentFingerprint.inputFingerprint,
+              );
+              cacheKey = key;
+            } finally {
+              endFingerprint?.();
+            }
             const cachedOutcome =
               options.qualityCheckResultCache === undefined
                 ? undefined

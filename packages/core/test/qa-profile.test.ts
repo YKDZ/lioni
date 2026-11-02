@@ -265,3 +265,95 @@ void test("空选择不伪造缓存查询和候选执行，借用 memo 仍归宿
       TypeError,
     );
 });
+
+void test("仅汇总模式仍保留完整、失败、不完整、不适用及中断状态计数", async () => {
+  let index = 0;
+  const statuses = [
+    "complete",
+    "failed",
+    "incomplete",
+    "not-applicable",
+  ] as const;
+  const reason = new QualityCheckBindingError(
+    "mixed",
+    "projection",
+    new Error("中断"),
+  );
+  const base = configFor(() => {});
+  const check = defineTestQualityCheck({
+    id: "mixed",
+    configuration: {},
+    check() {
+      const status = statuses[index++];
+      if (status === undefined) throw reason;
+      return {
+        status,
+        diagnostics: [],
+        issues: [],
+        coverage: {
+          selected: 1,
+          evaluated: status === "complete" ? 1 : 0,
+          failed: status === "failed" ? 1 : 0,
+          incomplete: status === "incomplete" ? 1 : 0,
+          notApplicable: status === "not-applicable" ? 1 : 0,
+        },
+      };
+    },
+  });
+  const profiler = createQualityProfiler({ slowestCandidates: 0 });
+  await assert.rejects(
+    analyzeQuality(
+      { ...base, quality: { checks: [check] } },
+      {
+        profiler,
+        candidates: Array.from({ length: 5 }, () => ({
+          sourceKey: "save",
+          language: "zh-CN",
+          content: "保存",
+        })),
+      },
+    ),
+    (error) => error === reason,
+  );
+  const evidence = profiler.report().checks[0]!;
+  assert.equal(evidence.candidateCount, 5);
+  assert.deepEqual(evidence.outcomes, {
+    complete: 1,
+    failed: 1,
+    incomplete: 1,
+    "not-applicable": 1,
+    interrupted: 1,
+  });
+  assert.deepEqual(evidence.slowestCandidates, []);
+});
+
+void test("运行中拒绝读取与并发复用，无检查项的运行仍正常结束", async () => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const base = configFor(() => {});
+  const profiler = createQualityProfiler();
+  const pending = analyzeQuality(
+    {
+      ...base,
+      quality: {
+        checks: [],
+        async loadDependencies() {
+          entered.resolve();
+          await release.promise;
+          return {};
+        },
+      },
+    },
+    { profiler },
+  );
+  await entered.promise;
+  try {
+    assert.throws(() => profiler.report(), TypeError);
+    await assert.rejects(analyzeQuality(base, { profiler }), TypeError);
+  } finally {
+    release.resolve();
+  }
+  await pending;
+  assert.equal(profiler.report().status, "completed");
+  assert.deepEqual(profiler.report().checks, []);
+});

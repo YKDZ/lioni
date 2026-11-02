@@ -10,6 +10,9 @@ export type {
   QualityProfileCheck,
   QualityProfileCandidate,
   QualityProfileTiming,
+  QualityProfileStage,
+  QualityProfileCandidateStatus,
+  QualityProfileCache,
 } from "./quality/profiler.ts";
 import { createHash } from "node:crypto";
 

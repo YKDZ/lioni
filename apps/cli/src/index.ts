@@ -303,4 +303,7 @@ export type {
   QualityProfileCheck,
   QualityProfileCandidate,
   QualityProfileTiming,
+  QualityProfileStage,
+  QualityProfileCandidateStatus,
+  QualityProfileCache,
 } from "@lioni/core";
