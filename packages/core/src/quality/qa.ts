@@ -697,7 +697,8 @@ function defineQualityCheckImplementation<
  * version 应覆盖算法及宿主选择、投影和策略的语义变化。默认指纹包含完整事实、
  * 当前候选、原文、动态依赖及关联关系；fingerprintInput 替换业务依据，检查身份、
  * 版本和最终配置仍始终参与。闭包依赖须由作者显式纳入依据。若需要显式业务泛型，
- * 用 withTypes 先绑定业务类型，再由单次声明推断检查项 ID 字面量。
+ * 用 withTypes 先绑定业务类型，再由单次声明推断检查项 ID 字面量。传入普通 string ID
+ * 时返回类型为 string，后续配置不能静态枚举该 ID，实际选择依赖运行时目录校验。
  */
 export const defineQualityCheck = Object.assign(
   defineQualityCheckImplementation,
