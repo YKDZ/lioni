@@ -313,6 +313,9 @@ export type FrameworkConfig<
   TTranslation = unknown,
   TBody = JsonValue,
   TUnavailable = never,
+  TCheckId extends string = string,
+  TGroups extends Readonly<Record<string, readonly NoInfer<TCheckId>[]>> =
+    Readonly<Record<string, readonly TCheckId[]>>,
 > = {
   readonly source: SourceAdapter<TUnit>;
   readonly keyOf: (unit: TUnit) => string;
@@ -346,15 +349,37 @@ export type FrameworkConfig<
     TUnit,
     TTranslation,
     TBody,
-    TUnavailable
+    TUnavailable,
+    TCheckId,
+    TGroups
   >;
 };
+
+type QualityGroupMap<TCheckId extends string> = Readonly<
+  Record<string, readonly NoInfer<TCheckId>[]>
+>;
+
+type QualityRunSelectionOptions<
+  TCheckId extends string,
+  TGroupName extends string,
+> =
+  | { readonly checkIds?: undefined; readonly groups?: undefined }
+  | {
+      readonly checkIds: readonly NoInfer<TCheckId>[];
+      readonly groups?: never;
+    }
+  | {
+      readonly checkIds?: never;
+      readonly groups: readonly NoInfer<TGroupName>[];
+    };
 
 export type QualityConfiguration<
   TUnit extends TranslationUnitInput,
   TTranslation,
   TBody = JsonValue,
   TUnavailable = never,
+  TCheckId extends string = string,
+  TGroups extends QualityGroupMap<TCheckId> = QualityGroupMap<TCheckId>,
 > = {
   /** 直接声明本次运行使用的检查器；检查器的校验与执行由 SDK 管理。 */
   readonly checks?: readonly QualityCheckDefinition<
@@ -362,8 +387,11 @@ export type QualityConfiguration<
     TTranslation,
     QualityObject,
     TBody,
-    TUnavailable
+    TUnavailable,
+    TCheckId
   >[];
+  /** 项目自定义分组；每个成员只能引用 checks 中声明的检查项 ID。 */
+  readonly groups?: TGroups;
   /** 每次 QA 依据本次已读取事实加载一次动态检查资料。 */
   readonly loadDependencies?: (input: {
     readonly facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>;
@@ -389,12 +417,16 @@ type DefineConfigInput<
   TTranslationSchema,
   TUnavailableSchema,
   TContentSchema,
+  TCheckId extends string,
+  TGroups extends QualityGroupMap<TCheckId>,
 > = Omit<
   FrameworkConfig<
     NoInfer<TUnit>,
     NoInfer<SchemaOutput<TTranslationSchema>>,
     NoInfer<SchemaOutput<TContentSchema>>,
-    NoInfer<SchemaOutput<TUnavailableSchema>>
+    NoInfer<SchemaOutput<TUnavailableSchema>>,
+    TCheckId,
+    TGroups
   >,
   "source" | "translations"
 > & {
@@ -614,28 +646,71 @@ export class DuplicateTranslationUnitKeyError extends Error {
   }
 }
 
-export function defineConfig<
+function defineConfigImplementation<
   TUnit extends TranslationUnitInput,
   TSchema = StandardSchemaV1<TUnit, TUnit>,
   TTranslationSchema = StandardSchemaV1<unknown, unknown>,
   TUnavailableSchema = never,
   TContentSchema = StandardSchemaV1<JsonValue, JsonValue>,
+  TCheckId extends string = never,
+  const TGroups extends QualityGroupMap<TCheckId> = {},
 >(
   config: DefineConfigInput<
     TUnit,
     TSchema,
     TTranslationSchema,
     TUnavailableSchema,
-    TContentSchema
+    TContentSchema,
+    TCheckId,
+    TGroups
   >,
 ): FrameworkConfig<
   TUnit,
   SchemaOutput<TTranslationSchema>,
   SchemaOutput<TContentSchema>,
-  SchemaOutput<TUnavailableSchema>
+  SchemaOutput<TUnavailableSchema>,
+  TCheckId,
+  TGroups
 > {
   return config;
 }
+
+/**
+ * 声明宿主配置。显式业务泛型通过 withTypes 预先绑定，以便从配置内容推断检查项与分组。
+ */
+export const defineConfig = Object.assign(defineConfigImplementation, {
+  withTypes<
+    TUnit extends TranslationUnitInput,
+    TSchema = StandardSchemaV1<TUnit, TUnit>,
+    TTranslationSchema = StandardSchemaV1<unknown, unknown>,
+    TUnavailableSchema = never,
+    TContentSchema = StandardSchemaV1<JsonValue, JsonValue>,
+  >() {
+    return <
+      TCheckId extends string = never,
+      const TGroups extends QualityGroupMap<TCheckId> = {},
+    >(
+      config: DefineConfigInput<
+        TUnit,
+        TSchema,
+        TTranslationSchema,
+        TUnavailableSchema,
+        TContentSchema,
+        TCheckId,
+        TGroups
+      >,
+    ) =>
+      defineConfigImplementation<
+        TUnit,
+        TSchema,
+        TTranslationSchema,
+        TUnavailableSchema,
+        TContentSchema,
+        TCheckId,
+        TGroups
+      >(config);
+  },
+});
 
 export function validateFrameworkConfig(value: unknown): void {
   validateSourceConfig(value);
@@ -901,18 +976,31 @@ export async function analyzeQuality<
   TTranslation,
   TBody,
   TUnavailable,
+  TCheckId extends string,
+  TGroups extends QualityGroupMap<TCheckId>,
 >(
-  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
-  options: LanguageSelectionOptions & {
-    /** 直接提供候选源；显式选择语言时，所有候选必须属于该范围。 */
-    readonly candidates?: readonly SemanticEditCandidate<TBody>[];
-    /** 在候选构造后筛选、排序或截取；返回项必须来自传入的集合。 */
-    readonly selectCandidates?: (
-      candidates: readonly SemanticEditCandidate<TBody>[],
-    ) => readonly SemanticEditCandidate<TBody>[];
-    readonly memo?: MemoScope;
-    readonly profiler?: QualityProfiler;
-  } = {},
+  config: FrameworkConfig<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable,
+    TCheckId,
+    TGroups
+  >,
+  options: LanguageSelectionOptions &
+    QualityRunSelectionOptions<
+      NoInfer<TCheckId>,
+      NoInfer<keyof TGroups & string>
+    > & {
+      /** 直接提供候选源；显式选择语言时，所有候选必须属于该范围。 */
+      readonly candidates?: readonly SemanticEditCandidate<TBody>[];
+      /** 在候选构造后筛选、排序或截取；返回项必须来自传入的集合。 */
+      readonly selectCandidates?: (
+        candidates: readonly SemanticEditCandidate<TBody>[],
+      ) => readonly SemanticEditCandidate<TBody>[];
+      readonly memo?: MemoScope;
+      readonly profiler?: QualityProfiler;
+    } = {},
 ): Promise<QualityRunResult<QualityObject, TBody>> {
   const profile =
     options.profiler === undefined
