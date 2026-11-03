@@ -5,6 +5,7 @@ import {
   analyzeQuality,
   bindQualityCheck,
   createDefaultQualityInputBasis,
+  createQualityProfiler,
   defineConfig,
   defineQualityCheck,
   QualityCheckBindingError,
@@ -354,6 +355,55 @@ void describe("quality check bindings", () => {
     assert.notStrictEqual(facts.first, shared);
     shared.value = "changed";
     assert.equal(facts.first.value, "same");
+  });
+
+  void it("在下一微任务前固定回调返回的完整指纹依据", async () => {
+    const fingerprint = async (changeAfterReturn: boolean) => {
+      const basis = { value: "回调返回时的依据" };
+      const checker = defineQualityCheck<
+        MixedUnit,
+        MixedTranslation,
+        typeof checkerConfigurationSchema,
+        QualityObject,
+        MixedBody,
+        MixedUnavailableTranslation
+      >({
+        id: "synchronous-fingerprint-basis",
+        version: "v1",
+        configurationSchema: checkerConfigurationSchema,
+        configuration: { includeListEvidence: false },
+        fingerprintInput: () => {
+          if (changeAfterReturn)
+            queueMicrotask(() => {
+              basis.value = "下一微任务修改后的依据";
+            });
+          return basis;
+        },
+        check: () => completeOutcome(),
+      });
+      const profiler = createQualityProfiler();
+      const result = await analyzeQuality(
+        qualityConfig(
+          [checker],
+          [{ sourceKey: "message", language: "fr", content: "Bonjour" }],
+        ),
+        { profiler },
+      );
+      const timings =
+        profiler.report().checks[0]?.slowestCandidates[0]?.timings ?? [];
+
+      assert.equal(
+        timings.find(({ stage }) => stage === "prepareInput")?.calls,
+        1,
+      );
+      assert.equal(
+        timings.find(({ stage }) => stage === "fingerprint")?.calls,
+        1,
+      );
+      return result.checks[0]?.executions[0]?.inputFingerprint;
+    };
+
+    assert.equal(await fingerprint(true), await fingerprint(false));
   });
 
   void it("按候选生成稳定指纹并将诊断关联到对应执行", async () => {

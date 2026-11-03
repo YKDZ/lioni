@@ -83,6 +83,7 @@ export type {
   TranslationWriteBatchResult,
 } from "./semantic-edits.ts";
 export {
+  assertJsonValue,
   StandardSchemaContractError,
   snapshotJsonValue,
 } from "./standard-schema.ts";

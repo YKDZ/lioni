@@ -1,4 +1,4 @@
-import { snapshotJsonValue } from "@lioni/core";
+import { assertJsonValue } from "@lioni/core";
 import type {
   JsonValue,
   QualityLocation,
@@ -10,7 +10,7 @@ import { z } from "zod";
 // 引用沿用核心无损 JSON 契约；z.json() 会跳过自有 __proto__，遗漏其中的非法值。
 const referenceSchema = z.custom<JsonValue>((value) => {
   try {
-    snapshotJsonValue(value, "消息族投影引用");
+    assertJsonValue(value, "消息族投影引用");
     return true;
   } catch {
     return false;
