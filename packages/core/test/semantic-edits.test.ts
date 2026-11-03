@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import {
   StandardSchemaContractError,
   defineConfig,
+  validateSemanticEditCandidate,
   writeTranslationRequests,
   type JsonValue,
   type TranslationIdentity,
@@ -24,6 +25,35 @@ type WriteInput = Parameters<
 type BatchWriteInput = Parameters<
   NonNullable<TranslationWritebackAdapter<Unit, Translation>["writeBatch"]>
 >[0];
+
+void describe("译文候选验证", () => {
+  void it("隔离来源并在独立快照中保留共享对象", async () => {
+    const shared = { text: "same" };
+    const candidate = await validateSemanticEditCandidate(
+      {
+        sourceKey: "message",
+        language: "fr",
+        content: {
+          first: shared,
+          repeated: shared,
+          sameValue: { text: "same" },
+        },
+      },
+      configFor({ translations: [], onWrite: () => {} }),
+    );
+    const content = candidate.content as {
+      readonly first: { readonly text: string };
+      readonly repeated: { readonly text: string };
+      readonly sameValue: { readonly text: string };
+    };
+
+    assert.strictEqual(content.first, content.repeated);
+    assert.notStrictEqual(content.first, content.sameValue);
+    assert.notStrictEqual(content.first, shared);
+    shared.text = "changed";
+    assert.equal(content.first.text, "same");
+  });
+});
 
 function identity(id: string): TranslationIdentity {
   return { language: "fr", namespace: "messages", key: id };
