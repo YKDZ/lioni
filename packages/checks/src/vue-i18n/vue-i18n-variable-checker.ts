@@ -38,8 +38,9 @@ export type VueI18nVariableCorrespondenceCheckerOptions<
   TTranslation,
   TBody,
   TUnavailable = never,
+  TId extends string = string,
 > = {
-  readonly id?: string;
+  readonly id: TId;
   readonly hostVersion: string;
   readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
 };
@@ -61,12 +62,14 @@ export function createVueI18nVariableCorrespondenceChecker<
   TTranslation,
   TBody,
   TUnavailable = never,
+  TId extends string = string,
 >(
   options: VueI18nVariableCorrespondenceCheckerOptions<
     TUnit,
     TTranslation,
     TBody,
-    TUnavailable
+    TUnavailable,
+    TId
   >,
 ) {
   type Subject = VueI18nMessageProjection;
@@ -78,9 +81,10 @@ export function createVueI18nVariableCorrespondenceChecker<
     Subject,
     QualityObject,
     TBody,
-    TUnavailable
+    TUnavailable,
+    TId
   >({
-    id: options.id ?? "vue-i18n/variable-correspondence",
+    id: options.id,
     version: `checks.vue-i18n/variable-correspondence/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}+${options.hostVersion}`,
     configurationSchema,
     configuration,

@@ -57,19 +57,22 @@ export function createVueI18nTerminologyChecks<
   TTranslation,
   TBody,
   TUnavailable,
+  TAllowedId extends string = string,
+  TForbiddenId extends string = string,
 >(options: {
   readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
   readonly analysis: TextAnalysis;
   readonly identities: {
-    readonly allowedTerminology: VueI18nCheckIdentity;
-    readonly forbiddenTerminology: VueI18nCheckIdentity;
+    readonly allowedTerminology: VueI18nCheckIdentity<TAllowedId>;
+    readonly forbiddenTerminology: VueI18nCheckIdentity<TForbiddenId>;
   };
 }): readonly QualityCheckDefinition<
   TUnit,
   TTranslation,
   QualityObject,
   TBody,
-  TUnavailable
+  TUnavailable,
+  TAllowedId | TForbiddenId
 >[] {
   const rules = [
     {
@@ -88,7 +91,13 @@ export function createVueI18nTerminologyChecks<
     compileTerms(createTermbase(data), { analysis: options.analysis });
 
   return rules.map(({ rule, identity, name }) =>
-    createTermChecker<TUnit, TTranslation, TermSubject, TBody, TUnavailable>({
+    createTermChecker.withTypes<
+      TUnit,
+      TTranslation,
+      TermSubject,
+      TBody,
+      TUnavailable
+    >()({
       id: identity.id,
       hostVersion: terminologyVersion(name, identity),
       terms: (input) => {
@@ -188,6 +197,7 @@ export function createVueI18nMessageFamilyCheck<
   TTranslation,
   TBody,
   TUnavailable = never,
+  TId extends string = string,
 >(options: {
   readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
   readonly reference: VueI18nReferenceProjector<
@@ -197,7 +207,7 @@ export function createVueI18nMessageFamilyCheck<
     TUnavailable
   >;
   readonly analysis: TextAnalysis;
-  readonly identity: VueI18nCheckIdentity;
+  readonly identity: VueI18nCheckIdentity<TId>;
 }) {
   const sourceTemplate: TemplateOptions = {
     abstract: (token) =>
@@ -213,7 +223,8 @@ export function createVueI18nMessageFamilyCheck<
     TUnit,
     TBody,
     TUnavailable,
-    FamilySubject<TUnit, TBody>
+    FamilySubject<TUnit, TBody>,
+    TId
   >({
     id: options.identity.id,
     hostVersion: familyVersion(options.identity),

@@ -1,8 +1,4 @@
-import type {
-  QualityCheckDefinition,
-  QualityObject,
-  TranslationUnitInput,
-} from "@lioni/core";
+import type { TranslationUnitInput } from "@lioni/core";
 
 import { createVueI18nAnalysis } from "./analysis.ts";
 import {
@@ -30,16 +26,8 @@ export function createVueI18nChecks<
   TTranslation,
   TBody,
   TUnavailable = never,
->(
-  options: VueI18nChecksOptions<TUnit, TTranslation, TBody, TUnavailable>,
-): readonly QualityCheckDefinition<
-  TUnit,
-  TTranslation,
-  QualityObject,
-  TBody,
-  TUnavailable
->[] {
-  const identity = (id: string) => ({
+>(options: VueI18nChecksOptions<TUnit, TTranslation, TBody, TUnavailable>) {
+  const identity = <const TId extends string>(id: TId) => ({
     id,
     hostVersion: options.hostVersion,
   });
@@ -93,5 +81,5 @@ export function createVueI18nChecks<
       analysis,
       identity: identity("message-family-consistency"),
     }),
-  ];
+  ] as const;
 }
