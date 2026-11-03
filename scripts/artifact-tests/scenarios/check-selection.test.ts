@@ -168,7 +168,10 @@ testArtifactConsumer(
     assert.equal(explicitCandidates.result.candidates.length, 1);
     assert.ok(!explicitCandidates.events.includes("candidate:build"));
     assert.equal(eventCount(explicitCandidates, "shared:read"), 1);
-    assert.equal(eventCount(explicitCandidates, "compile:shared:v1"), 1);
+    assert.equal(eventCount(explicitCandidates, "compile:shared:v1"), 0);
+    assert.ok(
+      !explicitCandidates.events.some((event) => event.startsWith("rule:")),
+    );
 
     assert.ok(sdk.changedDependency.result);
     assert.notEqual(
