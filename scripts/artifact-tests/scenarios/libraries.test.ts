@@ -8,5 +8,7 @@ testArtifactConsumer(
   async ({ typecheck, runNode }) => {
     await typecheck();
     await runNode("consumer.ts");
+    const performance = await runNode("message-families.ts");
+    process.stdout.write(performance.stdout);
   },
 );

@@ -6,7 +6,13 @@ import {
   createMessageFamilyChecker,
   indexMessageFamilies,
 } from "@lioni/checks";
-import type { MessageFamilyInput, MessageFamilyLimits } from "@lioni/checks";
+import type {
+  MessageFamilyInput,
+  MessageFamilyLimits,
+  MessageFamilyContext,
+  MessageFamilySubject,
+  MessageFamilyReferenceProjection,
+} from "@lioni/checks";
 import {
   analyzeQuality,
   createQualityException,
@@ -20,6 +26,7 @@ import {
   snapshotJsonValue,
   type QualityCheckResultCache,
 } from "@lioni/core";
+import { createMemoScope } from "@lioni/memo";
 import {
   asciiNumbers,
   createTextAnalysis,
@@ -46,6 +53,7 @@ type Translation = z.output<typeof translationSchema>;
 
 function checkerFor(
   options: {
+    readonly id?: string;
     readonly partialCandidate?: boolean;
     readonly candidateProjection?: MessageFamilyInput;
     readonly referenceProjection?: MessageFamilyInput;
@@ -55,7 +63,7 @@ function checkerFor(
     readonly targetEquivalence?: (
       signature: TemplateSignature,
       language: string,
-      input: QualityCheckInput<Unit, Translation, unknown, string>,
+      input: MessageFamilyContext<Unit, Translation, string>,
     ) => string;
     readonly limits?: Partial<MessageFamilyLimits>;
     readonly separateScopeFor?: string;
@@ -68,7 +76,75 @@ function checkerFor(
         ? { kind: "slot", identity: "error-code" }
         : undefined,
   };
+  const projectMessage = (
+    input:
+      | { kind: "candidate"; subject: MessageFamilySubject<Unit, string> }
+      | MessageFamilyReferenceProjection<Unit, Translation, string, never>,
+  ) => {
+    const isCandidate = input.kind === "candidate";
+    const selected = isCandidate ? input.subject : input;
+    const sourceUnit = selected.sourceUnit;
+    const sourceKey = selected.sourceKey;
+    const language = selected.language;
+    const target = isCandidate
+      ? input.subject.content
+      : input.translation.bodyAvailability === "available"
+        ? input.translation.content
+        : undefined;
+    const source = sourceUnit.unit.source;
+    if (!isCandidate && options.referenceProjections !== undefined)
+      options.referenceProjections.count += 1;
+    const complete =
+      sourceUnit.bodyAvailability === "available" && target !== undefined;
+    const result = {
+      complete: options.partialCandidate && isCandidate ? false : complete,
+      groups: [
+        {
+          ref: isCandidate
+            ? `candidate:${sourceKey}`
+            : `translation:${input.translation.identity.key}:${sourceKey}`,
+          scope: options.separateScopeFor === sourceKey ? "domain" : "ui",
+          source: {
+            language: "en",
+            complete: sourceUnit.bodyAvailability === "available",
+            fragments: [{ ref: `source:${sourceKey}`, text: source }],
+          },
+          target: {
+            language,
+            complete: target !== undefined,
+            fragments:
+              target === undefined
+                ? []
+                : [
+                    {
+                      ref: `target:${sourceKey}`,
+                      text: target,
+                      ...(options.protectedRanges === undefined
+                        ? {}
+                        : { protectedRanges: options.protectedRanges }),
+                    },
+                  ],
+          },
+        },
+      ],
+      issues:
+        options.partialCandidate && isCandidate
+          ? [
+              {
+                code: "candidateProjectionPartial",
+                message: "候选还有未投影的消息组。",
+              },
+            ]
+          : [],
+    };
+    return (
+      (isCandidate
+        ? options.candidateProjection
+        : options.referenceProjection) ?? result
+    );
+  };
   return createMessageFamilyChecker<Unit, Translation, Unit, string>({
+    id: options.id ?? "message-family-consistency",
     hostVersion: "message-families-test-v1",
     select: (input: QualityCheckInput<Unit, Translation, unknown, string>) => {
       const selectedUnit = input.sourceUnit;
@@ -89,69 +165,8 @@ function checkerFor(
         },
       };
     },
-    project: (input) => {
-      const isCandidate = input.kind === "candidate";
-      const selected = isCandidate ? input.subject : input;
-      const sourceUnit = selected.sourceUnit;
-      const sourceKey = selected.sourceKey;
-      const language = selected.language;
-      const target = isCandidate
-        ? input.subject.content
-        : input.translation.bodyAvailability === "available"
-          ? input.translation.content
-          : undefined;
-      const source = sourceUnit.unit.source;
-      if (!isCandidate && options.referenceProjections !== undefined)
-        options.referenceProjections.count += 1;
-      const complete =
-        sourceUnit.bodyAvailability === "available" && target !== undefined;
-      const result = {
-        complete: options.partialCandidate && isCandidate ? false : complete,
-        groups: [
-          {
-            ref: isCandidate
-              ? `candidate:${sourceKey}`
-              : `translation:${input.translation.identity.key}:${sourceKey}`,
-            scope: options.separateScopeFor === sourceKey ? "domain" : "ui",
-            source: {
-              language: "en",
-              complete: sourceUnit.bodyAvailability === "available",
-              fragments: [{ ref: `source:${sourceKey}`, text: source }],
-            },
-            target: {
-              language,
-              complete: target !== undefined,
-              fragments:
-                target === undefined
-                  ? []
-                  : [
-                      {
-                        ref: `target:${sourceKey}`,
-                        text: target,
-                        ...(options.protectedRanges === undefined
-                          ? {}
-                          : { protectedRanges: options.protectedRanges }),
-                      },
-                    ],
-            },
-          },
-        ],
-        issues:
-          options.partialCandidate && isCandidate
-            ? [
-                {
-                  code: "candidateProjectionPartial",
-                  message: "候选还有未投影的消息组。",
-                },
-              ]
-            : [],
-      };
-      return (
-        (isCandidate
-          ? options.candidateProjection
-          : options.referenceProjection) ?? result
-      );
-    },
+    project: ({ subject }) => projectMessage({ kind: "candidate", subject }),
+    reference: projectMessage,
     ...(options.explicitBasis
       ? {
           fingerprintInput: ({ projected, subject }) =>
@@ -299,6 +314,179 @@ void test("一致且没有诊断时也在投影入口拒绝特殊键中的非 JS
         return true;
       },
     );
+  }
+});
+
+void test("同次 QA 的固定消息族策略只准备每份保存参照一次", async () => {
+  const units = Array.from({ length: 20 }, (_, index) => ({
+    id: `message-${index}`,
+    source: "Hello",
+  }));
+  const projected = { count: 0 };
+  const result = await analyzeQuality(
+    configFor(
+      units,
+      units.map(({ id }) => ({ id, text: "你好" })),
+      checkerFor({ explicitBasis: true, referenceProjections: projected }),
+    ),
+    {
+      candidates: units.map(({ id }) => ({
+        sourceKey: id,
+        language: "zh",
+        content: "你好",
+      })),
+    },
+  );
+  assert.equal(result.status, "complete");
+  assert.deepEqual(result.diagnostics, []);
+  assert.ok(
+    projected.count <= units.length,
+    `保存参照准备了 ${projected.count} 次`,
+  );
+});
+
+void test("排除旧物理记录后的族依据不随候选顺序和旧自身正文变化", async () => {
+  const units = Array.from({ length: 12 }, (_, index) => ({
+    id: `message-${index}`,
+    source: "Hello",
+  }));
+  const translations = units.map(({ id }) => ({ id, text: "你好" }));
+  const checker = checkerFor({ explicitBasis: true });
+  const first = { sourceKey: "message-0", language: "zh", content: "你好" };
+  const other = { sourceKey: "message-1", language: "zh", content: "你好" };
+  const run = (candidates: (typeof first)[]) =>
+    analyzeQuality(configFor(units, translations, checker), { candidates });
+  const initial = await run([first]);
+  const fingerprint = initial.checks[0]!.executions[0]!.inputFingerprint;
+  assert.ok(fingerprint);
+  const reordered = await run([other, first]);
+  assert.equal(
+    reordered.checks[0]!.executions[1]!.inputFingerprint,
+    fingerprint,
+  );
+  translations[0] = { id: "message-0", text: "完全不同的旧译文" };
+  assert.equal(
+    (await run([first])).checks[0]!.executions[0]!.inputFingerprint,
+    fingerprint,
+  );
+  assert.equal(
+    (await run([other, first])).checks[0]!.executions[1]!.inputFingerprint,
+    fingerprint,
+  );
+});
+
+void test("非法旧参照不阻止自身替换，但作为其他候选参照时仍拒绝", async () => {
+  const referenceProjection: MessageFamilyInput = {
+    groups: [
+      {
+        ref: Number.NaN,
+        scope: "ui",
+        source: {
+          language: "en",
+          fragments: [{ ref: "source", text: "Hello" }],
+        },
+        target: {
+          language: "zh",
+          fragments: [{ ref: "target", text: "你好" }],
+        },
+      },
+    ],
+  };
+  const config = configFor(
+    [
+      { id: "editing", source: "Hello" },
+      { id: "other", source: "Hello" },
+    ],
+    [{ id: "editing", text: "旧译文" }],
+    checkerFor({ referenceProjection }),
+  );
+  const self = { sourceKey: "editing", language: "zh", content: "你好" };
+  const result = await analyzeQuality(config, { candidates: [self] });
+  assert.equal(result.status, "not-applicable");
+  await assert.rejects(
+    analyzeQuality(config, {
+      candidates: [self, { ...self, sourceKey: "other" }],
+    }),
+    QualityCheckBindingError,
+  );
+});
+
+void test("同次 QA 的两项固定等价策略分别准备参照", async () => {
+  const strictCalls = { count: 0 };
+  const relaxedCalls = { count: 0 };
+  const strict = checkerFor({
+    id: "strict",
+    referenceProjections: strictCalls,
+  });
+  const relaxed = checkerFor({
+    id: "relaxed",
+    referenceProjections: relaxedCalls,
+    targetEquivalence: () => "declared-equivalent",
+  });
+  const base = configFor(
+    [
+      { id: "editing", source: "Error Code 404" },
+      { id: "saved", source: "Error Code 504" },
+    ],
+    [{ id: "saved", text: "错误 504" }],
+    strict,
+  );
+  const result = await analyzeQuality(
+    {
+      ...base,
+      quality: { ...base.quality, checks: [relaxed, strict] },
+    },
+    {
+      candidates: [
+        { sourceKey: "editing", language: "zh", content: "错误码 404" },
+      ],
+    },
+  );
+  assert.deepEqual(
+    result.diagnostics.map((item) => item.checkId),
+    ["strict"],
+  );
+  assert.equal(strictCalls.count, 1);
+  assert.equal(relaxedCalls.count, 1);
+});
+
+void test("借入同一 memo 的后续运行仍使用新的事实与等价依赖", async () => {
+  const memo = createMemoScope();
+  const translations = [{ id: "saved", text: "错误 504" }];
+  let relaxed = false;
+  const checker = checkerFor({
+    targetEquivalence: (signature, _language, context) =>
+      (context.dependencies as { relaxed: boolean }).relaxed
+        ? "allowed"
+        : signatureKey(signature),
+  });
+  const base = configFor(
+    [
+      { id: "editing", source: "Error Code 404" },
+      { id: "saved", source: "Error Code 504" },
+    ],
+    translations,
+    checker,
+  );
+  const config = {
+    ...base,
+    quality: { ...base.quality, loadDependencies: () => ({ relaxed }) },
+  };
+  const options = {
+    memo,
+    candidates: [
+      { sourceKey: "editing", language: "zh", content: "错误码 404" },
+    ],
+  };
+  try {
+    assert.equal((await analyzeQuality(config, options)).diagnostics.length, 1);
+    relaxed = true;
+    assert.equal((await analyzeQuality(config, options)).diagnostics.length, 0);
+    relaxed = false;
+    translations[0] = { id: "saved", text: "错误码 504" };
+    assert.equal((await analyzeQuality(config, options)).diagnostics.length, 0);
+  } finally {
+    memo.dispose();
   }
 });
 
@@ -456,7 +644,7 @@ void test("排除当前替代记录并保留其他内容相同的事实", async 
   assert.equal(result.diagnostics.length, 1);
   assert.equal(
     result.checks[0]?.version,
-    "checks.message-family-consistency/v2+message-families-test-v1",
+    "checks.message-family-consistency/v3+message-families-test-v1",
   );
   assert.equal(result.diagnostics[0]?.severity, "warning");
   assert.equal(result.diagnostics[0]?.checkId, "message-family-consistency");
@@ -901,7 +1089,8 @@ void test("例外保留警告处理状态，未声明依据的通用工厂仍保
   assert.equal(changed.exceptionApplicability[0]?.status, "basis-changed");
 });
 
-void test("同次候选的等价回调分别接收当前候选，参照不共享首次结果", async () => {
+void test("固定等价策略的上下文不暴露当前候选", async () => {
+  let calls = 0;
   const result = await analyzeQuality(
     configFor(
       [
@@ -911,8 +1100,13 @@ void test("同次候选的等价回调分别接收当前候选，参照不共享
       ],
       [{ id: "saved", text: "错误码 304" }],
       checkerFor({
-        targetEquivalence: (_signature, _language, input) =>
-          input.candidate.sourceKey,
+        targetEquivalence: (signature, _language, context) => {
+          calls++;
+          assert.equal("candidate" in context, false);
+          assert.equal("sourceUnit" in context, false);
+          assert.ok(context.facts);
+          return signatureKey(signature);
+        },
       }),
     ),
     {
@@ -924,6 +1118,7 @@ void test("同次候选的等价回调分别接收当前候选，参照不共享
   );
   assert.equal(result.status, "complete");
   assert.deepEqual(result.diagnostics, []);
+  assert.ok(calls > 0);
 });
 
 void test("显式消息族依据复用无关编辑的缓存和例外，并跟随全部同族成员与位置变化", async () => {

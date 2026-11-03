@@ -18,11 +18,7 @@ import type { TemplateOptions, TextAnalysis } from "@lioni/text-analysis";
 
 import type { MessageFamilyInput } from "../../message-families.ts";
 import { createMessageFamilyChecker } from "../../message-family-checker.ts";
-import type {
-  MessageFamilyProjection,
-  MessageFamilyReferenceProjection,
-  MessageFamilySubject,
-} from "../../message-family-checker.ts";
+import type { MessageFamilySubject } from "../../message-family-checker.ts";
 import { createTermChecker } from "../../terms.ts";
 import { vueI18nDependencies } from "../dependencies.ts";
 import { memoizedVueI18nMessage } from "../message-memo.ts";
@@ -281,39 +277,12 @@ export function createVueI18nMessageFamilyCheck<
         },
       };
     },
-    project: async (
-      input: MessageFamilyProjection<
-        TUnit,
-        TUnit,
-        TTranslation,
-        TBody,
-        TUnavailable,
-        FamilySubject<TUnit, TBody>
-      >,
-      context: QualityCheckInput<
-        TUnit,
-        TTranslation,
-        unknown,
-        TBody,
-        TUnavailable
-      >,
-    ) => {
-      const { configuration: _configuration, ...referenceInput } = context;
-      const projection =
-        input.kind === "candidate"
-          ? input.subject.projection
-          : options.reference(
-              input as MessageFamilyReferenceProjection<
-                TUnit,
-                TTranslation,
-                TBody,
-                TUnavailable
-              >,
-              referenceInput,
-            );
-      return familyInput(projection, vueI18nDependencies(context).policies);
-    },
-    projectCandidate: async (input) =>
+    reference: (reference, context) =>
+      familyInput(
+        options.reference(reference, context),
+        vueI18nDependencies(context).policies,
+      ),
+    project: async (input) =>
       familyInput(
         await memoizedVueI18nProjection(input, options.project),
         vueI18nDependencies(input).policies,
@@ -424,7 +393,7 @@ function terminologyVersion(
 
 function familyVersion(identity: VueI18nCheckIdentity): string {
   return [
-    "vue-i18n-suite/message-family/v4",
+    "vue-i18n-suite/message-family/v5",
     `@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
     identity.hostVersion,
   ].join("+");

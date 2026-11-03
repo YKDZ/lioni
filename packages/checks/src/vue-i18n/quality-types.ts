@@ -8,10 +8,12 @@ import type {
 import type { TermbaseData } from "@lioni/terminology";
 import type { QuantityOptions } from "@lioni/text-analysis";
 
-import type { MessageFamilyReferenceProjection } from "../message-family-checker.ts";
+import type {
+  MessageFamilyReferenceProjection,
+  MessageFamilyContext,
+} from "../message-family-checker.ts";
 import type {
   VueI18nMessageProjection,
-  VueI18nProjectionInput,
   VueI18nProjector,
 } from "./quality-projection.ts";
 
@@ -102,7 +104,7 @@ export type VueI18nReferenceProjector<
   TUnavailable = never,
 > = (
   reference: VueI18nMessageReference<TUnit, TTranslation, TBody, TUnavailable>,
-  input: VueI18nProjectionInput<TUnit, TTranslation, TBody, TUnavailable>,
+  input: MessageFamilyContext<TUnit, TTranslation, TBody, TUnavailable>,
 ) => VueI18nMessageProjection;
 
 export type VueI18nChecksOptions<

@@ -159,13 +159,12 @@ export {
   createTermChecker,
 } from "@lioni/checks";
 export type {
-  MessageFamilyCandidateProjection,
   MessageFamilyCheckerOptions,
+  MessageFamilyContext,
   MessageFamilyComparison,
   MessageFamilyInput,
   MessageFamilyIssue,
   MessageFamilyLimits,
-  MessageFamilyProjection,
   MessageFamilyReference,
   MessageFamilyReferenceProjection,
   MessageFamilySignature,

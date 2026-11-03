@@ -24,9 +24,8 @@ export type {
 } from "./message-families.ts";
 export { createMessageFamilyChecker } from "./message-family-checker.ts";
 export type {
-  MessageFamilyCandidateProjection,
   MessageFamilyCheckerOptions,
-  MessageFamilyProjection,
+  MessageFamilyContext,
   MessageFamilyReferenceProjection,
   MessageFamilySubject,
 } from "./message-family-checker.ts";

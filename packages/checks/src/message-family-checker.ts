@@ -52,6 +52,7 @@ import {
   compareMessageFamily,
   indexMessageFamilies,
 } from "./message-families.ts";
+import { MessageFamilyBasis } from "./message-family-basis.ts";
 const configurationSchema = z
   .object({ limits: messageFamilyLimitsSchema })
   .readonly();
@@ -65,16 +66,6 @@ export type MessageFamilySubject<
   readonly sourceKey: string;
   readonly language: string;
   readonly content: TBody;
-};
-
-export type MessageFamilyCandidateProjection<
-  TSelectedUnit extends TranslationUnitInput,
-  TBody,
-  TSubject extends MessageFamilySubject<TSelectedUnit, TBody> =
-    MessageFamilySubject<TSelectedUnit, TBody>,
-> = {
-  readonly kind: "candidate";
-  readonly subject: TSubject;
 };
 
 export type MessageFamilyReferenceProjection<
@@ -95,17 +86,16 @@ export type MessageFamilyReferenceProjection<
   >;
 };
 
-export type MessageFamilyProjection<
+/** 同次检查的固定依据；参照解释不能读取当前候选。 */
+export type MessageFamilyContext<
   TUnit extends TranslationUnitInput,
-  TSelectedUnit extends TUnit,
   TTranslation,
   TBody,
-  TUnavailable,
-  TSubject extends MessageFamilySubject<TSelectedUnit, TBody> =
-    MessageFamilySubject<TSelectedUnit, TBody>,
-> =
-  | MessageFamilyCandidateProjection<TSelectedUnit, TBody, TSubject>
-  | MessageFamilyReferenceProjection<TUnit, TTranslation, TBody, TUnavailable>;
+  TUnavailable = never,
+> = Pick<
+  QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
+  "facts" | "dependencies" | "relationships" | "memo"
+>;
 
 export type MessageFamilyCheckerOptions<
   TUnit extends TranslationUnitInput,
@@ -122,26 +112,8 @@ export type MessageFamilyCheckerOptions<
   readonly select: (
     input: QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
   ) => Awaitable<QualityCheckSelection<TSubject>>;
-  /** 只映射宿主资料，不执行分析；候选与已保存参照共用该映射。 */
+  /** 投影当前候选；保留候选选择后的完整上下文。 */
   readonly project: (
-    input: MessageFamilyProjection<
-      TUnit,
-      TSelectedUnit,
-      TTranslation,
-      TBody,
-      TUnavailable,
-      TSubject
-    >,
-    context: QualityCheckInput<
-      TUnit,
-      TTranslation,
-      unknown,
-      TBody,
-      TUnavailable
-    >,
-  ) => Awaitable<MessageFamilyInput>;
-  /** 候选可访问完整 QA 输入，以便复用候选共用投影。 */
-  readonly projectCandidate?: (
     input: QualityCheckProjectionInput<
       TUnit,
       TTranslation,
@@ -150,6 +122,16 @@ export type MessageFamilyCheckerOptions<
       TBody,
       TUnavailable
     >,
+  ) => Awaitable<MessageFamilyInput>;
+  /** 投影已保存参照，同一固定依据下可跨候选复用。 */
+  readonly reference: (
+    reference: MessageFamilyReferenceProjection<
+      TUnit,
+      TTranslation,
+      TBody,
+      TUnavailable
+    >,
+    context: MessageFamilyContext<TUnit, TTranslation, TBody, TUnavailable>,
   ) => Awaitable<MessageFamilyInput>;
   /**
    * 显式声明宿主投影、选择及等价策略所用的额外依据。
@@ -173,7 +155,7 @@ export type MessageFamilyCheckerOptions<
   readonly targetEquivalence?: (
     signature: TemplateSignature,
     language: string,
-    input: QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
+    input: MessageFamilyContext<TUnit, TTranslation, TBody, TUnavailable>,
   ) => string;
   readonly limits?: Partial<MessageFamilyLimits>;
 };
@@ -193,6 +175,11 @@ type ProjectedReferences = {
   readonly issues: readonly MessageFamilyIssue[];
   readonly basis: readonly unknown[];
 };
+
+type ReferenceEvidence = Pick<
+  ProjectedReferences,
+  "incomplete" | "issues" | "basis"
+>;
 
 const defaultLimits: MessageFamilyLimits = {
   maxCategories: 6,
@@ -239,64 +226,132 @@ export function createMessageFamilyChecker<
       defaultLimits.maxSourcesPerCategory,
   };
 
-  async function projectReferences(
-    input: QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
-    language: string,
-    candidateSourceKey: string,
-    familyKeys: ReadonlySet<string>,
-  ): Promise<ProjectedReferences> {
-    const facts = input.facts;
-    const issues: MessageFamilyIssue[] = [];
-    const references: MessageFamilyReference[] = [];
-    const basis: unknown[] = [];
-    let incomplete = false;
-    const sourceByKey = new Map(
-      facts.source.units.map((unit) => [unit.key, unit]),
-    );
-    if (
-      facts.source.read.status !== "complete" ||
-      facts.source.read.scopes.some(
-        ({ enumeration }) => enumeration !== "complete",
-      )
-    ) {
-      incomplete = true;
-      issues.push(
-        issue(
-          "sourceEvidenceIncomplete",
-          "原文读取不完整，可能缺少消息族参照。",
-        ),
-      );
-      basis.push({ sourceRead: facts.source.read });
-    }
-    const translationRead = facts.translations.reads.find(
-      (read) => read.language === language,
-    );
-    // 有明确 covers 的缺口由对应关联处理；没有范围归属的读取失败可能隐藏任意同族参照。
-    if (
-      translationRead === undefined ||
-      translationRead.error !== undefined ||
-      translationRead.scopes.some(
-        (scope) =>
-          scope.enumeration !== "complete" && scope.covers.length === 0,
-      )
-    ) {
-      incomplete = true;
-      issues.push(
-        issue(
-          "translationEvidenceIncomplete",
-          `目标语言 ${language} 的译文读取不完整，可能缺少消息族参照。`,
-          { language },
-        ),
-      );
-      basis.push({ translationRead: translationRead ?? null });
-    }
+  const savedReferenceKey = (
+    reference: MessageFamilyReferenceProjection<
+      TUnit,
+      TTranslation,
+      TBody,
+      TUnavailable
+    >,
+    context: MessageFamilyContext<TUnit, TTranslation, TBody, TUnavailable>,
+  ): readonly unknown[] => [
+    context.facts,
+    context.dependencies,
+    context.relationships,
+    reference.sourceUnit,
+    reference.association,
+    reference.translation,
+    reference.language,
+  ];
 
-    const replacedIndex = candidateRecordIndex(
-      facts,
-      candidateSourceKey,
+  // 关联属于映射依据：同一物理译文通过不同原文映射时不能共享投影。
+  async function prepareSavedReference(
+    reference: MessageFamilyReferenceProjection<
+      TUnit,
+      TTranslation,
+      TBody,
+      TUnavailable
+    >,
+    context: MessageFamilyContext<TUnit, TTranslation, TBody, TUnavailable>,
+  ) {
+    const { sourceKey, language } = reference;
+    let projected: MessageFamilyInput;
+    try {
+      projected = validateProjection(
+        await options.reference(reference, context),
+        sourceKey,
+        language,
+        checkId,
+      );
+    } catch (error) {
+      throw new QualityCheckBindingError(checkId, "projection", error);
+    }
+    const projectionIssues = withSource(
+      projected.issues ?? [],
+      sourceKey,
       language,
     );
-    for (const association of facts.associations) {
+    if (projected.complete === false && projectionIssues.length === 0) {
+      projectionIssues.push(
+        issue(
+          "referenceProjectionIncomplete",
+          "保存参照投影仍有未提供的消息组。",
+          { language, sourceKey },
+        ),
+      );
+    }
+    const signedGroups = await Promise.all(
+      projected.groups.map(async (group) => {
+        assertProjectedLanguage(group, language, checkId);
+        return signGroup(
+          group,
+          analysis,
+          sourceTemplate,
+          targetTemplate,
+          options.targetEquivalence,
+          language,
+          { sourceKey },
+          context.memo,
+          context,
+        );
+      }),
+    );
+    return { projected, projectionIssues, signedGroups };
+  }
+
+  async function evaluateReferences(
+    input: MessageFamilyContext<TUnit, TTranslation, TBody, TUnavailable>,
+    language: string,
+    replacedIndex: number | undefined,
+    familyKeys: ReadonlySet<string>,
+    associations: readonly TranslationAssociationFact[],
+    sourceByKey: ReadonlyMap<string, SourceUnitFact<TUnit>>,
+    readEvidence: boolean,
+  ): Promise<ReferenceEvidence> {
+    const facts = input.facts;
+    const issues: MessageFamilyIssue[] = [];
+    const basis: unknown[] = [];
+    let incomplete = false;
+    if (readEvidence) {
+      if (
+        facts.source.read.status !== "complete" ||
+        facts.source.read.scopes.some(
+          ({ enumeration }) => enumeration !== "complete",
+        )
+      ) {
+        incomplete = true;
+        issues.push(
+          issue(
+            "sourceEvidenceIncomplete",
+            "原文读取不完整，可能缺少消息族参照。",
+          ),
+        );
+        basis.push({ sourceRead: facts.source.read });
+      }
+      const translationRead = facts.translations.reads.find(
+        (read) => read.language === language,
+      );
+      // 有明确 covers 的缺口由对应关联处理；没有范围归属的读取失败可能隐藏任意同族参照。
+      if (
+        translationRead === undefined ||
+        translationRead.error !== undefined ||
+        translationRead.scopes.some(
+          (scope) =>
+            scope.enumeration !== "complete" && scope.covers.length === 0,
+        )
+      ) {
+        incomplete = true;
+        issues.push(
+          issue(
+            "translationEvidenceIncomplete",
+            `目标语言 ${language} 的译文读取不完整，可能缺少消息族参照。`,
+            { language },
+          ),
+        );
+        basis.push({ translationRead: translationRead ?? null });
+      }
+    }
+    for (const association of associations) {
       if (association.language !== language) continue;
       const sourceKey = association.sourceKey;
       const sourceUnit = sourceByKey.get(sourceKey);
@@ -369,60 +424,24 @@ export function createMessageFamilyChecker<
           );
           continue;
         }
-        let projected: MessageFamilyInput;
-        try {
-          projected = validateProjection(
-            await options.project(
-              {
-                kind: "reference",
-                sourceUnit,
-                sourceKey,
-                language,
-                association,
-                translation,
-              },
-              input,
-            ),
-            sourceKey,
-            language,
-            checkId,
+        const { projected, projectionIssues, signedGroups } =
+          await input.memo.memo(prepareSavedReference, {
+            key: savedReferenceKey,
+          })(
+            {
+              kind: "reference",
+              sourceUnit,
+              sourceKey,
+              language,
+              association,
+              translation,
+            },
+            fixedContext(input),
           );
-        } catch (error) {
-          throw new QualityCheckBindingError(checkId, "projection", error);
-        }
-        const projectionIssues = withSource(
-          projected.issues ?? [],
-          sourceKey,
-          language,
-        );
         if (projected.complete === false) {
           knownFamilies = false;
           associationIncomplete = true;
-          if (projectionIssues.length === 0)
-            projectionIssues.push(
-              issue(
-                "referenceProjectionIncomplete",
-                "保存参照投影仍有未提供的消息组。",
-                { language, sourceKey },
-              ),
-            );
         }
-        const signedGroups = await Promise.all(
-          projected.groups.map(async (group) => {
-            assertProjectedLanguage(group, language, checkId);
-            return signGroup(
-              group,
-              analysis,
-              sourceTemplate,
-              targetTemplate,
-              options.targetEquivalence,
-              language,
-              { sourceKey },
-              input.memo,
-              input,
-            );
-          }),
-        );
         const projectionRelevant = signedGroups.some(({ familyKey }) =>
           familyKeys.has(familyKey),
         );
@@ -455,21 +474,6 @@ export function createMessageFamilyChecker<
             incomplete = true;
             continue;
           }
-          references.push({
-            familyKey: signed.familyKey,
-            targetKey: signed.targetKey,
-            translationIndex,
-            translationIdentity: translation.identity,
-            sourceKey,
-            group: signed.group,
-            sourceSignatures: signed.sourceSignatures,
-            targetSignatures: signed.targetSignatures,
-            translationLocation: {
-              language,
-              range: translation.range,
-              key: sourceKey,
-            },
-          });
         }
       }
       if (
@@ -487,11 +491,265 @@ export function createMessageFamilyChecker<
       }
     }
     return {
-      index: indexMessageFamilies(references),
       incomplete,
       issues: issues.sort(stableCompare),
       basis: basis.sort(stableCompare),
     };
+  }
+
+  const directoryKey = (
+    input: MessageFamilyContext<TUnit, TTranslation, TBody, TUnavailable>,
+    language: string,
+    _firstExcluded: number | undefined,
+  ): readonly unknown[] => [
+    input.facts,
+    input.dependencies,
+    input.relationships,
+    language,
+  ];
+
+  async function prepareDirectory(
+    input: MessageFamilyContext<TUnit, TTranslation, TBody, TUnavailable>,
+    language: string,
+    firstExcluded: number | undefined,
+  ) {
+    const facts = input.facts;
+    const sourceByKey = new Map(
+      facts.source.units.map((unit) => [unit.key, unit]),
+    );
+    const associations = facts.associations.filter(
+      (item) => item.language === language,
+    );
+    const byRecord = new Map<number, TranslationAssociationFact[]>();
+    for (const association of associations) {
+      for (const index of association.translationIndexes) {
+        const items = byRecord.get(index) ?? [];
+        items.push(association);
+        byRecord.set(index, items);
+      }
+    }
+    const reads = await evaluateReferences(
+      input,
+      language,
+      undefined,
+      new Set(),
+      [],
+      sourceByKey,
+      true,
+    );
+    const readsDigest = new MessageFamilyBasis([
+      ["reads", reads.basis],
+    ]).withChanges([]);
+    let pending = firstExcluded;
+    let index = indexMessageFamilies([]);
+    const byFamily = new Map<string, Set<TranslationAssociationFact>>();
+    const unknown = new Set<TranslationAssociationFact>();
+    type View = {
+      readonly chunks: Map<TranslationAssociationFact, ReferenceEvidence>;
+      readonly issueAssociations: Set<TranslationAssociationFact>;
+      readonly basis: MessageFamilyBasis;
+      readonly incompleteCount: number;
+    };
+    const views = new Map<string, Promise<View>>();
+    const associationKey = (association: TranslationAssociationFact) =>
+      JSON.stringify([association.language, association.sourceKey]);
+
+    // 首个候选自己的旧记录按需延后；它首次成为其他候选的参照时只补齐一次。
+    async function rebuild() {
+      byFamily.clear();
+      unknown.clear();
+      views.clear();
+      const references: MessageFamilyReference[] = [];
+      for (const association of associations) {
+        const { sourceKey } = association;
+        const sourceUnit = sourceByKey.get(sourceKey);
+        if (sourceUnit === undefined) {
+          unknown.add(association);
+          continue;
+        }
+        if (
+          association.translationIndexes.length === 0 &&
+          (sourceUnit.bodyAvailability !== "available" ||
+            association.coverageStatus !== "complete" ||
+            ["unknown", "conflict", "unavailable"].includes(association.status))
+        )
+          unknown.add(association);
+        for (const translationIndex of association.translationIndexes) {
+          if (translationIndex === pending) continue;
+          const translation = facts.translations.records[translationIndex];
+          if (translation === undefined || translation.language !== language) {
+            unknown.add(association);
+            continue;
+          }
+          const prepared = await input.memo.memo(prepareSavedReference, {
+            key: savedReferenceKey,
+          })(
+            {
+              kind: "reference",
+              sourceUnit,
+              sourceKey,
+              language,
+              association,
+              translation,
+            },
+            input,
+          );
+          if (prepared.projected.complete === false) unknown.add(association);
+          for (const signed of prepared.signedGroups) {
+            if (signed.familyKey === "") {
+              unknown.add(association);
+              continue;
+            }
+            let members = byFamily.get(signed.familyKey);
+            if (members === undefined) {
+              members = new Set();
+              byFamily.set(signed.familyKey, members);
+            }
+            members.add(association);
+            if (
+              signed.targetKey === undefined ||
+              signed.targetSignatures === undefined
+            )
+              continue;
+            references.push({
+              familyKey: signed.familyKey,
+              targetKey: signed.targetKey,
+              translationIndex,
+              translationIdentity: translation.identity,
+              sourceKey,
+              group: signed.group,
+              sourceSignatures: signed.sourceSignatures,
+              targetSignatures: signed.targetSignatures,
+              translationLocation: {
+                language,
+                range: translation.range,
+                key: sourceKey,
+              },
+            });
+          }
+        }
+      }
+      index = indexMessageFamilies(references);
+    }
+    await rebuild();
+
+    async function prepareView(familyKey: string): Promise<View> {
+      const chunks = new Map<TranslationAssociationFact, ReferenceEvidence>();
+      const issueAssociations = new Set<TranslationAssociationFact>();
+      const entries: [string, unknown][] = [];
+      let incompleteCount = 0;
+      for (const association of new Set([
+        ...(byFamily.get(familyKey) ?? []),
+        ...unknown,
+      ])) {
+        const chunk = await evaluateReferences(
+          input,
+          language,
+          pending,
+          new Set([familyKey]),
+          [association],
+          sourceByKey,
+          false,
+        );
+        chunks.set(association, chunk);
+        if (chunk.basis.length > 0)
+          entries.push([associationKey(association), chunk.basis]);
+        if (chunk.incomplete) incompleteCount++;
+        if (chunk.issues.length > 0) issueAssociations.add(association);
+      }
+      return {
+        chunks,
+        issueAssociations,
+        basis: new MessageFamilyBasis(entries),
+        incompleteCount,
+      };
+    }
+
+    return async (
+      excluded: number | undefined,
+      familyKeys: ReadonlySet<string>,
+    ): Promise<ProjectedReferences> => {
+      if (pending !== undefined && excluded !== pending) {
+        pending = undefined;
+        await rebuild();
+      }
+      const basis: unknown[] = [readsDigest];
+      let incomplete = reads.incomplete;
+      const issueAssociations = new Set<TranslationAssociationFact>();
+      const requestedFamilies =
+        familyKeys.size === 0 ? new Set([""]) : familyKeys;
+      for (const familyKey of [...requestedFamilies].sort()) {
+        let promised = views.get(familyKey);
+        if (promised === undefined) {
+          promised = prepareView(familyKey);
+          views.set(familyKey, promised);
+        }
+        const view = await promised;
+        let incompleteCount = view.incompleteCount;
+        const changes: [string, unknown][] = [];
+        for (const association of view.issueAssociations)
+          issueAssociations.add(association);
+        if (excluded !== undefined && excluded !== pending) {
+          for (const association of byRecord.get(excluded) ?? []) {
+            const original = view.chunks.get(association);
+            if (original === undefined) continue;
+            const replacement = await evaluateReferences(
+              input,
+              language,
+              excluded,
+              new Set([familyKey]),
+              [association],
+              sourceByKey,
+              false,
+            );
+            if (original.incomplete) incompleteCount--;
+            if (replacement.incomplete) incompleteCount++;
+            if (replacement.issues.length > 0)
+              issueAssociations.add(association);
+            changes.push([
+              associationKey(association),
+              replacement.basis.length === 0 ? undefined : replacement.basis,
+            ]);
+          }
+        }
+        incomplete ||= incompleteCount > 0;
+        basis.push([familyKey, view.basis.withChanges(changes)]);
+      }
+      // 只展开实际要输出的问题；正常的大族查询不再遍历所有关联或族成员。
+      const issues = [...reads.issues];
+      for (const association of issueAssociations) {
+        const current = await evaluateReferences(
+          input,
+          language,
+          excluded,
+          familyKeys,
+          [association],
+          sourceByKey,
+          false,
+        );
+        issues.push(...current.issues);
+        incomplete ||= current.incomplete;
+      }
+      return { index, incomplete, issues: issues.sort(stableCompare), basis };
+    };
+  }
+
+  async function projectReferences(
+    input: QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
+    language: string,
+    sourceKey: string,
+    familyKeys: ReadonlySet<string>,
+  ): Promise<ProjectedReferences> {
+    const excluded = candidateRecordIndex(
+      input.facts,
+      sourceKey,
+      language,
+      input.memo,
+    );
+    const query = await input.memo.memo(prepareDirectory, {
+      key: directoryKey,
+    })(fixedContext(input), language, excluded);
+    return query(excluded, familyKeys);
   }
 
   type PreparedSubject = {
@@ -512,7 +770,7 @@ export function createMessageFamilyChecker<
     TUnavailable
   >({
     id: checkId,
-    version: `checks.message-family-consistency/v2+${options.hostVersion}`,
+    version: `checks.message-family-consistency/v3+${options.hostVersion}`,
     configurationSchema,
     configuration: { limits },
     inputSchema,
@@ -521,9 +779,7 @@ export function createMessageFamilyChecker<
       if (selection.status !== "selected") return selection;
       const subject = selection.subject;
       const projected = validateProjection(
-        options.projectCandidate === undefined
-          ? await options.project({ kind: "candidate", subject }, input)
-          : await options.projectCandidate({ ...input, subject }),
+        await options.project({ ...input, subject }),
         subject.sourceKey,
         subject.language,
         checkId,
@@ -544,7 +800,7 @@ export function createMessageFamilyChecker<
           );
         }),
       );
-      // 宿主回调可读取当前候选，参照准备不可按 facts/language 错误共享首次候选的结果。
+      // 候选视图仍须排除自身旧记录；保存参照的映射与签名已按固定依据复用。
       const references = await projectReferences(
         input,
         subject.language,
@@ -576,6 +832,7 @@ export function createMessageFamilyChecker<
               input.facts,
               subject.sourceKey,
               subject.language,
+              input.memo,
             );
             return snapshotJsonValue(
               {
@@ -597,6 +854,7 @@ export function createMessageFamilyChecker<
                     input.facts,
                     subject.sourceKey,
                     subject.language,
+                    input.memo,
                   ),
                 ),
                 replacement:
@@ -645,6 +903,7 @@ export function createMessageFamilyChecker<
           input.facts,
           input.subject.value.sourceKey,
           input.subject.value.language,
+          input.memo,
         ),
       );
       const candidateIssues: MessageFamilyIssue[] = withSource(
@@ -678,6 +937,7 @@ export function createMessageFamilyChecker<
         input.facts,
         input.subject.value.sourceKey,
         input.subject.value.language,
+        input.memo,
       );
       const excludedRecordIndexes = new Set<number>();
       if (
@@ -844,19 +1104,13 @@ async function signGroup<
     | ((
         signature: TemplateSignature,
         language: string,
-        input: QualityCheckInput<
-          TUnit,
-          TTranslation,
-          unknown,
-          TBody,
-          TUnavailable
-        >,
+        input: MessageFamilyContext<TUnit, TTranslation, TBody, TUnavailable>,
       ) => string)
     | undefined,
   language: string,
   context: { readonly sourceKey?: string },
   memo: MemoScope,
-  input: QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
+  input: MessageFamilyContext<TUnit, TTranslation, TBody, TUnavailable>,
 ): Promise<SignedMessageGroup> {
   const issues: MessageFamilyIssue[] = [];
   const source = await signText(
@@ -900,7 +1154,7 @@ async function signGroup<
     };
   const targetParts = target.signatures.map((signature) => {
     const key =
-      targetEquivalence?.(signature, language, input) ??
+      targetEquivalence?.(signature, language, fixedContext(input)) ??
       signatureKey(signature);
     if (typeof key !== "string" || key.length === 0)
       throw new TypeError("目标签名等价键必须为非空字符串。");
@@ -1107,8 +1361,9 @@ function candidateRecordIndex<
   facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
   sourceKey: string,
   language: string,
+  memo: MemoScope,
 ): number | undefined {
-  const association = findAssociation(facts, sourceKey, language);
+  const association = findAssociation(facts, sourceKey, language, memo);
   if (
     association?.coverageStatus === "complete" &&
     (association.status === "matched" ||
@@ -1128,11 +1383,26 @@ function findAssociation<
   facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
   sourceKey: string,
   language: string,
+  memo: MemoScope,
 ): TranslationAssociationFact | undefined {
-  return facts.associations.find(
-    (association) =>
-      association.sourceKey === sourceKey && association.language === language,
-  );
+  return memo.memo(indexAssociations)(facts).get(language)?.get(sourceKey);
+}
+
+/** 同次事实的关联定位只建一次，避免候选替换和指纹阶段反复线性查找。 */
+function indexAssociations(facts: {
+  readonly associations: readonly TranslationAssociationFact[];
+}) {
+  const languages = new Map<string, Map<string, TranslationAssociationFact>>();
+  for (const association of facts.associations) {
+    let sources = languages.get(association.language);
+    if (sources === undefined) {
+      sources = new Map();
+      languages.set(association.language, sources);
+    }
+    if (!sources.has(association.sourceKey))
+      sources.set(association.sourceKey, association);
+  }
+  return languages;
 }
 
 function translationLocation<
@@ -1254,4 +1524,21 @@ function validateProjection(
       result.issues,
     );
   return result.value;
+}
+
+function fixedContext<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  input: MessageFamilyContext<TUnit, TTranslation, TBody, TUnavailable>,
+): MessageFamilyContext<TUnit, TTranslation, TBody, TUnavailable> {
+  const { facts, dependencies, relationships, memo } = input;
+  return {
+    facts,
+    dependencies,
+    ...(relationships === undefined ? {} : { relationships }),
+    memo,
+  };
 }
