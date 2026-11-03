@@ -225,6 +225,18 @@ testArtifactConsumer(
         { checkId: "unlisted", status: "complete" },
       ],
     );
+    assert.equal(
+      sdk.sharedLoaderFailure.result.exceptionApplicability.find(
+        ({ checkId }) => checkId === "syntax",
+      )?.status,
+      "not-verified",
+    );
+    assert.equal(
+      sdk.sharedLoaderFailure.result.exceptionApplicability.find(
+        ({ checkId }) => checkId === "syntax",
+      )?.reason,
+      "no-comparable-basis",
+    );
     assert.ok(
       sdk.sharedLoaderFailure.events.includes("rule:unlisted:normalized-v4"),
     );

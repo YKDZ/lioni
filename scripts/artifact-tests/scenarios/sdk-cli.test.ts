@@ -45,7 +45,11 @@ testArtifactConsumer(
       textReport.stdout,
       /语言范围：读取 fr、de；所选候选语言 fr、de/u,
     );
-    assert.match(textReport.stdout, /检查范围：已选候选 4 条，检查项 1 项/u);
+    assert.match(
+      textReport.stdout,
+      /检查项范围：配置 1 项，本次全量 1 项（number-correspondence）/u,
+    );
+    assert.match(textReport.stdout, /候选范围：已选候选 4 条/u);
 
     const report = await runProcess(executable, [
       "qa",
