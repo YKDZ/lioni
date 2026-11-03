@@ -36,6 +36,7 @@ export {
   ComparisonContractError,
   DuplicateTranslationUnitKeyError,
   QualityExceptionFormatError,
+  QualityDataReaderContractError,
   StandardSchemaContractError,
   TranslationIdentityContractError,
 } from "@lioni/core";
