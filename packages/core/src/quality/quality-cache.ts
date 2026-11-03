@@ -8,7 +8,10 @@ export type CacheableQualityCheckOutcome<
   readonly status: "complete" | "not-applicable";
 };
 
-/** 原始检查结果缓存；异常处理和本次执行关联由缓存消费者在读取后完成。 */
+/**
+ * 原始检查结果缓存；异常处理和本次执行关联由缓存消费者在读取后完成。
+ * 适配器可保留并返回传入的同一引用，但双方都必须只读使用；需要修改时先复制。
+ */
 export type QualityCheckResultCache<
   TObject extends QualityObject = QualityObject,
 > = {

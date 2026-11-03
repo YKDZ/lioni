@@ -90,27 +90,29 @@ export type QualityEvidence<TObject extends QualityObject = QualityObject> = {
   readonly value: unknown;
 };
 
-export type QualityDiagnostic<TObject extends QualityObject = QualityObject> = {
-  readonly checkId: string;
-  readonly executionId: number;
-  readonly severity: "error" | "warning" | "info";
-  readonly object: TObject;
-  readonly location: QualityLocation;
-  readonly message: string;
-  readonly evidence: readonly QualityEvidence<TObject>[];
-  readonly handling: QualityDiagnosticHandling;
-};
+export type QualityDiagnostic<TObject extends QualityObject = QualityObject> =
+  ReadonlyQualityValue<{
+    readonly checkId: string;
+    readonly executionId: number;
+    readonly severity: "error" | "warning" | "info";
+    readonly object: TObject;
+    readonly location: QualityLocation;
+    readonly message: string;
+    readonly evidence: readonly QualityEvidence<TObject>[];
+    readonly handling: QualityDiagnosticHandling;
+  }>;
 
 export type QualityFinding<TObject extends QualityObject = QualityObject> =
   Omit<QualityDiagnostic<TObject>, "checkId" | "executionId" | "handling">;
 
-export type QualityIssue<TObject extends QualityObject = QualityObject> = {
-  readonly code: string;
-  readonly message: string;
-  readonly object?: TObject;
-  readonly location?: QualityLocation;
-  readonly evidence?: readonly QualityEvidence<TObject>[];
-};
+export type QualityIssue<TObject extends QualityObject = QualityObject> =
+  ReadonlyQualityValue<{
+    readonly code: string;
+    readonly message: string;
+    readonly object?: TObject;
+    readonly location?: QualityLocation;
+    readonly evidence?: readonly QualityEvidence<TObject>[];
+  }>;
 
 export type QualityCoverage = {
   readonly selected: number;
@@ -120,10 +122,33 @@ export type QualityCoverage = {
   readonly failed: number;
 };
 
+type ReadonlyQualityValue<TValue> = TValue extends readonly (infer TItem)[]
+  ? readonly ReadonlyQualityValue<TItem>[]
+  : TValue extends object
+    ? { readonly [TKey in keyof TValue]: ReadonlyQualityValue<TValue[TKey]> }
+    : TValue;
+
 type MutableQualityCoverage = {
   -readonly [TKey in keyof QualityCoverage]: QualityCoverage[TKey];
 };
 
+type AcceptedQualityCheckOutcome = {
+  readonly outcome: QualityCheckOutcome;
+  readonly cacheableOutcome?: CacheableQualityCheckOutcome;
+};
+
+type QualityCheckOutcomeResolution =
+  | { readonly outcome: QualityCheckOutcome }
+  | {
+      readonly execute: () => Awaitable<QualityCheckOutcome>;
+      readonly cache?: QualityCheckResultCache;
+      readonly cacheKey?: string;
+    };
+
+/**
+ * 检查器返回的原始结果。QA 在接入时隔离一次，之后缓存与报告共享只读数据；
+ * 检查器完成返回后不得继续修改原对象。
+ */
 export type QualityCheckOutcome<TObject extends QualityObject = QualityObject> =
   {
     readonly status: Exclude<QualityCheckStatus, "not-run">;
@@ -966,9 +991,7 @@ export async function runQualityChecks<
         const executionId = nextExecutionId;
         nextExecutionId += 1;
         let fingerprint: QualityInputFingerprint | undefined;
-        let cacheKey: string | undefined;
-        let shouldCacheOutcome = false;
-        let outcome: QualityCheckOutcome;
+        let outcomeResolution: QualityCheckOutcomeResolution;
         try {
           const sourceUnit = sourceUnits.get(candidate.sourceKey) ?? null;
           const endPreparation = candidateProfile?.stage("prepareInput");
@@ -1009,27 +1032,29 @@ export async function runQualityChecks<
           if (preparation.status === "ready") {
             fingerprint = preparation.fingerprint;
             const key = preparation.cacheKey;
-            cacheKey = key;
-            const cachedOutcome =
-              options.qualityCheckResultCache === undefined
-                ? undefined
-                : await readCachedQualityOutcome(
-                    options.qualityCheckResultCache,
-                    key,
-                    candidateProfile,
-                  );
-            if (cachedOutcome === undefined) {
-              candidateProfile?.executed();
-              const endExecute = candidateProfile?.stage("execute");
-              try {
-                outcome = await preparation.execute();
-              } finally {
-                endExecute?.();
-              }
-              shouldCacheOutcome = true;
-            } else outcome = cachedOutcome;
+            const execute = preparation.execute.bind(preparation);
+            outcomeResolution = {
+              execute: async () => {
+                try {
+                  return await execute();
+                } catch (error) {
+                  if (
+                    error instanceof StandardSchemaContractError ||
+                    error instanceof QualityCheckBindingError
+                  )
+                    throw error;
+                  return failedQualityCheckOutcome(candidate, error);
+                }
+              },
+              ...(options.qualityCheckResultCache === undefined
+                ? {}
+                : {
+                    cache: options.qualityCheckResultCache,
+                    cacheKey: key,
+                  }),
+            };
           } else {
-            outcome = preparation.outcome;
+            outcomeResolution = { outcome: preparation.outcome };
           }
         } catch (error) {
           if (
@@ -1037,41 +1062,16 @@ export async function runQualityChecks<
             error instanceof QualityCheckBindingError
           )
             throw error;
-          outcome = {
-            status: "failed",
-            diagnostics: [],
-            issues: [
-              {
-                code: "checkFailed",
-                message: error instanceof Error ? error.message : String(error),
-                object: candidateObject(candidate),
-              },
-            ],
-            coverage: {
-              selected: 1,
-              evaluated: 0,
-              notApplicable: 0,
-              incomplete: 0,
-              failed: 1,
-            },
+          outcomeResolution = {
+            outcome: failedQualityCheckOutcome(candidate, error),
           };
         }
 
-        const endSnapshot = candidateProfile?.stage("snapshot");
-        const stableOutcome = snapshotQualityData(outcome);
-        endSnapshot?.();
-        if (
-          shouldCacheOutcome &&
-          cacheKey !== undefined &&
-          options.qualityCheckResultCache !== undefined &&
-          isCacheableQualityCheckOutcome(stableOutcome)
-        )
-          await writeCachedQualityOutcome(
-            options.qualityCheckResultCache,
-            cacheKey,
-            stableOutcome,
-            candidateProfile,
-          );
+        const accepted = await resolveQualityCheckOutcome(
+          outcomeResolution,
+          candidateProfile,
+        );
+        const stableOutcome = accepted.outcome;
         const endResults = candidateProfile?.stage("results");
         const findings = stableOutcome.diagnostics;
         issues.push(...stableOutcome.issues);
@@ -1158,6 +1158,30 @@ function snapshotQualityData<TValue>(value: TValue): TValue {
   return snapshotJsonValue(value, "QA 输入与结果") as TValue;
 }
 
+function failedQualityCheckOutcome<TBody>(
+  candidate: SemanticEditCandidate<TBody>,
+  error: unknown,
+): QualityCheckOutcome {
+  return {
+    status: "failed",
+    diagnostics: [],
+    issues: [
+      {
+        code: "checkFailed",
+        message: error instanceof Error ? error.message : String(error),
+        object: candidateObject(candidate),
+      },
+    ],
+    coverage: {
+      selected: 1,
+      evaluated: 0,
+      notApplicable: 0,
+      incomplete: 0,
+      failed: 1,
+    },
+  };
+}
+
 function qualityInputFingerprint(
   checkId: string,
   version: string,
@@ -1204,7 +1228,7 @@ async function readCachedQualityOutcome(
   cache: QualityCheckResultCache,
   key: string,
   profile?: QualityProfileCandidateSession,
-): Promise<QualityCheckOutcome | undefined> {
+): Promise<AcceptedQualityCheckOutcome | undefined> {
   const end = profile?.stage("cacheRead");
   try {
     const outcome = await cache.get(key);
@@ -1212,18 +1236,92 @@ async function readCachedQualityOutcome(
       profile?.read("miss");
       return undefined;
     }
-    if (!isCacheableQualityCheckOutcome(outcome)) {
+    const accepted = acceptQualityCheckOutcome(outcome, "cache", profile);
+    if (accepted === undefined) {
       profile?.read("invalid");
       return undefined;
     }
-    const stable = snapshotQualityData(outcome);
     profile?.read("hit");
-    return stable;
+    return accepted;
   } catch {
     profile?.read("error");
     return undefined;
   } finally {
     end?.();
+  }
+}
+
+/** 缓存读取、规则执行和结果交接共用同一入口。 */
+async function resolveQualityCheckOutcome(
+  resolution: QualityCheckOutcomeResolution,
+  profile?: QualityProfileCandidateSession,
+): Promise<AcceptedQualityCheckOutcome> {
+  if ("outcome" in resolution)
+    return acceptQualityCheckOutcome(resolution.outcome, "check", profile);
+
+  const { cache, cacheKey, execute } = resolution;
+  if (cache !== undefined && cacheKey !== undefined) {
+    const cached = await readCachedQualityOutcome(cache, cacheKey, profile);
+    if (cached !== undefined) return cached;
+  }
+
+  profile?.executed();
+  const endExecute = profile?.stage("execute");
+  let outcome: QualityCheckOutcome;
+  try {
+    outcome = await execute();
+  } finally {
+    endExecute?.();
+  }
+
+  const accepted = acceptQualityCheckOutcome(outcome, "check", profile);
+  if (
+    cache !== undefined &&
+    cacheKey !== undefined &&
+    accepted.cacheableOutcome !== undefined
+  )
+    await writeCachedQualityOutcome(
+      cache,
+      cacheKey,
+      accepted.cacheableOutcome,
+      profile,
+    );
+  return accepted;
+}
+
+function acceptQualityCheckOutcome(
+  outcome: QualityCheckOutcome,
+  source: "check",
+  profile?: QualityProfileCandidateSession,
+): AcceptedQualityCheckOutcome;
+function acceptQualityCheckOutcome(
+  outcome: unknown,
+  source: "cache",
+  profile?: QualityProfileCandidateSession,
+): AcceptedQualityCheckOutcome | undefined;
+function acceptQualityCheckOutcome(
+  outcome: unknown,
+  source: "check" | "cache",
+  profile?: QualityProfileCandidateSession,
+): AcceptedQualityCheckOutcome | undefined {
+  if (source === "cache" && !isCacheableQualityCheckOutcome(outcome))
+    return undefined;
+
+  const endSnapshot = profile?.stage("snapshot");
+  try {
+    const stableOutcome = snapshotQualityData(outcome) as QualityCheckOutcome;
+    const isCacheable =
+      source === "cache" || isCacheableQualityCheckOutcome(stableOutcome);
+    return {
+      outcome: stableOutcome,
+      ...(isCacheable
+        ? {
+            cacheableOutcome: stableOutcome as CacheableQualityCheckOutcome,
+          }
+        : {}),
+    };
+  } finally {
+    endSnapshot?.();
   }
 }
 

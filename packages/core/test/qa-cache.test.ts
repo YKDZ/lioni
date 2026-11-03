@@ -8,6 +8,7 @@ import {
   analyzeQuality,
   bindQualityCheck,
   createQualityException,
+  createQualityProfiler,
   defineConfig,
   type CacheableQualityCheckOutcome,
   type JsonValue,
@@ -40,6 +41,18 @@ const candidate: SemanticEditCandidate<JsonValue> = {
   language: "fr",
   content: "Bonjour",
 };
+
+function assertCacheOutcomeIsReadOnly(
+  outcome: CacheableQualityCheckOutcome<
+    QualityObject & { readonly extension: { values: string[] } }
+  >,
+) {
+  const finding = outcome.diagnostics[0];
+  if (finding === undefined) return;
+  // @ts-expect-error 缓存与报告共享的检查对象只能只读消费。
+  finding.object.extension.values.push("changed");
+}
+void assertCacheOutcomeIsReadOnly;
 
 void describe("QA 结果缓存", () => {
   void it("缓存命中时仍使用最新例外并关联本次执行", async () => {
@@ -172,6 +185,99 @@ void describe("QA 结果缓存", () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+
+  void it("将规则结果隔离一次后让缓存和报告共享只读数据", async () => {
+    const rawOutcome = reviewOutcome();
+    const rawFinding = rawOutcome.diagnostics[0];
+    assert.ok(rawFinding);
+    let checkCount = 0;
+    const check = defineTestQualityCheck<Unit, Translation, JsonValue>({
+      id: "stable-result",
+      configuration: {},
+      check() {
+        checkCount += 1;
+        return rawOutcome;
+      },
+    });
+    const entries = new Map<string, CacheableQualityCheckOutcome>();
+    const cache: QualityCheckResultCache = {
+      async get(key) {
+        return entries.get(key);
+      },
+      async set(key, outcome) {
+        entries.set(key, outcome);
+      },
+    };
+    const config = createTestConfig(check, { cache });
+
+    const first = await analyzeQuality(config);
+    const cachedOutcome = entries.values().next().value;
+    assert.ok(cachedOutcome);
+    const cachedFinding = cachedOutcome.diagnostics[0];
+    const reportedFinding = first.checks[0]?.diagnostics[0];
+    assert.ok(cachedFinding);
+    assert.ok(reportedFinding);
+    assert.notStrictEqual(cachedOutcome, rawOutcome);
+    assert.notStrictEqual(cachedFinding, rawFinding);
+    assert.strictEqual(reportedFinding.object, cachedFinding.object);
+    assert.strictEqual(reportedFinding.location, cachedFinding.location);
+    assert.strictEqual(reportedFinding.evidence, cachedFinding.evidence);
+
+    Object.assign(rawFinding, { message: "规则来源已在返回后变化。" });
+    assert.equal(cachedFinding.message, "请复核译文。");
+    assert.equal(reportedFinding.message, "请复核译文。");
+
+    const profiler = createQualityProfiler();
+    const second = await analyzeQuality(config, { profiler });
+    assert.deepEqual(second, first);
+    assert.equal(checkCount, 1);
+    const warmedFinding = second.checks[0]?.diagnostics[0];
+    const reusedCachedOutcome = entries.values().next().value;
+    assert.ok(warmedFinding);
+    assert.ok(reusedCachedOutcome);
+    const reusedCachedFinding = reusedCachedOutcome.diagnostics[0];
+    assert.ok(reusedCachedFinding);
+    assert.notStrictEqual(warmedFinding.object, reusedCachedFinding.object);
+    assert.notStrictEqual(warmedFinding.location, reusedCachedFinding.location);
+    assert.notStrictEqual(warmedFinding.evidence, reusedCachedFinding.evidence);
+    assert.equal(
+      profiler
+        .report()
+        .checks[0]?.timings.find(({ stage }) => stage === "snapshot")?.calls,
+      1,
+    );
+  });
+
+  void it("普通规则异常保持 failed 且不进入缓存", async () => {
+    let checkCount = 0;
+    let cacheWrites = 0;
+    const cache: QualityCheckResultCache = {
+      async get() {
+        return undefined;
+      },
+      async set() {
+        cacheWrites += 1;
+      },
+    };
+    const check = defineTestQualityCheck<Unit, Translation, JsonValue>({
+      id: "ordinary-error",
+      configuration: {},
+      check() {
+        checkCount += 1;
+        throw new Error("规则运行失败。");
+      },
+    });
+    const config = createTestConfig(check, { cache });
+
+    const first = await analyzeQuality(config);
+    const second = await analyzeQuality(config);
+
+    assert.equal(first.status, "failed");
+    assert.equal(second.status, "failed");
+    assert.equal(first.checks[0]?.issues[0]?.message, "规则运行失败。");
+    assert.equal(checkCount, 2);
+    assert.equal(cacheWrites, 0);
   });
 
   void it("只缓存 complete 与 not-applicable 原始结果", async () => {
