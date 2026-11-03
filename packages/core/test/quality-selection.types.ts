@@ -3,7 +3,9 @@ import {
   bindQualityCheck,
   defineConfig,
   defineQualityCheck,
+  type FrameworkConfig,
   type QualityCheckInput,
+  type QualityCheckDefinition,
   type QualityCheckOutcome,
   type QualityObject,
 } from "../src/index.ts";
@@ -99,6 +101,60 @@ const inferredCheck = defineQualityCheck({
 const inferredId: "custom/inferred" = inferredCheck.id;
 void inferredId;
 
+function createFactoryCheck(): QualityCheckDefinition<
+  Unit,
+  Translation,
+  QualityObject,
+  Body,
+  UnavailableTranslation,
+  "factory/default"
+>;
+function createFactoryCheck<const TId extends string>(
+  id: TId,
+): QualityCheckDefinition<
+  Unit,
+  Translation,
+  QualityObject,
+  Body,
+  UnavailableTranslation,
+  TId
+>;
+function createFactoryCheck(
+  id = "factory/default",
+): QualityCheckDefinition<
+  Unit,
+  Translation,
+  QualityObject,
+  Body,
+  UnavailableTranslation,
+  string
+> {
+  return defineQualityCheck.withTypes<
+    Unit,
+    Translation,
+    typeof settingsSchema,
+    QualityObject,
+    Body,
+    UnavailableTranslation
+  >()({
+    id,
+    version: "1",
+    configurationSchema: settingsSchema,
+    configuration: { minimum: 1 },
+    check: () => completeOutcome(),
+  });
+}
+const fixedFactoryId: "factory/default" = createFactoryCheck().id;
+const overriddenFactoryId: "host/factory-check" =
+  createFactoryCheck("host/factory-check").id;
+void fixedFactoryId;
+void overriddenFactoryId;
+
+declare const runtimeCheckId: string;
+const runtimeCheck = createFactoryCheck(runtimeCheckId);
+const runtimeCheckIdRemainsWide: string = runtimeCheck.id;
+void runtimeCheckIdRemainsWide;
+
 const projectionCheck = bindQualityCheck<
   Unit,
   Translation,
@@ -187,6 +243,23 @@ const passedById = analyzeQuality(config, {
 const passedByGroup = analyzeQuality(config, { groups: ["daily"] });
 void passedById;
 void passedByGroup;
+
+const broadRuntimeConfig: FrameworkConfig<
+  Unit,
+  Translation,
+  Body,
+  UnavailableTranslation
+> = {
+  ...config,
+  quality: {
+    checks: [runtimeCheck],
+    groups: { runtime: [runtimeCheckId] },
+  },
+};
+const dynamicSelection = analyzeQuality(broadRuntimeConfig, {
+  checkIds: [runtimeCheckId],
+});
+void dynamicSelection;
 
 // @ts-expect-error 未声明的检查项不能通过运行选项反向扩大 ID 联合。
 void analyzeQuality(config, { checkIds: ["custom/typo"] });

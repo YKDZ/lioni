@@ -39,8 +39,9 @@ export function createProtectedLiteralCheck<
   TTranslation,
   TBody,
   TUnavailable = never,
+  TId extends string = string,
 >(options: {
-  readonly identity: VueI18nCheckIdentity;
+  readonly identity: VueI18nCheckIdentity<TId>;
   readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
 }) {
   const hostVersion = options.identity.hostVersion;
@@ -73,8 +74,9 @@ export function createQuantityCheck<
   TTranslation,
   TBody,
   TUnavailable = never,
+  TId extends string = string,
 >(options: {
-  readonly identity: VueI18nCheckIdentity;
+  readonly identity: VueI18nCheckIdentity<TId>;
   readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
 }) {
   const hostVersion = options.identity.hostVersion;

@@ -208,13 +208,65 @@ export function createMessageFamilyChecker<
     TBody,
     TUnavailable,
     TSubject
+  > & { readonly id?: undefined },
+): QualityCheckDefinition<
+  TUnit,
+  TTranslation,
+  QualityObject,
+  TBody,
+  TUnavailable,
+  "message-family-consistency"
+>;
+export function createMessageFamilyChecker<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TSelectedUnit extends TUnit,
+  TBody,
+  TUnavailable = never,
+  TSubject extends MessageFamilySubject<TSelectedUnit, TBody> =
+    MessageFamilySubject<TSelectedUnit, TBody>,
+  const TId extends string = string,
+>(
+  options: MessageFamilyCheckerOptions<
+    TUnit,
+    TTranslation,
+    TSelectedUnit,
+    TBody,
+    TUnavailable,
+    TSubject
+  > & { readonly id: TId },
+): QualityCheckDefinition<
+  TUnit,
+  TTranslation,
+  QualityObject,
+  TBody,
+  TUnavailable,
+  TId
+>;
+export function createMessageFamilyChecker<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TSelectedUnit extends TUnit,
+  TBody,
+  TUnavailable = never,
+  TSubject extends MessageFamilySubject<TSelectedUnit, TBody> =
+    MessageFamilySubject<TSelectedUnit, TBody>,
+>(
+  options: MessageFamilyCheckerOptions<
+    TUnit,
+    TTranslation,
+    TSelectedUnit,
+    TBody,
+    TUnavailable,
+    TSubject
   >,
 ): QualityCheckDefinition<
   TUnit,
   TTranslation,
   QualityObject,
   TBody,
-  TUnavailable
+  TUnavailable,
+  string
 > {
   const checkId = options.id ?? "message-family-consistency";
   const analysis = options.analysis ?? createTextAnalysis();
@@ -784,7 +836,8 @@ export function createMessageFamilyChecker<
     PreparedSubject,
     QualityObject,
     TBody,
-    TUnavailable
+    TUnavailable,
+    string
   >({
     id: checkId,
     version: `checks.message-family-consistency/v3+${options.hostVersion}`,
