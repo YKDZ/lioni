@@ -211,6 +211,21 @@ export function snapshotJsonValue(
   return copyJsonValue(value, valueDescription, options);
 }
 
+/** 在复制并校验普通 JSON 输入时，保留调用方已固定的子对象身份。 */
+export function snapshotJsonValuePreservingShared(
+  value: unknown,
+  valueDescription: string,
+  isShared: (value: object) => boolean,
+): JsonValue {
+  return visitJsonValue(
+    value,
+    valueDescription,
+    {},
+    true,
+    isShared,
+  ) as JsonValue;
+}
+
 function copyJsonValue(
   value: unknown,
   valueDescription: string,
@@ -224,6 +239,7 @@ function visitJsonValue(
   valueDescription: string,
   options: { readonly omitUndefinedObjectProperties?: boolean },
   copy: boolean,
+  isShared?: (value: object) => boolean,
 ): JsonValue | undefined {
   const active = new Set<object>();
   const copies = copy ? new WeakMap<object, JsonValue>() : undefined;
@@ -246,6 +262,7 @@ function visitJsonValue(
       path.length === 0 ? valueDescription : `${valueDescription}${path}`;
     if (typeof current !== "object") throw invalidJson(location);
     if (active.has(current)) throw invalidJson(location);
+    if (isShared?.(current) === true) return current as JsonValue;
     const existingCopy = copies?.get(current);
     if (existingCopy !== undefined) return existingCopy;
     active.add(current);

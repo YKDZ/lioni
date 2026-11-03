@@ -12,6 +12,8 @@ import {
   createQualityProfiler,
   defineConfig,
   QualityCheckBindingError,
+  QualityDataReaderContractError,
+  StandardSchemaContractError,
   type QualityDataReader,
   type SemanticEditCandidate,
 } from "../src/index.ts";
@@ -164,6 +166,104 @@ void test("同次检查资料可显式共享，借入长期 memo 也会在下次
   }
 });
 
+void test("共享读取资料可嵌入各项输入并复用同一项纯计算", async () => {
+  type SharedTerms = {
+    readonly revision: number;
+    readonly entries: readonly { readonly text: string }[];
+  };
+  let reads = 0;
+  let compiles = 0;
+  const originals: SharedTerms[] = [];
+  const compiledInputs: SharedTerms[] = [];
+  const checkerInputs: SharedTerms[] = [];
+  const checkerDependencies: {
+    readonly language: string;
+    readonly terms: SharedTerms;
+  }[] = [];
+  const loadTerms = () => {
+    const terms = { revision: ++reads, entries: [{ text: "Save" }] };
+    originals.push(terms);
+    return terms;
+  };
+  const compile = (terms: SharedTerms) => {
+    compiles += 1;
+    compiledInputs.push(terms);
+    return {};
+  };
+  const base = configFor(() => {});
+  const checks = ["first", "second"].map((id) =>
+    defineTestQualityCheck({
+      id,
+      configuration: {},
+      loadDependencies: async ({ qualityData }) => ({
+        language: "zh-CN",
+        terms: await qualityData.read(loadTerms),
+      }),
+      check({ dependencies, memo }) {
+        const preparedDependencies = dependencies as {
+          readonly language: string;
+          readonly terms: SharedTerms;
+        };
+        const terms = preparedDependencies.terms;
+        checkerDependencies.push(preparedDependencies);
+        checkerInputs.push(terms);
+        memo.memo(compile)(terms);
+        return complete();
+      },
+    }),
+  );
+  const config = {
+    ...base,
+    quality: {
+      checks,
+      async buildCandidates({
+        defaultCandidates,
+        memo,
+        qualityData,
+      }: {
+        readonly defaultCandidates: readonly SemanticEditCandidate<string>[];
+        readonly memo: MemoScope;
+        readonly qualityData: QualityDataReader;
+      }) {
+        const terms = await qualityData.read(loadTerms);
+        memo.memo(compile)(terms);
+        return defaultCandidates;
+      },
+    },
+  };
+
+  await analyzeQuality(config);
+
+  assert.equal(reads, 1);
+  assert.equal(compiles, 1);
+  const fixedTerms = compiledInputs[0];
+  assert.ok(fixedTerms);
+  assert.notStrictEqual(fixedTerms, originals[0]);
+  assert.notStrictEqual(fixedTerms.entries, originals[0]?.entries);
+  assert.notStrictEqual(fixedTerms.entries[0], originals[0]?.entries[0]);
+  assert.strictEqual(fixedTerms, checkerInputs[0]);
+  assert.strictEqual(fixedTerms, checkerInputs[1]);
+  assert.equal(checkerDependencies[0]?.language, "zh-CN");
+  assert.notStrictEqual(checkerDependencies[0], checkerDependencies[1]);
+  assert.strictEqual(
+    checkerDependencies[0]?.terms,
+    checkerDependencies[1]?.terms,
+  );
+  assert.ok(Object.isFrozen(fixedTerms));
+  assert.ok(Object.isFrozen(fixedTerms.entries));
+  assert.ok(Object.isFrozen(fixedTerms.entries[0]));
+
+  await analyzeQuality(config);
+
+  const refreshedTerms = compiledInputs[1];
+  assert.equal(reads, 2);
+  assert.equal(compiles, 2);
+  assert.ok(refreshedTerms);
+  assert.notStrictEqual(refreshedTerms, fixedTerms);
+  assert.strictEqual(refreshedTerms, checkerInputs[2]);
+  assert.strictEqual(refreshedTerms, checkerInputs[3]);
+});
+
 void test("默认指纹只纳入当前检查项的动态资料", async () => {
   let revision = 1;
   const base = configFor(() => {});
@@ -198,7 +298,7 @@ void test("默认指纹只纳入当前检查项的动态资料", async () => {
 
 void test("共享资料失败只读取一次并隔离到相关检查，独立检查仍执行", async () => {
   const base = configFor(() => {});
-  const sharedFailure = new Error("共享策略不可用");
+  const sharedFailure = new TypeError("共享策略不可用");
   let reads = 0;
   let independentRuns = 0;
   const loadShared = (_key: string) => {
@@ -220,6 +320,16 @@ void test("共享资料失败只读取一次并隔离到相关检查，独立检
             },
           }),
         ),
+        defineTestQualityCheck({
+          id: "ordinary-type-error",
+          configuration: {},
+          loadDependencies() {
+            throw new TypeError("普通宿主读取失败");
+          },
+          check() {
+            throw new Error("读取失败后不得执行规则");
+          },
+        }),
         defineTestQualityCheck({
           id: "independent",
           configuration: {},
@@ -244,19 +354,69 @@ void test("共享资料失败只读取一次并隔离到相关检查，独立检
     [
       ["first", "failed"],
       ["second", "failed"],
+      ["ordinary-type-error", "failed"],
       ["independent", "complete"],
     ],
   );
   assert.equal(result.checks[0]?.issues[0]?.message, sharedFailure.message);
   assert.equal(Object.hasOwn(result.checks[0] ?? {}, "dependencies"), false);
-  assert.deepEqual(result.checks[2]?.dependencies, { available: true });
+  assert.deepEqual(result.checks[3]?.dependencies, { available: true });
   const profile = profiler.report();
-  for (const check of profile.checks.slice(0, 2)) {
+  for (const check of profile.checks.slice(0, 3)) {
     assert.equal(
       check.timings.find(({ stage }) => stage === "dependencies")?.calls,
       1,
     );
   }
+});
+
+void test("无效读取函数作为读取器契约错误中止 QA", async () => {
+  const base = configFor(() => {});
+  let checkRuns = 0;
+  const badCheck = defineTestQualityCheck({
+    id: "invalid-reader",
+    configuration: {},
+    loadDependencies: ({ qualityData }) => qualityData.read(undefined as never),
+    check() {
+      checkRuns += 1;
+      return complete();
+    },
+  });
+  const config = { ...base, quality: { checks: [badCheck] } };
+
+  await assert.rejects(analyzeQuality(config), (error: unknown) => {
+    assert.ok(error instanceof QualityDataReaderContractError);
+    assert.ok(error instanceof TypeError);
+    assert.equal(error.name, "QualityDataReaderContractError");
+    assert.equal(error.message, "qualityData.read 的读取函数必须是函数。");
+    return true;
+  });
+  assert.equal(checkRuns, 0);
+});
+
+void test("共享资料嵌入 loader 自有非 JSON 值时仍按契约错误中止", async () => {
+  const base = configFor(() => {});
+  const loadTerms = () => ({ entries: [{ text: "Save" }] });
+  const check = defineTestQualityCheck({
+    id: "invalid-shared-output",
+    configuration: {},
+    loadDependencies: async ({ qualityData }) => ({
+      terms: await qualityData.read(loadTerms),
+      unsupported: new Map(),
+    }),
+    check: complete,
+  });
+  const config = { ...base, quality: { checks: [check] } };
+
+  await assert.rejects(analyzeQuality(config), (error: unknown) => {
+    assert.ok(error instanceof StandardSchemaContractError);
+    assert.equal(error.kind, "invalid-json");
+    assert.equal(
+      error.valueDescription,
+      "QA 检查项 invalid-shared-output 的检查资料.unsupported",
+    );
+    return true;
+  });
 });
 
 void test("直接配置检查器并按运行读取资料，筛选不裁剪事实且空选择保持为空", async () => {

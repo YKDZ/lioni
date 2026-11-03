@@ -121,6 +121,7 @@ export type {
 } from "./quality/quality-exceptions.ts";
 export {
   QualityCheckBindingError,
+  QualityDataReaderContractError,
   createDefaultQualityInputBasis,
   defineQualityCheck,
   bindQualityCheck,
@@ -1029,7 +1030,7 @@ export async function analyzeQuality<
               facts,
               defaultCandidates,
               memo,
-              qualityData,
+              qualityData: qualityData.reader,
             }));
       if (!Array.isArray(candidateSource))
         throw new TypeError(
