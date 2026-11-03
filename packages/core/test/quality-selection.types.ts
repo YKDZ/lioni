@@ -262,11 +262,14 @@ const dynamicSelection = analyzeQuality(broadRuntimeConfig, {
 void dynamicSelection;
 
 // @ts-expect-error 未声明的检查项不能通过运行选项反向扩大 ID 联合。
-analyzeQuality(config, { checkIds: ["custom/typo"] });
+void analyzeQuality(config, { checkIds: ["custom/typo"] });
 // @ts-expect-error 分组名称来自静态配置。
-analyzeQuality(config, { groups: ["nightly"] });
-// @ts-expect-error 同次运行只能指定 ID 或分组。
-analyzeQuality(config, { checkIds: ["custom/explicit"], groups: ["daily"] });
+void analyzeQuality(config, { groups: ["nightly"] });
+void analyzeQuality(config, {
+  checkIds: ["custom/explicit"],
+  // @ts-expect-error 同次运行只能指定 ID 或分组。
+  groups: ["daily"],
+});
 
 const invalidGroupConfig = defineConfig.withTypes<
   Unit,

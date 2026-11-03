@@ -331,21 +331,20 @@ void test("运行中拒绝读取与并发复用，无检查项的运行仍正常
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const base = configFor(() => {});
-  const profiler = createQualityProfiler();
-  const pending = analyzeQuality(
-    {
-      ...base,
-      quality: {
-        checks: [],
-        async loadDependencies() {
-          entered.resolve();
-          await release.promise;
-          return {};
-        },
+  const config = {
+    ...base,
+    source: {
+      ...base.source,
+      async read() {
+        entered.resolve();
+        await release.promise;
+        return base.source.read();
       },
     },
-    { profiler },
-  );
+    quality: { checks: [] },
+  };
+  const profiler = createQualityProfiler();
+  const pending = analyzeQuality(config, { profiler });
   await entered.promise;
   try {
     assert.throws(() => profiler.report(), TypeError);

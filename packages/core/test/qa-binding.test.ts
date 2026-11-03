@@ -273,7 +273,6 @@ function qualityConfig(
     MixedUnavailableTranslation
   >[],
   candidates: readonly SemanticEditCandidate<MixedBody>[],
-  dependencies: unknown = {},
   unrelatedSource = "Reference 7",
   relationships: readonly QualityRelationship[] = [],
 ) {
@@ -284,7 +283,6 @@ function qualityConfig(
     quality: {
       checks,
       buildCandidates: () => candidates,
-      loadDependencies: () => dependencies,
       relationships,
     },
   });
@@ -433,6 +431,7 @@ void describe("quality check bindings", () => {
         version,
         configurationSchema: checkerConfigurationSchema,
         configuration,
+        loadDependencies: () => dependencies,
         ...(customBasis !== undefined
           ? { fingerprintInput: () => customBasis }
           : useDefaultBasisHelper
@@ -457,13 +456,7 @@ void describe("quality check bindings", () => {
           ]),
       });
       return analyzeQuality(
-        qualityConfig(
-          [checker],
-          candidates,
-          dependencies,
-          unrelatedSource,
-          relationships,
-        ),
+        qualityConfig([checker], candidates, unrelatedSource, relationships),
       );
     };
 
@@ -685,6 +678,7 @@ void describe("quality check bindings", () => {
       version: "algorithm-v1",
       configurationSchema: checkerConfigurationSchema,
       configuration: { includeListEvidence: false },
+      loadDependencies: () => ({ policyVersion: 3 }),
       inputSchema: projectedTextSchema,
       select: (input) => {
         selected += 1;
@@ -741,7 +735,7 @@ void describe("quality check bindings", () => {
         ]);
       },
     });
-    const config = qualityConfig([checker], candidates, { policyVersion: 3 });
+    const config = qualityConfig([checker], candidates);
 
     const first = await analyzeQuality(config);
     glossaryVersion = "glossary-v2";

@@ -23,12 +23,14 @@ import {
   resolveLanguageSelection,
   type LanguageSelectionOptions,
 } from "./language-scope.ts";
-import { isRecord } from "./object-guards.ts";
+import { isPlainRecord, isRecord } from "./object-guards.ts";
 import type { UpdatePolicy } from "./plans.ts";
 import {
-  runQualityChecks,
+  createQualityDataReader,
+  runQualityChecksWithQualityData,
   type QualityCheckDefinition,
   type QualityRunResult,
+  type QualityDataReader,
   type QualityObject,
   type QualityRelationship,
 } from "./quality/qa.ts";
@@ -153,6 +155,9 @@ export type {
   QualityCheckDefinition,
   QualityCheckBinding,
   QualityCheckResult,
+  QualityDataLoadInput,
+  QualityDataReader,
+  QualityCheckScope,
   QualityFactCoverage,
   QualityRunResult,
   QualityExecutionOptions,
@@ -392,17 +397,12 @@ export type QualityConfiguration<
   >[];
   /** 项目自定义分组；每个成员只能引用 checks 中声明的检查项 ID。 */
   readonly groups?: TGroups;
-  /** 每次 QA 依据本次已读取事实加载一次动态检查资料。 */
-  readonly loadDependencies?: (input: {
-    readonly facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>;
-    readonly memo: MemoScope;
-  }) => Awaitable<unknown>;
   /** 基于当前事实扩展默认候选；返回值随后仍由 selectCandidates 筛选。 */
   readonly buildCandidates?: (input: {
     readonly facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>;
     readonly defaultCandidates: readonly SemanticEditCandidate<TBody>[];
-    readonly dependencies: unknown;
     readonly memo: MemoScope;
+    readonly qualityData: QualityDataReader;
   }) => Awaitable<readonly SemanticEditCandidate<TBody>[]>;
   /** 关系上下文不随候选筛选裁剪。 */
   readonly relationships?: readonly QualityRelationship[];
@@ -740,13 +740,6 @@ function validateQualityConfiguration(value: unknown): void {
   if (value.checks !== undefined && !Array.isArray(value.checks))
     invalidFrameworkConfig("defineConfig 的 quality.checks 必须是检查器数组。");
   if (
-    value.loadDependencies !== undefined &&
-    typeof value.loadDependencies !== "function"
-  )
-    invalidFrameworkConfig(
-      "defineConfig 的 quality.loadDependencies 必须是函数。",
-    );
-  if (
     value.buildCandidates !== undefined &&
     typeof value.buildCandidates !== "function"
   )
@@ -1010,6 +1003,12 @@ export async function analyzeQuality<
   let stage = profile?.stage("configuration");
   try {
     validateFrameworkConfig(config);
+    const quality = config.quality;
+    const selectedChecks = resolveQualityCheckSelection(
+      quality?.checks ?? [],
+      quality?.groups,
+      options,
+    );
     stage?.();
     stage = profile?.stage("exceptions");
     const exceptions = await loadQualityExceptions(config);
@@ -1018,14 +1017,8 @@ export async function analyzeQuality<
     const facts = await readFacts(config, options);
     stage?.();
     const memo = options.memo ?? createMemoScope();
+    const qualityData = createQualityDataReader();
     try {
-      const quality = config.quality;
-      stage = profile?.stage("dependencies");
-      const dependencies =
-        quality?.loadDependencies === undefined
-          ? {}
-          : await quality.loadDependencies({ facts, memo });
-      stage?.();
       stage = profile?.stage("candidates");
       const defaultCandidates = defaultQualityCandidates(facts);
       const candidateSource =
@@ -1035,8 +1028,8 @@ export async function analyzeQuality<
           : await quality.buildCandidates({
               facts,
               defaultCandidates,
-              dependencies,
               memo,
+              qualityData,
             }));
       if (!Array.isArray(candidateSource))
         throw new TypeError(
@@ -1076,15 +1069,14 @@ export async function analyzeQuality<
 
       stage?.();
       stage = profile?.stage("checks");
-      const result = await runQualityChecks(
+      const result = await runQualityChecksWithQualityData(
         facts,
         {
           candidates: selection,
-          dependencies,
           relationships: quality?.relationships ?? [],
           exceptions,
         },
-        quality?.checks ?? [],
+        selectedChecks,
         {
           memo,
           ...(profile === undefined ? {} : { profile }),
@@ -1092,14 +1084,22 @@ export async function analyzeQuality<
             ? {}
             : { qualityCheckResultCache: quality.resultCache }),
         },
+        qualityData,
       );
       stage?.();
       completed = true;
-      return result;
+      return {
+        ...result,
+        checkScope: {
+          configuredCount: quality?.checks?.length ?? 0,
+          selectedIds: selectedChecks.map(({ id }) => id),
+        },
+      };
     } finally {
       stage?.();
       stage = profile?.stage("cleanup");
       try {
+        qualityData.dispose();
         if (options.memo === undefined) memo.dispose();
       } finally {
         stage?.();
@@ -1112,6 +1112,83 @@ export async function analyzeQuality<
     stage?.();
     profile?.finish(completed ? "completed" : "interrupted");
   }
+}
+
+function resolveQualityCheckSelection<TCheck extends { readonly id: string }>(
+  checks: readonly TCheck[],
+  configuredGroups: unknown,
+  options: { readonly checkIds?: unknown; readonly groups?: unknown },
+): readonly TCheck[] {
+  const checksById = new Map<string, TCheck>();
+  for (const check of checks) {
+    if (typeof check.id !== "string" || check.id.trim() === "")
+      throw new TypeError("QA 检查项必须提供非空 id。");
+    if (checksById.has(check.id))
+      throw new TypeError(`QA 检查项 id ${check.id} 重复。`);
+    checksById.set(check.id, check);
+  }
+
+  const groupsByName = new Map<string, readonly string[]>();
+  if (configuredGroups !== undefined) {
+    if (!isPlainRecord(configuredGroups))
+      throw new TypeError("defineConfig 的 quality.groups 必须是对象。");
+    for (const [groupName, members] of Object.entries(configuredGroups)) {
+      if (
+        !Array.isArray(members) ||
+        members.some((id) => typeof id !== "string")
+      )
+        throw new TypeError(
+          `defineConfig 的 quality.groups.${groupName} 必须是检查项 ID 数组。`,
+        );
+      for (const id of members) {
+        if (!checksById.has(id))
+          throw new TypeError(
+            `质量检查分组 ${groupName} 引用了未配置的检查项 ${JSON.stringify(id)}。`,
+          );
+      }
+      groupsByName.set(groupName, members);
+    }
+  }
+
+  const { checkIds, groups } = options;
+  if (checkIds !== undefined && groups !== undefined)
+    throw new TypeError("质量检查不能同时使用 checkIds 和 groups 选择。");
+
+  let selectedIds: Set<string> | undefined;
+  if (checkIds !== undefined) {
+    if (
+      !Array.isArray(checkIds) ||
+      checkIds.some((id) => typeof id !== "string")
+    )
+      throw new TypeError("checkIds 必须是检查项 ID 数组。");
+    if (checkIds.length === 0) throw new TypeError("显式检查项选择不能为空。");
+    selectedIds = new Set();
+    for (const id of checkIds) {
+      if (!checksById.has(id))
+        throw new TypeError(`未配置质量检查项 ${JSON.stringify(id)}。`);
+      selectedIds.add(id);
+    }
+  } else if (groups !== undefined) {
+    if (
+      !Array.isArray(groups) ||
+      groups.some((name) => typeof name !== "string")
+    )
+      throw new TypeError("groups 必须是分组名数组。");
+    if (groups.length === 0)
+      throw new TypeError("显式检查项分组选择不能为空。");
+    selectedIds = new Set();
+    for (const name of groups) {
+      const members = groupsByName.get(name);
+      if (members === undefined)
+        throw new TypeError(`未配置质量检查分组 ${JSON.stringify(name)}。`);
+      for (const id of members) selectedIds.add(id);
+    }
+    if (selectedIds.size === 0)
+      throw new TypeError("质量检查分组选择结果不能为空。");
+  }
+
+  if (selectedIds === undefined) return checks;
+  return checks.filter(({ id }) => selectedIds!.has(id));
 }
 
 async function loadQualityExceptions<
