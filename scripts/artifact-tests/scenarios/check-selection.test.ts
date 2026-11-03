@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { QualityRunResult } from "@lioni/lioni";
+import type { QualityRunResult } from "@lioni/core";
 
 import { testArtifactConsumer } from "../support/consumer.ts";
 
@@ -20,7 +20,11 @@ type SdkEvidence = {
   readonly groupUnion: CapturedRun;
   readonly termsOnly: CapturedRun;
   readonly invalidSelections: Readonly<Record<string, CapturedRun>>;
-  readonly candidates: Readonly<Record<string, CapturedRun>>;
+  readonly candidates: {
+    readonly noBuiltCandidates: CapturedRun;
+    readonly noProvidedCandidates: CapturedRun;
+    readonly explicitCandidates: CapturedRun;
+  };
   readonly changedDependency: CapturedRun;
   readonly isolatedLoaderFailure: CapturedRun;
   readonly sharedLoaderFailure: CapturedRun;
