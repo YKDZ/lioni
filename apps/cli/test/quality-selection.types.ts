@@ -51,14 +51,13 @@ const config = defineConfig.withTypes<Unit, typeof sourceSchema>()({
   },
 });
 
-const selectedByGroup = analyzeQuality(config, { groups: ["daily"] });
-const selectedById = analyzeQuality(config, {
-  checkIds: ["sdk/custom-check"],
-});
-void selectedByGroup;
-void selectedById;
+function verifySelectionTypes() {
+  void analyzeQuality(config, { groups: ["daily"] });
+  void analyzeQuality(config, { checkIds: ["sdk/custom-check"] });
 
-// @ts-expect-error SDK consumers receive the same exact ID union.
-analyzeQuality(config, { checkIds: ["sdk/custom-chek"] });
-// @ts-expect-error SDK consumers receive the configured group-name union.
-analyzeQuality(config, { groups: ["nightly"] });
+  // @ts-expect-error SDK consumers receive the same exact ID union.
+  void analyzeQuality(config, { checkIds: ["sdk/custom-chek"] });
+  // @ts-expect-error SDK consumers receive the configured group-name union.
+  void analyzeQuality(config, { groups: ["nightly"] });
+}
+void verifySelectionTypes;

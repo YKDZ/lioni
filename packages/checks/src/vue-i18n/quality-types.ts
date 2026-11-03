@@ -1,10 +1,13 @@
 import type {
   ActualTranslationFact,
+  Awaitable,
+  FrameworkFacts,
   JsonValue,
   SourceUnitFact,
   TranslationAssociationFact,
   TranslationUnitInput,
 } from "@lioni/core";
+import type { MemoScope } from "@lioni/memo";
 import type { TermbaseData } from "@lioni/terminology";
 import type { QuantityOptions } from "@lioni/text-analysis";
 
@@ -37,20 +40,14 @@ export type VueI18nScopeRule = {
   readonly flags?: string;
 };
 
-/** 每次质量检查读取的 Vue 规则、消息资料与术语库。 */
-export type VueI18nCheckData = {
-  readonly policies: readonly VueI18nPolicy[];
-  readonly terms: TermbaseData;
-};
-
-/** 放入 quality.loadDependencies 返回值的 Vue 检查资料。 */
-export type VueI18nCheckDependencies = {
-  readonly vueI18n: VueI18nCheckData;
-};
-
-export type VueI18nPolicy = {
+/** 语法、变量与术语检查所需的最小语言范围。 */
+export type VueI18nLanguagePolicy = {
   readonly sourceLanguage: string;
   readonly targetLanguage: string;
+};
+
+/** 完整 Vue 策略；供既有项目投影和事实构造使用。 */
+export type VueI18nPolicy = VueI18nLanguagePolicy & {
   readonly resources: {
     readonly source: {
       readonly messages: Readonly<Record<string, string>>;
@@ -71,6 +68,36 @@ export type VueI18nPolicy = {
     readonly targetEquivalences: readonly (readonly string[])[];
   };
 };
+
+/** 每项策略允许只携带具体检查项使用的部分；必需字段由该项 schema 校验。 */
+export type VueI18nPolicyData = Pick<
+  VueI18nPolicy,
+  "sourceLanguage" | "targetLanguage"
+> &
+  Partial<
+    Pick<
+      VueI18nPolicy,
+      "resources" | "quantities" | "protectedLiterals" | "messageFamilies"
+    >
+  >;
+
+export type VueI18nPolicyRequirement =
+  | "resources"
+  | "quantities"
+  | "protectedLiterals"
+  | "messageFamilies";
+
+/** 宿主按需读取 Vue I18n 检查资料；facts 与 memo 可用于选择读取范围。 */
+export type VueI18nDataReader<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+  TValue,
+> = (
+  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
+  memo: MemoScope,
+) => Awaitable<TValue>;
 
 export type VueI18nCheckIdentity<TId extends string = string> = {
   readonly id: TId;
@@ -117,6 +144,30 @@ export type VueI18nChecksOptions<
   readonly hostVersion: string;
   /** 将本次候选、事实和依赖映射为 Vue I18n 消息。 */
   readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
+  /** 只提供语言范围；语法、变量和术语检查不要求消息族策略或术语容器。 */
+  readonly loadLanguages?: VueI18nDataReader<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable,
+    readonly VueI18nLanguagePolicy[]
+  >;
+  /** 链接、数量、字面值和消息族检查只验证自己读取的策略字段。 */
+  readonly loadPolicies?: VueI18nDataReader<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable,
+    readonly VueI18nPolicyData[]
+  >;
+  /** 术语检查读取原始术语库资料，并在共享计算范围内编译。 */
+  readonly loadTerms?: VueI18nDataReader<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable,
+    TermbaseData
+  >;
   /** 将已保存译文映射为 Vue I18n 消息，供消息族参照检查使用。 */
   readonly reference: VueI18nReferenceProjector<
     TUnit,

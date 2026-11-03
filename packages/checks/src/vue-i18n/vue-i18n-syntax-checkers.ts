@@ -9,13 +9,15 @@ import { assertJsonValue, bindQualityCheck } from "@lioni/core";
 import type { MemoScope } from "@lioni/memo";
 import { z } from "zod";
 
-import { vueI18nDependencies } from "./dependencies.ts";
+import { readVueI18nLanguagePolicies } from "./dependencies.ts";
 import { memoizedVueI18nMessage } from "./message-memo.ts";
 import {
   memoizedVueI18nProjection,
   vueI18nMessageProjectionSchema,
 } from "./quality-projection.ts";
 import type {
+  VueI18nDataReader,
+  VueI18nLanguagePolicy,
   VueI18nMessageProjection,
   VueI18nProjector,
 } from "./quality-types.ts";
@@ -38,6 +40,13 @@ export type VueI18nSourceSyntaxCheckerOptions<
   readonly id: TId;
   readonly hostVersion: string;
   readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
+  readonly loadLanguages: VueI18nDataReader<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable,
+    readonly VueI18nLanguagePolicy[]
+  >;
 };
 
 export type VueI18nTargetSyntaxCheckerOptions<
@@ -87,8 +96,14 @@ export function createVueI18nSourceSyntaxChecker<
     configurationSchema,
     configuration,
     inputSchema: vueI18nMessageProjectionSchema,
+    loadDependencies: ({ facts, memo, qualityData }) =>
+      qualityData.read(options.loadLanguages, facts, memo),
     select: async (input) => {
-      if (!vueI18nDependencies(input).policies.has(input.candidate.language))
+      if (
+        !readVueI18nLanguagePolicies(input.dependencies).has(
+          input.candidate.language,
+        )
+      )
         return { status: "not-applicable" };
       const projection = await memoizedVueI18nProjection(
         input,
@@ -166,8 +181,14 @@ export function createVueI18nTargetSyntaxChecker<
     configurationSchema,
     configuration,
     inputSchema: vueI18nMessageProjectionSchema,
+    loadDependencies: ({ facts, memo, qualityData }) =>
+      qualityData.read(options.loadLanguages, facts, memo),
     select: async (input) => {
-      if (!vueI18nDependencies(input).policies.has(input.candidate.language))
+      if (
+        !readVueI18nLanguagePolicies(input.dependencies).has(
+          input.candidate.language,
+        )
+      )
         return { status: "not-applicable" };
       const projection = await memoizedVueI18nProjection(
         input,

@@ -3,6 +3,7 @@ import type {
   QualityCheckDefinition,
   QualityCheckInput,
   QualityCheckOutcome,
+  QualityDataLoadInput,
   QualityCheckRuleInput,
   QualityCheckSelection,
   QualityEvidence,
@@ -54,12 +55,14 @@ type NumberCheckerDefinition<
   TTranslation,
   TBody,
   TUnavailable,
+  TId extends string = "number-correspondence",
 > = QualityCheckDefinition<
   TUnit,
   TTranslation,
   QualityObject,
   TBody,
-  TUnavailable
+  TUnavailable,
+  TId
 >;
 
 export type NumberCheckerOptions<
@@ -72,6 +75,10 @@ export type NumberCheckerOptions<
 > = {
   /** 宿主选择与文本提取逻辑的版本。 */
   readonly hostVersion: string;
+  /** 只在数字检查已选且存在候选时读取其专属资料。 */
+  readonly loadDependencies?: (
+    input: QualityDataLoadInput<TUnit, TTranslation, TBody, TUnavailable>,
+  ) => Awaitable<unknown>;
   readonly select: (
     input: QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
   ) => Awaitable<
@@ -129,6 +136,7 @@ export function createNumberChecker<
     readonly association: QualityInputBasis;
   };
   const fingerprintInput = options.fingerprintInput;
+  const loadDependencies = options.loadDependencies;
   return bindQualityCheck<
     TUnit,
     TTranslation,
@@ -137,13 +145,15 @@ export function createNumberChecker<
     Subject,
     QualityObject,
     TBody,
-    TUnavailable
+    TUnavailable,
+    "number-correspondence"
   >({
     id: "number-correspondence",
     version: `checks.number-correspondence/v2+${options.hostVersion}`,
     configurationSchema: numberCheckerConfigurationSchema,
     configuration: numberCheckerConfiguration,
     inputSchema: numberTextInputSchema,
+    ...(loadDependencies === undefined ? {} : { loadDependencies }),
     select: async (input) => {
       const selection = await options.select(input);
       if (selection.status !== "selected") return selection;

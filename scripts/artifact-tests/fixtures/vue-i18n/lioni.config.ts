@@ -54,6 +54,8 @@ export function createConfig(
       messageFamilies: { scopes: [], targetEquivalences: [] },
     },
   ];
+  const readPolicies = () => policies;
+  const readTerms = () => options.terms ?? { concepts: [] };
   return defineConfig({
     source: {
       schema: unitSchema,
@@ -135,9 +137,9 @@ export function createConfig(
               ? translation.content
               : undefined,
           ),
-      }),
-      loadDependencies: () => ({
-        vueI18n: { policies, terms: options.terms ?? { concepts: [] } },
+        loadLanguages: readPolicies,
+        loadPolicies: readPolicies,
+        loadTerms: readTerms,
       }),
     },
   });

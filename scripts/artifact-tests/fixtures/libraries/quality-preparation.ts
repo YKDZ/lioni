@@ -182,6 +182,7 @@ function createConfig(
   evidencePayload: JsonPayload | undefined,
   ruleExecutions: { count: number },
 ) {
+  const readDependencyPayload = () => dependencyPayload;
   const checks = Array.from({ length: workload.checkCount }, (_, index) =>
     defineQualityCheck<
       Unit,
@@ -195,6 +196,8 @@ function createConfig(
       version: "artifact-cost-v1",
       configurationSchema,
       configuration: {},
+      loadDependencies: ({ qualityData }) =>
+        qualityData.read(readDependencyPayload),
       fingerprintInput: ({ candidate, dependencies }) => ({
         candidate,
         payload:
@@ -269,7 +272,6 @@ function createConfig(
     },
     quality: {
       checks,
-      loadDependencies: () => dependencyPayload,
       resultCache: cache,
     },
   });
