@@ -19,6 +19,7 @@ import {
   compileQualityData,
   readIndependentData,
   readSharedData,
+  type QualityData,
   recordEvent,
   shouldBuilderReadShared,
 } from "./state.ts";
@@ -71,6 +72,10 @@ const dependencySchema = z.object({
   origin: z.enum(["shared", "independent"]),
 });
 
+function assertQualityData(value: unknown): asserts value is QualityData {
+  dependencySchema.parse(value);
+}
+
 const exceptionFileStore = createFileQualityExceptionStore(
   path.join(process.cwd(), "lioni.exceptions.yaml"),
 );
@@ -121,7 +126,8 @@ function createChecker<const TId extends "syntax" | "terms" | "unlisted">(
       return await qualityData.read(reader, "catalog");
     },
     check(input): QualityCheckOutcome {
-      const loadedData = dependencySchema.parse(input.dependencies);
+      const loadedData = input.dependencies;
+      assertQualityData(loadedData);
       const dependency = input.memo.memo(compileQualityData)(loadedData);
       recordEvent(`rule:${id}:${dependency.revision}`);
       const diagnostics =
