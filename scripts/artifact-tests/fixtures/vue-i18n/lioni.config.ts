@@ -16,6 +16,19 @@ const unitSchema = z.looseObject({ key: z.string(), source: z.string() });
 const translationSchema = z.looseObject({ key: z.string(), text: z.string() });
 type Unit = z.infer<typeof unitSchema>;
 type Translation = z.infer<typeof translationSchema>;
+
+const dataReadCounts = { languages: 0, policies: 0, terms: 0 };
+
+export function resetDataReadCounts(): void {
+  dataReadCounts.languages = 0;
+  dataReadCounts.policies = 0;
+  dataReadCounts.terms = 0;
+}
+
+export function getDataReadCounts() {
+  return { ...dataReadCounts };
+}
+
 export function createConfig(
   target: string,
   options: {
@@ -54,8 +67,18 @@ export function createConfig(
       messageFamilies: { scopes: [], targetEquivalences: [] },
     },
   ];
-  const readPolicies = () => policies;
-  const readTerms = () => options.terms ?? { concepts: [] };
+  const readLanguages = () => {
+    dataReadCounts.languages += 1;
+    return policies;
+  };
+  const readPolicies = () => {
+    dataReadCounts.policies += 1;
+    return policies;
+  };
+  const readTerms = () => {
+    dataReadCounts.terms += 1;
+    return options.terms ?? { concepts: [] };
+  };
   return defineConfig({
     source: {
       schema: unitSchema,
@@ -137,7 +160,7 @@ export function createConfig(
               ? translation.content
               : undefined,
           ),
-        loadLanguages: readPolicies,
+        loadLanguages: readLanguages,
         loadPolicies: readPolicies,
         loadTerms: readTerms,
       }),
