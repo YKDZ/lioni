@@ -7,7 +7,6 @@ import {
   type QualityCheckDefinition,
   type QualityObject,
   type TermCheckerOptions,
-  type TranslationUnitInput,
 } from "@lioni/lioni";
 
 import config from "./lioni.config.ts";
@@ -27,7 +26,7 @@ analyzeQuality(config, { groups: ["all"] });
 analyzeQuality(config, { checkIds: ["syntax"], groups: ["daily"] });
 
 type Body = { readonly text: string; readonly state: "draft" | "reviewed" };
-type Unit = TranslationUnitInput & {
+type Unit = {
   readonly source: Body;
   readonly context: { readonly key: string };
 };
