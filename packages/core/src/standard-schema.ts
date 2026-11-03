@@ -111,9 +111,11 @@ export async function validateWithStandardSchema<TInput, TOutput>(
 ): Promise<TOutput> {
   const preserveValue = options.preserveValue === true;
   const requireJson = options.requireJson === true || preserveValue;
-  const before = requireJson
-    ? copyJsonValue(value, valueDescription)
+  // 只有保值契约需要保存验证前的副本；单纯 JSON 校验不复制输入。
+  const before = preserveValue
+    ? snapshotJsonValue(value, valueDescription)
     : undefined;
+  if (requireJson && !preserveValue) assertJsonValue(value, valueDescription);
 
   let result: unknown;
   let validationError: unknown;
@@ -178,7 +180,7 @@ export async function validateWithStandardSchema<TInput, TOutput>(
     );
 
   const output = result.value;
-  if (requireJson) copyJsonValue(output, `${valueDescription}的验证结果`);
+  if (requireJson) assertJsonValue(output, `${valueDescription}的验证结果`);
   if (preserveValue && !sameJsonValue(output, before))
     throw new StandardSchemaContractError(
       valueDescription,
@@ -189,14 +191,18 @@ export async function validateWithStandardSchema<TInput, TOutput>(
   return output as TOutput;
 }
 
+/** 只验证 JSON 合法性，不创建数据副本。 */
 export function assertJsonValue(
   value: unknown,
   valueDescription: string,
   options: { readonly omitUndefinedObjectProperties?: boolean } = {},
 ): asserts value is JsonValue {
-  snapshotJsonValue(value, valueDescription, options);
+  visitJsonValue(value, valueDescription, options, false);
 }
 
+/**
+ * 检查并隔离 JSON 数据；同一副本内重复出现的对象仍指向同一副本。
+ */
 export function snapshotJsonValue(
   value: unknown,
   valueDescription: string,
@@ -210,26 +216,38 @@ function copyJsonValue(
   valueDescription: string,
   options: { readonly omitUndefinedObjectProperties?: boolean } = {},
 ): JsonValue {
-  const active = new Set<object>();
+  return visitJsonValue(value, valueDescription, options, true) as JsonValue;
+}
 
-  function visit(current: unknown, path: string): JsonValue {
+function visitJsonValue(
+  value: unknown,
+  valueDescription: string,
+  options: { readonly omitUndefinedObjectProperties?: boolean },
+  copy: boolean,
+): JsonValue | undefined {
+  const active = new Set<object>();
+  const copies = copy ? new WeakMap<object, JsonValue>() : undefined;
+
+  function visit(current: unknown, path: string): JsonValue | undefined {
     if (
       current === null ||
       typeof current === "string" ||
       typeof current === "boolean"
     )
-      return current;
+      return copy ? current : undefined;
     if (
       typeof current === "number" &&
       Number.isFinite(current) &&
       !Object.is(current, -0)
     )
-      return current;
+      return copy ? current : undefined;
 
     const location =
       path.length === 0 ? valueDescription : `${valueDescription}${path}`;
     if (typeof current !== "object") throw invalidJson(location);
     if (active.has(current)) throw invalidJson(location);
+    const existingCopy = copies?.get(current);
+    if (existingCopy !== undefined) return existingCopy;
     active.add(current);
     try {
       if (Array.isArray(current)) {
@@ -238,7 +256,7 @@ function copyJsonValue(
         const ownKeys = Reflect.ownKeys(current);
         if (ownKeys.some((key) => typeof key === "symbol"))
           throw invalidJson(location);
-        const result: JsonValue[] = [];
+        const result: JsonValue[] | undefined = copy ? [] : undefined;
         for (let index = 0; index < current.length; index += 1) {
           if (!Object.hasOwn(current, index)) throw invalidJson(location);
           const descriptor = Object.getOwnPropertyDescriptor(
@@ -251,7 +269,8 @@ function copyJsonValue(
             !Object.hasOwn(descriptor, "value")
           )
             throw invalidJson(location);
-          result.push(visit(descriptor.value, `${path}[${index}]`));
+          const item = visit(descriptor.value, `${path}[${index}]`);
+          if (result !== undefined) result.push(item as JsonValue);
         }
         if (
           ownKeys.some(
@@ -262,6 +281,7 @@ function copyJsonValue(
           )
         )
           throw invalidJson(location);
+        if (result !== undefined) copies?.set(current, result);
         return result;
       }
 
@@ -271,7 +291,9 @@ function copyJsonValue(
       const keys = Reflect.ownKeys(current);
       if (keys.some((key) => typeof key === "symbol"))
         throw invalidJson(location);
-      const result: Record<string, JsonValue> = {};
+      const result: Record<string, JsonValue> | undefined = copy
+        ? {}
+        : undefined;
       for (const key of keys) {
         if (typeof key !== "string") throw invalidJson(location);
         const descriptor = Object.getOwnPropertyDescriptor(current, key);
@@ -286,13 +308,16 @@ function copyJsonValue(
           descriptor.value === undefined
         )
           continue;
-        Object.defineProperty(result, key, {
-          configurable: true,
-          enumerable: true,
-          value: visit(descriptor.value, `${path}.${key}`),
-          writable: true,
-        });
+        const propertyValue = visit(descriptor.value, `${path}.${key}`);
+        if (result !== undefined)
+          Object.defineProperty(result, key, {
+            configurable: true,
+            enumerable: true,
+            value: propertyValue as JsonValue,
+            writable: true,
+          });
       }
+      if (result !== undefined) copies?.set(current, result);
       return result;
     } catch (error) {
       if (error instanceof StandardSchemaContractError) throw error;

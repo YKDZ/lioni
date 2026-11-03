@@ -326,6 +326,36 @@ function selectedText(
 }
 
 void describe("quality check bindings", () => {
+  void it("默认依据快照隔离来源并保留共享对象", () => {
+    const shared = { value: "same" };
+    const basis = createDefaultQualityInputBasis({
+      facts: {
+        first: shared,
+        repeated: shared,
+        sameValue: { value: "same" },
+      },
+      candidate: {},
+      sourceUnit: {},
+      dependencies: {},
+      relationships: [],
+    });
+    const facts = (
+      basis as unknown as {
+        readonly facts: {
+          readonly first: { readonly value: string };
+          readonly repeated: { readonly value: string };
+          readonly sameValue: { readonly value: string };
+        };
+      }
+    ).facts;
+
+    assert.strictEqual(facts.first, facts.repeated);
+    assert.notStrictEqual(facts.first, facts.sameValue);
+    assert.notStrictEqual(facts.first, shared);
+    shared.value = "changed";
+    assert.equal(facts.first.value, "same");
+  });
+
   void it("按候选生成稳定指纹并将诊断关联到对应执行", async () => {
     const candidates = [
       { sourceKey: "message", language: "fr", content: "Bonjour" },

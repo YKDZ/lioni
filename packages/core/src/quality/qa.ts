@@ -16,6 +16,7 @@ import type { JsonValue, SemanticEditCandidate } from "../semantic-edits.ts";
 import { stableStringifyJson } from "../stable-json.ts";
 import {
   assertJsonValue,
+  snapshotJsonValue,
   StandardSchemaContractError,
   validateWithStandardSchema,
 } from "../standard-schema.ts";
@@ -178,8 +179,7 @@ export function createDefaultQualityInputBasis(
     dependencies: input.dependencies,
     relationships: input.relationships ?? [],
   };
-  assertJsonValue(basis, "QA 默认输入指纹依据");
-  return structuredClone(basis) as JsonValue;
+  return snapshotJsonValue(basis, "QA 默认输入指纹依据");
 }
 
 export type QualityInputFingerprintSummary = {
@@ -716,8 +716,10 @@ function prepareFingerprintInput<TInput extends QualityDefaultInput>(
   }
 
   const basis = fingerprintInput(input);
-  assertJsonValue(basis, `QA 检查器 ${id} 的输入指纹依据`);
-  return { kind: "custom", value: structuredClone(basis) };
+  return {
+    kind: "custom",
+    value: snapshotJsonValue(basis, `QA 检查器 ${id} 的输入指纹依据`),
+  };
 }
 
 export type QualityCheckResult<TObject extends QualityObject = QualityObject> =
@@ -1098,8 +1100,7 @@ function addCoverage(
 }
 
 function snapshotQualityData<TValue>(value: TValue): TValue {
-  assertJsonValue(value, "QA 输入与结果");
-  return structuredClone(value);
+  return snapshotJsonValue(value, "QA 输入与结果") as TValue;
 }
 
 function qualityInputFingerprint(

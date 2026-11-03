@@ -141,6 +141,59 @@ void describe("framework facts", () => {
     );
   });
 
+  void it("领域 JSON 验证拒绝非法结构且不执行 getter", async () => {
+    let getterCalls = 0;
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const accessor = Object.defineProperty({}, "value", {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        return "value";
+      },
+    });
+    const sparse: unknown[] = [];
+    sparse[1] = "value";
+    const symbolKeyed = { [Symbol("extension")]: "value" };
+    const invalidPrototype = Object.create({ inherited: true }) as Record<
+      string,
+      unknown
+    >;
+    invalidPrototype.value = "value";
+    const cases: readonly (readonly [string, unknown])[] = [
+      ["非 JSON 对象", new Date(0)],
+      ["非有限数字", Number.NaN],
+      ["循环", cyclic],
+      ["稀疏数组", sparse],
+      ["访问器", accessor],
+      ["符号键", symbolKeyed],
+      ["非法原型", invalidPrototype],
+    ];
+
+    for (const [description, extension] of cases) {
+      const unit = {
+        source: "Save",
+        context: { file: "messages.ts", line: 1 },
+        extension,
+      } as ManualUnit;
+      const config = defineConfig({
+        source: {
+          schema: manualSourceSchema,
+          read: () => completeSource(unit),
+        },
+        keyOf: (value) => `${value.context.file}:${value.context.line}`,
+      });
+
+      await assert.rejects(readSourceFacts(config), (error: unknown) => {
+        assert.ok(error instanceof StandardSchemaContractError, description);
+        assert.equal(error.kind, "invalid-json", description);
+        return true;
+      });
+    }
+
+    assert.equal(getterCalls, 0);
+  });
+
   void it("rejects schema mismatches and values that cannot be stored as JSON", async () => {
     const invalidUnit = {
       source: "Save",
