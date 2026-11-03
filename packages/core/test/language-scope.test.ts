@@ -111,10 +111,18 @@ void describe("本次执行的语言范围", () => {
   });
 
   void it("无效范围在读取源译资源前失败", async () => {
-    for (const run of [readFacts, readComparisonSnapshot, analyzeQuality]) {
+    const runs: readonly ((
+      config: FrameworkConfig<Unit, Translation, string>,
+      languages: readonly string[],
+    ) => Promise<unknown>)[] = [
+      (config, languages) => readFacts(config, { languages }),
+      (config, languages) => readComparisonSnapshot(config, { languages }),
+      (config, languages) => analyzeQuality(config, { languages }),
+    ];
+    for (const run of runs) {
       for (const languages of [[], ["es"], ["fr", "es"]]) {
         const { config, reads } = fixture();
-        await assert.rejects(run(config, { languages }), {
+        await assert.rejects(run(config, languages), {
           name: "TypeError",
           message:
             languages.length === 0
