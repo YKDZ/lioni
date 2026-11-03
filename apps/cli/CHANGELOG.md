@@ -1,5 +1,19 @@
 # 更新日志
 
+## 0.2.3
+
+### QA 数据准备与检查结果
+
+- JSON 合法性校验只执行校验，不构造额外的 JSON 对象树；需要独立快照的操作仍保持来源隔离，并保留快照内部的共享引用。
+- 检查依据由准备流程在回调同步返回后校验并生成摘要；本版本沿用现有指纹算法。
+- 框架统一校验和固定规则执行或缓存读取的原始检查结果。检查器、缓存适配器和报告整理只读共享稳定数据；需要改写时由相应消费者自行复制。
+
+### 结果缓存迁移
+
+- Node 结果缓存改为在专用目录中按键保存独立条目。将 `createFileQualityCheckResultCache(filePath)` 迁移到 `createDirectoryQualityCheckResultCache(cacheDirectory)`；将 `createDefaultQualityCheckResultCache(configPath)` 和 `resolveDefaultQualityCheckResultCachePath(configPath)` 分别迁移到 `createDefaultDirectoryQualityCheckResultCache(configPath)` 和 `resolveDefaultQualityCheckResultCacheDirectory(configPath)`。旧单文件接口不保留兼容别名；默认路径工厂仍需由宿主显式装配，不会自动启用缓存。
+- 默认缓存位置由配置文件同目录下的 `.lioni/cache/quality-results.json` 改为 `.lioni/cache/quality-results/` 目录。
+- 旧单文件结果缓存不会被读取、双读、自动转换或自动删除。迁移到目录缓存后，旧结果按缓存未命中处理并重新计算；QA 例外记录仍由独立存储管理，本次迁移不改变例外依据。
+
 ## 0.2.2
 
 ### 消息族性能
