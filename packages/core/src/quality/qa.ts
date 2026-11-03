@@ -154,6 +154,7 @@ export type QualityCheckInput<
   readonly memo: MemoScope;
 };
 
+/** 可作为检查输入依据的 JSON 值；回调结果会由核心在交接前验证并摘要。 */
 export type QualityInputBasis = JsonValue;
 
 const qualityInputFingerprintFormat = "lioni.check-input/v1";
@@ -305,7 +306,19 @@ type PreparedQualityCheck<
   readonly version: string;
   readonly prepareInput: (
     input: QualityCheckExecutionInput<TUnit, TTranslation, TBody, TUnavailable>,
+    context: QualityInputPreparationContext,
   ) => Awaitable<QualityCheckExecutionPreparation<TObject>>;
+};
+
+type QualityInputPreparationContext = {
+  readonly candidateIndex: number;
+  readonly sourceKey: string;
+  readonly language: string;
+  readonly configurationFingerprint: string;
+  readonly validateDefaultInputComponents: () => void;
+  readonly getDefaultInputComponents: () => DefaultQualityInputFingerprintComponents;
+  readonly startFingerprint: () => void;
+  readonly endFingerprint: () => void;
 };
 
 type QualityCheckPreparer = () => Promise<unknown>;
@@ -317,17 +330,10 @@ type QualityCheckExecutionPreparation<TObject extends QualityObject> =
     }
   | {
       readonly status: "ready";
-      readonly fingerprintInput: PreparedQualityInputFingerprintBasis;
+      readonly fingerprint: Required<QualityInputFingerprint>;
+      readonly cacheKey: string;
       readonly execute: () => Awaitable<QualityCheckOutcome<TObject>>;
     };
-
-type PreparedQualityInputFingerprintBasis =
-  | {
-      readonly kind: "default";
-      readonly candidateFingerprint: string;
-      readonly sourceUnitFingerprint: string;
-    }
-  | { readonly kind: "custom"; readonly value: QualityInputBasis };
 
 type DefaultQualityInputFingerprintComponents = {
   readonly facts: string;
@@ -371,6 +377,7 @@ export type QualityCheckBinding<
   readonly version: string;
   readonly configurationSchema: TConfigurationSchema;
   readonly configuration: StandardSchemaInput<TConfigurationSchema>;
+  /** 同步返回完整依据；核心在回调返回后立即验证、摘要，不保留依据副本。只读使用共享输入。 */
   readonly fingerprintInput?: (
     input: QualityCheckRuleInput<
       TUnit,
@@ -435,6 +442,7 @@ export function defineQualityCheck<
   readonly version: string;
   readonly configurationSchema: TSchema;
   readonly configuration: StandardSchemaInput<TSchema>;
+  /** 同步返回完整依据；核心在回调返回后立即验证、摘要，不保留依据副本。只读使用共享输入。 */
   readonly fingerprintInput?: (
     input: QualityCheckInput<
       TUnit,
@@ -486,18 +494,22 @@ export function defineQualityCheck<
           TBody,
           TUnavailable
         >,
+        context: QualityInputPreparationContext,
       ) => {
         const checkInput = {
           ...input,
           configuration: parsedConfiguration,
         };
+        const preparedFingerprint = prepareQualityInput(
+          id,
+          version,
+          fingerprintInput,
+          checkInput,
+          context,
+        );
         return {
           status: "ready",
-          fingerprintInput: prepareFingerprintInput(
-            id,
-            fingerprintInput,
-            checkInput,
-          ),
+          ...preparedFingerprint,
           execute: () => check(checkInput),
         };
       },
@@ -572,6 +584,7 @@ export function bindQualityCheck<
           TBody,
           TUnavailable
         >,
+        context: QualityInputPreparationContext,
       ) => {
         const boundInput = { ...input, configuration: parsedConfiguration };
         let selection: QualityCheckSelection<TSubject, TObject>;
@@ -632,13 +645,16 @@ export function bindQualityCheck<
           subject: selection.subject,
           projected: projectedInput,
         };
+        const preparedFingerprint = prepareQualityInput(
+          id,
+          version,
+          fingerprintInput,
+          checkInput,
+          context,
+        );
         return {
           status: "ready",
-          fingerprintInput: prepareFingerprintInput(
-            id,
-            fingerprintInput,
-            checkInput,
-          ),
+          ...preparedFingerprint,
           execute: () => check(checkInput),
         };
       },
@@ -698,28 +714,63 @@ function assertQualityCheckIdentity(id: string, version: string): void {
     throw new TypeError(`QA 检查项 ${id} 必须提供非空 version。`);
 }
 
-function prepareFingerprintInput<TInput extends QualityDefaultInput>(
+function prepareQualityInput<TInput extends QualityDefaultInput>(
   id: string,
-  fingerprintInput: ((input: TInput) => QualityInputBasis) | undefined,
+  version: string,
+  fingerprintInput: ((input: TInput) => unknown) | undefined,
   input: TInput,
-): PreparedQualityInputFingerprintBasis {
-  if (fingerprintInput === undefined) {
-    assertJsonValue(input.candidate, `QA 检查器 ${id} 的候选依据`);
-    assertJsonValue(input.sourceUnit, `QA 检查器 ${id} 的原文依据`);
+  context: QualityInputPreparationContext,
+): {
+  readonly fingerprint: Required<QualityInputFingerprint>;
+  readonly cacheKey: string;
+} {
+  function prepareFingerprint(inputBasisFingerprint: string) {
+    const fingerprint = qualityInputFingerprint(
+      id,
+      version,
+      context.configurationFingerprint,
+      inputBasisFingerprint,
+    );
     return {
-      kind: "default",
-      candidateFingerprint: fingerprintJsonValue(input.candidate as JsonValue),
-      sourceUnitFingerprint: fingerprintJsonValue(
-        input.sourceUnit as JsonValue,
+      fingerprint,
+      cacheKey: qualityCheckCacheKey(
+        id,
+        context.candidateIndex,
+        context.sourceKey,
+        context.language,
+        fingerprint.inputFingerprint,
       ),
     };
   }
 
+  if (fingerprintInput === undefined) {
+    assertJsonValue(input.candidate, `QA 检查器 ${id} 的候选依据`);
+    assertJsonValue(input.sourceUnit, `QA 检查器 ${id} 的原文依据`);
+    context.validateDefaultInputComponents();
+    context.startFingerprint();
+    try {
+      const defaultComponents = context.getDefaultInputComponents();
+      const inputBasisFingerprint = fingerprintJsonObjectComponents([
+        ["candidate", fingerprintJsonValue(input.candidate as JsonValue)],
+        ["dependencies", defaultComponents.dependencies],
+        ["facts", defaultComponents.facts],
+        ["relationships", defaultComponents.relationships],
+        ["sourceUnit", fingerprintJsonValue(input.sourceUnit as JsonValue)],
+      ]);
+      return prepareFingerprint(inputBasisFingerprint);
+    } finally {
+      context.endFingerprint();
+    }
+  }
+
   const basis = fingerprintInput(input);
-  return {
-    kind: "custom",
-    value: snapshotJsonValue(basis, `QA 检查器 ${id} 的输入指纹依据`),
-  };
+  assertJsonValue(basis, `QA 检查器 ${id} 的输入指纹依据`);
+  context.startFingerprint();
+  try {
+    return prepareFingerprint(fingerprintQualityInputBasis(basis));
+  } finally {
+    context.endFingerprint();
+  }
 }
 
 export type QualityCheckResult<TObject extends QualityObject = QualityObject> =
@@ -842,18 +893,23 @@ export async function runQualityChecks<
     const sourceUnits = new Map(
       facts.source.units.map((unit) => [unit.key, unit]),
     );
+    const defaultInputBasis = {
+      facts,
+      dependencies: boundRequest.dependencies,
+      relationships: boundRequest.relationships,
+    };
+    let defaultInputComponentsValidated = false;
     let defaultInputComponents:
       | DefaultQualityInputFingerprintComponents
       | undefined;
+    const validateDefaultInputComponents = () => {
+      if (defaultInputComponentsValidated) return;
+      assertJsonValue(defaultInputBasis, "QA 默认输入指纹依据");
+      defaultInputComponentsValidated = true;
+    };
     const getDefaultInputComponents =
       (): DefaultQualityInputFingerprintComponents => {
-        if (defaultInputComponents === undefined) {
-          const fixedBasis = {
-            facts,
-            dependencies: boundRequest.dependencies,
-            relationships: boundRequest.relationships,
-          };
-          assertJsonValue(fixedBasis, "QA 默认输入指纹依据");
+        if (defaultInputComponents === undefined)
           defaultInputComponents = {
             facts: fingerprintJsonValue(facts as JsonValue),
             dependencies: fingerprintJsonValue(
@@ -863,7 +919,6 @@ export async function runQualityChecks<
               boundRequest.relationships as JsonValue,
             ),
           };
-        }
         return defaultInputComponents;
       };
     const selectedLanguages = new Map<string, Set<string>>();
@@ -917,44 +972,44 @@ export async function runQualityChecks<
         try {
           const sourceUnit = sourceUnits.get(candidate.sourceKey) ?? null;
           const endPreparation = candidateProfile?.stage("prepareInput");
+          let endFingerprintStage: (() => void) | undefined;
+          const preparationContext: QualityInputPreparationContext = {
+            candidateIndex,
+            sourceKey: candidate.sourceKey,
+            language: candidate.language,
+            configurationFingerprint,
+            validateDefaultInputComponents,
+            getDefaultInputComponents,
+            startFingerprint() {
+              endPreparation?.();
+              endFingerprintStage = candidateProfile?.stage("fingerprint");
+            },
+            endFingerprint() {
+              endFingerprintStage?.();
+              endFingerprintStage = undefined;
+            },
+          };
           let preparation;
           try {
-            preparation = await prepared.prepareInput({
-              facts,
-              candidate,
-              sourceUnit,
-              memo,
-              dependencies: boundRequest.dependencies,
-              relationships: boundRequest.relationships,
-            });
+            preparation = await prepared.prepareInput(
+              {
+                facts,
+                candidate,
+                sourceUnit,
+                memo,
+                dependencies: boundRequest.dependencies,
+                relationships: boundRequest.relationships,
+              },
+              preparationContext,
+            );
           } finally {
             endPreparation?.();
+            preparationContext.endFingerprint();
           }
           if (preparation.status === "ready") {
-            const endFingerprint = candidateProfile?.stage("fingerprint");
-            let key: string;
-            try {
-              const currentFingerprint = qualityInputFingerprint(
-                id,
-                prepared.version,
-                configurationFingerprint,
-                preparation.fingerprintInput,
-                preparation.fingerprintInput.kind === "default"
-                  ? getDefaultInputComponents()
-                  : undefined,
-              );
-              fingerprint = currentFingerprint;
-              key = qualityCheckCacheKey(
-                id,
-                candidateIndex,
-                candidate.sourceKey,
-                candidate.language,
-                currentFingerprint.inputFingerprint,
-              );
-              cacheKey = key;
-            } finally {
-              endFingerprint?.();
-            }
+            fingerprint = preparation.fingerprint;
+            const key = preparation.cacheKey;
+            cacheKey = key;
             const cachedOutcome =
               options.qualityCheckResultCache === undefined
                 ? undefined
@@ -1107,25 +1162,8 @@ function qualityInputFingerprint(
   checkId: string,
   version: string,
   configurationFingerprint: string,
-  inputBasis: PreparedQualityInputFingerprintBasis,
-  defaultComponents?: DefaultQualityInputFingerprintComponents,
+  inputBasisFingerprint: string,
 ): Required<QualityInputFingerprint> {
-  const inputBasisFingerprint =
-    inputBasis.kind === "default"
-      ? fingerprintJsonObjectComponents([
-          ["candidate", inputBasis.candidateFingerprint],
-          [
-            "dependencies",
-            requiredDefaultComponent(defaultComponents, "dependencies"),
-          ],
-          ["facts", requiredDefaultComponent(defaultComponents, "facts")],
-          [
-            "relationships",
-            requiredDefaultComponent(defaultComponents, "relationships"),
-          ],
-          ["sourceUnit", inputBasis.sourceUnitFingerprint],
-        ])
-      : fingerprintQualityInputBasis(inputBasis.value);
   const summaryVersion = `${qualityInputFingerprintFormat}:${version}`;
   return {
     inputFingerprint: fingerprintJsonObjectComponents([
@@ -1205,15 +1243,6 @@ async function writeCachedQualityOutcome(
   } finally {
     end?.();
   }
-}
-
-function requiredDefaultComponent(
-  components: DefaultQualityInputFingerprintComponents | undefined,
-  key: keyof DefaultQualityInputFingerprintComponents,
-): string {
-  if (components === undefined)
-    throw new TypeError("默认 QA 输入指纹缺少固定组件摘要。");
-  return components[key];
 }
 
 function fingerprintQualityInputBasis(value: JsonValue): string {

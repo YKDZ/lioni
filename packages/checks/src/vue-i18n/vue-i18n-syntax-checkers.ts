@@ -5,7 +5,7 @@ import type {
   QualityObject,
   TranslationUnitInput,
 } from "@lioni/core";
-import { bindQualityCheck, snapshotJsonValue } from "@lioni/core";
+import { assertJsonValue, bindQualityCheck } from "@lioni/core";
 import type { MemoScope } from "@lioni/memo";
 import { z } from "zod";
 
@@ -109,8 +109,10 @@ export function createVueI18nSourceSyntaxChecker<
         TUnavailable
       >,
     ) => ({ status: "ready", value: input.subject }),
-    fingerprintInput: ({ projected }) =>
-      snapshotJsonValue(projected, "Vue I18n 检查投影"),
+    fingerprintInput: ({ projected }) => {
+      assertJsonValue(projected, "Vue I18n 检查投影");
+      return projected;
+    },
     check: (input) => {
       const text = input.projected.source;
       if (text.status !== "available")
@@ -176,8 +178,10 @@ export function createVueI18nTargetSyntaxChecker<
         TUnavailable
       >,
     ) => ({ status: "ready", value: input.subject }),
-    fingerprintInput: ({ projected }) =>
-      snapshotJsonValue(projected, "Vue I18n 检查投影"),
+    fingerprintInput: ({ projected }) => {
+      assertJsonValue(projected, "Vue I18n 检查投影");
+      return projected;
+    },
     check: (input) => {
       const text = input.projected.target;
       if (text.status !== "available")

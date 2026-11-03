@@ -1,5 +1,5 @@
 import {
-  snapshotJsonValue,
+  assertJsonValue,
   type QualityCheckDefinition,
   type QualityCheckInput,
   type QualityCheckSelection,
@@ -96,15 +96,16 @@ export function createVueI18nTerminologyChecks<
       },
       rule,
       // 投影已表达实际文本与语言；位置参与结果缓存，其他消息资源不构成本项依据。
-      fingerprintInput: ({ candidate, projected, subject }) => ({
-        sourceKey: candidate.sourceKey,
-        language: candidate.language,
-        projected,
-        locations: snapshotJsonValue(
-          subject.projection.locations,
-          "术语检查诊断位置",
-        ),
-      }),
+      fingerprintInput: ({ candidate, projected, subject }) => {
+        const basis = {
+          sourceKey: candidate.sourceKey,
+          language: candidate.language,
+          projected,
+          locations: subject.projection.locations,
+        };
+        assertJsonValue(basis, "术语检查依据");
+        return basis;
+      },
       select: async (
         input: QualityCheckInput<
           TUnit,
@@ -220,8 +221,10 @@ export function createVueI18nMessageFamilyCheck<
     sourceTemplate,
     targetTemplate,
     // 工厂已纳入候选与参照采用的等价签名；未使用的等价声明不构成本次依据。
-    fingerprintInput: ({ subject }) =>
-      snapshotJsonValue(subject.projection, "消息族候选投影"),
+    fingerprintInput: ({ subject }) => {
+      assertJsonValue(subject.projection, "消息族候选投影");
+      return subject.projection;
+    },
     targetEquivalence: (signature, language, input) =>
       vueI18nDependencies(input).targetEquivalences.get(language)?.(
         signature,

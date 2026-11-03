@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { snapshotJsonValue } from "@lioni/core";
+import { assertJsonValue } from "@lioni/core";
 
 import { messageFamilyEvidenceKey } from "./message-families.ts";
 
@@ -112,11 +112,11 @@ export class MessageFamilyBasis {
   }
 
   private leaf(key: string, value: unknown): Leaf {
-    const validated = snapshotJsonValue(value, "消息族共享依据");
+    assertJsonValue(value, "消息族共享依据");
     return {
       kind: "leaf",
       key: hash(key),
-      digest: hash(messageFamilyEvidenceKey([key, validated])),
+      digest: hash(messageFamilyEvidenceKey([key, value])),
     };
   }
 

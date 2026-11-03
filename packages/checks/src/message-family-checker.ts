@@ -3,13 +3,13 @@ import type {
   Awaitable,
   FrameworkFacts,
   QualityCheckDefinition,
-  QualityInputBasis,
   QualityCheckInput,
   QualityCheckOutcome,
   QualityCheckProjectionInput,
   QualityCheckRuleInput,
   QualityCheckSelection,
   QualityEvidence,
+  QualityInputBasis,
   QualityIssue,
   QualityLocation,
   QualityObject,
@@ -19,9 +19,9 @@ import type {
 } from "@lioni/core";
 import {
   QualityCheckBindingError,
+  assertJsonValue,
   bindQualityCheck,
   StandardSchemaContractError,
-  snapshotJsonValue,
 } from "@lioni/core";
 import type { MemoScope } from "@lioni/memo";
 import type {
@@ -136,6 +136,7 @@ export type MessageFamilyCheckerOptions<
   /**
    * 显式声明宿主投影、选择及等价策略所用的额外依据。
    * 工厂自动补入全部同族参照、候选签名、关联、位置及完整性；未声明时沿用核心完整事实默认值。
+   * 回调返回后核心立即校验并摘要；此处只读访问共享输入。
    */
   readonly fingerprintInput?: (
     input: QualityCheckRuleInput<
@@ -850,49 +851,47 @@ export function createMessageFamilyChecker<
               subject.language,
               input.memo,
             );
-            return snapshotJsonValue(
-              {
-                input: options.fingerprintInput!({ ...input, subject }),
-                candidate: {
-                  sourceKey: subject.sourceKey,
-                  language: subject.language,
-                  complete: input.projected.complete ?? true,
-                  issues: input.projected.issues ?? [],
-                  groups: input.subject.groups.map(signedBasis),
-                },
-                candidateSourceAvailability:
-                  subject.sourceUnit.bodyAvailability,
-                candidateLocation: translationLocation(
+            const basis = {
+              input: options.fingerprintInput!({ ...input, subject }),
+              candidate: {
+                sourceKey: subject.sourceKey,
+                language: subject.language,
+                complete: input.projected.complete ?? true,
+                issues: input.projected.issues ?? [],
+                groups: input.subject.groups.map(signedBasis),
+              },
+              candidateSourceAvailability: subject.sourceUnit.bodyAvailability,
+              candidateLocation: translationLocation(
+                input.facts,
+                subject.sourceKey,
+                subject.language,
+                candidateRecordIndex(
                   input.facts,
                   subject.sourceKey,
                   subject.language,
-                  candidateRecordIndex(
-                    input.facts,
-                    subject.sourceKey,
-                    subject.language,
-                    input.memo,
-                  ),
+                  input.memo,
                 ),
-                replacement:
-                  association === undefined
-                    ? null
-                    : {
-                        status: association.status,
-                        coverageStatus: association.coverageStatus,
-                        translations: association.translationIndexes
-                          .map(
-                            (index) =>
-                              input.facts.translations.records[index]
-                                ?.identity ?? null,
-                          )
-                          .sort(stableCompare),
-                      },
-                references: input.subject.references.basis,
-                issues: input.subject.references.issues,
-                incomplete: input.subject.references.incomplete,
-              },
-              "消息族检查依据",
-            );
+              ),
+              replacement:
+                association === undefined
+                  ? null
+                  : {
+                      status: association.status,
+                      coverageStatus: association.coverageStatus,
+                      translations: association.translationIndexes
+                        .map(
+                          (index) =>
+                            input.facts.translations.records[index]?.identity ??
+                            null,
+                        )
+                        .sort(stableCompare),
+                    },
+              references: input.subject.references.basis,
+              issues: input.subject.references.issues,
+              incomplete: input.subject.references.incomplete,
+            };
+            assertJsonValue(basis, "消息族检查依据");
+            return basis;
           },
         }),
     check: async (
