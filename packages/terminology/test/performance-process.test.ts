@@ -5,6 +5,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { runProcess } from "../scripts/evaluation/support/process.ts";
 
 const childSource = "setInterval(() => {}, 1000);";
+// 先给受测 Node 脚本留出启动并输出 PID 的时间，再验证超时或中断回收。
+const pidCollectionWindowMs = 2_000;
 
 function longRunningProcess(): readonly string[] {
   const spawnChild =
@@ -58,13 +60,16 @@ void test("超时和中断都会回收样本进程及其子进程", async () => 
   const timedOut = await runProcess({
     command: process.execPath,
     args: longRunningProcess(),
-    timeoutMs: 500,
+    timeoutMs: pidCollectionWindowMs,
   });
   assert.equal(timedOut.status, "timed-out");
   await assertProcessesExited(timedOut.stdout);
 
   const controller = new AbortController();
-  const interruptTimer = setTimeout(() => controller.abort(), 500);
+  const interruptTimer = setTimeout(
+    () => controller.abort(),
+    pidCollectionWindowMs,
+  );
   const interrupted = await runProcess({
     command: process.execPath,
     args: longRunningProcess(),
