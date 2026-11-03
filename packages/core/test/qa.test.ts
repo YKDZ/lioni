@@ -72,11 +72,11 @@ void describe("quality checks", () => {
         },
         quality: {
           buildCandidates: () => [candidate],
-          loadDependencies: () => dependencies,
           checks: [
             defineTestQualityCheck({
               id: "dependency-observer",
               configuration: {},
+              loadDependencies: () => dependencies,
               check(input) {
                 observedDependencies = input.dependencies;
                 return {
@@ -103,7 +103,10 @@ void describe("quality checks", () => {
       (error: unknown) => {
         assert.ok(error instanceof StandardSchemaContractError);
         assert.equal(error.kind, "invalid-json");
-        assert.equal(error.valueDescription, "QA 输入与结果.dependencies");
+        assert.equal(
+          error.valueDescription,
+          "QA 检查项 dependency-observer 的检查资料",
+        );
         return true;
       },
     );
@@ -113,7 +116,7 @@ void describe("quality checks", () => {
     const result = await analyzeQuality(configFor(dependencies));
 
     assert.equal(result.status, "complete");
-    assert.deepEqual(result.dependencies, dependencies);
+    assert.deepEqual(result.checks[0]?.dependencies, dependencies);
     assert.deepEqual(observedDependencies, dependencies);
     assert.equal(result.checks[0]?.issues.length, 0);
   });
@@ -171,10 +174,11 @@ void describe("quality checks", () => {
     let observedDependencies: unknown;
     let observedConfiguration: unknown;
 
-    const result = await runQualityChecks(facts, { candidates, dependencies }, [
+    const result = await runQualityChecks(facts, { candidates }, [
       defineTestQualityCheck({
         id: "placeholders",
         configuration,
+        loadDependencies: () => dependencies,
         check(input) {
           observedVersion = input.facts.version;
           observedDependencies = input.dependencies;
@@ -301,7 +305,6 @@ void describe("quality checks", () => {
     );
     const request: QualityCheckRequest = {
       candidates: [],
-      dependencies: { policyVersion: 1 },
     };
 
     const notRun = await runQualityChecks(facts, request, []);
@@ -359,7 +362,6 @@ void describe("quality checks", () => {
     assert.equal(noCandidateRun.status, "not-run");
     assert.equal(called, false);
     assert.equal(notApplicable.status, "not-applicable");
-    assert.deepEqual(notRun.dependencies, request.dependencies);
     assert.deepEqual(noCandidateRun.candidates, request.candidates);
   });
 
@@ -391,10 +393,7 @@ void describe("quality checks", () => {
     });
 
     await assert.rejects(
-      runQualityChecks(facts, { candidates: [], dependencies: {} }, [
-        check,
-        check,
-      ]),
+      runQualityChecks(facts, { candidates: [] }, [check, check]),
       { message: "QA 检查项 id same-check 重复。" },
     );
   });
@@ -414,7 +413,6 @@ void describe("quality checks", () => {
           { sourceKey: "A", language: "fr", content: "Premier" },
           { sourceKey: "B", language: "fr", content: "Second" },
         ],
-        dependencies: {},
       },
       [
         defineTestQualityCheck({
@@ -463,12 +461,12 @@ void describe("quality checks", () => {
         candidates: [
           { sourceKey: "external", language: "fr", content: "Bonjour" },
         ],
-        dependencies,
       },
       [
         defineTestQualityCheck({
           id: "broken",
           configuration: { enabled: true },
+          loadDependencies: () => dependencies,
           check: () => {
             throw new Error("checker crashed");
           },
@@ -478,7 +476,7 @@ void describe("quality checks", () => {
 
     assert.equal(result.status, "failed");
     assert.equal(result.version, facts.version);
-    assert.deepEqual(result.dependencies, dependencies);
+    assert.deepEqual(result.checks[0]?.dependencies, dependencies);
     assert.equal(result.checks[0]?.issues[0]?.message, "checker crashed");
   });
 
@@ -519,7 +517,6 @@ void describe("quality checks", () => {
     });
     const request: QualityCheckRequest = {
       candidates: [{ sourceKey: "A", language: "fr", content: "value:A" }],
-      dependencies: {},
     };
     const outcome = {
       status: "complete" as const,
@@ -644,7 +641,6 @@ void describe("quality checks", () => {
     );
     const request: QualityCheckRequest = {
       candidates: [{ sourceKey: "A", language: "fr", content: "value:A" }],
-      dependencies: {},
     };
     const check = defineTestQualityCheck({
       id: "scope-specific-check",
