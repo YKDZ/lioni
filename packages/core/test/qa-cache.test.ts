@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
@@ -21,7 +21,7 @@ import {
   type StandardSchemaV1,
   StandardSchemaContractError,
 } from "../src/index.ts";
-import { createFileQualityCheckResultCache } from "../src/node/index.ts";
+import { createDirectoryQualityCheckResultCache } from "../src/node/index.ts";
 import { defineTestQualityCheck } from "./quality-check-fixture.ts";
 import {
   jsonValueSchema,
@@ -116,42 +116,46 @@ void describe("QA 结果缓存", () => {
   void it("合法 JSON 缓存内容被改写时重新计算", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "lioni-qa-cache-"));
     try {
-      const filePath = path.join(directory, "quality-cache.json");
-      const cache = createFileQualityCheckResultCache(filePath);
+      const cacheDirectory = path.join(directory, "quality-results");
       let checkCount = 0;
-      const config = createTestConfig(
+      const firstConfig = createTestConfig(
         reviewCheck(() => {
           checkCount += 1;
         }),
-        { cache },
+        { cache: createDirectoryQualityCheckResultCache(cacheDirectory) },
       );
 
-      const first = await analyzeQuality(config);
+      const first = await analyzeQuality(firstConfig);
       assert.deepEqual(
         first.diagnostics.map(({ checkId, message }) => [checkId, message]),
         [["message-review", "请复核译文。"]],
       );
-      const document = JSON.parse(await readFile(filePath, "utf8")) as {
-        readonly format: string;
-        readonly entries: readonly {
-          readonly key: string;
-          readonly outcome: Record<string, unknown>;
-        }[];
+      const independentConfig = createTestConfig(
+        reviewCheck(() => {
+          checkCount += 1;
+        }),
+        { cache: createDirectoryQualityCheckResultCache(cacheDirectory) },
+      );
+      const warm = await analyzeQuality(independentConfig);
+      assert.deepEqual(warm.diagnostics, first.diagnostics);
+      assert.equal(checkCount, 1);
+
+      const [entryName] = await readdir(cacheDirectory);
+      assert.ok(entryName);
+      const entryPath = path.join(cacheDirectory, entryName);
+      const entry = JSON.parse(await readFile(entryPath, "utf8")) as {
+        readonly outcome: Record<string, unknown>;
       };
-      assert.equal(document.entries.length, 1);
       await writeFile(
-        filePath,
+        entryPath,
         JSON.stringify({
-          ...document,
-          entries: document.entries.map((entry) => ({
-            ...entry,
-            outcome: { ...entry.outcome, diagnostics: [] },
-          })),
+          ...entry,
+          outcome: { ...entry.outcome, diagnostics: [] },
         }),
         "utf8",
       );
 
-      const second = await analyzeQuality(config);
+      const second = await analyzeQuality(independentConfig);
       assert.deepEqual(
         {
           checkCount,
@@ -384,6 +388,33 @@ void describe("QA 结果缓存", () => {
     assert.equal(result.status, "complete");
     assert.equal(result.diagnostics.length, 1);
     assert.equal(checkCount, 1);
+  });
+
+  void it("真实缓存目录不可用时完整 QA 仍返回检查结果", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "lioni-qa-cache-"));
+    try {
+      const blockedParent = path.join(directory, "not-a-directory");
+      await writeFile(blockedParent, "file", "utf8");
+      let checkCount = 0;
+      const result = await analyzeQuality(
+        createTestConfig(
+          reviewCheck(() => {
+            checkCount += 1;
+          }),
+          {
+            cache: createDirectoryQualityCheckResultCache(
+              path.join(blockedParent, "quality-results"),
+            ),
+          },
+        ),
+      );
+
+      assert.equal(result.status, "complete");
+      assert.equal(result.diagnostics[0]?.message, "请复核译文。");
+      assert.equal(checkCount, 1);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   void it("未装配缓存时每次分析都重新执行检查", async () => {

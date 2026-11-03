@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
+import { isDeepStrictEqual } from "node:util";
 
 import {
-  createFileQualityCheckResultCache,
-  resolveDefaultQualityCheckResultCachePath,
+  createDefaultDirectoryQualityCheckResultCache,
+  createDirectoryQualityCheckResultCache,
+  resolveDefaultQualityCheckResultCacheDirectory,
 } from "../src/node/quality-cache.ts";
 import type { CacheableQualityCheckOutcome } from "../src/quality/quality-cache.ts";
 
@@ -31,6 +33,19 @@ const completeOutcome: CacheableQualityCheckOutcome = {
   },
 };
 
+const notApplicable: CacheableQualityCheckOutcome = {
+  status: "not-applicable",
+  diagnostics: [],
+  issues: [],
+  coverage: {
+    selected: 1,
+    evaluated: 0,
+    notApplicable: 1,
+    incomplete: 0,
+    failed: 0,
+  },
+};
+
 async function withDirectory(
   run: (directory: string) => Promise<void>,
 ): Promise<void> {
@@ -42,12 +57,26 @@ async function withDirectory(
   }
 }
 
+async function entryPathForKey(
+  directory: string,
+  key: string,
+): Promise<string> {
+  for (const filename of await readdir(directory)) {
+    const entryPath = path.join(directory, filename);
+    const entry = JSON.parse(await readFile(entryPath, "utf8")) as {
+      readonly key: string;
+    };
+    if (entry.key === key) return entryPath;
+  }
+  assert.fail(`缓存目录中没有键 ${key} 的条目。`);
+}
+
 void describe("QA 结果缓存", () => {
-  void it("新建的缓存实例可读取已保存的完整原始结果", async () => {
-    await withDirectory(async (directory) => {
-      const filePath = path.join(directory, "quality-cache.json");
-      const first = createFileQualityCheckResultCache(filePath);
-      const second = createFileQualityCheckResultCache(filePath);
+  void it("将各键写为独立条目，并支持独立实例读取", async () => {
+    await withDirectory(async (root) => {
+      const cacheDirectory = path.join(root, "quality-results");
+      const first = createDirectoryQualityCheckResultCache(cacheDirectory);
+      const second = createDirectoryQualityCheckResultCache(cacheDirectory);
 
       await first.set(
         "check:save:fr:candidate:0:fingerprint:a",
@@ -66,26 +95,57 @@ void describe("QA 结果缓存", () => {
         await second.get("check:save:fr:candidate:0:fingerprint:b"),
         undefined,
       );
+
+      await second.set(
+        "check:save:fr:candidate:1:fingerprint:a",
+        notApplicable,
+      );
+      assert.equal((await readdir(cacheDirectory)).length, 2);
     });
   });
 
-  void it("允许缓存含错误诊断的 complete 与 not-applicable 结果", async () => {
+  void it("只替换同键条目，保留其他键的记录", async () => {
     await withDirectory(async (directory) => {
-      const cache = createFileQualityCheckResultCache(
-        path.join(directory, "quality-cache.json"),
-      );
-      const notApplicable: CacheableQualityCheckOutcome = {
-        status: "not-applicable",
-        diagnostics: [],
-        issues: [],
-        coverage: {
-          selected: 1,
-          evaluated: 0,
-          notApplicable: 1,
-          incomplete: 0,
-          failed: 0,
-        },
+      const cache = createDirectoryQualityCheckResultCache(directory);
+      const replacement: CacheableQualityCheckOutcome = {
+        ...completeOutcome,
+        diagnostics: completeOutcome.diagnostics.map((diagnostic) => ({
+          ...diagnostic,
+          message: "已替换的诊断。",
+        })),
       };
+      await cache.set("first", completeOutcome);
+      await cache.set("second", notApplicable);
+      const unrelatedEntryPath = await entryPathForKey(directory, "second");
+      const unrelatedEntry = await readFile(unrelatedEntryPath);
+
+      await cache.set("first", replacement);
+
+      assert.deepEqual(await cache.get("first"), replacement);
+      assert.deepEqual(await cache.get("second"), notApplicable);
+      assert.deepEqual(await readFile(unrelatedEntryPath), unrelatedEntry);
+      assert.equal((await readdir(directory)).length, 2);
+    });
+  });
+
+  void it("不同字符串键即使 UTF-8 替换后相同仍保持隔离", async () => {
+    await withDirectory(async (directory) => {
+      const cache = createDirectoryQualityCheckResultCache(directory);
+      const loneSurrogateKey = "\ud800";
+      const replacementCharacterKey = "\ufffd";
+
+      await cache.set(loneSurrogateKey, completeOutcome);
+      await cache.set(replacementCharacterKey, notApplicable);
+
+      assert.deepEqual(await cache.get(loneSurrogateKey), completeOutcome);
+      assert.deepEqual(await cache.get(replacementCharacterKey), notApplicable);
+      assert.equal((await readdir(directory)).length, 2);
+    });
+  });
+
+  void it("允许缓存可复用的完整结果及 not-applicable 结果", async () => {
+    await withDirectory(async (directory) => {
+      const cache = createDirectoryQualityCheckResultCache(directory);
 
       await cache.set("complete-with-error", completeOutcome);
       await cache.set("not-applicable", notApplicable);
@@ -97,8 +157,7 @@ void describe("QA 结果缓存", () => {
 
   void it("不保存 incomplete 或 failed 结果", async () => {
     await withDirectory(async (directory) => {
-      const filePath = path.join(directory, "quality-cache.json");
-      const cache = createFileQualityCheckResultCache(filePath);
+      const cache = createDirectoryQualityCheckResultCache(directory);
       const incomplete = {
         ...completeOutcome,
         status: "incomplete",
@@ -113,56 +172,106 @@ void describe("QA 结果缓存", () => {
 
       assert.equal(await cache.get("incomplete"), undefined);
       assert.equal(await cache.get("failed"), undefined);
+      assert.deepEqual(await readdir(directory), []);
     });
   });
 
-  void it("把损坏或不兼容文件当作未命中，并能重新写入结果", async () => {
+  void it("拒绝损坏、错位或旧格式条目且保留无关有效记录", async () => {
     await withDirectory(async (directory) => {
-      const filePath = path.join(directory, "quality-cache.json");
-      const cache = createFileQualityCheckResultCache(filePath);
-      await writeFile(filePath, "{not json", "utf8");
+      const cache = createDirectoryQualityCheckResultCache(directory);
+      await cache.set("damaged", completeOutcome);
+      await cache.set("deleted", notApplicable);
+      await cache.set("healthy", completeOutcome);
+
+      const damagedEntryPath = await entryPathForKey(directory, "damaged");
+      const deletedEntryPath = await entryPathForKey(directory, "deleted");
+      const validEntry = JSON.parse(
+        await readFile(damagedEntryPath, "utf8"),
+      ) as {
+        readonly format: string;
+        readonly key: string;
+        readonly outcome: Record<string, unknown>;
+        readonly contentDigest: string;
+      };
+      const incompatibleEntries = [
+        { ...validEntry, format: "lioni.qa-cache/v2" },
+        { ...validEntry, key: "a-different-key" },
+        {
+          ...validEntry,
+          outcome: { ...validEntry.outcome, diagnostics: [{}] },
+        },
+        { ...validEntry, contentDigest: `sha256:${"0".repeat(64)}` },
+      ];
+      for (const entry of incompatibleEntries) {
+        await writeFile(damagedEntryPath, JSON.stringify(entry), "utf8");
+        assert.equal(await cache.get("damaged"), undefined);
+      }
+      await writeFile(damagedEntryPath, "{not json", "utf8");
+      await rm(deletedEntryPath);
+
+      assert.equal(await cache.get("damaged"), undefined);
+      assert.equal(await cache.get("deleted"), undefined);
+      assert.deepEqual(await cache.get("healthy"), completeOutcome);
+
+      await cache.set("damaged", notApplicable);
+      assert.deepEqual(await cache.get("damaged"), notApplicable);
+    });
+  });
+
+  void it("不读取或改写旧单文件缓存", async () => {
+    await withDirectory(async (directory) => {
+      const legacyFile = path.join(directory, "quality-cache.json");
+      const legacyContents = JSON.stringify({
+        format: "lioni.qa-cache/v2",
+        entries: [{ key: "key", outcome: completeOutcome }],
+      });
+      await writeFile(legacyFile, legacyContents, "utf8");
+      const cache = createDirectoryQualityCheckResultCache(legacyFile);
 
       assert.equal(await cache.get("key"), undefined);
       await cache.set("key", completeOutcome);
-      assert.deepEqual(await cache.get("key"), completeOutcome);
-
-      const incompatiblePath = path.join(directory, "old-cache.json");
-      await writeFile(
-        incompatiblePath,
-        JSON.stringify({
-          format: "lioni.qa-cache/v1",
-          entries: [{ key: "key", outcome: completeOutcome }],
-        }),
-        "utf8",
-      );
-      const incompatible = createFileQualityCheckResultCache(incompatiblePath);
-      assert.equal(await incompatible.get("key"), undefined);
-
-      const malformedPath = path.join(directory, "malformed-cache.json");
-      await writeFile(
-        malformedPath,
-        JSON.stringify({
-          format: "lioni.qa-cache/v1",
-          entries: [
-            {
-              key: "key",
-              outcome: { ...completeOutcome, diagnostics: [{}] },
-            },
-          ],
-        }),
-        "utf8",
-      );
-      const malformed = createFileQualityCheckResultCache(malformedPath);
-      assert.equal(await malformed.get("key"), undefined);
+      assert.equal(await readFile(legacyFile, "utf8"), legacyContents);
     });
   });
 
-  void it("存储目录不可用时不让缓存 I/O 改变检查结果", async () => {
+  void it("同键并发替换始终保留完整结果", async () => {
+    await withDirectory(async (directory) => {
+      const cache = createDirectoryQualityCheckResultCache(directory);
+      const alternatives = [
+        completeOutcome,
+        {
+          ...completeOutcome,
+          diagnostics: completeOutcome.diagnostics.map((diagnostic) => ({
+            ...diagnostic,
+            message: "并发写入的诊断。",
+          })),
+        },
+      ] as const;
+      const writes = Array.from({ length: 8 }, (_, index) =>
+        cache.set("same-key", alternatives[index % alternatives.length]!),
+      );
+      const reads = Array.from({ length: 8 }, () => cache.get("same-key"));
+      const observed = await Promise.all([...writes, ...reads]);
+
+      for (const result of observed.slice(writes.length))
+        assert.ok(
+          result === undefined ||
+            alternatives.some((outcome) => isDeepStrictEqual(result, outcome)),
+        );
+      const final = await cache.get("same-key");
+      assert.ok(
+        alternatives.some((outcome) => isDeepStrictEqual(final, outcome)),
+      );
+      assert.equal((await readdir(directory)).length, 1);
+    });
+  });
+
+  void it("目录不可用时不让缓存 I/O 改变检查结果", async () => {
     await withDirectory(async (directory) => {
       const blockedParent = path.join(directory, "not-a-directory");
       await writeFile(blockedParent, "file", "utf8");
-      const cache = createFileQualityCheckResultCache(
-        path.join(blockedParent, "quality-cache.json"),
+      const cache = createDirectoryQualityCheckResultCache(
+        path.join(blockedParent, "quality-results"),
       );
 
       assert.equal(await cache.get("key"), undefined);
@@ -171,24 +280,24 @@ void describe("QA 结果缓存", () => {
     });
   });
 
-  void it("默认缓存文件位于配置文件同目录的 .lioni/cache 下", async () => {
+  void it("默认缓存目录位于配置文件同目录的 .lioni/cache 下", async () => {
     await withDirectory(async (directory) => {
       const configPath = path.join(directory, "config", "lioni.config.ts");
 
       assert.equal(
-        resolveDefaultQualityCheckResultCachePath(configPath),
-        path.join(
-          directory,
-          "config",
-          ".lioni",
-          "cache",
-          "quality-results.json",
-        ),
+        resolveDefaultQualityCheckResultCacheDirectory(configPath),
+        path.join(directory, "config", ".lioni", "cache", "quality-results"),
       );
       assert.equal(
-        resolveDefaultQualityCheckResultCachePath("configs/lioni.config.ts"),
-        path.resolve("configs/.lioni/cache/quality-results.json"),
+        resolveDefaultQualityCheckResultCacheDirectory(
+          "configs/lioni.config.ts",
+        ),
+        path.resolve("configs/.lioni/cache/quality-results"),
       );
+
+      const cache = createDefaultDirectoryQualityCheckResultCache(configPath);
+      await cache.set("default", completeOutcome);
+      assert.deepEqual(await cache.get("default"), completeOutcome);
     });
   });
 });

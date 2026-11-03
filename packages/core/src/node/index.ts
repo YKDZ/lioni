@@ -25,9 +25,9 @@ export {
   resolveDefaultQualityExceptionFilePath,
 } from "./quality-exceptions.ts";
 export {
-  createDefaultQualityCheckResultCache,
-  createFileQualityCheckResultCache,
-  resolveDefaultQualityCheckResultCachePath,
+  createDefaultDirectoryQualityCheckResultCache,
+  createDirectoryQualityCheckResultCache,
+  resolveDefaultQualityCheckResultCacheDirectory,
 } from "./quality-cache.ts";
 export type { QualityExceptionStore } from "../quality/quality-exceptions.ts";
 export type { QualityCheckResultCache } from "../quality/quality-cache.ts";

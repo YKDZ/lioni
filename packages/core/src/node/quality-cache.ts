@@ -9,57 +9,75 @@ import {
   type QualityCheckResultCache,
 } from "../quality/quality-cache.ts";
 import { stableStringify } from "../stable-json.ts";
-import { assertJsonValue } from "../standard-schema.ts";
 
-const QUALITY_CACHE_FORMAT = "lioni.qa-cache/v2" as const;
-
-type QualityCacheDocument = {
-  readonly format: typeof QUALITY_CACHE_FORMAT;
-  readonly entries: readonly QualityCacheEntry[];
-};
+const QUALITY_CACHE_ENTRY_FORMAT = "lioni.qa-cache-entry/v1" as const;
 
 type QualityCacheEntry = {
+  readonly format: typeof QUALITY_CACHE_ENTRY_FORMAT;
   readonly key: string;
   readonly outcome: CacheableQualityCheckOutcome;
   readonly contentDigest: string;
 };
 
-/** 创建尽力而为的 Node.js 文件检查结果缓存。 */
-export function createFileQualityCheckResultCache(
-  filePath: string,
+/**
+ * 在专用目录内按键保存独立缓存条目。
+ * 目录可由多个实例共用；文件系统错误按缓存未命中处理。
+ */
+export function createDirectoryQualityCheckResultCache(
+  cacheDirectory: string,
 ): QualityCheckResultCache {
-  const resolvedFilePath = path.resolve(filePath);
+  const resolvedDirectory = path.resolve(cacheDirectory);
   return {
     async get(key) {
       if (!isCacheKey(key)) return undefined;
-      const document = await readCacheDocument(resolvedFilePath);
-      return document?.entries.find((entry) => entry.key === key)?.outcome;
+
+      let contents: string;
+      try {
+        contents = await readFile(
+          entryPathForKey(resolvedDirectory, key),
+          "utf8",
+        );
+      } catch {
+        return undefined;
+      }
+
+      let value: unknown;
+      try {
+        value = JSON.parse(contents);
+      } catch {
+        return undefined;
+      }
+      return isQualityCacheEntry(value, key) ? value.outcome : undefined;
     },
 
     async set(key, outcome) {
       if (!isCacheKey(key) || !isCacheableQualityCheckOutcome(outcome)) return;
 
-      const document = await readCacheDocument(resolvedFilePath);
-      const entries = [...(document?.entries ?? [])];
-      const index = entries.findIndex((entry) => entry.key === key);
-      const nextEntry = {
+      const entry: QualityCacheEntry = {
+        format: QUALITY_CACHE_ENTRY_FORMAT,
         key,
         outcome,
         contentDigest: contentDigest(key, outcome),
       };
-      if (index === -1) entries.push(nextEntry);
-      else entries[index] = nextEntry;
-
-      await writeCacheDocument(resolvedFilePath, {
-        format: QUALITY_CACHE_FORMAT,
-        entries,
-      });
+      const entryPath = entryPathForKey(resolvedDirectory, key);
+      const temporaryPath = `${entryPath}.${process.pid}.${randomUUID()}.tmp`;
+      let moved = false;
+      try {
+        await mkdir(resolvedDirectory, { recursive: true });
+        await writeFile(temporaryPath, `${JSON.stringify(entry)}\n`, "utf8");
+        await rename(temporaryPath, entryPath);
+        moved = true;
+      } catch {
+        // 缓存 I/O 失败只会让后续执行重新计算。
+      } finally {
+        if (!moved) await unlink(temporaryPath).catch(() => undefined);
+      }
     },
   };
 }
 
-/** 解析位于配置文件同目录 `.lioni/cache` 下的默认缓存文件。 */
-export function resolveDefaultQualityCheckResultCachePath(
+/** 解析配置文件同目录 `.lioni/cache/quality-results` 下的默认缓存目录。 */
+export function resolveDefaultQualityCheckResultCacheDirectory(
   configPath: string,
 ): string {
   const absoluteConfigPath = path.resolve(process.cwd(), configPath);
@@ -67,86 +85,37 @@ export function resolveDefaultQualityCheckResultCachePath(
     path.dirname(absoluteConfigPath),
     ".lioni",
     "cache",
-    "quality-results.json",
+    "quality-results",
   );
 }
 
-/** 根据 Node.js 配置文件位置创建默认文件缓存。 */
-export function createDefaultQualityCheckResultCache(
+/** 根据 Node.js 配置文件位置创建默认目录结果缓存；不会自动装配到 QA。 */
+export function createDefaultDirectoryQualityCheckResultCache(
   configPath: string,
 ): QualityCheckResultCache {
-  return createFileQualityCheckResultCache(
-    resolveDefaultQualityCheckResultCachePath(configPath),
+  return createDirectoryQualityCheckResultCache(
+    resolveDefaultQualityCheckResultCacheDirectory(configPath),
   );
 }
 
-async function readCacheDocument(
-  filePath: string,
-): Promise<QualityCacheDocument | undefined> {
-  let contents: string;
-  try {
-    contents = await readFile(filePath, "utf8");
-  } catch {
-    return undefined;
-  }
-
-  let value: unknown;
-  try {
-    value = JSON.parse(contents);
-  } catch {
-    return undefined;
-  }
-  return isCacheDocument(value) ? value : undefined;
+function entryPathForKey(directory: string, key: string): string {
+  // 保留 JavaScript 字符串的 UTF-16 码元，避免孤立代理项与替换字符共用路径。
+  const filename = createHash("sha256").update(key, "utf16le").digest("hex");
+  return path.join(directory, `${filename}.json`);
 }
 
-async function writeCacheDocument(
-  filePath: string,
-  document: QualityCacheDocument,
-): Promise<void> {
-  let contents: string;
-  try {
-    assertJsonValue(document, "QA 结果缓存");
-    contents = `${JSON.stringify(document, null, 2)}\n`;
-  } catch {
-    return;
-  }
-
-  const directory = path.dirname(filePath);
-  const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
-  let moved = false;
-  try {
-    await mkdir(directory, { recursive: true });
-    await writeFile(temporaryPath, contents, "utf8");
-    await rename(temporaryPath, filePath);
-    moved = true;
-  } catch {
-    // 缓存 I/O 失败只会让后续执行重新计算。
-  } finally {
-    if (!moved) await unlink(temporaryPath).catch(() => undefined);
-  }
-}
-
-function isCacheDocument(value: unknown): value is QualityCacheDocument {
-  if (
-    !isRecord(value) ||
-    value.format !== QUALITY_CACHE_FORMAT ||
-    !Array.isArray(value.entries)
-  )
-    return false;
-
-  const keys = new Set<string>();
-  for (const entry of value.entries) {
-    if (!isRecord(entry) || !isCacheKey(entry.key)) return false;
-    if (keys.has(entry.key)) return false;
-    if (!isCacheableQualityCheckOutcome(entry.outcome)) return false;
-    if (
-      !isContentDigest(entry.contentDigest) ||
-      entry.contentDigest !== contentDigest(entry.key, entry.outcome)
-    )
-      return false;
-    keys.add(entry.key);
-  }
-  return true;
+function isQualityCacheEntry(
+  value: unknown,
+  expectedKey: string,
+): value is QualityCacheEntry {
+  return (
+    isRecord(value) &&
+    value.format === QUALITY_CACHE_ENTRY_FORMAT &&
+    value.key === expectedKey &&
+    isCacheableQualityCheckOutcome(value.outcome) &&
+    isContentDigest(value.contentDigest) &&
+    value.contentDigest === contentDigest(value.key, value.outcome)
+  );
 }
 
 function contentDigest(
