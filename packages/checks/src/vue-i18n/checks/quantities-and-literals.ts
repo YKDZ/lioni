@@ -10,8 +10,10 @@ import { compareProtectedLiterals } from "../../protected-literals.ts";
 import { compareQuantityBranches } from "../../quantities.ts";
 import { memoizedVueI18nMessage } from "../message-memo.ts";
 import type {
+  VueI18nDataReader,
   VueI18nCheckIdentity,
   VueI18nMessageProjection,
+  VueI18nPolicyData,
   VueI18nProjector,
   VueI18nQuantityPolicy,
 } from "../quality-types.ts";
@@ -43,6 +45,13 @@ export function createProtectedLiteralCheck<
 >(options: {
   readonly identity: VueI18nCheckIdentity<TId>;
   readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
+  readonly loadPolicies: VueI18nDataReader<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable,
+    readonly VueI18nPolicyData[]
+  >;
 }) {
   const hostVersion = options.identity.hostVersion;
   const version = [
@@ -54,6 +63,8 @@ export function createProtectedLiteralCheck<
     id: options.identity.id,
     version,
     project: options.project,
+    loadPolicies: options.loadPolicies,
+    policyRequirements: ["protectedLiterals"],
     requiresSource: true,
     requiresTarget: true,
     targetMustContainText: true,
@@ -78,6 +89,13 @@ export function createQuantityCheck<
 >(options: {
   readonly identity: VueI18nCheckIdentity<TId>;
   readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
+  readonly loadPolicies: VueI18nDataReader<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable,
+    readonly VueI18nPolicyData[]
+  >;
 }) {
   const hostVersion = options.identity.hostVersion;
   const version = [
@@ -90,6 +108,8 @@ export function createQuantityCheck<
     id: options.identity.id,
     version,
     project: options.project,
+    loadPolicies: options.loadPolicies,
+    policyRequirements: ["quantities"],
     requiresSource: true,
     requiresTarget: true,
     targetMustContainText: true,

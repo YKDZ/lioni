@@ -5,6 +5,7 @@ import type {
   QualityCheckDefinition,
   QualityCheckInput,
   QualityCheckOutcome,
+  QualityDataLoadInput,
   QualityCheckProjectionInput,
   QualityCheckRuleInput,
   QualityCheckSelection,
@@ -109,6 +110,10 @@ export type MessageFamilyCheckerOptions<
   readonly id?: string;
   /** 宿主投影、分析配置与等价策略的版本。 */
   readonly hostVersion: string;
+  /** 只在检查项已选且存在候选时读取；可用同一 qualityData reader 显式共享。 */
+  readonly loadDependencies?: (
+    input: QualityDataLoadInput<TUnit, TTranslation, TBody, TUnavailable>,
+  ) => Awaitable<unknown>;
   readonly select: (
     input: QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
   ) => Awaitable<QualityCheckSelection<TSubject>>;
@@ -272,6 +277,7 @@ export function createMessageFamilyChecker<
   const analysis = options.analysis ?? createTextAnalysis();
   const sourceTemplate = options.sourceTemplate ?? defaultTemplate;
   const targetTemplate = options.targetTemplate ?? defaultTemplate;
+  const loadDependencies = options.loadDependencies;
   const limits = {
     maxCategories: options.limits?.maxCategories ?? defaultLimits.maxCategories,
     maxSourcesPerCategory:
@@ -844,6 +850,7 @@ export function createMessageFamilyChecker<
     configurationSchema,
     configuration: { limits },
     inputSchema,
+    ...(loadDependencies === undefined ? {} : { loadDependencies }),
     select: async (input) => {
       const selection = await options.select(input);
       if (selection.status !== "selected") return selection;

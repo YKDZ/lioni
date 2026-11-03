@@ -206,17 +206,18 @@ const staticVueConfig: FrameworkConfig<
 > = vueConfig;
 void staticVueConfig;
 
-const vueByGroup = analyzeQuality(vueConfig, { groups: ["syntax"] });
-const vueById = analyzeQuality(vueConfig, {
-  checkIds: ["vue-i18n/source-syntax", "message-family-consistency"],
-});
-void vueByGroup;
-void vueById;
+function verifyVueSelectionTypes() {
+  void analyzeQuality(vueConfig, { groups: ["syntax"] });
+  void analyzeQuality(vueConfig, {
+    checkIds: ["vue-i18n/source-syntax", "message-family-consistency"],
+  });
 
-// @ts-expect-error Vue 集合 ID 联合拒绝拼写错误。
-analyzeQuality(vueConfig, { checkIds: ["vue-i18n/source-syntaxx"] });
-// @ts-expect-error Vue 分组名称必须来自宿主配置。
-analyzeQuality(vueConfig, { groups: ["unconfigured"] });
+  // @ts-expect-error Vue 集合 ID 联合拒绝拼写错误。
+  void analyzeQuality(vueConfig, { checkIds: ["vue-i18n/source-syntaxx"] });
+  // @ts-expect-error Vue 分组名称必须来自宿主配置。
+  void analyzeQuality(vueConfig, { groups: ["unconfigured"] });
+}
+void verifyVueSelectionTypes;
 
 function vueConfigWithInvalidGroup(): FrameworkConfig<
   VueUnit,

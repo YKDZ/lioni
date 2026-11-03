@@ -100,7 +100,7 @@ export type VueI18nProjectionInput<
   TUnavailable = never,
 > = Omit<
   QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
-  "configuration"
+  "configuration" | "dependencies"
 >;
 
 export type VueI18nProjector<
@@ -119,13 +119,7 @@ const projectionKey = <
   TUnavailable,
 >(
   input: VueI18nProjectionInput<TUnit, TTranslation, TBody, TUnavailable>,
-) => [
-  input.facts,
-  input.candidate,
-  input.sourceUnit,
-  input.dependencies,
-  input.relationships,
-];
+) => [input.facts, input.candidate, input.sourceUnit, input.relationships];
 
 /** 为一组检查建立共用投影入口，排除不同检查各自的 configuration。 */
 export function memoizedVueI18nProjection<

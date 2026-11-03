@@ -116,6 +116,7 @@ async function run(
             sourceUnit!.unit.source,
             candidate.content,
           ),
+        loadPolicies: () => [policy],
         reference: ({ sourceUnit, translation }) => {
           assert.equal(translation.bodyAvailability, "available");
           return projection(
@@ -125,9 +126,6 @@ async function run(
           );
         },
       }).filter(({ id }) => id === "message-family-consistency"),
-      loadDependencies: () => ({
-        vueI18n: { policies: [policy], terms: { concepts: [] } },
-      }),
       resultCache: {
         async get(key: string) {
           const value = cache.get(key);

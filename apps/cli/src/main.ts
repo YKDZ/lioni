@@ -48,17 +48,40 @@ const languageOption = {
   longOption: "--language",
   description: "本次执行的目标语言；可重复指定，省略时执行全部已配置语言",
 } as const;
+const checkOption = {
+  kind: "repeatableOption",
+  longOption: "--check",
+  description: "本次要执行的检查项 ID；可重复指定",
+} as const;
+const groupOption = {
+  kind: "repeatableOption",
+  longOption: "--group",
+  description: "本次要执行的项目分组；可重复指定",
+} as const;
 
 const languagesSchema = z.optional(z.array(z.string()));
 const scopedConfigSchema = z.object({
   config: z.string(),
   languages: languagesSchema,
 });
+const qaConfigSchema = scopedConfigSchema.extend({
+  checks: z.optional(z.array(z.string())),
+  groups: z.optional(z.array(z.string())),
+});
 
 function languageSelection(input: {
   readonly languages?: readonly string[] | undefined;
 }): LanguageSelectionOptions {
   return input.languages === undefined ? {} : { languages: input.languages };
+}
+
+function qualityCheckSelection(input: {
+  readonly checks?: readonly string[] | undefined;
+  readonly groups?: readonly string[] | undefined;
+}) {
+  if (input.checks !== undefined) return { checkIds: input.checks };
+  if (input.groups !== undefined) return { groups: input.groups };
+  return {};
 }
 
 const enumerationSchema = z.enum(["complete", "partial", "failed"]);
@@ -451,6 +474,8 @@ function createCliContract(identity: CliCommandIdentity) {
         commandPlaceholder: "命令",
         choices: "候选：{choices}",
         default: "默认：{value}",
+        present: "已指定 {field}",
+        forbiddenCombination: "{facts} 不可同时使用",
       },
     }),
     version: versionCapability({
@@ -875,8 +900,19 @@ function createCliContract(identity: CliCommandIdentity) {
         fields: {
           config: { kind: "positional", description: "宿主配置文件路径" },
           languages: languageOption,
+          checks: checkOption,
+          groups: groupOption,
         },
-        input: scopedConfigSchema,
+        input: qaConfigSchema,
+        usageConstraints: [
+          {
+            kind: "forbiddenCombination",
+            all: [
+              { kind: "present", field: "checks" },
+              { kind: "present", field: "groups" },
+            ],
+          },
+        ],
         success: {
           kind: "data",
           variants: {
@@ -905,10 +941,10 @@ function createCliContract(identity: CliCommandIdentity) {
         async handler({ input, outcome }) {
           try {
             const config = await loadConfig(input.config);
-            const result = await analyzeQuality(
-              config,
-              languageSelection(input),
-            );
+            const result = await analyzeQuality(config, {
+              ...languageSelection(input),
+              ...qualityCheckSelection(input),
+            });
             return decideQualityReport(result).passed
               ? outcome.data.checked(result)
               : outcome.data.notPassed(result);
