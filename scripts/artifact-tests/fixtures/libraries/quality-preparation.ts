@@ -269,6 +269,9 @@ function createCache(): {
 
 function summarizeAllocation(profile: { readonly head: HeapProfileNode }): {
   readonly sampledBytes: number;
+  readonly productStackSampledBytes: number;
+  readonly snapshotJsonValueStackSampledBytes: number;
+  readonly qualityInputSnapshotStackSampledBytes: number;
   readonly topFrames: readonly {
     readonly frame: string;
     readonly sampledBytes: number;
@@ -276,13 +279,25 @@ function summarizeAllocation(profile: { readonly head: HeapProfileNode }): {
 } {
   const frames = new Map<string, number>();
   let sampledBytes = 0;
+  let productStackSampledBytes = 0;
+  let snapshotJsonValueStackSampledBytes = 0;
+  let qualityInputSnapshotStackSampledBytes = 0;
   function visit(node: HeapProfileNode, ancestors: readonly string[]): void {
     sampledBytes += node.selfSize;
     const { callFrame } = node;
     const name = callFrame.functionName || "<anonymous>";
     const frame = `${name} (${callFrame.url}:${callFrame.lineNumber + 1})`;
+    const stack = [...ancestors, frame].slice(-6).reverse().join(" <- ");
+    if (stack.includes("/node_modules/@lioni/lioni/"))
+      productStackSampledBytes += node.selfSize;
+    if (stack.includes("snapshotJsonValue"))
+      snapshotJsonValueStackSampledBytes += node.selfSize;
+    if (
+      stack.includes("prepareQualityInput") &&
+      stack.includes("snapshotJsonValue")
+    )
+      qualityInputSnapshotStackSampledBytes += node.selfSize;
     if (node.selfSize > 0) {
-      const stack = [...ancestors, frame].slice(-6).reverse().join(" <- ");
       frames.set(stack, (frames.get(stack) ?? 0) + node.selfSize);
     }
     for (const child of node.children) visit(child, [...ancestors, frame]);
@@ -290,6 +305,9 @@ function summarizeAllocation(profile: { readonly head: HeapProfileNode }): {
   visit(profile.head, []);
   return {
     sampledBytes,
+    productStackSampledBytes,
+    snapshotJsonValueStackSampledBytes,
+    qualityInputSnapshotStackSampledBytes,
     topFrames: [...frames]
       .map(([frame, bytes]) => ({ frame, sampledBytes: bytes }))
       .sort((left, right) => right.sampledBytes - left.sampledBytes)
@@ -353,7 +371,7 @@ async function runWorker(): Promise<void> {
   const workload = JSON.parse(workloadJson) as Workload;
   const basisPayload = createPayload(workload.basisTargetBytes, "basis");
   const dependencyPayload = createPayload(
-    workload.basisTargetBytes,
+    workload.family === "shared-dependency" ? 32768 : 128,
     "dependency",
   );
   const evidencePayload =
@@ -532,6 +550,9 @@ function aggregateSamples(
       sample.allocation as
         | {
             readonly sampledBytes: number;
+            readonly productStackSampledBytes: number;
+            readonly snapshotJsonValueStackSampledBytes: number;
+            readonly qualityInputSnapshotStackSampledBytes: number;
             readonly topFrames: readonly {
               readonly frame: string;
               readonly sampledBytes: number;
@@ -557,6 +578,21 @@ function aggregateSamples(
     result.medianSampledAllocationBytes = median(
       allocationSamples.map((allocation) => allocation?.sampledBytes ?? 0),
     );
+    result.medianProductStackSampledBytes = median(
+      allocationSamples.map(
+        (allocation) => allocation?.productStackSampledBytes ?? 0,
+      ),
+    );
+    result.medianSnapshotJsonValueStackSampledBytes = median(
+      allocationSamples.map(
+        (allocation) => allocation?.snapshotJsonValueStackSampledBytes ?? 0,
+      ),
+    );
+    result.medianQualityInputSnapshotStackSampledBytes = median(
+      allocationSamples.map(
+        (allocation) => allocation?.qualityInputSnapshotStackSampledBytes ?? 0,
+      ),
+    );
     result.topAllocatingFrames = [...topFrames]
       .map(([frame, sampledBytes]) => ({ frame, sampledBytes }))
       .sort((left, right) => right.sampledBytes - left.sampledBytes)
@@ -564,6 +600,90 @@ function aggregateSamples(
     result.profiler = samples.map((sample) => sample.profiler);
   }
   return result;
+}
+
+function assertAllocationScalingBudgets(
+  reports: readonly Record<string, unknown>[],
+): void {
+  const coldRows = reports
+    .map((report) => ({
+      report,
+      workload: report.workload as Workload,
+      allocation: report.allocation as {
+        readonly medianSampledAllocationBytes: number;
+        readonly medianProductStackSampledBytes: number;
+        readonly medianSnapshotJsonValueStackSampledBytes: number;
+        readonly medianQualityInputSnapshotStackSampledBytes: number;
+      },
+      basisPayloadBytes: report.basisPayloadBytes as number,
+    }))
+    .filter(({ workload }) => workload.cacheMode === "cold");
+  const findAxisRows = (axis: WorkloadAxis) =>
+    coldRows
+      .filter(({ workload }) => workload.axis === axis)
+      .sort((left, right) => {
+        const leftScale =
+          axis === "candidate-count"
+            ? left.workload.candidateCount
+            : axis === "check-count"
+              ? left.workload.checkCount
+              : left.basisPayloadBytes;
+        const rightScale =
+          axis === "candidate-count"
+            ? right.workload.candidateCount
+            : axis === "check-count"
+              ? right.workload.checkCount
+              : right.basisPayloadBytes;
+        return leftScale - rightScale;
+      });
+  const assertPerUnitAllocation = (
+    axis: WorkloadAxis,
+    unitsFor: (row: (typeof coldRows)[number]) => number,
+  ) => {
+    const rows = findAxisRows(axis);
+    const smallest = rows[0];
+    const largest = rows.at(-1);
+    assert.ok(smallest !== undefined && largest !== undefined);
+    const smallestBytes =
+      smallest.allocation.medianProductStackSampledBytes / unitsFor(smallest);
+    const largestBytes =
+      largest.allocation.medianProductStackSampledBytes / unitsFor(largest);
+    assert.ok(smallestBytes > 0 && largestBytes > 0);
+    assert.ok(
+      largestBytes <= smallestBytes * 4,
+      `${axis} 每单位分配样本放大超过 4 倍：` +
+        `${smallestBytes.toFixed(1)} → ${largestBytes.toFixed(1)} bytes/unit`,
+    );
+  };
+
+  // 新进程分配采样按实际处理单位归一化，允许噪声余量并拦截规模放大。
+  assertPerUnitAllocation(
+    "candidate-count",
+    ({ workload }) => workload.candidateCount * workload.checkCount,
+  );
+  assertPerUnitAllocation(
+    "check-count",
+    ({ workload }) => workload.candidateCount * workload.checkCount,
+  );
+  assertPerUnitAllocation(
+    "basis-bytes",
+    ({ workload, basisPayloadBytes }) =>
+      workload.candidateCount * workload.checkCount * basisPayloadBytes,
+  );
+
+  // 大依据场景中若重新通过 JSON 快照函数复制整份依据，采样分配会显著越过半份依据。
+  const largeBasis = findAxisRows("basis-bytes").at(-1);
+  assert.ok(largeBasis !== undefined);
+  assert.ok(
+    largeBasis.allocation.medianSnapshotJsonValueStackSampledBytes <
+      largeBasis.basisPayloadBytes / 2,
+    "大依据场景重新出现了输入规模的 JSON 快照分配。",
+  );
+  assert.equal(
+    largeBasis.allocation.medianQualityInputSnapshotStackSampledBytes,
+    0,
+    "输入指纹准备阶段不应再次通过 JSON 快照函数复制依据。",
+  );
 }
 
 async function runBenchmark(): Promise<void> {
@@ -645,6 +765,8 @@ async function runBenchmark(): Promise<void> {
       allocationSamplingIntervalBytes,
       facts: "one in-memory source fact; no translation reads",
       resultCache: "in-memory Map using public QA cache contract",
+      allocationGates:
+        "按工作单位归一化的产品栈采样分配不得超过小规模的4倍；输入准备阶段不得通过 JSON 快照栈复制依据",
     },
     workloads: reports,
   };
@@ -652,6 +774,8 @@ async function runBenchmark(): Promise<void> {
   await writeFile(evidencePath, `${JSON.stringify(report, null, 2)}\n`);
   process.stdout.write(`QA 性能证据：${evidencePath}\n`);
   process.stdout.write(`${JSON.stringify(report)}\n`);
+  // 基线可能因旧复制路径未通过门禁；先落盘原始采样，仍可复核失败原因。
+  assertAllocationScalingBudgets(reports);
 }
 
 async function runSubprocessForSample(
