@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 import { analyzeQuality, createQualityProfiler, readFacts } from "@lioni/lioni";
+import { createDirectoryQualityCheckResultCache } from "@lioni/lioni/node";
 
 import config from "./lioni.config.ts";
 
@@ -80,6 +84,22 @@ assert.deepEqual(
 const quality = await analyzeQuality(config);
 assert.equal(quality.status, "complete");
 assert.equal(quality.diagnostics.length, 1);
+const cacheDirectory = await mkdtemp(
+  path.join(os.tmpdir(), "lioni-artifact-cache-"),
+);
+try {
+  const cachedConfig = () => ({
+    ...config,
+    quality: {
+      ...config.quality,
+      resultCache: createDirectoryQualityCheckResultCache(cacheDirectory),
+    },
+  });
+  assert.deepEqual(await analyzeQuality(cachedConfig()), quality);
+  assert.deepEqual(await analyzeQuality(cachedConfig()), quality);
+} finally {
+  await rm(cacheDirectory, { recursive: true, force: true });
+}
 const selected = await readFacts(config, { languages: ["de"] });
 assert.deepEqual(
   selected.translations.reads.map(({ language }) => language),
