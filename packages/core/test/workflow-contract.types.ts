@@ -160,7 +160,6 @@ void frameworkConfig;
 
 const oldExceptionRequest: Omit<QualityCheckRequest<Body>, "exceptions"> = {
   candidates: [],
-  dependencies: {},
   // @ts-expect-error 例外来源只由 quality.exceptionStore 装配。
   exceptions: [],
 };
