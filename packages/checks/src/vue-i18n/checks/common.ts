@@ -11,7 +11,7 @@ import type {
   QualityObject,
   TranslationUnitInput,
 } from "@lioni/core";
-import { bindQualityCheck, snapshotJsonValue } from "@lioni/core";
+import { assertJsonValue, bindQualityCheck } from "@lioni/core";
 import { z } from "zod";
 
 import { vueI18nDependencies } from "../dependencies.ts";
@@ -184,10 +184,14 @@ export function createVueI18nMessageCheck<
         TUnavailable
       >,
     ) => ({ status: "ready", value: input.subject.projection }),
-    fingerprintInput: ({ projected, subject }) => ({
-      projection: snapshotJsonValue(projected, "Vue I18n 检查投影"),
-      dependencies: snapshotJsonValue(subject.prepared, "Vue I18n 检查依赖"),
-    }),
+    fingerprintInput: ({ projected, subject }) => {
+      const basis = {
+        projection: projected,
+        dependencies: subject.prepared,
+      };
+      assertJsonValue(basis, "Vue I18n 检查依据");
+      return basis;
+    },
     check: (input) =>
       options.check(
         { ...input, subject: input.subject.projection },

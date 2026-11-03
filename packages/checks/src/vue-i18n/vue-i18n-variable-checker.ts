@@ -6,7 +6,7 @@ import type {
   QualityObject,
   TranslationUnitInput,
 } from "@lioni/core";
-import { bindQualityCheck, snapshotJsonValue } from "@lioni/core";
+import { assertJsonValue, bindQualityCheck } from "@lioni/core";
 import type { MemoScope } from "@lioni/memo";
 import { z } from "zod";
 
@@ -118,8 +118,10 @@ export function createVueI18nVariableCorrespondenceChecker<
         TUnavailable
       >,
     ) => ({ status: "ready", value: input.subject }),
-    fingerprintInput: ({ projected }) =>
-      snapshotJsonValue(projected, "Vue I18n 检查投影"),
+    fingerprintInput: ({ projected }) => {
+      assertJsonValue(projected, "Vue I18n 检查投影");
+      return projected;
+    },
     check: (input) => compareVariables(input.projected, input.memo),
   });
 }

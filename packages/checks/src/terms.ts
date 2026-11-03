@@ -49,6 +49,7 @@ export type TermCheckerOptions<
    * 显式替换默认业务依据；须涵盖投影、检查对象、位置映射及其他实际依赖。
    * 工厂额外纳入本次使用的术语库数据，核心保留检查身份、版本和配置。
    * 未提供时沿用核心的完整事实依据；函数行为变化须更新 hostVersion。
+   * 回调返回后核心立即校验并摘要；此处只读访问共享输入。
    */
   readonly fingerprintInput?: (
     input: QualityCheckRuleInput<

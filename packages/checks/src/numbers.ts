@@ -13,7 +13,7 @@ import type {
   SourceUnitFact,
   TranslationUnitInput,
 } from "@lioni/core";
-import { bindQualityCheck, snapshotJsonValue } from "@lioni/core";
+import { assertJsonValue, bindQualityCheck } from "@lioni/core";
 import { z } from "zod";
 
 const numberCheckerConfigurationSchema = z.object({
@@ -77,7 +77,7 @@ export type NumberCheckerOptions<
   ) => Awaitable<
     QualityCheckSelection<NumberCheckerSubject<TSelectedUnit, TContent>>
   >;
-  /** 声明显式宿主依赖；工厂另行纳入实际文本、关联、位置和诊断证据，省略时保留全事实默认。 */
+  /** 声明显式宿主依赖；工厂另行纳入实际文本、关联、位置和诊断证据，省略时保留全事实默认。回调返回后核心立即校验并摘要；此处只读访问共享输入。 */
   readonly fingerprintInput?: (
     input: QualityCheckRuleInput<
       TUnit,
@@ -247,11 +247,18 @@ export function createNumberChecker<
               TBody,
               TUnavailable
             >,
-          ) => ({
-            input: fingerprintInput({ ...input, subject: input.subject.value }),
-            report: snapshotJsonValue(input.subject.report, "数字检查诊断依据"),
-            association: input.subject.association,
-          }),
+          ) => {
+            const basis = {
+              input: fingerprintInput({
+                ...input,
+                subject: input.subject.value,
+              }),
+              report: input.subject.report,
+              association: input.subject.association,
+            };
+            assertJsonValue(basis, "数字检查输入依据");
+            return basis;
+          },
         }),
     check: ({ subject }) => compareNumberText(subject.report),
   });
