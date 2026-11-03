@@ -34,6 +34,7 @@ export type TermCheckerOptions<
   TId extends string | undefined = undefined,
   TRule extends TermRule = TermRule,
 > = {
+  /** 普通或可选 string ID 返回 string，并使配置中的检查项联合退化为 string。 */
   readonly id?: TId;
   /** 宿主提供的识别策略、规则、选择、投影和位置映射的语义版本。 */
   readonly hostVersion: string;
@@ -391,6 +392,24 @@ function createTermCheckerWithTypes<
     TUnavailable,
     TId
   >;
+  function create<const TRule extends TermRule>(
+    options: TermCheckerOptions<
+      TUnit,
+      TTranslation,
+      TSubject,
+      TBody,
+      TUnavailable,
+      string | undefined,
+      TRule
+    >,
+  ): QualityCheckDefinition<
+    TUnit,
+    TTranslation,
+    import("@lioni/core").QualityObject,
+    TBody,
+    TUnavailable,
+    string
+  >;
   function create(
     options: TermCheckerOptions<
       TUnit,
@@ -420,7 +439,10 @@ function createTermCheckerWithTypes<
   return create;
 }
 
-/** 术语规则工厂；显式业务泛型先经 withTypes 绑定，规则与覆盖 ID 由本次调用推断。 */
+/**
+ * 术语规则工厂；显式业务泛型先经 withTypes 绑定，规则与覆盖 ID 由本次调用推断。
+ * 字面量及派生 ID 保持精确；普通可选 string ID 返回 string，后续选择依赖运行时校验。
+ */
 export const createTermChecker = Object.assign(
   createTermCheckerImplementation,
   {

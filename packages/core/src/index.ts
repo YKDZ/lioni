@@ -678,6 +678,8 @@ function defineConfigImplementation<
 
 /**
  * 声明宿主配置。显式业务泛型通过 withTypes 预先绑定，以便从配置内容推断检查项与分组。
+ * 静态字面量 ID 保留精确选择类型；混入普通 string ID 会使检查项联合退化为 string，
+ * 此时检查项、分组成员和运行选项依赖 QA 入口的运行时目录校验。
  */
 export const defineConfig = Object.assign(defineConfigImplementation, {
   withTypes<

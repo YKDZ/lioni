@@ -107,6 +107,7 @@ export type MessageFamilyCheckerOptions<
   TSubject extends MessageFamilySubject<TSelectedUnit, TBody> =
     MessageFamilySubject<TSelectedUnit, TBody>,
 > = {
+  /** 普通可选 string 会产生宽 ID；静态选择需要依赖运行时目录校验。 */
   readonly id?: string;
   /** 宿主投影、分析配置与等价策略的版本。 */
   readonly hostVersion: string;
@@ -196,7 +197,10 @@ const inputSchema = messageFamilyInputSchema;
 
 const defaultTemplate: TemplateOptions = { abstract: () => undefined };
 
-/** 通过正式 QA 绑定接入宿主事实，并比较显式投影的消息族。 */
+/**
+ * 通过正式 QA 绑定接入宿主事实，并比较显式投影的消息族。
+ * 字面量 ID 保留精确类型；普通可选 string ID 返回 string，选择由运行时目录校验。
+ */
 export function createMessageFamilyChecker<
   TUnit extends TranslationUnitInput,
   TTranslation,
@@ -247,6 +251,31 @@ export function createMessageFamilyChecker<
   TBody,
   TUnavailable,
   TId
+>;
+export function createMessageFamilyChecker<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TSelectedUnit extends TUnit,
+  TBody,
+  TUnavailable = never,
+  TSubject extends MessageFamilySubject<TSelectedUnit, TBody> =
+    MessageFamilySubject<TSelectedUnit, TBody>,
+>(
+  options: MessageFamilyCheckerOptions<
+    TUnit,
+    TTranslation,
+    TSelectedUnit,
+    TBody,
+    TUnavailable,
+    TSubject
+  >,
+): QualityCheckDefinition<
+  TUnit,
+  TTranslation,
+  QualityObject,
+  TBody,
+  TUnavailable,
+  string
 >;
 export function createMessageFamilyChecker<
   TUnit extends TranslationUnitInput,
