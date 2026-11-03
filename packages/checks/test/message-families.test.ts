@@ -57,6 +57,9 @@ function checkerFor(
     readonly partialCandidate?: boolean;
     readonly candidateProjection?: MessageFamilyInput;
     readonly referenceProjection?: MessageFamilyInput;
+    readonly referenceProjectionByKey?: Readonly<
+      Record<string, MessageFamilyInput>
+    >;
     readonly explicitBasis?: boolean;
     readonly referenceProjections?: { count: number };
     readonly analysis?: TextAnalysis;
@@ -140,7 +143,8 @@ function checkerFor(
     return (
       (isCandidate
         ? options.candidateProjection
-        : options.referenceProjection) ?? result
+        : (options.referenceProjectionByKey?.[input.translation.identity.key] ??
+          options.referenceProjection)) ?? result
     );
   };
   return createMessageFamilyChecker<Unit, Translation, Unit, string>({
@@ -488,6 +492,206 @@ void test("借入同一 memo 的后续运行仍使用新的事实与等价依赖
   } finally {
     memo.dispose();
   }
+});
+
+void test("冲突关联中未知族与其他族的保存记录重排不改变依据", async () => {
+  const translations = [
+    { id: "saved", targetKey: "other", text: "保存" },
+    { id: "saved", targetKey: "unknown", text: "未知" },
+  ];
+  const checker = checkerFor({
+    explicitBasis: true,
+    referenceProjectionByKey: {
+      other: {
+        groups: [
+          {
+            ref: "other",
+            scope: "ui",
+            source: {
+              language: "en",
+              fragments: [{ ref: "source", text: "Save" }],
+            },
+            target: {
+              language: "zh",
+              fragments: [{ ref: "target", text: "保存" }],
+            },
+          },
+        ],
+      },
+      unknown: { complete: false, groups: [] },
+    },
+  });
+  const run = () =>
+    analyzeQuality(
+      configFor(
+        [
+          { id: "editing", source: "Hello" },
+          { id: "saved", source: "Save" },
+        ],
+        translations,
+        checker,
+      ),
+      {
+        candidates: [{ sourceKey: "editing", language: "zh", content: "你好" }],
+      },
+    );
+  const initial = await run();
+  translations.reverse();
+  const reordered = await run();
+  assert.equal(initial.status, "incomplete");
+  assert.equal(
+    reordered.checks[0]!.executions[0]!.inputFingerprint,
+    initial.checks[0]!.executions[0]!.inputFingerprint,
+  );
+});
+
+void test("全部候选不适用时不投影任何候选或保存参照", async () => {
+  const checker = createMessageFamilyChecker<Unit, Translation, Unit, string>({
+    hostVersion: "not-applicable-v1",
+    select: () => ({ status: "not-applicable" }),
+    project: () => {
+      throw new Error("不应投影候选");
+    },
+    reference: () => {
+      throw new Error("不应准备参照");
+    },
+  });
+  const result = await analyzeQuality(
+    configFor(
+      [{ id: "saved", source: "Hello" }],
+      [{ id: "saved", text: "你好" }],
+      checker,
+    ),
+    { candidates: [{ sourceKey: "saved", language: "zh", content: "你好" }] },
+  );
+  assert.equal(result.status, "not-applicable");
+});
+
+void test("旧消息族版本例外在重新执行时失配，未运行时保持未验证", async () => {
+  const units = [
+    { id: "editing", source: "Hello" },
+    { id: "saved", source: "Hello" },
+  ];
+  const translations = [{ id: "saved", text: "您好" }];
+  const checker = checkerFor({ explicitBasis: true });
+  const candidates = [
+    { sourceKey: "editing", language: "zh", content: "你好" },
+  ];
+  const initial = await analyzeQuality(
+    configFor(units, translations, checker),
+    { candidates },
+  );
+  const current = createQualityException({
+    id: "previous-release",
+    reason: "接受之前的表达。",
+    execution: initial.checks[0]!.executions[0]!,
+  });
+  const old: QualityException = {
+    ...current,
+    inputFingerprint: `sha256:${"0".repeat(64)}`,
+    fingerprintSummary: {
+      ...current.fingerprintSummary,
+      version: "checks.message-family-consistency/v2+message-families-test-v1",
+    },
+  };
+  const store: QualityExceptionStore = {
+    load: async () => [old],
+    upsert: async () => {},
+  };
+  const config = configFor(units, translations, checker, store);
+  const result = await analyzeQuality(config, { candidates });
+  assert.equal(result.exceptionApplicability[0]?.status, "basis-changed");
+  assert.ok(
+    result.exceptionApplicability[0]?.reasons?.includes("check-implementation"),
+  );
+  assert.equal(result.diagnostics[0]?.handling.status, "active");
+  assert.equal((await store.load())[0], old);
+  const skipped = await analyzeQuality(config, { candidates: [] });
+  assert.equal(skipped.exceptionApplicability[0]?.status, "not-verified");
+});
+
+void test("唯一旧译文正文不可用时仍能完整检查替换候选", async () => {
+  const base = configFor(
+    [
+      { id: "editing", source: "Hello" },
+      { id: "saved", source: "Hello" },
+    ],
+    [],
+    checkerFor(),
+  );
+  const projection = (key: string, content: string): MessageFamilyInput => ({
+    groups: [
+      {
+        ref: key,
+        scope: "ui",
+        source: { language: "en", fragments: [{ ref: key, text: "Hello" }] },
+        target: { language: "zh", fragments: [{ ref: key, text: content }] },
+      },
+    ],
+  });
+  const checker = createMessageFamilyChecker<
+    Unit,
+    Translation,
+    Unit,
+    string,
+    Translation
+  >({
+    hostVersion: "unavailable-test-v1",
+    select: (input) =>
+      input.sourceUnit === null
+        ? {
+            status: "incomplete",
+            issue: { code: "sourceUnavailable", message: "找不到原文。" },
+          }
+        : {
+            status: "selected",
+            subject: {
+              sourceUnit: input.sourceUnit,
+              sourceKey: input.candidate.sourceKey,
+              language: input.candidate.language,
+              content: input.candidate.content,
+            },
+          },
+    project: ({ subject }) => projection(subject.sourceKey, subject.content),
+    reference: (reference) => {
+      assert.equal(reference.sourceKey, "saved");
+      return projection(reference.sourceKey, "你好");
+    },
+  });
+  const config = defineConfig({
+    source: base.source,
+    keyOf: base.keyOf,
+    translations: {
+      ...base.translations!,
+      unavailableSchema: translationSchema,
+      read: () => ({
+        scopes: [
+          {
+            range: "zh.json",
+            enumeration: "complete",
+            covers: ["editing", "saved"],
+            records: [
+              {
+                value: { id: "editing", text: "不可用旧正文" },
+                bodyAvailability: "unavailable",
+              },
+              {
+                value: { id: "saved", text: "你好" },
+                bodyAvailability: "available",
+              },
+            ],
+          },
+        ],
+      }),
+    },
+    quality: { checks: [checker] },
+  });
+  const result = await analyzeQuality(config, {
+    candidates: [{ sourceKey: "editing", language: "zh", content: "你好" }],
+  });
+  assert.equal(result.status, "complete");
+  assert.deepEqual(result.diagnostics, []);
+  assert.deepEqual(result.checks[0]!.issues, []);
 });
 
 function configFor(

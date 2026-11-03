@@ -407,13 +407,44 @@ export function createMessageFamilyChecker<
           ),
         );
       let knownFamilies = association.translationIndexes.length > 0;
+      const preparedRecords = new Map<
+        number,
+        Awaited<ReturnType<typeof prepareSavedReference>>
+      >();
+      // 先判定整个关联的归属完整性，再统一选取依据，避免记录顺序改变成员集合。
+      for (const translationIndex of association.translationIndexes) {
+        if (translationIndex === replacedIndex) continue;
+        const translation = facts.translations.records[translationIndex];
+        if (translation === undefined || translation.language !== language) {
+          knownFamilies = false;
+          continue;
+        }
+        const prepared = await input.memo.memo(prepareSavedReference, {
+          key: savedReferenceKey,
+        })(
+          {
+            kind: "reference",
+            sourceUnit,
+            sourceKey,
+            language,
+            association,
+            translation,
+          },
+          fixedContext(input),
+        );
+        preparedRecords.set(translationIndex, prepared);
+        if (
+          prepared.projected.complete === false ||
+          prepared.signedGroups.some(({ familyKey }) => familyKey === "")
+        )
+          knownFamilies = false;
+      }
       let relevant = false;
       const projectedBasis: unknown[] = [];
       for (const translationIndex of association.translationIndexes) {
         if (translationIndex === replacedIndex) continue;
         const translation = facts.translations.records[translationIndex];
         if (translation === undefined || translation.language !== language) {
-          knownFamilies = false;
           associationIncomplete = true;
           associationIssues.push(
             issue(
@@ -425,28 +456,13 @@ export function createMessageFamilyChecker<
           continue;
         }
         const { projected, projectionIssues, signedGroups } =
-          await input.memo.memo(prepareSavedReference, {
-            key: savedReferenceKey,
-          })(
-            {
-              kind: "reference",
-              sourceUnit,
-              sourceKey,
-              language,
-              association,
-              translation,
-            },
-            fixedContext(input),
-          );
+          preparedRecords.get(translationIndex)!;
         if (projected.complete === false) {
-          knownFamilies = false;
           associationIncomplete = true;
         }
         const projectionRelevant = signedGroups.some(({ familyKey }) =>
           familyKeys.has(familyKey),
         );
-        if (signedGroups.some(({ familyKey }) => familyKey === ""))
-          knownFamilies = false;
         relevant ||= projectionRelevant;
         if (!knownFamilies || projectionRelevant) {
           associationIssues.push(...projectionIssues);
