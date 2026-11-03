@@ -17,6 +17,7 @@ import {
   type QualityCheckResultCache,
   type QualityObject,
   type QualityProfileReport,
+  type QualityRunResult,
 } from "@lioni/lioni";
 import { z } from "zod";
 
@@ -56,6 +57,29 @@ type HeapProfileNode = {
   };
   readonly selfSize: number;
   readonly children: readonly HeapProfileNode[];
+};
+
+type QualityResultSummary = {
+  readonly sha256: string;
+  readonly jsonBytes: number;
+  readonly status: string;
+  readonly candidateCount: number;
+  readonly diagnosticCount: number;
+  readonly diagnosticEvidenceCount: number;
+  readonly diagnosticEvidenceJsonBytes: number;
+  readonly factCoverage: {
+    readonly sourceStatus: string;
+    readonly translationReadCount: number;
+    readonly associationCount: number;
+  };
+  readonly checks: readonly {
+    readonly checkId: string;
+    readonly status: string;
+    readonly coverage: QualityRunResult["checks"][number]["coverage"];
+    readonly diagnosticCount: number;
+    readonly issueCount: number;
+    readonly executionCount: number;
+  }[];
 };
 
 const repetitions = 5;
@@ -360,6 +384,38 @@ function summarizeProfiler(report: QualityProfileReport) {
   };
 }
 
+function summarizeQualityResult<TBody>(
+  result: QualityRunResult<QualityObject, TBody>,
+): QualityResultSummary {
+  const serialized = JSON.stringify(result);
+  assert.ok(serialized !== undefined);
+  const evidence = result.diagnostics.flatMap(
+    (diagnostic) => diagnostic.evidence,
+  );
+  return {
+    sha256: createHash("sha256").update(serialized).digest("hex"),
+    jsonBytes: Buffer.byteLength(serialized),
+    status: result.status,
+    candidateCount: result.candidates.length,
+    diagnosticCount: result.diagnostics.length,
+    diagnosticEvidenceCount: evidence.length,
+    diagnosticEvidenceJsonBytes: Buffer.byteLength(JSON.stringify(evidence)),
+    factCoverage: {
+      sourceStatus: result.factCoverage.source.status,
+      translationReadCount: result.factCoverage.translations.length,
+      associationCount: result.factCoverage.associations.length,
+    },
+    checks: result.checks.map((check) => ({
+      checkId: check.checkId,
+      status: check.status,
+      coverage: check.coverage,
+      diagnosticCount: check.diagnostics.length,
+      issueCount: check.issues.length,
+      executionCount: check.executions.length,
+    })),
+  };
+}
+
 async function runWorker(): Promise<void> {
   const workloadJson = process.argv[3];
   const measurementMode = process.argv[4];
@@ -498,6 +554,8 @@ async function runWorker(): Promise<void> {
         executions.map(({ inputFingerprint }) => inputFingerprint).join("\n"),
       )
       .digest("hex");
+    // 完整结果摘要在计时与分配采样结束后计算，不计入 QA 成本窗口。
+    const resultSummary = summarizeQualityResult(result);
     process.stdout.write(
       `${JSON.stringify({
         workload,
@@ -514,6 +572,7 @@ async function runWorker(): Promise<void> {
           JSON.stringify(result.diagnostics),
         ),
         fingerprintDigest,
+        resultSummary,
         ...(profilerSummary === undefined ? {} : { profiler: profilerSummary }),
         ...(sampledAllocation === undefined
           ? {}
@@ -600,6 +659,23 @@ function aggregateSamples(
     result.profiler = samples.map((sample) => sample.profiler);
   }
   return result;
+}
+
+function summarizeRepeatedQualityResults(
+  samples: readonly Record<string, unknown>[],
+): QualityResultSummary & { readonly matchingSamples: number } {
+  const summaries = samples.map((sample) => {
+    const summary = sample.resultSummary as QualityResultSummary | undefined;
+    assert.ok(summary, "性能样本缺少完整 QA 结果摘要。");
+    return summary;
+  });
+  const first = summaries[0];
+  assert.ok(first !== undefined);
+  assert.ok(
+    summaries.every((summary) => summary.sha256 === first.sha256),
+    "同一固定负载的重复进程产生了不同 QA 结果。",
+  );
+  return { ...first, matchingSamples: summaries.length };
 }
 
 function assertAllocationScalingBudgets(
@@ -738,6 +814,10 @@ async function runBenchmark(): Promise<void> {
       diagnosticEvidenceBytes: timingSamples[0]?.diagnosticEvidenceBytes,
       diagnosticResultBytes: timingSamples[0]?.diagnosticResultBytes,
       fingerprintDigest: timingSamples[0]?.fingerprintDigest,
+      resultSummary: summarizeRepeatedQualityResults([
+        ...timingSamples,
+        ...allocationSamples,
+      ]),
       timing: aggregateSamples(timingSamples, "timing"),
       allocation: aggregateSamples(allocationSamples, "allocation"),
     });
