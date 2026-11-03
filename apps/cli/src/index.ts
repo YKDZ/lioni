@@ -36,6 +36,7 @@ export {
   ComparisonContractError,
   DuplicateTranslationUnitKeyError,
   QualityExceptionFormatError,
+  QualityDataReaderContractError,
   StandardSchemaContractError,
   TranslationIdentityContractError,
 } from "@lioni/core";
@@ -59,6 +60,9 @@ export type {
   JsonValue,
   LanguageSelectionOptions,
   QualityCheckDefinition,
+  QualityDataLoadInput,
+  QualityDataReader,
+  QualityCheckScope,
   QualityCheckOutcome,
   QualityCheckInput,
   QualityCheckResult,
@@ -180,11 +184,13 @@ export type {
 } from "@lioni/checks";
 export { createVueI18nChecks } from "@lioni/checks";
 export type {
-  VueI18nCheckData,
-  VueI18nCheckDependencies,
   VueI18nChecksOptions,
+  VueI18nDataReader,
+  VueI18nLanguagePolicy,
   VueI18nMessageProjection,
   VueI18nPolicy,
+  VueI18nPolicyData,
+  VueI18nPolicyRequirement,
   VueI18nProjector,
   VueI18nQuantityPolicy,
   VueI18nReferenceProjector,

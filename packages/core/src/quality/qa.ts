@@ -17,6 +17,7 @@ import { stableStringifyJson } from "../stable-json.ts";
 import {
   assertJsonValue,
   snapshotJsonValue,
+  snapshotJsonValuePreservingShared,
   StandardSchemaContractError,
   validateWithStandardSchema,
 } from "../standard-schema.ts";
@@ -171,13 +172,27 @@ export type QualityDataReader = {
   ) => Promise<TValue>;
 };
 
-type QualityDataReaderScope = QualityDataReader & {
+type QualityDataReaderScope = {
   readonly dispose: () => void;
+  readonly reader: QualityDataReader;
+  readonly snapshot: <TValue>(
+    value: TValue,
+    valueDescription: string,
+  ) => TValue;
 };
+
+/** 动态接入未提供有效读取函数时直接报告的契约错误。 */
+export class QualityDataReaderContractError extends TypeError {
+  constructor() {
+    super("qualityData.read 的读取函数必须是函数。");
+    this.name = "QualityDataReaderContractError";
+  }
+}
 
 /** 创建仅覆盖当前 QA 运行的检查资料读取范围。 */
 export function createQualityDataReader(): QualityDataReaderScope {
   const memo = createMemoScope();
+  const sharedValues = new WeakSet<object>();
   const operations = new WeakMap<
     object,
     (...args: readonly unknown[]) => Promise<JsonValue>
@@ -188,19 +203,56 @@ export function createQualityDataReader(): QualityDataReaderScope {
       ...args: TArguments
     ): Promise<TValue> {
       if (typeof reader !== "function")
-        throw new TypeError("qualityData.read 的读取函数必须是函数。");
+        throw new QualityDataReaderContractError();
       let snapshotReader = operations.get(reader);
       if (snapshotReader === undefined) {
         snapshotReader = async (...readerArgs: readonly unknown[]) => {
           const value = await reader(...(readerArgs as unknown as TArguments));
-          return snapshotJsonValue(value, "QA 检查资料");
+          const snapshot = snapshotJsonValue(value, "QA 检查资料");
+          registerSharedQualityData(snapshot, sharedValues);
+          return snapshot;
         };
         operations.set(reader, snapshotReader);
       }
       return memo.memo(snapshotReader)(...args) as Promise<TValue>;
     },
   };
-  return { ...qualityData, dispose: () => memo.dispose() };
+  return {
+    reader: qualityData,
+    snapshot: <TValue>(value: TValue, valueDescription: string) =>
+      snapshotQualityDataPreservingShared(
+        value,
+        valueDescription,
+        sharedValues,
+      ),
+    dispose: () => memo.dispose(),
+  };
+}
+
+function registerSharedQualityData(
+  value: unknown,
+  sharedValues: WeakSet<object>,
+): void {
+  if (typeof value !== "object" || value === null || sharedValues.has(value))
+    return;
+  sharedValues.add(value);
+  if (Array.isArray(value)) {
+    for (const item of value) registerSharedQualityData(item, sharedValues);
+  } else {
+    for (const item of Object.values(value))
+      registerSharedQualityData(item, sharedValues);
+  }
+  Object.freeze(value);
+}
+
+function snapshotQualityDataPreservingShared<TValue>(
+  value: TValue,
+  valueDescription: string,
+  sharedValues: WeakSet<object>,
+): TValue {
+  return snapshotJsonValuePreservingShared(value, valueDescription, (shared) =>
+    sharedValues.has(shared),
+  ) as TValue;
 }
 
 export type QualityDataLoadInput<
@@ -1050,7 +1102,7 @@ export async function runQualityChecksWithQualityData<
     TUnavailable
   >[],
   options: QualityExecutionOptions = {},
-  qualityData: QualityDataReader,
+  qualityData: QualityDataReaderScope,
 ): Promise<QualityRunResult<QualityObject, TBody>> {
   const memo = options.memo ?? createMemoScope();
   try {
@@ -1131,14 +1183,19 @@ export async function runQualityChecksWithQualityData<
           "dependencies",
         );
         try {
-          dependencies = snapshotQualityData(
-            await loadDependencies({ facts, memo, qualityData }),
+          dependencies = qualityData.snapshot(
+            await loadDependencies({
+              facts,
+              memo,
+              qualityData: qualityData.reader,
+            }),
             `QA 检查项 ${definition.id} 的检查资料`,
           );
         } catch (error) {
           if (
             error instanceof StandardSchemaContractError ||
-            error instanceof QualityCheckBindingError
+            error instanceof QualityCheckBindingError ||
+            error instanceof QualityDataReaderContractError
           )
             throw error;
           dependencyFailure = { error };
@@ -1295,7 +1352,8 @@ export async function runQualityChecksWithQualityData<
                 } catch (error) {
                   if (
                     error instanceof StandardSchemaContractError ||
-                    error instanceof QualityCheckBindingError
+                    error instanceof QualityCheckBindingError ||
+                    error instanceof QualityDataReaderContractError
                   )
                     throw error;
                   return failedQualityCheckOutcome(candidate, error);
@@ -1314,7 +1372,8 @@ export async function runQualityChecksWithQualityData<
         } catch (error) {
           if (
             error instanceof StandardSchemaContractError ||
-            error instanceof QualityCheckBindingError
+            error instanceof QualityCheckBindingError ||
+            error instanceof QualityDataReaderContractError
           )
             throw error;
           outcomeResolution = {

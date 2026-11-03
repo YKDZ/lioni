@@ -3,9 +3,11 @@ import type { MemoScope } from "@lioni/memo";
 
 import { memoizedVueI18nMessage } from "../message-memo.ts";
 import type {
+  VueI18nDataReader,
   VueI18nCheckIdentity,
   VueI18nMessageProjection,
   VueI18nPolicy,
+  VueI18nPolicyData,
   VueI18nProjector,
 } from "../quality-types.ts";
 import { VUE_I18N_MESSAGE_COMPILER_VERSION } from "../vue-i18n-messages.ts";
@@ -28,11 +30,20 @@ export function createLinkTargetExistsCheck<
 >(options: {
   readonly identity: VueI18nCheckIdentity<TId>;
   readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
+  readonly loadPolicies: VueI18nDataReader<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable,
+    readonly VueI18nPolicyData[]
+  >;
 }) {
   return createVueI18nMessageCheck({
     id: options.identity.id,
     version: version("link-target-exists", options.identity),
     project: options.project,
+    loadPolicies: options.loadPolicies,
+    policyRequirements: ["resources"],
     requiresSource: false,
     requiresTarget: true,
     prepare: (projection, policy, memo) => {
@@ -108,11 +119,20 @@ export function createLinkCycleCheck<
 >(options: {
   readonly identity: VueI18nCheckIdentity<TId>;
   readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
+  readonly loadPolicies: VueI18nDataReader<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable,
+    readonly VueI18nPolicyData[]
+  >;
 }) {
   return createVueI18nMessageCheck({
     id: options.identity.id,
     version: version("link-cycle", options.identity),
     project: options.project,
+    loadPolicies: options.loadPolicies,
+    policyRequirements: ["resources"],
     requiresSource: false,
     requiresTarget: true,
     prepare: reachableMessages,

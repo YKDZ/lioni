@@ -35,11 +35,13 @@ export { compareProtectedLiterals } from "./protected-literals.ts";
 export type { ProtectedLiteralIssue } from "./protected-literals.ts";
 export { createVueI18nChecks } from "./vue-i18n/quality-checks.ts";
 export type {
-  VueI18nCheckData,
-  VueI18nCheckDependencies,
   VueI18nChecksOptions,
+  VueI18nDataReader,
+  VueI18nLanguagePolicy,
   VueI18nMessageProjection,
   VueI18nPolicy,
+  VueI18nPolicyData,
+  VueI18nPolicyRequirement,
   VueI18nProjectionInput,
   VueI18nProjector,
   VueI18nReferenceProjector,

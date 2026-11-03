@@ -10,6 +10,7 @@ import {
   type QualityInputBasis,
   type QualityLocation,
   type QualityCheckDefinition,
+  type QualityDataLoadInput,
   type TranslationUnitInput,
 } from "@lioni/core";
 import {
@@ -47,6 +48,10 @@ export type TermCheckerOptions<
           TUnavailable
         >,
       ) => Awaitable<CompiledTerms>);
+  /** 只在检查项已选且存在候选时读取；可用同一 qualityData reader 显式共享。 */
+  readonly loadDependencies?: (
+    input: QualityDataLoadInput<TUnit, TTranslation, TBody, TUnavailable>,
+  ) => Awaitable<unknown>;
   readonly rule: TRule;
   /**
    * 显式替换默认业务依据；须涵盖投影、检查对象、位置映射及其他实际依赖。
@@ -198,6 +203,7 @@ function createTermCheckerImplementation<
 > {
   const rule = options.rule;
   const fingerprintInput = options.fingerprintInput;
+  const loadDependencies = options.loadDependencies;
   return bindQualityCheck<
     TUnit,
     TTranslation,
@@ -214,6 +220,7 @@ function createTermCheckerImplementation<
     configurationSchema: termRulesConfigurationSchema,
     configuration: { rules: [rule.id] },
     inputSchema: termComparisonInputSchema,
+    ...(loadDependencies === undefined ? {} : { loadDependencies }),
     async select(input) {
       const selection = await options.select(input);
       if (selection.status !== "selected") return selection;

@@ -117,6 +117,7 @@ void describe("quality checks", () => {
 
     assert.equal(result.status, "complete");
     assert.deepEqual(result.checks[0]?.dependencies, dependencies);
+    assert.notStrictEqual(observedDependencies, dependencies);
     assert.deepEqual(observedDependencies, dependencies);
     assert.equal(result.checks[0]?.issues.length, 0);
   });
