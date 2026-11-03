@@ -142,6 +142,12 @@ void describe("本次执行的语言范围", () => {
         defineTestQualityCheck<Unit, Translation, string>({
           id: "language-observer",
           configuration: {},
+          loadDependencies: ({ facts }) => {
+            preparedLanguages.push(
+              facts.translations.reads.map(({ language }) => language),
+            );
+            return {};
+          },
           check({ candidate }) {
             checkedLanguages.push(candidate.language);
             return {
@@ -159,12 +165,6 @@ void describe("本次执行的语言范围", () => {
           },
         }),
       ],
-      loadDependencies: ({ facts }) => {
-        preparedLanguages.push(
-          facts.translations.reads.map(({ language }) => language),
-        );
-        return {};
-      },
     });
     const result = await analyzeQuality(config, { languages: ["ja"] });
     assert.deepStrictEqual(reads, ["source", "ja"]);

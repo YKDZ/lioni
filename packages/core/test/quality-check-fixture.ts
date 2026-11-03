@@ -6,6 +6,7 @@ import {
   type QualityCheckInput,
   type QualityObject,
   type QualityCheckOutcome,
+  type QualityDataLoadInput,
   type StandardSchemaV1,
   type TranslationUnitInput,
 } from "../src/index.ts";
@@ -29,6 +30,9 @@ export function defineTestQualityCheck<
   readonly id: string;
   readonly version?: string;
   readonly configuration: JsonValue;
+  readonly loadDependencies?: (
+    input: QualityDataLoadInput<TUnit, TTranslation, TBody, TUnavailable>,
+  ) => Awaitable<unknown>;
   readonly check: (
     input: QualityCheckInput<
       TUnit,

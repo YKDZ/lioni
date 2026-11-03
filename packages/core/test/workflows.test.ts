@@ -93,6 +93,7 @@ function diagnosedEditScenario() {
         defineTestQualityCheck({
           id: "needs-review",
           configuration: {},
+          loadDependencies: () => ({ requestVersion }),
           check: ({ candidate }) => ({
             status: "complete",
             diagnostics: [
@@ -123,7 +124,6 @@ function diagnosedEditScenario() {
           }),
         }),
       ],
-      loadDependencies: () => ({ requestVersion }),
     },
   });
   const candidate = {
@@ -553,6 +553,11 @@ void describe("configured analysis workflow", () => {
       content: string;
     }[] = [];
     let candidateBuilds = 0;
+    let glossaryReads = 0;
+    const loadGlossary = () => {
+      glossaryReads += 1;
+      return { glossaryVersion: "v1" };
+    };
     const config = defineConfig({
       source: {
         schema: sourceSchemaFromExamples<Unit>({
@@ -584,17 +589,18 @@ void describe("configured analysis workflow", () => {
         matches: (unit, translation) => unit.id === translation.id,
       },
       quality: {
-        buildCandidates: ({ defaultCandidates, dependencies, facts }) => {
+        buildCandidates: async ({ defaultCandidates, facts, qualityData }) => {
           candidateBuilds += 1;
           assert.deepEqual(defaultCandidates, []);
           assert.deepEqual(facts.source.units, []);
-          assert.deepEqual(dependencies, { glossaryVersion: "v1" });
+          assert.deepEqual(await qualityData.read(loadGlossary), {
+            glossaryVersion: "v1",
+          });
           observedCandidates = [
             { sourceKey: "external", language: "ja", content: "外部" },
           ];
           return observedCandidates;
         },
-        loadDependencies: () => ({ glossaryVersion: "v1" }),
       },
     });
 
@@ -604,7 +610,7 @@ void describe("configured analysis workflow", () => {
       { sourceKey: "external", language: "ja", content: "外部" },
     ]);
     assert.equal(candidateBuilds, 1);
-    assert.deepEqual(result.dependencies, { glossaryVersion: "v1" });
+    assert.equal(glossaryReads, 1);
     assert.equal(result.status, "not-run");
 
     const invalidConfig = defineConfig({
@@ -641,26 +647,6 @@ void describe("configured analysis workflow", () => {
         error instanceof StandardSchemaContractError &&
         error.kind === "schema-mismatch" &&
         error.message === "defineConfig 的 source.read 必须是函数。",
-    );
-
-    const invalidRequestConfig = defineConfig({
-      source: {
-        schema: sourceSchemaFromExamples<Unit>({
-          id: "unused",
-          source: "unused",
-        }),
-        read: () => ({ scopes: [] }),
-      },
-      keyOf: ({ id }) => id,
-      quality: { loadDependencies: "invalid" as never },
-    });
-    await assert.rejects(
-      analyzeQuality(invalidRequestConfig),
-      (error: unknown) =>
-        error instanceof StandardSchemaContractError &&
-        error.kind === "schema-mismatch" &&
-        error.message ===
-          "defineConfig 的 quality.loadDependencies 必须是函数。",
     );
   });
 

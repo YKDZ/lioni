@@ -9,8 +9,11 @@ import {
 
 import {
   analyzeQuality,
+  createQualityProfiler,
   defineConfig,
   QualityCheckBindingError,
+  type QualityDataReader,
+  type SemanticEditCandidate,
 } from "../src/index.ts";
 import { defineTestQualityCheck } from "./quality-check-fixture.ts";
 import {
@@ -104,11 +107,164 @@ void test("配置不执行计算，同次 QA 共享范围，运行结束关闭�
   assert.equal(calls, 2);
 });
 
+void test("同次检查资料可显式共享，借入长期 memo 也会在下次运行刷新", async () => {
+  let reads = 0;
+  const observed: unknown[] = [];
+  const memo = createMemoScope();
+  const loadPolicy = () => ({ revision: ++reads });
+  let candidateBuilds = 0;
+  const base = configFor(() => {});
+  const checks = ["first", "second"].map((id) =>
+    defineTestQualityCheck({
+      id,
+      configuration: {},
+      loadDependencies: ({ qualityData }: { qualityData: QualityDataReader }) =>
+        qualityData.read(loadPolicy),
+      check(input) {
+        observed.push(input.dependencies);
+        return complete();
+      },
+    }),
+  );
+  const config = {
+    ...base,
+    quality: {
+      checks,
+      async buildCandidates({
+        defaultCandidates,
+        qualityData,
+      }: {
+        readonly defaultCandidates: readonly SemanticEditCandidate<string>[];
+        readonly qualityData: QualityDataReader;
+      }) {
+        candidateBuilds += 1;
+        await qualityData.read(loadPolicy);
+        return defaultCandidates;
+      },
+    },
+  };
+
+  try {
+    await analyzeQuality(config, { memo });
+    assert.equal(reads, 1);
+    assert.equal(candidateBuilds, 1);
+    assert.deepEqual(observed, [{ revision: 1 }, { revision: 1 }]);
+
+    await analyzeQuality(config, { memo });
+    assert.equal(reads, 2);
+    assert.equal(candidateBuilds, 2);
+    assert.deepEqual(observed, [
+      { revision: 1 },
+      { revision: 1 },
+      { revision: 2 },
+      { revision: 2 },
+    ]);
+  } finally {
+    memo.dispose();
+  }
+});
+
+void test("默认指纹只纳入当前检查项的动态资料", async () => {
+  let revision = 1;
+  const base = configFor(() => {});
+  const checks = [
+    defineTestQualityCheck({
+      id: "stable-input",
+      configuration: {},
+      check: complete,
+    }),
+    defineTestQualityCheck({
+      id: "changing-input",
+      configuration: {},
+      loadDependencies: () => ({ revision }),
+      check: complete,
+    }),
+  ];
+  const config = { ...base, quality: { checks } };
+
+  const first = await analyzeQuality(config);
+  revision += 1;
+  const second = await analyzeQuality(config);
+
+  assert.equal(
+    first.checks[0]?.executions[0]?.inputFingerprint,
+    second.checks[0]?.executions[0]?.inputFingerprint,
+  );
+  assert.notEqual(
+    first.checks[1]?.executions[0]?.inputFingerprint,
+    second.checks[1]?.executions[0]?.inputFingerprint,
+  );
+});
+
+void test("共享资料失败只读取一次并隔离到相关检查，独立检查仍执行", async () => {
+  const base = configFor(() => {});
+  const sharedFailure = new Error("共享策略不可用");
+  let reads = 0;
+  let independentRuns = 0;
+  const loadShared = (_key: string) => {
+    reads += 1;
+    throw sharedFailure;
+  };
+  const config = {
+    ...base,
+    quality: {
+      checks: [
+        ...["first", "second"].map((id) =>
+          defineTestQualityCheck({
+            id,
+            configuration: {},
+            loadDependencies: ({ qualityData }) =>
+              qualityData.read(loadShared, "policy"),
+            check() {
+              throw new Error("资料失败后不得执行规则");
+            },
+          }),
+        ),
+        defineTestQualityCheck({
+          id: "independent",
+          configuration: {},
+          loadDependencies: () => ({ available: true }),
+          check() {
+            independentRuns += 1;
+            return complete();
+          },
+        }),
+      ],
+    },
+  };
+  const profiler = createQualityProfiler();
+
+  const result = await analyzeQuality(config, { profiler });
+
+  assert.equal(reads, 1);
+  assert.equal(independentRuns, 1);
+  assert.equal(result.status, "failed");
+  assert.deepEqual(
+    result.checks.map(({ checkId, status }) => [checkId, status]),
+    [
+      ["first", "failed"],
+      ["second", "failed"],
+      ["independent", "complete"],
+    ],
+  );
+  assert.equal(result.checks[0]?.issues[0]?.message, sharedFailure.message);
+  assert.equal(Object.hasOwn(result.checks[0] ?? {}, "dependencies"), false);
+  assert.deepEqual(result.checks[2]?.dependencies, { available: true });
+  const profile = profiler.report();
+  for (const check of profile.checks.slice(0, 2)) {
+    assert.equal(
+      check.timings.find(({ stage }) => stage === "dependencies")?.calls,
+      1,
+    );
+  }
+});
+
 void test("直接配置检查器并按运行读取资料，筛选不裁剪事实且空选择保持为空", async () => {
   const source = { source: "Save" };
   const translation = { id: "save", text: "保存" };
   let dependencyReads = 0;
   let sourceReads = 0;
+  let candidateBuilds = 0;
   const observed: unknown[] = [];
   const observedContexts: unknown[] = [];
   const dependencySourceKeys: string[][] = [];
@@ -119,6 +275,14 @@ void test("直接配置检查器并按运行读取资料，筛选不裁剪事实
   >({
     id: "candidate-observer",
     configuration: {},
+    async loadDependencies({ facts, memo }) {
+      dependencyReads += 1;
+      assert.equal(sourceReads, dependencyReads);
+      dependencySourceKeys.push(facts.source.units.map(({ key }) => key));
+      await Promise.resolve();
+      memo.memo(() => "loaded")();
+      return { run: dependencyReads };
+    },
     check: ({ candidate, facts, relationships }) => {
       observed.push(candidate.content);
       observedContexts.push({
@@ -171,6 +335,10 @@ void test("直接配置检查器并按运行读取资料，筛选不裁剪事实
     },
     quality: {
       checks: [checker],
+      buildCandidates({ defaultCandidates }) {
+        candidateBuilds += 1;
+        return defaultCandidates;
+      },
       relationships: [
         {
           kind: "translation-family",
@@ -178,14 +346,6 @@ void test("直接配置检查器并按运行读取资料，筛选不裁剪事实
           members: [{ key: "save", language: "zh-CN" }],
         },
       ],
-      async loadDependencies({ facts, memo }) {
-        dependencyReads += 1;
-        assert.equal(sourceReads, dependencyReads);
-        dependencySourceKeys.push(facts.source.units.map(({ key }) => key));
-        await Promise.resolve();
-        memo.memo(() => "loaded")();
-        return { run: dependencyReads };
-      },
     },
   });
 
@@ -193,10 +353,11 @@ void test("直接配置检查器并按运行读取资料，筛选不裁剪事实
   const first = await analyzeQuality(config);
   assert.equal(first.status, "complete");
   assert.equal(dependencyReads, 1);
+  assert.equal(candidateBuilds, 1);
   assert.deepEqual(first.candidates, [
     { sourceKey: "save", language: "zh-CN", content: "保存" },
   ]);
-  assert.deepEqual(first.dependencies, { run: 1 });
+  assert.deepEqual(first.checks[0]?.dependencies, { run: 1 });
 
   const second = await analyzeQuality(config, {
     candidates: [
@@ -206,17 +367,20 @@ void test("直接配置检查器并按运行读取资料，筛选不裁剪事实
     selectCandidates: (candidates) => candidates.slice(1),
   });
   assert.equal(dependencyReads, 2);
+  assert.equal(candidateBuilds, 1);
   assert.deepEqual(second.candidates, [
     { sourceKey: "external", language: "zh-CN", content: "外部候选 B" },
   ]);
-  assert.deepEqual(second.dependencies, { run: 2 });
+  assert.deepEqual(second.checks[0]?.dependencies, { run: 2 });
   assert.equal(second.factCoverage.associations[0]?.candidateSelected, false);
   const third = await analyzeQuality(config, {
     selectCandidates: () => [],
   });
-  assert.equal(dependencyReads, 3);
+  assert.equal(dependencyReads, 2);
+  assert.equal(candidateBuilds, 2);
   assert.deepEqual(third.candidates, []);
-  assert.deepEqual(third.dependencies, { run: 3 });
+  assert.equal(third.status, "not-run");
+  assert.equal(third.checks[0]?.status, "not-run");
   assert.deepEqual(observed, ["保存", "外部候选 B"]);
   assert.deepEqual(observedContexts, [
     {
@@ -241,7 +405,7 @@ void test("直接配置检查器并按运行读取资料，筛选不裁剪事实
     },
   ]);
   assert.equal(second.factCoverage.translations.length, 1);
-  assert.deepEqual(dependencySourceKeys, [["save"], ["save"], ["save"]]);
+  assert.deepEqual(dependencySourceKeys, [["save"], ["save"]]);
   assert.equal(third.factCoverage.associations[0]?.candidateSelected, false);
 });
 

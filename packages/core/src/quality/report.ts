@@ -87,11 +87,17 @@ export function formatQualityReport(report: QualityRunResult): string {
   const candidateLanguages = report.candidates.map(({ language }) => language);
   const reasons = unfinishedReasons(report);
   const decision = decideQualityReport(report);
+  const { configuredCount, selectedIds } = report.checkScope;
+  const checkScope =
+    configuredCount === 0
+      ? "配置 0 项，本次无检查项"
+      : `配置 ${configuredCount} 项，本次${selectedIds.length === configuredCount ? "全量" : "子集"} ${selectedIds.length} 项（${selectedIds.join("、")}）`;
   const lines = [
     `质量结论：${decision.passed ? "通过" : "未通过"}`,
     `执行状态：${executionStatusText[decision.executionStatus]}`,
     `语言范围：${readLanguages.length === 0 ? "无译文语言" : `读取 ${readLanguages.join("、")}`}；所选候选语言 ${candidateLanguages.length === 0 ? "无" : [...new Set(candidateLanguages)].join("、")}`,
-    `检查范围：已选候选 ${report.candidates.length} 条，检查项 ${report.checks.length} 项`,
+    `检查项范围：${checkScope}`,
+    `候选范围：已选候选 ${report.candidates.length} 条`,
     `有效问题：错误 ${countSeverity(activeDiagnostics, "error")}，警告 ${countSeverity(activeDiagnostics, "warning")}，提示 ${countSeverity(activeDiagnostics, "info")}；已豁免 ${exceptedCount}`,
   ];
 
@@ -197,7 +203,7 @@ function unfinishedReasons(report: QualityRunResult): string[] {
     addReadReasons(reasons, `译文 ${read.language}`, read);
 
   if (report.candidates.length === 0) reasons.add("本次没有候选可检查");
-  if (report.checks.length === 0) reasons.add("没有配置检查项");
+  if (report.checkScope.configuredCount === 0) reasons.add("没有配置检查项");
   if (
     report.checks.length > 0 &&
     report.checks.every(({ status }) => status === "not-applicable")
