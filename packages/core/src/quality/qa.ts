@@ -377,11 +377,12 @@ export type QualityCheckDefinition<
   TObject extends QualityObject = QualityObject,
   TBody = unknown,
   TUnavailable = never,
+  TId extends string = string,
 > = {
   readonly [qualityCheckDefinitionBrand]: (
     input: QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
   ) => QualityCheckOutcome<TObject>;
-  readonly id: string;
+  readonly id: TId;
   readonly version: string;
 };
 
@@ -397,8 +398,9 @@ export type QualityCheckBinding<
   TObject extends QualityObject = QualityObject,
   TBody = unknown,
   TUnavailable = never,
+  TId extends string = string,
 > = {
-  readonly id: string;
+  readonly id: TId;
   readonly version: string;
   readonly configurationSchema: TConfigurationSchema;
   readonly configuration: StandardSchemaInput<TConfigurationSchema>;
@@ -449,21 +451,17 @@ export type QualityCheckBinding<
   ) => Awaitable<QualityCheckOutcome<TObject>>;
 };
 
-/**
- * 声明质量检查项；正式运行会校验配置并调用检查函数，返回值只表达检查项身份。
- * version 应覆盖算法及宿主选择、投影和策略的语义变化。默认指纹包含完整事实、
- * 当前候选、原文、动态依赖及关联关系；fingerprintInput 替换业务依据，检查身份、
- * 版本和最终配置仍始终参与。闭包依赖须由作者显式纳入依据。
- */
-export function defineQualityCheck<
+/** 单次检查项声明的输入类型。 */
+type QualityCheckDefinitionInput<
   TUnit extends TranslationUnitInput,
   TTranslation,
   TSchema extends StandardSchemaV1<unknown, unknown>,
-  TObject extends QualityObject = QualityObject,
-  TBody = unknown,
-  TUnavailable = never,
->(definition: {
-  readonly id: string;
+  TObject extends QualityObject,
+  TBody,
+  TUnavailable,
+  TId extends string,
+> = {
+  readonly id: TId;
   readonly version: string;
   readonly configurationSchema: TSchema;
   readonly configuration: StandardSchemaInput<TSchema>;
@@ -486,7 +484,34 @@ export function defineQualityCheck<
       TUnavailable
     >,
   ) => Awaitable<QualityCheckOutcome<TObject>>;
-}): QualityCheckDefinition<TUnit, TTranslation, TObject, TBody, TUnavailable> {
+};
+
+function defineQualityCheckImplementation<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TSchema extends StandardSchemaV1<unknown, unknown>,
+  TObject extends QualityObject = QualityObject,
+  TBody = unknown,
+  TUnavailable = never,
+  TId extends string = string,
+>(
+  definition: QualityCheckDefinitionInput<
+    TUnit,
+    TTranslation,
+    TSchema,
+    TObject,
+    TBody,
+    TUnavailable,
+    TId
+  >,
+): QualityCheckDefinition<
+  TUnit,
+  TTranslation,
+  TObject,
+  TBody,
+  TUnavailable,
+  TId
+> {
   const {
     id,
     version,
@@ -545,9 +570,52 @@ export function defineQualityCheck<
     TTranslation,
     TObject,
     TBody,
-    TUnavailable
+    TUnavailable,
+    TId
   >;
 }
+
+/**
+ * 声明质量检查项；正式运行会校验配置并调用检查函数，返回值只表达检查项身份。
+ * version 应覆盖算法及宿主选择、投影和策略的语义变化。默认指纹包含完整事实、
+ * 当前候选、原文、动态依赖及关联关系；fingerprintInput 替换业务依据，检查身份、
+ * 版本和最终配置仍始终参与。闭包依赖须由作者显式纳入依据。若需要显式业务泛型，
+ * 用 withTypes 先绑定业务类型，再由单次声明推断检查项 ID 字面量。
+ */
+export const defineQualityCheck = Object.assign(
+  defineQualityCheckImplementation,
+  {
+    withTypes<
+      TUnit extends TranslationUnitInput,
+      TTranslation,
+      TSchema extends StandardSchemaV1<unknown, unknown>,
+      TObject extends QualityObject = QualityObject,
+      TBody = unknown,
+      TUnavailable = never,
+    >() {
+      return <const TId extends string>(
+        definition: QualityCheckDefinitionInput<
+          TUnit,
+          TTranslation,
+          TSchema,
+          TObject,
+          TBody,
+          TUnavailable,
+          TId
+        >,
+      ) =>
+        defineQualityCheckImplementation<
+          TUnit,
+          TTranslation,
+          TSchema,
+          TObject,
+          TBody,
+          TUnavailable,
+          TId
+        >(definition);
+    },
+  },
+);
 
 /**
  * 将选择、投影和检查绑定为共同检查器契约。
@@ -562,6 +630,7 @@ export function bindQualityCheck<
   TObject extends QualityObject = QualityObject,
   TBody = unknown,
   TUnavailable = never,
+  TId extends string = string,
 >(
   definition: QualityCheckBinding<
     TUnit,
@@ -571,9 +640,17 @@ export function bindQualityCheck<
     TSubject,
     TObject,
     TBody,
-    TUnavailable
+    TUnavailable,
+    TId
   >,
-): QualityCheckDefinition<TUnit, TTranslation, TObject, TBody, TUnavailable> {
+): QualityCheckDefinition<
+  TUnit,
+  TTranslation,
+  TObject,
+  TBody,
+  TUnavailable,
+  TId
+> {
   const {
     id,
     version,
@@ -690,7 +767,8 @@ export function bindQualityCheck<
     TTranslation,
     TObject,
     TBody,
-    TUnavailable
+    TUnavailable,
+    TId
   >;
 }
 
