@@ -24,8 +24,9 @@ export function createLinkTargetExistsCheck<
   TTranslation,
   TBody,
   TUnavailable = never,
+  TId extends string = string,
 >(options: {
-  readonly identity: VueI18nCheckIdentity;
+  readonly identity: VueI18nCheckIdentity<TId>;
   readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
 }) {
   return createVueI18nMessageCheck({
@@ -103,8 +104,9 @@ export function createLinkCycleCheck<
   TTranslation,
   TBody,
   TUnavailable = never,
+  TId extends string = string,
 >(options: {
-  readonly identity: VueI18nCheckIdentity;
+  readonly identity: VueI18nCheckIdentity<TId>;
   readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
 }) {
   return createVueI18nMessageCheck({

@@ -49,8 +49,9 @@ export type VueI18nMessageRuleOptions<
   TBody,
   TUnavailable,
   TPrepared,
+  TId extends string = string,
 > = {
-  readonly id: string;
+  readonly id: TId;
   readonly version: string;
   readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
   readonly requiresSource: boolean;
@@ -79,20 +80,23 @@ export function createVueI18nMessageCheck<
   TBody,
   TUnavailable = never,
   TPrepared = unknown,
+  TId extends string = string,
 >(
   options: VueI18nMessageRuleOptions<
     TUnit,
     TTranslation,
     TBody,
     TUnavailable,
-    TPrepared
+    TPrepared,
+    TId
   >,
 ): QualityCheckDefinition<
   TUnit,
   TTranslation,
   QualityObject,
   TBody,
-  TUnavailable
+  TUnavailable,
+  TId
 > {
   type Subject = {
     readonly projection: VueI18nMessageProjection;
@@ -107,7 +111,8 @@ export function createVueI18nMessageCheck<
     Subject,
     QualityObject,
     TBody,
-    TUnavailable
+    TUnavailable,
+    TId
   >({
     id: options.id,
     version: options.version,

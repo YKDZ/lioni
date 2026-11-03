@@ -72,8 +72,8 @@ export type VueI18nPolicy = {
   };
 };
 
-export type VueI18nCheckIdentity = {
-  readonly id: string;
+export type VueI18nCheckIdentity<TId extends string = string> = {
+  readonly id: TId;
   readonly hostVersion: string;
 };
 

@@ -29,22 +29,30 @@ const termRuleSchema = z.object({ id: termRuleIdSchema }).readonly();
 export type TermRuleId =
   | "require-allowed-translation"
   | "reject-forbidden-translation";
-export type TermRule = { readonly id: TermRuleId };
+type RequireAllowedTranslationRule = {
+  readonly id: "require-allowed-translation";
+};
+type RejectForbiddenTranslationRule = {
+  readonly id: "reject-forbidden-translation";
+};
+export type TermRule =
+  | RequireAllowedTranslationRule
+  | RejectForbiddenTranslationRule;
 
 const termRulesSchema = z.array(termRuleSchema);
 
-const allowedRule: TermRule = Object.freeze({
+const allowedRule: RequireAllowedTranslationRule = Object.freeze({
   id: "require-allowed-translation",
 });
-const forbiddenRule: TermRule = Object.freeze({
+const forbiddenRule: RejectForbiddenTranslationRule = Object.freeze({
   id: "reject-forbidden-translation",
 });
 const defaultRules = Object.freeze([allowedRule, forbiddenRule]);
 
-export function requireAllowedTranslation(): TermRule {
+export function requireAllowedTranslation(): RequireAllowedTranslationRule {
   return allowedRule;
 }
-export function rejectForbiddenTranslation(): TermRule {
+export function rejectForbiddenTranslation(): RejectForbiddenTranslationRule {
   return forbiddenRule;
 }
 

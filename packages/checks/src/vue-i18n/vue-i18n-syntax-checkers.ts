@@ -33,8 +33,9 @@ export type VueI18nSourceSyntaxCheckerOptions<
   TTranslation,
   TBody,
   TUnavailable = never,
+  TId extends string = string,
 > = {
-  readonly id?: string;
+  readonly id: TId;
   readonly hostVersion: string;
   readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
 };
@@ -44,7 +45,14 @@ export type VueI18nTargetSyntaxCheckerOptions<
   TTranslation,
   TBody,
   TUnavailable = never,
-> = VueI18nSourceSyntaxCheckerOptions<TUnit, TTranslation, TBody, TUnavailable>;
+  TId extends string = string,
+> = VueI18nSourceSyntaxCheckerOptions<
+  TUnit,
+  TTranslation,
+  TBody,
+  TUnavailable,
+  TId
+>;
 
 /** 按候选对应的共同消息投影检查原文语法。 */
 export function createVueI18nSourceSyntaxChecker<
@@ -52,12 +60,14 @@ export function createVueI18nSourceSyntaxChecker<
   TTranslation,
   TBody,
   TUnavailable = never,
+  TId extends string = string,
 >(
   options: VueI18nSourceSyntaxCheckerOptions<
     TUnit,
     TTranslation,
     TBody,
-    TUnavailable
+    TUnavailable,
+    TId
   >,
 ) {
   type Subject = VueI18nMessageProjection;
@@ -69,9 +79,10 @@ export function createVueI18nSourceSyntaxChecker<
     Subject,
     QualityObject,
     TBody,
-    TUnavailable
+    TUnavailable,
+    TId
   >({
-    id: options.id ?? "vue-i18n/source-syntax",
+    id: options.id,
     version: `checks.vue-i18n/source-syntax/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}+${options.hostVersion}`,
     configurationSchema,
     configuration,
@@ -128,12 +139,14 @@ export function createVueI18nTargetSyntaxChecker<
   TTranslation,
   TBody,
   TUnavailable = never,
+  TId extends string = string,
 >(
   options: VueI18nTargetSyntaxCheckerOptions<
     TUnit,
     TTranslation,
     TBody,
-    TUnavailable
+    TUnavailable,
+    TId
   >,
 ) {
   type Subject = VueI18nMessageProjection;
@@ -145,9 +158,10 @@ export function createVueI18nTargetSyntaxChecker<
     Subject,
     QualityObject,
     TBody,
-    TUnavailable
+    TUnavailable,
+    TId
   >({
-    id: options.id ?? "vue-i18n/target-syntax",
+    id: options.id,
     version: `checks.vue-i18n/target-syntax/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}+${options.hostVersion}`,
     configurationSchema,
     configuration,
