@@ -37,3 +37,6 @@ RUN install -m 0755 -d /etc/apt/keyrings \
     && apt-get update \
     && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
+
+# Debian 登录 shell 重建 PATH；按当前用户恢复 pnpm 全局工具目录。
+RUN printf '%s\n' 'export PATH="$HOME/.local/share/pnpm/bin:$PATH"' > /etc/profile.d/pnpm.sh
