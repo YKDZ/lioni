@@ -14,14 +14,17 @@ import type {
 import { assertJsonValue, bindQualityCheck } from "@lioni/core";
 import { z } from "zod";
 
-import { vueI18nDependencies } from "../dependencies.ts";
+import { readVueI18nPolicies } from "../dependencies.ts";
 import {
   memoizedVueI18nProjection,
   vueI18nMessageProjectionSchema,
 } from "../quality-projection.ts";
 import type {
+  VueI18nDataReader,
   VueI18nMessageProjection,
   VueI18nPolicy,
+  VueI18nPolicyData,
+  VueI18nPolicyRequirement,
   VueI18nProjector,
 } from "../quality-types.ts";
 
@@ -49,10 +52,19 @@ export type VueI18nMessageRuleOptions<
   TBody,
   TUnavailable,
   TPrepared,
+  TId extends string = string,
 > = {
-  readonly id: string;
+  readonly id: TId;
   readonly version: string;
   readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
+  readonly loadPolicies: VueI18nDataReader<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable,
+    readonly VueI18nPolicyData[]
+  >;
+  readonly policyRequirements: readonly VueI18nPolicyRequirement[];
   readonly requiresSource: boolean;
   readonly requiresTarget: boolean;
   readonly targetMustContainText?: boolean;
@@ -79,20 +91,23 @@ export function createVueI18nMessageCheck<
   TBody,
   TUnavailable = never,
   TPrepared = unknown,
+  TId extends string = string,
 >(
   options: VueI18nMessageRuleOptions<
     TUnit,
     TTranslation,
     TBody,
     TUnavailable,
-    TPrepared
+    TPrepared,
+    TId
   >,
 ): QualityCheckDefinition<
   TUnit,
   TTranslation,
   QualityObject,
   TBody,
-  TUnavailable
+  TUnavailable,
+  TId
 > {
   type Subject = {
     readonly projection: VueI18nMessageProjection;
@@ -107,13 +122,16 @@ export function createVueI18nMessageCheck<
     Subject,
     QualityObject,
     TBody,
-    TUnavailable
+    TUnavailable,
+    TId
   >({
     id: options.id,
     version: options.version,
     configurationSchema,
     configuration: { version: 1 },
     inputSchema: vueI18nMessageProjectionSchema,
+    loadDependencies: ({ facts, memo, qualityData }) =>
+      qualityData.read(options.loadPolicies, facts, memo),
     select: async (
       input: QualityCheckInput<
         TUnit,
@@ -123,9 +141,10 @@ export function createVueI18nMessageCheck<
         TUnavailable
       >,
     ): Promise<QualityCheckSelection<Subject>> => {
-      const policy = vueI18nDependencies(input).policies.get(
-        input.candidate.language,
-      );
+      const policy = readVueI18nPolicies(
+        input.dependencies,
+        options.policyRequirements,
+      ).get(input.candidate.language);
       if (policy === undefined) return { status: "not-applicable" };
       const projection = await memoizedVueI18nProjection(
         input,

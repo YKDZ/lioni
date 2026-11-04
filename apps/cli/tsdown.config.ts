@@ -7,7 +7,7 @@ export default defineConfig({
     node: "src/node.ts",
   },
   format: "esm",
-  target: "node24",
+  target: "node26",
   fixedExtension: false,
   dts: { build: true },
   clean: true,

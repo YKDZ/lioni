@@ -1,12 +1,9 @@
 {
   "build": {
     "args": {
-      "NODE_VERSION": "24.21.0"
+      "NODE_VERSION": "26.13.0"
     },
     "dockerfile": "Dockerfile"
-  },
-  "containerEnv": {
-    "PNPM_CONFIG_STORE_DIR": "/pnpm/store"
   },
   "customizations": {
     "vscode": {

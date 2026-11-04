@@ -3,6 +3,7 @@ import {
   type QualityCheckDefinition,
   type QualityCheckInput,
   type QualityCheckSelection,
+  type QualityDataLoadInput,
   type QualityObject,
   type TranslationUnitInput,
 } from "@lioni/core";
@@ -20,13 +21,19 @@ import type { MessageFamilyInput } from "../../message-families.ts";
 import { createMessageFamilyChecker } from "../../message-family-checker.ts";
 import type { MessageFamilySubject } from "../../message-family-checker.ts";
 import { createTermChecker } from "../../terms.ts";
-import { vueI18nDependencies } from "../dependencies.ts";
+import {
+  readVueI18nFamilyPolicies,
+  readVueI18nLanguagePolicies,
+} from "../dependencies.ts";
 import { memoizedVueI18nMessage } from "../message-memo.ts";
 import { memoizedVueI18nProjection } from "../quality-projection.ts";
 import type {
   VueI18nCheckIdentity,
+  VueI18nDataReader,
+  VueI18nLanguagePolicy,
   VueI18nMessageProjection,
   VueI18nPolicy,
+  VueI18nPolicyData,
   VueI18nProjector,
   VueI18nReferenceProjector,
 } from "../quality-types.ts";
@@ -41,7 +48,7 @@ type TermSubject = {
   readonly language: string;
   readonly source: string;
   readonly target: string;
-  readonly policy: VueI18nPolicy;
+  readonly policy: VueI18nLanguagePolicy;
   readonly projection: VueI18nMessageProjection;
 };
 
@@ -57,19 +64,36 @@ export function createVueI18nTerminologyChecks<
   TTranslation,
   TBody,
   TUnavailable,
+  TAllowedId extends string = string,
+  TForbiddenId extends string = string,
 >(options: {
   readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
   readonly analysis: TextAnalysis;
+  readonly loadLanguages: VueI18nDataReader<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable,
+    readonly VueI18nLanguagePolicy[]
+  >;
+  readonly loadTerms: VueI18nDataReader<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable,
+    TermbaseData
+  >;
   readonly identities: {
-    readonly allowedTerminology: VueI18nCheckIdentity;
-    readonly forbiddenTerminology: VueI18nCheckIdentity;
+    readonly allowedTerminology: VueI18nCheckIdentity<TAllowedId>;
+    readonly forbiddenTerminology: VueI18nCheckIdentity<TForbiddenId>;
   };
 }): readonly QualityCheckDefinition<
   TUnit,
   TTranslation,
   QualityObject,
   TBody,
-  TUnavailable
+  TUnavailable,
+  TAllowedId | TForbiddenId
 >[] {
   const rules = [
     {
@@ -86,13 +110,34 @@ export function createVueI18nTerminologyChecks<
   // 两条术语规则共用同一编译任务，按本次依赖缓存一份结果。
   const compile = (data: TermbaseData) =>
     compileTerms(createTermbase(data), { analysis: options.analysis });
+  const loadDependencies = async ({
+    facts,
+    memo,
+    qualityData,
+  }: QualityDataLoadInput<TUnit, TTranslation, TBody, TUnavailable>) => {
+    const [languages, terms] = await Promise.all([
+      qualityData.read(options.loadLanguages, facts, memo),
+      qualityData.read(options.loadTerms, facts, memo),
+    ]);
+    return { languages, terms };
+  };
 
   return rules.map(({ rule, identity, name }) =>
-    createTermChecker<TUnit, TTranslation, TermSubject, TBody, TUnavailable>({
+    createTermChecker.withTypes<
+      TUnit,
+      TTranslation,
+      TermSubject,
+      TBody,
+      TUnavailable
+    >()({
       id: identity.id,
       hostVersion: terminologyVersion(name, identity),
+      loadDependencies,
       terms: (input) => {
-        return input.memo.memo(compile)(vueI18nDependencies(input).terms);
+        const dependencies = input.dependencies as {
+          readonly terms: TermbaseData;
+        };
+        return input.memo.memo(compile)(dependencies.terms);
       },
       rule,
       // 投影已表达实际文本与语言；位置参与结果缓存，其他消息资源不构成本项依据。
@@ -115,7 +160,10 @@ export function createVueI18nTerminologyChecks<
           TUnavailable
         >,
       ): Promise<QualityCheckSelection<TermSubject>> => {
-        const policy = vueI18nDependencies(input).policies.get(
+        const dependencies = input.dependencies as {
+          readonly languages: readonly VueI18nLanguagePolicy[];
+        };
+        const policy = readVueI18nLanguagePolicies(dependencies.languages).get(
           input.candidate.language,
         );
         if (policy === undefined) return { status: "not-applicable" };
@@ -188,8 +236,16 @@ export function createVueI18nMessageFamilyCheck<
   TTranslation,
   TBody,
   TUnavailable = never,
+  TId extends string = string,
 >(options: {
   readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
+  readonly loadPolicies: VueI18nDataReader<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable,
+    readonly VueI18nPolicyData[]
+  >;
   readonly reference: VueI18nReferenceProjector<
     TUnit,
     TTranslation,
@@ -197,7 +253,7 @@ export function createVueI18nMessageFamilyCheck<
     TUnavailable
   >;
   readonly analysis: TextAnalysis;
-  readonly identity: VueI18nCheckIdentity;
+  readonly identity: VueI18nCheckIdentity<TId>;
 }) {
   const sourceTemplate: TemplateOptions = {
     abstract: (token) =>
@@ -206,6 +262,14 @@ export function createVueI18nMessageFamilyCheck<
         : undefined,
   };
   const targetTemplate: TemplateOptions = { ...sourceTemplate };
+  const resolvePolicies = (dependencies: unknown) =>
+    readVueI18nFamilyPolicies(dependencies);
+  const loadDependencies = ({
+    facts,
+    memo,
+    qualityData,
+  }: QualityDataLoadInput<TUnit, TTranslation, TBody, TUnavailable>) =>
+    qualityData.read(options.loadPolicies, facts, memo);
 
   return createMessageFamilyChecker<
     TUnit,
@@ -213,10 +277,12 @@ export function createVueI18nMessageFamilyCheck<
     TUnit,
     TBody,
     TUnavailable,
-    FamilySubject<TUnit, TBody>
+    FamilySubject<TUnit, TBody>,
+    TId
   >({
     id: options.identity.id,
     hostVersion: familyVersion(options.identity),
+    loadDependencies,
     analysis: options.analysis,
     sourceTemplate,
     targetTemplate,
@@ -226,9 +292,10 @@ export function createVueI18nMessageFamilyCheck<
       return subject.projection;
     },
     targetEquivalence: (signature, language, input) =>
-      vueI18nDependencies(input).targetEquivalences.get(language)?.(
-        signature,
-      ) ?? signatureKey(signature),
+      input.memo
+        .memo(resolvePolicies)(input.dependencies)
+        .targetEquivalences.get(language)?.(signature) ??
+      signatureKey(signature),
     select: async (
       input: QualityCheckInput<
         TUnit,
@@ -238,9 +305,9 @@ export function createVueI18nMessageFamilyCheck<
         TUnavailable
       >,
     ): Promise<QualityCheckSelection<FamilySubject<TUnit, TBody>>> => {
-      const policy = vueI18nDependencies(input).policies.get(
-        input.candidate.language,
-      );
+      const policy = input.memo
+        .memo(resolvePolicies)(input.dependencies)
+        .policies.get(input.candidate.language);
       if (policy === undefined || input.sourceUnit === null)
         return { status: "not-applicable" };
       const projection = await memoizedVueI18nProjection(
@@ -283,12 +350,12 @@ export function createVueI18nMessageFamilyCheck<
     reference: (reference, context) =>
       familyInput(
         options.reference(reference, context),
-        vueI18nDependencies(context).policies,
+        context.memo.memo(resolvePolicies)(context.dependencies).policies,
       ),
     project: async (input) =>
       familyInput(
         await memoizedVueI18nProjection(input, options.project),
-        vueI18nDependencies(input).policies,
+        input.memo.memo(resolvePolicies)(input.dependencies).policies,
       ),
   });
 }

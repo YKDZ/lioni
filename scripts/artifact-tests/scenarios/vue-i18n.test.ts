@@ -12,6 +12,7 @@ testArtifactConsumer(
   async ({ root, typecheck, runNode, runProcess }) => {
     await typecheck();
     await runNode("families-consumer.ts");
+    await runNode("selection-consumer.ts");
     const sdk = await runNode("consumer.ts");
     const summaries = JSON.parse(sdk.stdout) as readonly {
       target: string;

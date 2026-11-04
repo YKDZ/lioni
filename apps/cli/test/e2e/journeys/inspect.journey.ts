@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { CliJourney } from "../journey.ts";
@@ -95,6 +95,7 @@ export default defineConfig({
       version: "inspect-journey-qa-v1",
       configurationSchema: enabledConfigurationSchema,
       configuration: { enabled: true },
+      loadDependencies: () => ({ selectedBy: "defineQualityCheck" }),
       check({ configuration, candidate }) {
         return {
           status: configuration.enabled ? "complete" : "not-applicable",
@@ -123,7 +124,6 @@ export default defineConfig({
         };
       }
     })],
-    loadDependencies: () => ({ selectedBy: "defineConfig" }),
   },
 });
 `,
@@ -342,7 +342,6 @@ export default defineConfig({
           language: string;
           content: string;
         }[];
-        dependencies: { selectedBy: string };
         factCoverage: {
           associations: readonly {
             sourceKey: string;
@@ -355,6 +354,7 @@ export default defineConfig({
           checkId: string;
           version: string;
           configuration: { enabled: boolean };
+          dependencies?: { selectedBy: string };
           status: string;
           diagnostics: readonly {
             checkId: string;
@@ -386,9 +386,6 @@ export default defineConfig({
         content: "Enregistrer",
       },
     ]);
-    assert.deepEqual(qaResult.data.dependencies, {
-      selectedBy: "defineConfig",
-    });
     assert.deepEqual(qaResult.data.factCoverage.associations, [
       {
         sourceKey: "src/messages.ts:18",
@@ -405,6 +402,9 @@ export default defineConfig({
     assert.equal(check?.checkId, "host-rule");
     assert.equal(check?.version, "inspect-journey-qa-v1");
     assert.deepEqual(check?.configuration, { enabled: true });
+    assert.deepEqual(check?.dependencies, {
+      selectedBy: "defineQualityCheck",
+    });
     assert.equal(check?.status, "complete");
     assert.equal(qaResult.data.diagnostics.length, 1);
     assert.equal(qaResult.data.diagnostics[0]?.checkId, "host-rule");
@@ -456,7 +456,11 @@ export default defineConfig({
     assert.match(qaText?.stdout ?? "", /质量结论：通过/u);
     assert.match(qaText?.stdout ?? "", /执行状态：完整/u);
     assert.match(qaText?.stdout ?? "", /语言范围：读取 fr；所选候选语言 fr/u);
-    assert.match(qaText?.stdout ?? "", /检查范围：已选候选 1 条，检查项 1 项/u);
+    assert.match(
+      qaText?.stdout ?? "",
+      /检查项范围：配置 1 项，本次全量 1 项（host-rule）/u,
+    );
+    assert.match(qaText?.stdout ?? "", /候选范围：已选候选 1 条/u);
     assert.match(
       qaText?.stdout ?? "",
       /有效问题：错误 0，警告 1，提示 0；已豁免 0/u,
@@ -469,13 +473,17 @@ export default defineConfig({
     assert.match(noChecks?.stdout ?? "", /语言范围：读取 fr；所选候选语言 fr/u);
     assert.match(
       noChecks?.stdout ?? "",
-      /检查范围：已选候选 1 条，检查项 0 项/u,
+      /检查项范围：配置 0 项，本次无检查项/u,
     );
+    assert.match(noChecks?.stdout ?? "", /候选范围：已选候选 1 条/u);
     assert.match(noChecks?.stdout ?? "", /没有配置检查项/u);
     assert.equal(results[6]?.exitCode, 0);
     assert.match(results[6]?.stdout ?? "", /inspect/u);
     assert.equal(results[7]?.exitCode, 0);
-    assert.equal(results[7]?.stdout, "lioni 0.2.3\n");
+    const manifest = JSON.parse(
+      await readFile(new URL("../../../package.json", import.meta.url), "utf8"),
+    ) as { readonly version: string };
+    assert.equal(results[7]?.stdout, `lioni ${manifest.version}\n`);
     assert.equal(results[8]?.exitCode, 2);
     assert.equal(results[8]?.stdout, "");
     assert.partialDeepStrictEqual(JSON.parse(results[8]?.stderr ?? ""), {

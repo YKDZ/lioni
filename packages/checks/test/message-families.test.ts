@@ -18,6 +18,7 @@ import {
   createQualityException,
   defineConfig,
   type QualityCheckInput,
+  type QualityDataLoadInput,
   type QualityException,
   type QualityExceptionStore,
   type SourceUnitFact,
@@ -63,6 +64,9 @@ function checkerFor(
     readonly explicitBasis?: boolean;
     readonly referenceProjections?: { count: number };
     readonly analysis?: TextAnalysis;
+    readonly loadDependencies?: (
+      input: QualityDataLoadInput<Unit, Translation, string, never>,
+    ) => unknown;
     readonly targetEquivalence?: (
       signature: TemplateSignature,
       language: string,
@@ -150,6 +154,9 @@ function checkerFor(
   return createMessageFamilyChecker<Unit, Translation, Unit, string>({
     id: options.id ?? "message-family-consistency",
     hostVersion: "message-families-test-v1",
+    ...(options.loadDependencies === undefined
+      ? {}
+      : { loadDependencies: options.loadDependencies }),
     select: (input: QualityCheckInput<Unit, Translation, unknown, string>) => {
       const selectedUnit = input.sourceUnit;
       if (selectedUnit === null)
@@ -459,6 +466,7 @@ void test("借入同一 memo 的后续运行仍使用新的事实与等价依赖
   const translations = [{ id: "saved", text: "错误 504" }];
   let relaxed = false;
   const checker = checkerFor({
+    loadDependencies: () => ({ relaxed }),
     targetEquivalence: (signature, _language, context) =>
       (context.dependencies as { relaxed: boolean }).relaxed
         ? "allowed"
@@ -472,10 +480,6 @@ void test("借入同一 memo 的后续运行仍使用新的事实与等价依赖
     translations,
     checker,
   );
-  const config = {
-    ...base,
-    quality: { ...base.quality, loadDependencies: () => ({ relaxed }) },
-  };
   const options = {
     memo,
     candidates: [
@@ -483,12 +487,12 @@ void test("借入同一 memo 的后续运行仍使用新的事实与等价依赖
     ],
   };
   try {
-    assert.equal((await analyzeQuality(config, options)).diagnostics.length, 1);
+    assert.equal((await analyzeQuality(base, options)).diagnostics.length, 1);
     relaxed = true;
-    assert.equal((await analyzeQuality(config, options)).diagnostics.length, 0);
+    assert.equal((await analyzeQuality(base, options)).diagnostics.length, 0);
     relaxed = false;
     translations[0] = { id: "saved", text: "错误码 504" };
-    assert.equal((await analyzeQuality(config, options)).diagnostics.length, 0);
+    assert.equal((await analyzeQuality(base, options)).diagnostics.length, 0);
   } finally {
     memo.dispose();
   }
@@ -846,10 +850,6 @@ void test("排除当前替代记录并保留其他内容相同的事实", async 
 
   assert.equal(result.status, "complete");
   assert.equal(result.diagnostics.length, 1);
-  assert.equal(
-    result.checks[0]?.version,
-    "checks.message-family-consistency/v3+message-families-test-v1",
-  );
   assert.equal(result.diagnostics[0]?.severity, "warning");
   assert.equal(result.diagnostics[0]?.checkId, "message-family-consistency");
   const references = result.diagnostics[0]!.evidence.filter(

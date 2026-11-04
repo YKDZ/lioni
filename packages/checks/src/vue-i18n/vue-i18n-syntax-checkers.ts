@@ -9,13 +9,15 @@ import { assertJsonValue, bindQualityCheck } from "@lioni/core";
 import type { MemoScope } from "@lioni/memo";
 import { z } from "zod";
 
-import { vueI18nDependencies } from "./dependencies.ts";
+import { readVueI18nLanguagePolicies } from "./dependencies.ts";
 import { memoizedVueI18nMessage } from "./message-memo.ts";
 import {
   memoizedVueI18nProjection,
   vueI18nMessageProjectionSchema,
 } from "./quality-projection.ts";
 import type {
+  VueI18nDataReader,
+  VueI18nLanguagePolicy,
   VueI18nMessageProjection,
   VueI18nProjector,
 } from "./quality-types.ts";
@@ -33,10 +35,18 @@ export type VueI18nSourceSyntaxCheckerOptions<
   TTranslation,
   TBody,
   TUnavailable = never,
+  TId extends string = string,
 > = {
-  readonly id?: string;
+  readonly id: TId;
   readonly hostVersion: string;
   readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
+  readonly loadLanguages: VueI18nDataReader<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable,
+    readonly VueI18nLanguagePolicy[]
+  >;
 };
 
 export type VueI18nTargetSyntaxCheckerOptions<
@@ -44,7 +54,14 @@ export type VueI18nTargetSyntaxCheckerOptions<
   TTranslation,
   TBody,
   TUnavailable = never,
-> = VueI18nSourceSyntaxCheckerOptions<TUnit, TTranslation, TBody, TUnavailable>;
+  TId extends string = string,
+> = VueI18nSourceSyntaxCheckerOptions<
+  TUnit,
+  TTranslation,
+  TBody,
+  TUnavailable,
+  TId
+>;
 
 /** 按候选对应的共同消息投影检查原文语法。 */
 export function createVueI18nSourceSyntaxChecker<
@@ -52,12 +69,14 @@ export function createVueI18nSourceSyntaxChecker<
   TTranslation,
   TBody,
   TUnavailable = never,
+  TId extends string = string,
 >(
   options: VueI18nSourceSyntaxCheckerOptions<
     TUnit,
     TTranslation,
     TBody,
-    TUnavailable
+    TUnavailable,
+    TId
   >,
 ) {
   type Subject = VueI18nMessageProjection;
@@ -69,15 +88,22 @@ export function createVueI18nSourceSyntaxChecker<
     Subject,
     QualityObject,
     TBody,
-    TUnavailable
+    TUnavailable,
+    TId
   >({
-    id: options.id ?? "vue-i18n/source-syntax",
+    id: options.id,
     version: `checks.vue-i18n/source-syntax/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}+${options.hostVersion}`,
     configurationSchema,
     configuration,
     inputSchema: vueI18nMessageProjectionSchema,
+    loadDependencies: ({ facts, memo, qualityData }) =>
+      qualityData.read(options.loadLanguages, facts, memo),
     select: async (input) => {
-      if (!vueI18nDependencies(input).policies.has(input.candidate.language))
+      if (
+        !readVueI18nLanguagePolicies(input.dependencies).has(
+          input.candidate.language,
+        )
+      )
         return { status: "not-applicable" };
       const projection = await memoizedVueI18nProjection(
         input,
@@ -128,12 +154,14 @@ export function createVueI18nTargetSyntaxChecker<
   TTranslation,
   TBody,
   TUnavailable = never,
+  TId extends string = string,
 >(
   options: VueI18nTargetSyntaxCheckerOptions<
     TUnit,
     TTranslation,
     TBody,
-    TUnavailable
+    TUnavailable,
+    TId
   >,
 ) {
   type Subject = VueI18nMessageProjection;
@@ -145,15 +173,22 @@ export function createVueI18nTargetSyntaxChecker<
     Subject,
     QualityObject,
     TBody,
-    TUnavailable
+    TUnavailable,
+    TId
   >({
-    id: options.id ?? "vue-i18n/target-syntax",
+    id: options.id,
     version: `checks.vue-i18n/target-syntax/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}+${options.hostVersion}`,
     configurationSchema,
     configuration,
     inputSchema: vueI18nMessageProjectionSchema,
+    loadDependencies: ({ facts, memo, qualityData }) =>
+      qualityData.read(options.loadLanguages, facts, memo),
     select: async (input) => {
-      if (!vueI18nDependencies(input).policies.has(input.candidate.language))
+      if (
+        !readVueI18nLanguagePolicies(input.dependencies).has(
+          input.candidate.language,
+        )
+      )
         return { status: "not-applicable" };
       const projection = await memoizedVueI18nProjection(
         input,

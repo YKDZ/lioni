@@ -101,6 +101,14 @@ export function createQualityFixture(input: {
   readonly loadPolicies?: () => readonly VueI18nPolicy[];
   readonly terms?: TermbaseData;
   readonly loadTerms?: () => TermbaseData;
+  readonly dataReaders?: {
+    readonly loadLanguages?: () => readonly {
+      readonly sourceLanguage: string;
+      readonly targetLanguage: string;
+    }[];
+    readonly loadPolicies?: () => readonly VueI18nPolicy[];
+    readonly loadTerms?: () => TermbaseData;
+  };
   readonly resultCache?: QualityCheckResultCache;
   readonly exceptionStore?: QualityExceptionStore;
   readonly unavailableSourceKeys?: readonly string[];
@@ -116,11 +124,22 @@ export function createQualityFixture(input: {
   const sourcePolicy = policies[0];
   if (!sourcePolicy) throw new Error("至少需要一个目标语言策略。");
   const unavailableSourceKeys = new Set(input.unavailableSourceKeys ?? []);
+  const policyReader = input.loadPolicies ?? (() => policies);
+  const termsReader =
+    input.loadTerms ?? (() => input.terms ?? { concepts: [] });
+  const dataReaders =
+    input.dataReaders === undefined
+      ? {
+          loadLanguages: policyReader,
+          loadPolicies: policyReader,
+          loadTerms: termsReader,
+        }
+      : input.dataReaders;
 
   const project = (
     qualityInput: Omit<
       QualityCheckInput<Unit, Translation, unknown, Body>,
-      "configuration"
+      "configuration" | "dependencies"
     >,
   ): VueI18nMessageProjection => {
     input.onProject?.();
@@ -245,19 +264,20 @@ export function createQualityFixture(input: {
         hostVersion: "vue-i18n-quality-test-v1",
         project,
         reference,
-      }),
-      loadDependencies: () => ({
-        vueI18n: {
-          policies: input.loadPolicies?.() ?? policies,
-          terms: input.loadTerms?.() ?? input.terms ?? { concepts: [] },
-        },
+        ...dataReaders,
       }),
     },
   });
 
   return {
-    run(candidates: readonly SemanticEditCandidate<Body>[]) {
-      return analyzeQuality(config, { candidates });
+    run(
+      candidates: readonly SemanticEditCandidate<Body>[],
+      selectedIds?: readonly (typeof checkIds)[keyof typeof checkIds][],
+    ) {
+      return analyzeQuality(config, {
+        candidates,
+        ...(selectedIds === undefined ? {} : { checkIds: selectedIds }),
+      });
     },
   };
 }

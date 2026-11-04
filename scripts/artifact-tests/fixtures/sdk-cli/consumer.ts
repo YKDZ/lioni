@@ -3,10 +3,15 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { analyzeQuality, createQualityProfiler, readFacts } from "@lioni/lioni";
+import {
+  analyzeQuality,
+  createQualityProfiler,
+  readFacts,
+  StandardSchemaContractError,
+} from "@lioni/lioni";
 import { createDirectoryQualityCheckResultCache } from "@lioni/lioni/node";
 
-import config from "./lioni.config.ts";
+import config, { createConfig } from "./lioni.config.ts";
 
 const facts = await readFacts(config);
 assert.equal(facts.source.units.length, 2);
@@ -123,19 +128,18 @@ assert.ok(
   evidence.checks.every((check) => check.slowestCandidates.length <= 1),
 );
 const interrupted = createQualityProfiler();
+const invalidDependencyData = () => {
+  const value: Record<string, unknown> = {};
+  value.self = value;
+  return value;
+};
 await assert.rejects(
   analyzeQuality(
-    {
-      ...config,
-      quality: {
-        ...config.quality,
-        loadDependencies() {
-          throw new Error("依赖加载中断");
-        },
-      },
-    },
+    createConfig(({ qualityData }) => qualityData.read(invalidDependencyData)),
     { profiler: interrupted },
   ),
-  /依赖加载中断/u,
+  (error: unknown) =>
+    error instanceof StandardSchemaContractError &&
+    error.kind === "invalid-json",
 );
 assert.equal(interrupted.report().status, "interrupted");

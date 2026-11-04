@@ -275,10 +275,6 @@ void describe("阿拉伯数字对应检查", () => {
       ],
     });
     const diagnostic = result.diagnostics[0]!;
-    assert.equal(
-      result.checks[0]?.version,
-      "checks.number-correspondence/v2+number-test-v1",
-    );
     assert.equal(diagnostic.checkId, "number-correspondence");
     assert.deepEqual(diagnostic.location, {
       language: "fr",
@@ -395,6 +391,8 @@ void describe("阿拉伯数字对应检查", () => {
       translationText: (content) =>
         typeof content === "string" ? content : undefined,
     });
+    const numberCheckId: "number-correspondence" = checker.id;
+    void numberCheckId;
     const config = defineConfig({
       source: {
         schema: mixedUnitSchema,
@@ -534,6 +532,7 @@ void describe("数字检查的显式依据", () => {
             fingerprintInput: ({ projected }) => projected,
           }),
         ],
+        groups: { daily: ["number-correspondence"] },
         exceptionStore: {
           load: async () => exceptions,
           upsert: async (value) => {
@@ -552,6 +551,15 @@ void describe("数字检查的显式依据", () => {
         },
       },
     });
+    function verifySelectionTypes() {
+      void analyzeQuality(config, { checkIds: ["number-correspondence"] });
+      void analyzeQuality(config, { groups: ["daily"] });
+      // @ts-expect-error 动态选择不能扩张静态配置里的检查项 ID。
+      void analyzeQuality(config, { checkIds: ["number-correspondance"] });
+      // @ts-expect-error 动态选择不能扩张静态配置里的分组名。
+      void analyzeQuality(config, { groups: ["nightly"] });
+    }
+    void verifySelectionTypes;
     const run = () =>
       analyzeQuality(config, {
         candidates: [{ sourceKey: "message", language: "fr", content: "21" }],

@@ -18,6 +18,7 @@ import {
   type StandardSchemaV1,
   type UpdatePlanItem,
 } from "../src/index.ts";
+import { defineTestQualityCheck } from "./quality-check-fixture.ts";
 import {
   jsonValueSchema,
   schemaFromExamples,
@@ -42,16 +43,16 @@ function makeConfig(
     readonly contentSchema?: typeof stringSchema;
     readonly updatePolicy?: Config["updatePolicy"];
     readonly compare?: Config["compare"];
-    readonly onQuality?: () => void;
+    readonly onQualityData?: () => void;
   } = {},
 ): Config {
-  return defineConfig<
+  return defineConfig.withTypes<
     Unit,
     StandardSchemaV1<Unit, Unit>,
     StandardSchemaV1<Translation, Translation>,
     never,
     typeof stringSchema
-  >({
+  >()({
     source: {
       schema: sourceSchemaFromExamples<Unit>(
         { id: "example", source: "example" },
@@ -103,12 +104,34 @@ function makeConfig(
     ...(options.updatePolicy === undefined
       ? {}
       : { updatePolicy: options.updatePolicy }),
-    quality: {
-      loadDependencies() {
-        options.onQuality?.();
-        throw new Error("预览不应加载 QA 资料。");
-      },
-    },
+    ...(options.onQualityData === undefined
+      ? {}
+      : {
+          quality: {
+            checks: [
+              defineTestQualityCheck<Unit, Translation, string>({
+                id: "deferred-policy",
+                configuration: {},
+                loadDependencies: () => {
+                  options.onQualityData?.();
+                  return {};
+                },
+                check: () => ({
+                  status: "complete",
+                  diagnostics: [],
+                  issues: [],
+                  coverage: {
+                    selected: 1,
+                    evaluated: 1,
+                    notApplicable: 0,
+                    incomplete: 0,
+                    failed: 0,
+                  },
+                }),
+              }),
+            ],
+          },
+        }),
   });
 }
 
@@ -158,7 +181,7 @@ void describe("业务更新计划与预览", () => {
         },
       ],
       {
-        onQuality: () => {
+        onQualityData: () => {
           qualityCalls += 1;
         },
       },

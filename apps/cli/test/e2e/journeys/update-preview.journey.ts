@@ -342,7 +342,7 @@ const journey: CliJourney = {
     const batchText = results[11];
     const baselinePath = path.join(context.workDir, "lioni.baseline.json");
 
-    assert.equal(structured?.exitCode, 0, structured?.stderr);
+    assert.equal(structured?.exitCode, 0, structured?.stderr ?? "");
     assert.equal(structured?.stderr, "");
     const output = JSON.parse(structured?.stdout ?? "unknown");
     assert.equal(output.kind, "data");
@@ -363,12 +363,12 @@ const journey: CliJourney = {
       },
       expectedTarget: { status: "missing" },
     });
-    assert.equal(readable?.exitCode, 0, readable?.stderr);
+    assert.equal(readable?.exitCode, 0, readable?.stderr ?? "");
     assert.equal(readable?.stderr, "");
     assert.ok(readable?.stdout.includes("更新预览"));
     assert.ok(readable?.stdout.includes("补入待译占位"));
     assert.ok(readable?.stdout.includes("待译：Welcome"));
-    assert.equal(applied?.exitCode, 0, applied?.stderr);
+    assert.equal(applied?.exitCode, 0, applied?.stderr ?? "");
     assert.equal(applied?.stderr, "");
     const execution = JSON.parse(applied?.stdout ?? "unknown");
     assert.equal(execution.variant, "applied");
@@ -383,7 +383,7 @@ const journey: CliJourney = {
       ),
       [{ targetId: "welcome", sourceId: "welcome", text: "待译：Welcome" }],
     );
-    assert.equal(detachedChanges?.exitCode, 0, detachedChanges?.stderr);
+    assert.equal(detachedChanges?.exitCode, 0, detachedChanges?.stderr ?? "");
     assert.equal(detachedChanges?.stderr, "");
     assert.ok(
       detachedChanges?.stdout.includes("0 项决定，2 项变化未形成决定。"),
@@ -407,13 +407,13 @@ const journey: CliJourney = {
         "原因：译文已从完整范围移除，当前没有对应记录可供处理。",
       ),
     );
-    assert.equal(empty?.exitCode, 0, empty?.stderr);
+    assert.equal(empty?.exitCode, 0, empty?.stderr ?? "");
     assert.equal(empty?.stdout.trim(), "没有变化，也没有需要处理的更新决定。");
     assert.equal(
       await readFile(baselinePath, "utf8").catch(() => undefined),
       undefined,
     );
-    assert.equal(retained?.exitCode, 0, retained?.stderr);
+    assert.equal(retained?.exitCode, 0, retained?.stderr ?? "");
     assert.ok(retained?.stdout.includes("已保留"));
     assert.equal(retained?.stdout.includes("retained"), false);
     assert.equal(retained?.stdout.includes("retain"), false);
@@ -432,7 +432,7 @@ const journey: CliJourney = {
     assert.equal(structuredFailure.data.status, "failed");
     assert.equal(structuredFailure.data.results[0]?.status, "writeUnconfirmed");
 
-    assert.equal(modifiedPreview?.exitCode, 0, modifiedPreview?.stderr);
+    assert.equal(modifiedPreview?.exitCode, 0, modifiedPreview?.stderr ?? "");
     assert.equal(modifiedPreview?.stderr, "");
     assert.ok(modifiedPreview?.stdout.includes("重置待译占位"));
     assert.ok(modifiedPreview?.stdout.includes("人工译文"));
@@ -442,7 +442,7 @@ const journey: CliJourney = {
         "原文已变化；使用当前原文生成待译占位并重置现有译文。",
       ),
     );
-    assert.equal(modifiedApplied?.exitCode, 0, modifiedApplied?.stderr);
+    assert.equal(modifiedApplied?.exitCode, 0, modifiedApplied?.stderr ?? "");
     assert.equal(modifiedApplied?.stderr, "");
     const modifiedExecution = JSON.parse(modifiedApplied?.stdout ?? "unknown");
     assert.equal(modifiedExecution.variant, "applied");

@@ -8,9 +8,9 @@ import {
   type QualityException,
   type QualityCheckResultCache,
 } from "@lioni/core";
+import { TermContractError } from "@lioni/terminology";
 import type { TermbaseData } from "@lioni/terminology";
 
-import { VUE_I18N_MESSAGE_COMPILER_VERSION } from "../../src/vue-i18n/vue-i18n-messages.ts";
 import {
   checkIds,
   createQualityFixture,
@@ -57,11 +57,6 @@ void test("检查组保留独立身份，并从投影位置报告原文和候选
   ]);
 
   for (const id of Object.values(checkIds)) assert.ok(check(result, id), id);
-  assert.ok(
-    check(result, checkIds.variableCorrespondence)?.version.includes(
-      "@intlify/message-compiler@11.2.8",
-    ),
-  );
 
   const source = findings(result, checkIds.sourceSyntax)[0];
   const target = findings(result, checkIds.targetSyntax)[0];
@@ -78,16 +73,6 @@ void test("检查组保留独立身份，并从投影位置报告原文和候选
   assert.equal(
     check(result, checkIds.variableCorrespondence)?.status,
     "incomplete",
-  );
-  assert.deepEqual(check(result, checkIds.sourceSyntax)?.configuration, {
-    compilerVersion: VUE_I18N_MESSAGE_COMPILER_VERSION,
-  });
-  assert.deepEqual(
-    check(result, checkIds.variableCorrespondence)?.configuration,
-    {
-      compilerVersion: VUE_I18N_MESSAGE_COMPILER_VERSION,
-      comparison: "branch-variable-count-patterns-v1",
-    },
   );
 });
 
@@ -251,11 +236,18 @@ void test("动态策略拒绝特殊字典键下的非法资源、字面值和数
       fixture.run([candidate("a", "等待 2 分钟")]),
       (error: unknown) => {
         assert.ok(error instanceof QualityCheckBindingError);
-        assert.ok(error.cause instanceof TypeError);
-        assert.ok(
-          error.cause.message.includes(scenario.expected),
-          error.cause.message,
-        );
+        assert.ok(error.cause instanceof StandardSchemaContractError);
+        assert.equal(error.cause.kind, "schema-mismatch");
+        const actualPath = error.cause.issues?.[0]?.path
+          ?.map((part) => {
+            if (typeof part === "string" || typeof part === "number")
+              return String(part);
+            if (typeof part === "object" && part !== null && "key" in part)
+              return String(part.key);
+            return JSON.stringify(part) ?? "";
+          })
+          .join(".");
+        assert.equal(actualPath, scenario.expected);
         return true;
       },
     );
@@ -812,7 +804,7 @@ void test("每次质量运行读取一次 Vue 动态规则并使用最新术语�
   assert.deepEqual(findings(second, checkIds.forbiddenTerminology), []);
 });
 
-void test("quality.loadDependencies 将 Vue 策略和术语资料作为嵌套 JSON 依赖传入 core", async () => {
+void test("语法、术语和消息族检查只收到各自声明的资料", async () => {
   const policy = policyFor({
     sourceMessages: { label: "Hello {name}" },
     targetMessages: { label: "你好 {name}" },
@@ -821,14 +813,62 @@ void test("quality.loadDependencies 将 Vue 策略和术语资料作为嵌套 JS
   const result = await createQualityFixture({
     policies: [policy],
     terms,
+    dataReaders: {
+      loadLanguages: () => [{ sourceLanguage: "en", targetLanguage: "zh-CN" }],
+      loadPolicies: () => [policy],
+      loadTerms: () => terms,
+    },
   }).run([candidate("label", "你好 {name}")]);
 
-  assert.deepEqual(result.dependencies, {
-    vueI18n: { policies: [policy], terms },
+  const sourceSyntax = result.checks.find(
+    ({ checkId }) => checkId === checkIds.sourceSyntax,
+  );
+  const allowedTerminology = result.checks.find(
+    ({ checkId }) => checkId === checkIds.allowedTerminology,
+  );
+  const messageFamily = result.checks.find(
+    ({ checkId }) => checkId === checkIds.messageFamilyConsistency,
+  );
+  assert.deepEqual(sourceSyntax?.dependencies, [
+    { sourceLanguage: "en", targetLanguage: "zh-CN" },
+  ]);
+  assert.deepEqual(allowedTerminology?.dependencies, {
+    languages: [{ sourceLanguage: "en", targetLanguage: "zh-CN" }],
+    terms,
   });
+  assert.deepEqual(messageFamily?.dependencies, [policy]);
 });
 
-void test("quality.loadDependencies 返回的规则依赖不是 JSON 时拒绝", async () => {
+void test("只选 Vue 语法时不读取术语库或消息族策略", async () => {
+  const policy = policyFor({
+    sourceMessages: { label: "Hello {name}" },
+    targetMessages: { label: "你好 {name}" },
+  });
+  const fixture = createQualityFixture({
+    policies: [policy],
+    dataReaders: {
+      loadLanguages: () => [{ sourceLanguage: "en", targetLanguage: "zh-CN" }],
+    },
+  });
+  const result = await fixture.run(
+    [candidate("label", "你好 {name}")],
+    [
+      checkIds.sourceSyntax,
+      checkIds.targetSyntax,
+      checkIds.variableCorrespondence,
+    ],
+  );
+  assert.deepEqual(
+    result.checks.map(({ checkId, status }) => ({ checkId, status })),
+    [
+      { checkId: checkIds.sourceSyntax, status: "complete" },
+      { checkId: checkIds.targetSyntax, status: "complete" },
+      { checkId: checkIds.variableCorrespondence, status: "complete" },
+    ],
+  );
+});
+
+void test("所选 Vue 术语资料不是 JSON 时保持契约错误", async () => {
   const policy = policyFor({ sourceMessages: { label: "Hello" } });
   const metadata: Record<string, unknown> = {};
   metadata.self = metadata;
@@ -841,10 +881,27 @@ void test("quality.loadDependencies 返回的规则依赖不是 JSON 时拒绝",
   });
 
   await assert.rejects(
-    fixture.run([candidate("label", "你好")]),
+    fixture.run([candidate("label", "你好")], [checkIds.allowedTerminology]),
     (error: unknown) =>
       error instanceof StandardSchemaContractError &&
       error.kind === "invalid-json",
+  );
+});
+
+void test("所选 Vue 术语资料不符合术语 schema 时以绑定错误中止", async () => {
+  const policy = policyFor({ sourceMessages: { label: "Hello" } });
+  const fixture = createQualityFixture({
+    policies: [policy],
+    terms: { concepts: "invalid" } as unknown as TermbaseData,
+  });
+
+  await assert.rejects(
+    fixture.run([candidate("label", "你好")], [checkIds.allowedTerminology]),
+    (error: unknown) => {
+      assert.ok(error instanceof QualityCheckBindingError);
+      assert.ok(error.cause instanceof TermContractError);
+      return true;
+    },
   );
 });
 

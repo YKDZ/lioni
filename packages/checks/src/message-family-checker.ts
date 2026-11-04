@@ -5,6 +5,7 @@ import type {
   QualityCheckDefinition,
   QualityCheckInput,
   QualityCheckOutcome,
+  QualityDataLoadInput,
   QualityCheckProjectionInput,
   QualityCheckRuleInput,
   QualityCheckSelection,
@@ -106,9 +107,14 @@ export type MessageFamilyCheckerOptions<
   TSubject extends MessageFamilySubject<TSelectedUnit, TBody> =
     MessageFamilySubject<TSelectedUnit, TBody>,
 > = {
+  /** 普通可选 string 会产生宽 ID；静态选择需要依赖运行时目录校验。 */
   readonly id?: string;
   /** 宿主投影、分析配置与等价策略的版本。 */
   readonly hostVersion: string;
+  /** 只在检查项已选且存在候选时读取；可用同一 qualityData reader 显式共享。 */
+  readonly loadDependencies?: (
+    input: QualityDataLoadInput<TUnit, TTranslation, TBody, TUnavailable>,
+  ) => Awaitable<unknown>;
   readonly select: (
     input: QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
   ) => Awaitable<QualityCheckSelection<TSubject>>;
@@ -191,7 +197,61 @@ const inputSchema = messageFamilyInputSchema;
 
 const defaultTemplate: TemplateOptions = { abstract: () => undefined };
 
-/** 通过正式 QA 绑定接入宿主事实，并比较显式投影的消息族。 */
+/**
+ * 通过正式 QA 绑定接入宿主事实，并比较显式投影的消息族。
+ * 字面量 ID 保留精确类型；普通可选 string ID 返回 string，选择由运行时目录校验。
+ */
+export function createMessageFamilyChecker<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TSelectedUnit extends TUnit,
+  TBody,
+  TUnavailable = never,
+  TSubject extends MessageFamilySubject<TSelectedUnit, TBody> =
+    MessageFamilySubject<TSelectedUnit, TBody>,
+>(
+  options: MessageFamilyCheckerOptions<
+    TUnit,
+    TTranslation,
+    TSelectedUnit,
+    TBody,
+    TUnavailable,
+    TSubject
+  > & { readonly id?: undefined },
+): QualityCheckDefinition<
+  TUnit,
+  TTranslation,
+  QualityObject,
+  TBody,
+  TUnavailable,
+  "message-family-consistency"
+>;
+export function createMessageFamilyChecker<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TSelectedUnit extends TUnit,
+  TBody,
+  TUnavailable = never,
+  TSubject extends MessageFamilySubject<TSelectedUnit, TBody> =
+    MessageFamilySubject<TSelectedUnit, TBody>,
+  const TId extends string = string,
+>(
+  options: MessageFamilyCheckerOptions<
+    TUnit,
+    TTranslation,
+    TSelectedUnit,
+    TBody,
+    TUnavailable,
+    TSubject
+  > & { readonly id: TId },
+): QualityCheckDefinition<
+  TUnit,
+  TTranslation,
+  QualityObject,
+  TBody,
+  TUnavailable,
+  TId
+>;
 export function createMessageFamilyChecker<
   TUnit extends TranslationUnitInput,
   TTranslation,
@@ -214,12 +274,39 @@ export function createMessageFamilyChecker<
   TTranslation,
   QualityObject,
   TBody,
-  TUnavailable
+  TUnavailable,
+  string
+>;
+export function createMessageFamilyChecker<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TSelectedUnit extends TUnit,
+  TBody,
+  TUnavailable = never,
+  TSubject extends MessageFamilySubject<TSelectedUnit, TBody> =
+    MessageFamilySubject<TSelectedUnit, TBody>,
+>(
+  options: MessageFamilyCheckerOptions<
+    TUnit,
+    TTranslation,
+    TSelectedUnit,
+    TBody,
+    TUnavailable,
+    TSubject
+  >,
+): QualityCheckDefinition<
+  TUnit,
+  TTranslation,
+  QualityObject,
+  TBody,
+  TUnavailable,
+  string
 > {
   const checkId = options.id ?? "message-family-consistency";
   const analysis = options.analysis ?? createTextAnalysis();
   const sourceTemplate = options.sourceTemplate ?? defaultTemplate;
   const targetTemplate = options.targetTemplate ?? defaultTemplate;
+  const loadDependencies = options.loadDependencies;
   const limits = {
     maxCategories: options.limits?.maxCategories ?? defaultLimits.maxCategories,
     maxSourcesPerCategory:
@@ -784,13 +871,15 @@ export function createMessageFamilyChecker<
     PreparedSubject,
     QualityObject,
     TBody,
-    TUnavailable
+    TUnavailable,
+    string
   >({
     id: checkId,
     version: `checks.message-family-consistency/v3+${options.hostVersion}`,
     configurationSchema,
     configuration: { limits },
     inputSchema,
+    ...(loadDependencies === undefined ? {} : { loadDependencies }),
     select: async (input) => {
       const selection = await options.select(input);
       if (selection.status !== "selected") return selection;

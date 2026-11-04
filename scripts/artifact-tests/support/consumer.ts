@@ -77,7 +77,7 @@ export function testArtifactConsumer(
           type: "module",
           packageManager: "pnpm@12.9.1",
           dependencies,
-          devDependencies: { "@types/node": "24.19.2", zod: "4.6.7" },
+          devDependencies: { "@types/node": "26.6.6", zod: "4.6.7" },
         }),
       );
       await writeFile(

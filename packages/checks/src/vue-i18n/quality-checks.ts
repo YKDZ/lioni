@@ -1,8 +1,5 @@
-import type {
-  QualityCheckDefinition,
-  QualityObject,
-  TranslationUnitInput,
-} from "@lioni/core";
+import type { TranslationUnitInput } from "@lioni/core";
+import type { TermbaseData } from "@lioni/terminology";
 
 import { createVueI18nAnalysis } from "./analysis.ts";
 import {
@@ -17,7 +14,12 @@ import {
   createVueI18nMessageFamilyCheck,
   createVueI18nTerminologyChecks,
 } from "./checks/terminology-families.ts";
+import { missingVueI18nData } from "./dependencies.ts";
 import type { VueI18nChecksOptions } from "./quality-types.ts";
+import type {
+  VueI18nLanguagePolicy,
+  VueI18nPolicyData,
+} from "./quality-types.ts";
 import {
   createVueI18nSourceSyntaxChecker,
   createVueI18nTargetSyntaxChecker,
@@ -30,16 +32,19 @@ export function createVueI18nChecks<
   TTranslation,
   TBody,
   TUnavailable = never,
->(
-  options: VueI18nChecksOptions<TUnit, TTranslation, TBody, TUnavailable>,
-): readonly QualityCheckDefinition<
-  TUnit,
-  TTranslation,
-  QualityObject,
-  TBody,
-  TUnavailable
->[] {
-  const identity = (id: string) => ({
+>(options: VueI18nChecksOptions<TUnit, TTranslation, TBody, TUnavailable>) {
+  const loadLanguages =
+    options.loadLanguages ??
+    missingVueI18nData<readonly VueI18nLanguagePolicy[]>(
+      "Vue I18n 语言策略读取器",
+    );
+  const loadPolicies =
+    options.loadPolicies ??
+    missingVueI18nData<readonly VueI18nPolicyData[]>("Vue I18n 检查策略读取器");
+  const loadTerms =
+    options.loadTerms ??
+    missingVueI18nData<TermbaseData>("Vue I18n 术语库读取器");
+  const identity = <const TId extends string>(id: TId) => ({
     id,
     hostVersion: options.hostVersion,
   });
@@ -50,36 +55,45 @@ export function createVueI18nChecks<
       id: "vue-i18n/source-syntax",
       hostVersion: options.hostVersion,
       project: options.project,
+      loadLanguages,
     }),
     createVueI18nTargetSyntaxChecker({
       id: "vue-i18n/target-syntax",
       hostVersion: options.hostVersion,
       project: options.project,
+      loadLanguages,
     }),
     createVueI18nVariableCorrespondenceChecker({
       id: "vue-i18n/variable-correspondence",
       hostVersion: options.hostVersion,
       project: options.project,
+      loadLanguages,
     }),
     createLinkTargetExistsCheck({
       identity: identity("vue-i18n/link-target-exists"),
       project: options.project,
+      loadPolicies,
     }),
     createLinkCycleCheck({
       identity: identity("vue-i18n/link-cycle"),
       project: options.project,
+      loadPolicies,
     }),
     createProtectedLiteralCheck({
       identity: identity("vue-i18n/protected-literals"),
       project: options.project,
+      loadPolicies,
     }),
     createQuantityCheck({
       identity: identity("vue-i18n/quantities"),
       project: options.project,
+      loadPolicies,
     }),
     ...createVueI18nTerminologyChecks({
       project: options.project,
       analysis,
+      loadLanguages,
+      loadTerms,
       identities: {
         allowedTerminology: identity("terminology/require-allowed-translation"),
         forbiddenTerminology: identity(
@@ -89,9 +103,10 @@ export function createVueI18nChecks<
     }),
     createVueI18nMessageFamilyCheck({
       project: options.project,
+      loadPolicies,
       reference: options.reference,
       analysis,
       identity: identity("message-family-consistency"),
     }),
-  ];
+  ] as const;
 }

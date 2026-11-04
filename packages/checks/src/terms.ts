@@ -9,6 +9,8 @@ import {
   type QualityEvidence,
   type QualityInputBasis,
   type QualityLocation,
+  type QualityCheckDefinition,
+  type QualityDataLoadInput,
   type TranslationUnitInput,
 } from "@lioni/core";
 import {
@@ -29,8 +31,11 @@ export type TermCheckerOptions<
   TSubject,
   TBody = unknown,
   TUnavailable = never,
+  TId extends string | undefined = undefined,
+  TRule extends TermRule = TermRule,
 > = {
-  readonly id?: string;
+  /** 普通或可选 string ID 返回 string，并使配置中的检查项联合退化为 string。 */
+  readonly id?: TId;
   /** 宿主提供的识别策略、规则、选择、投影和位置映射的语义版本。 */
   readonly hostVersion: string;
   readonly terms:
@@ -44,7 +49,11 @@ export type TermCheckerOptions<
           TUnavailable
         >,
       ) => Awaitable<CompiledTerms>);
-  readonly rule: TermRule;
+  /** 只在检查项已选且存在候选时读取；可用同一 qualityData reader 显式共享。 */
+  readonly loadDependencies?: (
+    input: QualityDataLoadInput<TUnit, TTranslation, TBody, TUnavailable>,
+  ) => Awaitable<unknown>;
+  readonly rule: TRule;
   /**
    * 显式替换默认业务依据；须涵盖投影、检查对象、位置映射及其他实际依赖。
    * 工厂额外纳入本次使用的术语库数据，核心保留检查身份、版本和配置。
@@ -92,7 +101,58 @@ export type TermCheckerOptions<
 };
 
 /** 一次绑定一条独立术语规则；识别、歧义与规则判断全部由术语包负责。 */
-export function createTermChecker<
+function createTermCheckerImplementation<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TSubject,
+  TBody = unknown,
+  TUnavailable = never,
+  const TRule extends TermRule = TermRule,
+>(
+  options: TermCheckerOptions<
+    TUnit,
+    TTranslation,
+    TSubject,
+    TBody,
+    TUnavailable,
+    undefined,
+    TRule
+  > & { readonly id?: undefined },
+): QualityCheckDefinition<
+  TUnit,
+  TTranslation,
+  import("@lioni/core").QualityObject,
+  TBody,
+  TUnavailable,
+  `terminology/${TRule["id"]}`
+>;
+function createTermCheckerImplementation<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TSubject,
+  TBody = unknown,
+  TUnavailable = never,
+  const TRule extends TermRule = TermRule,
+  const TId extends string = string,
+>(
+  options: TermCheckerOptions<
+    TUnit,
+    TTranslation,
+    TSubject,
+    TBody,
+    TUnavailable,
+    TId,
+    TRule
+  > & { readonly id: TId },
+): QualityCheckDefinition<
+  TUnit,
+  TTranslation,
+  import("@lioni/core").QualityObject,
+  TBody,
+  TUnavailable,
+  TId
+>;
+function createTermCheckerImplementation<
   TUnit extends TranslationUnitInput,
   TTranslation,
   TSubject,
@@ -104,11 +164,47 @@ export function createTermChecker<
     TTranslation,
     TSubject,
     TBody,
-    TUnavailable
+    TUnavailable,
+    string | undefined,
+    TermRule
   >,
-) {
+): QualityCheckDefinition<
+  TUnit,
+  TTranslation,
+  import("@lioni/core").QualityObject,
+  TBody,
+  TUnavailable,
+  string
+>;
+function createTermCheckerImplementation<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TSubject,
+  TBody = unknown,
+  TUnavailable = never,
+  TRule extends TermRule = TermRule,
+  TId extends string | undefined = undefined,
+>(
+  options: TermCheckerOptions<
+    TUnit,
+    TTranslation,
+    TSubject,
+    TBody,
+    TUnavailable,
+    TId,
+    TRule
+  >,
+): QualityCheckDefinition<
+  TUnit,
+  TTranslation,
+  import("@lioni/core").QualityObject,
+  TBody,
+  TUnavailable,
+  string
+> {
   const rule = options.rule;
   const fingerprintInput = options.fingerprintInput;
+  const loadDependencies = options.loadDependencies;
   return bindQualityCheck<
     TUnit,
     TTranslation,
@@ -117,13 +213,15 @@ export function createTermChecker<
     { readonly value: TSubject; readonly terms: CompiledTerms },
     import("@lioni/core").QualityObject,
     TBody,
-    TUnavailable
+    TUnavailable,
+    string
   >({
     id: options.id ?? `terminology/${rule.id}`,
     version: `checks.terminology-rule/v2+${options.hostVersion}`,
     configurationSchema: termRulesConfigurationSchema,
     configuration: { rules: [rule.id] },
     inputSchema: termComparisonInputSchema,
+    ...(loadDependencies === undefined ? {} : { loadDependencies }),
     async select(input) {
       const selection = await options.select(input);
       if (selection.status !== "selected") return selection;
@@ -250,3 +348,104 @@ export function createTermChecker<
     },
   });
 }
+
+function createTermCheckerWithTypes<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TSubject,
+  TBody = unknown,
+  TUnavailable = never,
+>() {
+  function create<const TRule extends TermRule>(
+    options: TermCheckerOptions<
+      TUnit,
+      TTranslation,
+      TSubject,
+      TBody,
+      TUnavailable,
+      undefined,
+      TRule
+    >,
+  ): QualityCheckDefinition<
+    TUnit,
+    TTranslation,
+    import("@lioni/core").QualityObject,
+    TBody,
+    TUnavailable,
+    `terminology/${TRule["id"]}`
+  >;
+  function create<const TRule extends TermRule, const TId extends string>(
+    options: TermCheckerOptions<
+      TUnit,
+      TTranslation,
+      TSubject,
+      TBody,
+      TUnavailable,
+      TId,
+      TRule
+    > & { readonly id: TId },
+  ): QualityCheckDefinition<
+    TUnit,
+    TTranslation,
+    import("@lioni/core").QualityObject,
+    TBody,
+    TUnavailable,
+    TId
+  >;
+  function create<const TRule extends TermRule>(
+    options: TermCheckerOptions<
+      TUnit,
+      TTranslation,
+      TSubject,
+      TBody,
+      TUnavailable,
+      string | undefined,
+      TRule
+    >,
+  ): QualityCheckDefinition<
+    TUnit,
+    TTranslation,
+    import("@lioni/core").QualityObject,
+    TBody,
+    TUnavailable,
+    string
+  >;
+  function create(
+    options: TermCheckerOptions<
+      TUnit,
+      TTranslation,
+      TSubject,
+      TBody,
+      TUnavailable,
+      string | undefined,
+      TermRule
+    >,
+  ): QualityCheckDefinition<
+    TUnit,
+    TTranslation,
+    import("@lioni/core").QualityObject,
+    TBody,
+    TUnavailable,
+    string
+  > {
+    return createTermCheckerImplementation<
+      TUnit,
+      TTranslation,
+      TSubject,
+      TBody,
+      TUnavailable
+    >(options);
+  }
+  return create;
+}
+
+/**
+ * 术语规则工厂；显式业务泛型先经 withTypes 绑定，规则与覆盖 ID 由本次调用推断。
+ * 字面量及派生 ID 保持精确；普通可选 string ID 返回 string，后续选择依赖运行时校验。
+ */
+export const createTermChecker = Object.assign(
+  createTermCheckerImplementation,
+  {
+    withTypes: createTermCheckerWithTypes,
+  },
+);
