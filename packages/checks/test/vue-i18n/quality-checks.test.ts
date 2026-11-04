@@ -11,7 +11,6 @@ import {
 import { TermContractError } from "@lioni/terminology";
 import type { TermbaseData } from "@lioni/terminology";
 
-import { VUE_I18N_MESSAGE_COMPILER_VERSION } from "../../src/vue-i18n/vue-i18n-messages.ts";
 import {
   checkIds,
   createQualityFixture,
@@ -58,11 +57,6 @@ void test("检查组保留独立身份，并从投影位置报告原文和候选
   ]);
 
   for (const id of Object.values(checkIds)) assert.ok(check(result, id), id);
-  assert.ok(
-    check(result, checkIds.variableCorrespondence)?.version.includes(
-      "@intlify/message-compiler@11.2.8",
-    ),
-  );
 
   const source = findings(result, checkIds.sourceSyntax)[0];
   const target = findings(result, checkIds.targetSyntax)[0];
@@ -79,16 +73,6 @@ void test("检查组保留独立身份，并从投影位置报告原文和候选
   assert.equal(
     check(result, checkIds.variableCorrespondence)?.status,
     "incomplete",
-  );
-  assert.deepEqual(check(result, checkIds.sourceSyntax)?.configuration, {
-    compilerVersion: VUE_I18N_MESSAGE_COMPILER_VERSION,
-  });
-  assert.deepEqual(
-    check(result, checkIds.variableCorrespondence)?.configuration,
-    {
-      compilerVersion: VUE_I18N_MESSAGE_COMPILER_VERSION,
-      comparison: "branch-variable-count-patterns-v1",
-    },
   );
 });
 

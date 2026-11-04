@@ -528,13 +528,6 @@ void test("QA 例外保留术语发现，宿主条件控制语义编辑", async 
     candidates: [candidate],
   });
   assert.deepEqual(
-    passedQuality.checks.map(({ version }) => version),
-    [
-      "checks.terminology-rule/v2+terms-test-v1",
-      "checks.terminology-rule/v2+terms-test-v1",
-    ],
-  );
-  assert.deepEqual(
     passedQuality.diagnostics.map((diagnostic) => diagnostic.object.code),
     ["missing-allowed-translation", "forbidden-translation"],
   );

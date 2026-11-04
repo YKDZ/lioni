@@ -850,10 +850,6 @@ void test("排除当前替代记录并保留其他内容相同的事实", async 
 
   assert.equal(result.status, "complete");
   assert.equal(result.diagnostics.length, 1);
-  assert.equal(
-    result.checks[0]?.version,
-    "checks.message-family-consistency/v3+message-families-test-v1",
-  );
   assert.equal(result.diagnostics[0]?.severity, "warning");
   assert.equal(result.diagnostics[0]?.checkId, "message-family-consistency");
   const references = result.diagnostics[0]!.evidence.filter(

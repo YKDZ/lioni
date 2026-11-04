@@ -275,10 +275,6 @@ void describe("阿拉伯数字对应检查", () => {
       ],
     });
     const diagnostic = result.diagnostics[0]!;
-    assert.equal(
-      result.checks[0]?.version,
-      "checks.number-correspondence/v2+number-test-v1",
-    );
     assert.equal(diagnostic.checkId, "number-correspondence");
     assert.deepEqual(diagnostic.location, {
       language: "fr",

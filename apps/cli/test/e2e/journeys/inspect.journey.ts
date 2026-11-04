@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { CliJourney } from "../journey.ts";
@@ -480,7 +480,10 @@ export default defineConfig({
     assert.equal(results[6]?.exitCode, 0);
     assert.match(results[6]?.stdout ?? "", /inspect/u);
     assert.equal(results[7]?.exitCode, 0);
-    assert.equal(results[7]?.stdout, "lioni 0.2.3\n");
+    const manifest = JSON.parse(
+      await readFile(new URL("../../../package.json", import.meta.url), "utf8"),
+    ) as { readonly version: string };
+    assert.equal(results[7]?.stdout, `lioni ${manifest.version}\n`);
     assert.equal(results[8]?.exitCode, 2);
     assert.equal(results[8]?.stdout, "");
     assert.partialDeepStrictEqual(JSON.parse(results[8]?.stderr ?? ""), {
