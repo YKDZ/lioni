@@ -48,7 +48,7 @@
     "test:e2e": "node --conditions=source --test --test-timeout=180000 --test-reporter=spec --test-reporter=@lioni/tooling-config/node-test-count-reporter --test-reporter-destination=stdout --test-reporter-destination=stderr 'test/e2e/run-journeys.test.ts'"
   },
   "dependencies": {
-    "@intlify/message-compiler": "11.2.8",
+    "@intlify/message-compiler": "11.4.17",
     "@standard-schema/spec": "1.1.0",
     "@ykdz/cli-contract": "catalog:",
     "yaml": "^2.9.1",
@@ -65,11 +65,11 @@
     "oxfmt": "catalog:",
     "oxlint": "catalog:",
     "oxlint-tsgolint": "catalog:",
-    "tsdown": "0.22.1",
+    "tsdown": "0.23.4",
     "typescript": "6.0.3",
     "typescript-7": "catalog:"
   },
   "engines": {
-    "node": "^24.21.0"
+    "node": "^26.13.0"
   }
 }

@@ -13,8 +13,8 @@
   "scripts": {
     "format:check": "oxfmt --list-different .",
     "format:write": "oxfmt --write .",
-    "lint": "oxlint --quiet --format=unix --ignore-pattern node_modules .",
-    "lint:fix": "oxlint --format=unix . --fix",
+    "lint": "oxlint --type-aware --quiet --format=unix --ignore-pattern node_modules .",
+    "lint:fix": "oxlint --type-aware --format=unix . --fix",
     "typecheck": "tsc -p tsconfig.json --noEmit --pretty false"
   },
   "dependencies": {
@@ -28,6 +28,6 @@
     "typescript-7": "catalog:"
   },
   "engines": {
-    "node": "24.21.0"
+    "node": "^26.13.0"
   }
 }
