@@ -5,7 +5,7 @@ import path from "node:path";
 import type { CliJourney, CliJourneyResult } from "../journey.ts";
 
 function qualityData(result: CliJourneyResult | undefined) {
-  assert.equal(result?.exitCode, 0, result?.stderr);
+  assert.equal(result?.exitCode, 0, result?.stderr ?? "");
   return JSON.parse(result?.stdout ?? "").data;
 }
 
@@ -174,7 +174,7 @@ export default defineConfig({
     );
 
     const readable = results[5];
-    assert.equal(readable?.exitCode, 0, readable?.stderr);
+    assert.equal(readable?.exitCode, 0, readable?.stderr ?? "");
     assert.match(
       readable?.stdout ?? "",
       /检查项范围：配置 2 项，本次子集 1 项（second）/u,

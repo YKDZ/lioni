@@ -9,7 +9,7 @@ import type {
 } from "@intlify/message-compiler";
 import type { TextRange, TextToken } from "@lioni/text-analysis";
 
-export const VUE_I18N_MESSAGE_COMPILER_VERSION = "11.2.8";
+export const VUE_I18N_MESSAGE_COMPILER_VERSION = "11.4.17";
 
 export type VueI18nSyntaxError = {
   readonly code: number;

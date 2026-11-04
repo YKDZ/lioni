@@ -5,7 +5,7 @@ import path from "node:path";
 import type { CliJourney, CliJourneyResult } from "../journey.ts";
 
 function dataOf(result: CliJourneyResult | undefined) {
-  assert.equal(result?.exitCode, 0, result?.stderr);
+  assert.equal(result?.exitCode, 0, result?.stderr ?? "");
   assert.equal(result?.stderr, "");
   return JSON.parse(result?.stdout ?? "").data;
 }
@@ -155,7 +155,7 @@ export default defineConfig({
     assert.equal(unchanged.status, "completed");
     assert.equal(unchanged.baseline?.outcome, "unchanged");
     assert.equal(await readFile(baselinePath, "utf8"), savedBaseline);
-    assert.equal(results[3]?.exitCode, 0, results[3]?.stderr);
+    assert.equal(results[3]?.exitCode, 0, results[3]?.stderr ?? "");
     assert.match(results[3]?.stdout ?? "", /比较基线没有变化/u);
   },
 };

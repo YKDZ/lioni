@@ -82,7 +82,7 @@ export default defineConfig({
       "lioni.baseline.json",
     );
 
-    assert.equal(recorded?.exitCode, 0, recorded?.stderr);
+    assert.equal(recorded?.exitCode, 0, recorded?.stderr ?? "");
     assert.equal(recorded?.stderr, "");
     assert.partialDeepStrictEqual(JSON.parse(recorded?.stdout ?? ""), {
       schemaVersion: "2",
@@ -92,13 +92,13 @@ export default defineConfig({
     });
     const savedContents = await readFile(baselinePath, "utf8");
 
-    assert.equal(unchanged?.exitCode, 0, unchanged?.stderr);
+    assert.equal(unchanged?.exitCode, 0, unchanged?.stderr ?? "");
     assert.partialDeepStrictEqual(JSON.parse(unchanged?.stdout ?? ""), {
       kind: "data",
       variant: "recorded",
       data: { outcome: "unchanged", path: baselinePath },
     });
-    assert.equal(readable?.exitCode, 0, readable?.stderr);
+    assert.equal(readable?.exitCode, 0, readable?.stderr ?? "");
     assert.equal(readable?.stderr, "");
     assert.ok(readable?.stdout.includes(`比较基线没有变化：${baselinePath}`));
     assert.equal(incomplete?.exitCode, 1);

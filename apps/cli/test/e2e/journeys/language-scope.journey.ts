@@ -5,7 +5,7 @@ import path from "node:path";
 import type { CliJourney, CliJourneyResult } from "../journey.ts";
 
 function dataOf(result: CliJourneyResult | undefined) {
-  assert.equal(result?.exitCode, 0, result?.stderr);
+  assert.equal(result?.exitCode, 0, result?.stderr ?? "");
   assert.equal(result?.stderr, "");
   return JSON.parse(result?.stdout ?? "").data;
 }

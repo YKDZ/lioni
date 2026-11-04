@@ -34,7 +34,7 @@ type SdkEvidence = {
 };
 
 function checkIds(run: CapturedRun): readonly string[] {
-  assert.ok(run.result, run.error);
+  assert.ok(run.result, run.error ?? "");
   return run.result.checkScope.selectedIds;
 }
 
