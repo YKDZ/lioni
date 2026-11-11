@@ -1,11 +1,7 @@
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-export type TermsLoaderMode =
-  | "none"
-  | "failure"
-  | "contract-error"
-  | "reader-contract-error";
+export type TermsLoaderMode = "none" | "failure" | "reader-contract-error";
 
 let sharedRevision = "v1";
 let sharedReadFails = false;

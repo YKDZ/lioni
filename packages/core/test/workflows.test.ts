@@ -4,15 +4,16 @@ import { describe, it } from "node:test";
 import {
   analyzeQuality,
   createQualityException,
+  defineChecker,
   defineConfig,
   StandardSchemaContractError,
   writeTranslationRequests,
-  type QualityCheckInput,
   type JsonValue,
+  type QualityCheckOutcome,
   type QualityExceptionStore,
   type TranslationWriteRequest,
 } from "../src/index.ts";
-import { defineTestQualityCheck } from "./quality-check-fixture.ts";
+import { defineTestChecker } from "./quality-check-fixture.ts";
 import {
   jsonValueSchema,
   schemaFromExamples,
@@ -32,7 +33,6 @@ type Translation = {
 
 function diagnosedEditScenario() {
   const translation = { id: "save", text: "Enregistrer" };
-  let requestVersion = "v1";
   const config = defineConfig({
     source: {
       schema: sourceSchemaFromExamples<Unit>({ id: "save", source: "Save" }),
@@ -89,24 +89,31 @@ function diagnosedEditScenario() {
     },
     quality: {
       checks: [
-        defineTestQualityCheck({
+        defineChecker({
           id: "needs-review",
-          configuration: {},
-          loadDependencies: () => ({ requestVersion }),
-          check: ({ candidate }) => ({
+          version: "needs-review-v1",
+          inputSchema: schemaFromExamples({ sourceKey: "", language: "" }),
+          prepare: ({ candidate }) => ({
+            status: "ready",
+            input: {
+              sourceKey: candidate.sourceKey,
+              language: candidate.language,
+            },
+          }),
+          check: ({ sourceKey, language }): QualityCheckOutcome => ({
             status: "complete",
             diagnostics: [
               {
                 severity: "error",
                 object: {
                   kind: "translation-unit",
-                  key: candidate.sourceKey,
-                  language: candidate.language,
+                  key: sourceKey,
+                  language,
                 },
                 location: {
-                  language: candidate.language,
+                  language,
                   range: "fr.json",
-                  key: candidate.sourceKey,
+                  key: sourceKey,
                 },
                 message: "需要人工复核。",
                 evidence: [],
@@ -133,9 +140,6 @@ function diagnosedEditScenario() {
   return {
     candidate,
     config,
-    setRequestVersion: (value: string) => {
-      requestVersion = value;
-    },
     translation,
   };
 }
@@ -198,16 +202,20 @@ void describe("configured analysis workflow", () => {
       },
       quality: {
         checks: [
-          defineTestQualityCheck({
+          defineChecker({
             id: "candidate-observer",
-            configuration: {},
-            check(input) {
+            version: "candidate-observer-v1",
+            inputSchema: schemaFromExamples(null),
+            prepare(input) {
               observed.push({
                 candidate: input.candidate,
                 context: input.facts.translations.records.map(
                   ({ content }) => content,
                 ),
               });
+              return { status: "ready", input: null };
+            },
+            check() {
               return {
                 status: "complete",
                 diagnostics: [],
@@ -335,14 +343,13 @@ void describe("configured analysis workflow", () => {
       },
       quality: {
         checks: [
-          defineTestQualityCheck<
+          defineTestChecker<
             Unit,
             Translation,
             JsonValue,
             { readonly id: string }
           >({
             id: "must-not-run",
-            configuration: {},
             check() {
               invoked = true;
               return {
@@ -429,7 +436,13 @@ void describe("configured analysis workflow", () => {
   });
 
   void it("runs configured checks with the default request through the public API", async () => {
-    let observed: QualityCheckInput<Unit, Translation> | undefined;
+    let observed:
+      | {
+          readonly enabled: boolean;
+          readonly sourceKey: string;
+          readonly associationStatus: string;
+        }
+      | undefined;
     const config = defineConfig({
       source: {
         schema: sourceSchemaFromExamples<Unit>({ id: "save", source: "Save" }),
@@ -477,9 +490,22 @@ void describe("configured analysis workflow", () => {
       },
       quality: {
         checks: [
-          defineTestQualityCheck<Unit, Translation>({
+          defineChecker.withTypes<Unit, Translation>()({
             id: "translation-present",
-            configuration: { enabled: true },
+            version: "translation-present-v1",
+            inputSchema: schemaFromExamples({
+              enabled: true,
+              sourceKey: "",
+              associationStatus: "matched",
+            }),
+            prepare: ({ candidate, association }) => ({
+              status: "ready",
+              input: {
+                enabled: true,
+                sourceKey: candidate.sourceKey,
+                associationStatus: association.status,
+              },
+            }),
             check: (input) => {
               observed = input;
               return {
@@ -510,8 +536,11 @@ void describe("configured analysis workflow", () => {
       result.checks.map(({ checkId }) => checkId),
       ["translation-present"],
     );
-    assert.deepEqual(observed?.configuration, { enabled: true });
-    assert.equal(observed?.facts.associations[0]?.status, "matched");
+    assert.deepEqual(observed, {
+      enabled: true,
+      sourceKey: "save",
+      associationStatus: "matched",
+    });
   });
 
   void it("程序化调用在 QA 前构造候选并拒绝无效检查配置", async () => {

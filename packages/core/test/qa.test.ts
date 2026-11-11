@@ -1,648 +1,103 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { test } from "node:test";
 
 import {
   analyzeQuality,
   createQualityException,
+  defineChecker,
   defineConfig,
-  readFacts,
-  runQualityChecks,
-  StandardSchemaContractError,
-  type QualityCheckRequest,
+  type QualityCheckDefinition,
+  type QualityCheckOutcome,
+  type QualityExceptionStore,
+  type QualityObject,
 } from "../src/index.ts";
-import { defineTestQualityCheck } from "./quality-check-fixture.ts";
 import {
-  emptySourceSchema,
-  jsonValueSchema,
+  fixtureTranslationKey,
   schemaFromExamples,
   sourceSchemaFromExamples,
-  fixtureTranslationKey,
 } from "./source-schema.ts";
 
-async function factsForCandidates(keys: readonly string[]) {
-  const units = keys.map((source) => ({ source }));
-  const config = defineConfig({
+type Unit = { readonly source: string };
+type Translation = { readonly id: string; readonly text: string };
+type Checker = QualityCheckDefinition<
+  Unit,
+  Translation,
+  QualityObject,
+  string,
+  never
+>;
+
+const unit = { source: "Hello" };
+const translation = { id: "hello", text: "Bonjour" };
+const candidates = [{ sourceKey: "hello", language: "fr", content: "Bonjour" }];
+
+function configFor(
+  checks: readonly Checker[],
+  exceptionStore?: QualityExceptionStore,
+) {
+  return defineConfig({
     source: {
-      schema: sourceSchemaFromExamples(units[0] ?? { source: "unused" }),
+      schema: sourceSchemaFromExamples(unit),
       read: () => ({
         scopes: [
           {
             range: "messages.json",
-            enumeration: "complete" as const,
-            records: units.map((value) => ({
-              value,
-              bodyAvailability: "available" as const,
-            })),
+            enumeration: "complete",
+            records: [{ value: unit, bodyAvailability: "available" }],
           },
         ],
       }),
     },
-    keyOf: ({ source }) => source,
+    keyOf: () => "hello",
     translations: {
       languages: ["fr"],
-      keyOf: fixtureTranslationKey,
-      schema: schemaFromExamples({ id: "unused", text: "" }),
-      contentSchema: jsonValueSchema,
+      schema: schemaFromExamples(translation),
+      contentSchema: schemaFromExamples(""),
       contentOf: ({ text }) => text,
-      read: (_language, sourceUnits) => ({
+      keyOf: fixtureTranslationKey,
+      read: () => ({
         scopes: [
           {
-            range: "fr.json",
-            covers: sourceUnits.map(({ key }) => key),
-            enumeration: "complete" as const,
-            records: [],
+            range: "messages.fr.json",
+            covers: ["hello"],
+            enumeration: "complete",
+            records: [{ value: translation, bodyAvailability: "available" }],
           },
         ],
       }),
     },
+    quality: {
+      checks,
+      ...(exceptionStore === undefined ? {} : { exceptionStore }),
+    },
   });
-  return await readFacts(config);
 }
 
-void describe("quality checks", () => {
-  void it("rejects non-JSON dependencies before reporting a QA check failure", async () => {
-    const unit = { source: "Hello" };
-    const translation = { id: "message:hello", text: "Bonjour" };
-    let observedDependencies: unknown;
+const complete = {
+  status: "complete",
+  diagnostics: [],
+  issues: [],
+  coverage: {
+    selected: 1,
+    evaluated: 1,
+    notApplicable: 0,
+    incomplete: 0,
+    failed: 0,
+  },
+} satisfies QualityCheckOutcome;
 
-    function configFor(dependencies: unknown) {
-      return defineConfig({
-        source: {
-          schema: sourceSchemaFromExamples(unit),
-          read: () => ({
-            scopes: [
-              {
-                range: "messages.json",
-                enumeration: "complete" as const,
-                records: [
-                  { value: unit, bodyAvailability: "available" as const },
-                ],
-              },
-            ],
-          }),
-        },
-        keyOf: () => "message:hello",
-        translations: {
-          languages: ["fr"],
-          keyOf: fixtureTranslationKey,
-          schema: schemaFromExamples(translation),
-          contentSchema: jsonValueSchema,
-          contentOf: ({ text }) => text,
-          read: (_language, sourceUnits) => ({
-            scopes: [
-              {
-                range: "fr.json",
-                covers: sourceUnits.map(({ key }) => key),
-                enumeration: "complete" as const,
-                records: [
-                  {
-                    value: translation,
-                    bodyAvailability: "available" as const,
-                  },
-                ],
-              },
-            ],
-          }),
-        },
-        quality: {
-          checks: [
-            defineTestQualityCheck({
-              id: "dependency-observer",
-              configuration: {},
-              loadDependencies: () => dependencies,
-              check(input) {
-                observedDependencies = input.dependencies;
-                return {
-                  status: "complete",
-                  diagnostics: [],
-                  issues: [],
-                  coverage: {
-                    selected: 1,
-                    evaluated: 1,
-                    notApplicable: 0,
-                    incomplete: 0,
-                    failed: 0,
-                  },
-                };
-              },
-            }),
-          ],
-        },
-      });
-    }
-
-    await assert.rejects(
-      analyzeQuality(configFor(new Map([["policy", "strict"]]))),
-      (error: unknown) => {
-        assert.ok(error instanceof StandardSchemaContractError);
-        assert.equal(error.kind, "invalid-json");
-        assert.equal(
-          error.valueDescription,
-          "QA 检查项 dependency-observer 的检查资料",
-        );
-        return true;
-      },
-    );
-    assert.equal(observedDependencies, undefined);
-
-    const dependencies = { policy: { strict: true }, modes: ["short", "full"] };
-    const result = await analyzeQuality(configFor(dependencies));
-
-    assert.equal(result.status, "complete");
-    assert.equal(Object.hasOwn(result.checks[0] ?? {}, "dependencies"), false);
-    assert.notStrictEqual(observedDependencies, dependencies);
-    assert.deepEqual(observedDependencies, dependencies);
-    assert.equal(result.checks[0]?.issues.length, 0);
-  });
-
-  void it("runs selected checks against one facts snapshot and retains findings", async () => {
-    const unit = { source: "Hello {name}" };
-    const translation = { id: "message:save", text: "Bonjour" };
-    const facts = await readFacts(
-      defineConfig({
-        source: {
-          schema: sourceSchemaFromExamples(unit),
-          read: () => ({
-            scopes: [
-              {
-                range: "src/messages.ts",
-                enumeration: "complete",
-                records: [{ value: unit, bodyAvailability: "available" }],
-              },
-            ],
-          }),
-        },
-        keyOf: () => "message:save",
-        translations: {
-          languages: ["fr"],
-          keyOf: fixtureTranslationKey,
-          schema: schemaFromExamples(translation),
-          contentSchema: jsonValueSchema,
-          read: (_language, sourceUnits) => ({
-            scopes: [
-              {
-                range: "locales/fr.json",
-                covers: sourceUnits.map(({ key }) => key),
-                enumeration: "complete",
-                records: [
-                  { value: translation, bodyAvailability: "available" },
-                ],
-              },
-            ],
-          }),
-
-          contentOf: ({ text }) => ({ text }),
-        },
-      }),
-    );
-    const dependencies = { policy: { strict: true } };
-    const configuration = { missingPlaceholders: "error" };
-    const candidates = [
-      {
-        sourceKey: "message:save",
-        language: "fr",
-        content: { text: "Bonjour" },
-      },
-    ];
-    let observedVersion: string | undefined;
-    let observedDependencies: unknown;
-    let observedConfiguration: unknown;
-
-    const result = await runQualityChecks(facts, { candidates }, [
-      defineTestQualityCheck({
-        id: "placeholders",
-        configuration,
-        loadDependencies: () => dependencies,
-        check(input) {
-          observedVersion = input.facts.version;
-          observedDependencies = input.dependencies;
-          observedConfiguration = input.configuration;
-          return {
-            status: "complete" as const,
-            diagnostics: [
-              {
-                severity: "error" as const,
-                object: {
-                  kind: "translation-unit" as const,
-                  key: "message:save",
-                },
-                location: {
-                  language: "fr",
-                  range: "locales/fr.json",
-                  key: "message:save",
-                },
-                message: "Target is missing {name}.",
-                evidence: [
-                  {
-                    role: "source" as const,
-                    object: {
-                      kind: "translation-unit" as const,
-                      key: "message:save",
-                    },
-                    location: {
-                      language: null,
-                      range: "src/messages.ts",
-                      key: "message:save",
-                    },
-                    value: unit.source,
-                  },
-                  {
-                    role: "target" as const,
-                    object: {
-                      kind: "translation-unit" as const,
-                      key: "message:save",
-                    },
-                    location: {
-                      language: "fr",
-                      range: "locales/fr.json",
-                      key: "message:save",
-                    },
-                    value: translation.text,
-                  },
-                ],
-              },
-            ],
-            issues: [],
-            coverage: {
-              selected: 1,
-              evaluated: 1,
-              notApplicable: 0,
-              incomplete: 0,
-              failed: 0,
-            },
-          };
-        },
-      }),
-    ]);
-
-    assert.equal(observedVersion, facts.version);
-    assert.deepEqual(observedDependencies, dependencies);
-    assert.deepEqual(observedConfiguration, configuration);
-    assert.equal(result.version, facts.version);
-    assert.equal(result.status, "complete");
-    assert.deepEqual(result.candidates, candidates);
-    assert.deepEqual(result.diagnostics, [
-      {
-        checkId: "placeholders",
-        executionId: 0,
-        severity: "error",
-        handling: { status: "active" },
-        object: { kind: "translation-unit", key: "message:save" },
-        location: {
-          language: "fr",
-          range: "locales/fr.json",
-          key: "message:save",
-        },
-        message: "Target is missing {name}.",
-        evidence: [
-          {
-            role: "source",
-            object: { kind: "translation-unit", key: "message:save" },
-            location: {
-              language: null,
-              range: "src/messages.ts",
-              key: "message:save",
-            },
-            value: "Hello {name}",
-          },
-          {
-            role: "target",
-            object: { kind: "translation-unit", key: "message:save" },
-            location: {
-              language: "fr",
-              range: "locales/fr.json",
-              key: "message:save",
-            },
-            value: "Bonjour",
-          },
-        ],
-      },
-    ]);
-    assert.deepEqual(result.checks[0]?.coverage, {
-      selected: 1,
-      evaluated: 1,
-      notApplicable: 0,
-      incomplete: 0,
-      failed: 0,
-    });
-  });
-
-  void it("distinguishes no checks from an inapplicable check", async () => {
-    const facts = await readFacts(
-      defineConfig({
-        source: {
-          schema: emptySourceSchema,
-          read: () => ({ scopes: [] }),
-        },
-        keyOf: () => "unused",
-      }),
-    );
-    const request: QualityCheckRequest = {
-      candidates: [],
-    };
-
-    const notRun = await runQualityChecks(facts, request, []);
-    let called = false;
-    const noCandidateRun = await runQualityChecks(facts, request, [
-      defineTestQualityCheck({
-        id: "placeholders",
-        configuration: {},
-        check: () => {
-          called = true;
-          return {
-            status: "not-applicable",
-            diagnostics: [],
-            issues: [],
-            coverage: {
-              selected: 1,
-              evaluated: 0,
-              notApplicable: 1,
-              incomplete: 0,
-              failed: 0,
-            },
-          };
-        },
-      }),
-    ]);
-    const notApplicable = await runQualityChecks(
-      await factsForCandidates(["unused"]),
-      {
-        ...request,
-        candidates: [
-          { sourceKey: "unused", language: "fr", content: "Bonjour" },
-        ],
-      },
-      [
-        defineTestQualityCheck({
-          id: "placeholders",
-          configuration: {},
-          check: () => ({
-            status: "not-applicable",
-            diagnostics: [],
-            issues: [],
-            coverage: {
-              selected: 1,
-              evaluated: 0,
-              notApplicable: 1,
-              incomplete: 0,
-              failed: 0,
-            },
-          }),
-        }),
-      ],
-    );
-
-    assert.equal(notRun.status, "not-run");
-    assert.equal(noCandidateRun.status, "not-run");
-    assert.equal(called, false);
-    assert.equal(notApplicable.status, "not-applicable");
-    assert.deepEqual(noCandidateRun.candidates, request.candidates);
-  });
-
-  void it("rejects duplicate quality check identities", async () => {
-    const facts = await readFacts(
-      defineConfig({
-        source: {
-          schema: emptySourceSchema,
-          read: () => ({ scopes: [] }),
-        },
-        keyOf: () => "unused",
-      }),
-    );
-    const check = defineTestQualityCheck({
-      id: "same-check",
-      configuration: {},
-      check: () => ({
-        status: "complete",
-        diagnostics: [],
-        issues: [],
-        coverage: {
-          selected: 1,
-          evaluated: 1,
-          notApplicable: 0,
-          incomplete: 0,
-          failed: 0,
-        },
-      }),
-    });
-
-    await assert.rejects(
-      runQualityChecks(facts, { candidates: [] }, [check, check]),
-      { message: "QA 检查项 id same-check 重复。" },
-    );
-  });
-
-  void it("calls each configured checker once for each candidate", async () => {
-    const facts = await factsForCandidates(["A", "B"]);
-    const observed: string[] = [];
-    const result = await runQualityChecks(
-      facts,
-      {
-        candidates: [
-          { sourceKey: "A", language: "fr", content: "Premier" },
-          { sourceKey: "B", language: "fr", content: "Second" },
-        ],
-      },
-      [
-        defineTestQualityCheck({
-          id: "candidate-order",
-          configuration: {},
-          check({ candidate }) {
-            observed.push(candidate.sourceKey);
-            return {
-              status: "complete",
-              diagnostics: [],
-              issues: [],
-              coverage: {
-                selected: 1,
-                evaluated: 1,
-                notApplicable: 0,
-                incomplete: 0,
-                failed: 0,
-              },
-            };
-          },
-        }),
-      ],
-    );
-
-    assert.deepEqual(observed, ["A", "B"]);
-    assert.deepEqual(result.checks[0]?.coverage, {
-      selected: 2,
-      evaluated: 2,
-      notApplicable: 0,
-      incomplete: 0,
-      failed: 0,
-    });
-  });
-
-  void it("marks a thrown checker failed without losing the run binding", async () => {
-    const facts = await factsForCandidates(["external"]);
-    const dependencies = { sourceRevision: "revision-2" };
-    const result = await runQualityChecks(
-      facts,
-      {
-        candidates: [
-          { sourceKey: "external", language: "fr", content: "Bonjour" },
-        ],
-      },
-      [
-        defineTestQualityCheck({
-          id: "broken",
-          configuration: { enabled: true },
-          loadDependencies: () => dependencies,
-          check: () => {
-            throw new Error("checker crashed");
-          },
-        }),
-      ],
-    );
-
-    assert.equal(result.status, "failed");
-    assert.equal(result.version, facts.version);
-    assert.equal(Object.hasOwn(result.checks[0] ?? {}, "dependencies"), false);
-    assert.equal(result.checks[0]?.issues[0]?.message, "checker crashed");
-  });
-
-  void it("按完整绑定豁免对应执行的全部诊断并保留证据", async () => {
-    const facts = await factsForCandidates(["A", "B"]);
-    const makeFinding = (key: string) => ({
-      severity: "error" as const,
-      object: { kind: "translation-unit", key, language: "fr" },
-      location: { language: "fr", range: "locales/fr.json", key },
-      message: "Translation differs from its evidence.",
-      evidence: [
-        {
-          role: "target",
-          object: { kind: "translation-unit", key, language: "fr" },
-          location: { language: "fr", range: "locales/fr.json", key },
-          value: `value:${key}`,
-        },
-      ],
-    });
-    const request: QualityCheckRequest = {
-      candidates: [{ sourceKey: "A", language: "fr", content: "value:A" }],
-    };
-    const outcome = {
-      status: "complete" as const,
-      diagnostics: [makeFinding("A"), makeFinding("B")],
-      issues: [],
-      coverage: {
-        selected: 1,
-        evaluated: 1,
-        notApplicable: 0,
-        incomplete: 0,
-        failed: 0,
-      },
-    };
-    let checkerReceivedExceptions = true;
-
-    const checks = [
-      defineTestQualityCheck({
-        id: "example-rule",
-        configuration: {},
-        check: (input) => {
-          checkerReceivedExceptions = Object.hasOwn(input, "exceptions");
-          return outcome;
-        },
-      }),
-      defineTestQualityCheck({
-        id: "other-rule",
-        configuration: {},
-        check: () => ({ ...outcome, diagnostics: [makeFinding("A")] }),
-      }),
-    ];
-    const unexcepted = await runQualityChecks(facts, request, checks);
-    const execution = unexcepted.checks[0]?.executions[0];
-    assert.ok(execution);
-    const exception = createQualityException({
-      id: "allow-a",
-      reason: "宿主允许此消息使用不同表达。",
-      execution,
-    });
-    const result = await runQualityChecks(
-      facts,
-      { ...request, exceptions: [exception] },
-      checks,
-    );
-    const changedExceptionRequest = {
-      ...request,
-      exceptions: [
-        {
-          ...exception,
-          reason: "例外记录的理由已修改。",
-        },
-      ],
-    };
-    const changedExceptionResult = await runQualityChecks(
-      facts,
-      changedExceptionRequest,
-      checks,
-    );
-
-    assert.equal(result.status, "complete");
-    assert.equal(checkerReceivedExceptions, false);
-    assert.equal(
-      changedExceptionResult.checks[0]?.executions[0]?.inputFingerprint,
-      result.checks[0]?.executions[0]?.inputFingerprint,
-    );
-    assert.deepEqual(
-      result.diagnostics.map(({ checkId, object, handling }) => ({
-        checkId,
-        object,
-        handling,
-      })),
-      [
-        {
-          checkId: "example-rule",
-          object: { kind: "translation-unit", key: "A", language: "fr" },
-          handling: {
-            status: "excepted",
-            exceptionId: "allow-a",
-            reason: "宿主允许此消息使用不同表达。",
-          },
-        },
-        {
-          checkId: "example-rule",
-          object: { kind: "translation-unit", key: "B", language: "fr" },
-          handling: {
-            status: "excepted",
-            exceptionId: "allow-a",
-            reason: "宿主允许此消息使用不同表达。",
-          },
-        },
-        {
-          checkId: "other-rule",
-          object: { kind: "translation-unit", key: "A", language: "fr" },
-          handling: { status: "active" },
-        },
-      ],
-    );
-    assert.deepEqual(result.exceptionApplicability, [
-      {
-        exceptionId: "allow-a",
-        checkId: "example-rule",
-        sourceKey: "A",
-        language: "fr",
-        executionId: 0,
-        candidateIndex: 0,
-        status: "applicable",
-      },
-    ]);
-    assert.equal(result.diagnostics[0]?.evidence[0]?.value, "value:A");
-    assert.equal(result.checks[0]?.coverage.evaluated, 1);
-    assert.equal(result.version, facts.version);
-  });
-
-  void it("无诊断的 not-applicable 执行仍按可靠依据报告例外适用", async () => {
-    const facts = await factsForCandidates(["A"]);
-    const request: QualityCheckRequest = {
-      candidates: [{ sourceKey: "A", language: "fr", content: "value:A" }],
-    };
-    const check = defineTestQualityCheck({
-      id: "scope-specific-check",
-      configuration: {},
-      check: () => ({
+void test("按最终输入指纹为无诊断的 not-applicable 执行应用例外", async () => {
+  const checker = defineChecker.withTypes<Unit, Translation, string, never>()({
+    id: "scope-specific-check",
+    version: "scope-specific-v1",
+    inputSchema: schemaFromExamples(""),
+    prepare: ({ candidate }) => ({
+      status: "ready",
+      input: candidate.content,
+    }),
+    check(input) {
+      assert.equal(input, "Bonjour");
+      return {
         status: "not-applicable",
         diagnostics: [],
         issues: [],
@@ -653,34 +108,185 @@ void describe("quality checks", () => {
           incomplete: 0,
           failed: 0,
         },
-      }),
-    });
-    const report = await runQualityChecks(facts, request, [check]);
-    const execution = report.checks[0]?.executions[0];
-    assert.ok(execution?.inputFingerprint);
-    const exception = createQualityException({
-      id: "allow-scope-specific",
-      reason: "该检查结果不适用于此候选。",
-      execution,
-    });
-
-    const result = await runQualityChecks(
-      facts,
-      { ...request, exceptions: [exception] },
-      [check],
-    );
-
-    assert.deepEqual(result.diagnostics, []);
-    assert.deepEqual(result.exceptionApplicability, [
-      {
-        exceptionId: "allow-scope-specific",
-        checkId: "scope-specific-check",
-        sourceKey: "A",
-        language: "fr",
-        executionId: 0,
-        candidateIndex: 0,
-        status: "applicable",
-      },
-    ]);
+      };
+    },
   });
+  const first = await analyzeQuality(configFor([checker]), { candidates });
+  const execution = first.checks[0]?.executions[0];
+  assert.ok(execution?.inputFingerprint);
+  const exception = createQualityException({
+    id: "allow-scope-specific",
+    reason: "该检查结果不适用于此候选。",
+    execution,
+  });
+  const store: QualityExceptionStore = {
+    async load() {
+      return [exception];
+    },
+    async upsert() {},
+  };
+
+  const result = await analyzeQuality(configFor([checker], store), {
+    candidates,
+  });
+
+  assert.deepEqual(result.diagnostics, []);
+  assert.deepEqual(result.exceptionApplicability, [
+    {
+      exceptionId: "allow-scope-specific",
+      checkId: "scope-specific-check",
+      sourceKey: "hello",
+      language: "fr",
+      executionId: 0,
+      candidateIndex: 0,
+      status: "applicable",
+    },
+  ]);
+});
+
+void test("区分未配置检查、空候选与不适用结果，并拒绝重复 ID", async () => {
+  let checkCalls = 0;
+  const checker = defineChecker.withTypes<Unit, Translation, string, never>()({
+    id: "scope-check",
+    version: "scope-check-v1",
+    inputSchema: schemaFromExamples(""),
+    prepare: ({ candidate }) => ({
+      status: "ready",
+      input: candidate.content,
+    }),
+    check() {
+      checkCalls += 1;
+      return {
+        status: "not-applicable",
+        diagnostics: [],
+        issues: [],
+        coverage: {
+          selected: 1,
+          evaluated: 0,
+          notApplicable: 1,
+          incomplete: 0,
+          failed: 0,
+        },
+      };
+    },
+  });
+
+  const noChecks = await analyzeQuality(configFor([]));
+  const noCandidates = await analyzeQuality(configFor([checker]), {
+    candidates: [],
+  });
+  const notApplicable = await analyzeQuality(configFor([checker]), {
+    candidates,
+  });
+
+  assert.deepEqual(noChecks.checks, []);
+  assert.equal(noChecks.checkScope.configuredCount, 0);
+  assert.equal(noCandidates.checks[0]?.executions.length, 0);
+  assert.equal(checkCalls, 1);
+  assert.equal(notApplicable.checks[0]?.status, "not-applicable");
+  await assert.rejects(analyzeQuality(configFor([checker, checker])), {
+    message: "QA 检查项 id scope-check 重复。",
+  });
+});
+
+void test("例外豁免匹配执行的全部诊断并保留证据", async () => {
+  const makeDiagnostic = (value: string) => ({
+    severity: "error" as const,
+    object: { kind: "translation-unit", key: "hello", language: "fr" },
+    location: { language: "fr", range: "messages.fr.json", key: "hello" },
+    message: `候选需要复核：${value}`,
+    evidence: [
+      {
+        role: "input" as const,
+        object: { kind: "translation-unit", key: "hello", language: "fr" },
+        location: { language: "fr", range: "messages.fr.json", key: "hello" },
+        value,
+      },
+    ],
+  });
+  const sourceDiagnostic = makeDiagnostic("source marker");
+  const targetDiagnostic = makeDiagnostic("target marker");
+  const review = defineChecker.withTypes<Unit, Translation, string, never>()({
+    id: "example-rule",
+    version: "example-rule-v1",
+    inputSchema: schemaFromExamples(""),
+    prepare: ({ candidate }) => ({
+      status: "ready",
+      input: candidate.content,
+    }),
+    check(): QualityCheckOutcome {
+      return { ...complete, diagnostics: [sourceDiagnostic, targetDiagnostic] };
+    },
+  });
+  const independent = defineChecker.withTypes<
+    Unit,
+    Translation,
+    string,
+    never
+  >()({
+    id: "other-rule",
+    version: "other-rule-v1",
+    inputSchema: schemaFromExamples(""),
+    prepare: ({ candidate }) => ({
+      status: "ready",
+      input: candidate.content,
+    }),
+    check(): QualityCheckOutcome {
+      return {
+        ...complete,
+        diagnostics: [{ ...sourceDiagnostic, message: "独立检查仍需复核。" }],
+      };
+    },
+  });
+  const checks: readonly Checker[] = [review, independent];
+  const first = await analyzeQuality(configFor(checks), { candidates });
+  const execution = first.checks[0]?.executions[0];
+  assert.ok(execution?.inputFingerprint);
+  const exception = createQualityException({
+    id: "allow-reviewed-copy",
+    reason: "该候选已经由维护者确认。",
+    execution,
+  });
+  const store: QualityExceptionStore = {
+    async load() {
+      return [exception];
+    },
+    async upsert() {},
+  };
+
+  const result = await analyzeQuality(configFor(checks, store), { candidates });
+
+  assert.deepEqual(
+    result.diagnostics.map(({ checkId, handling, evidence }) => ({
+      checkId,
+      handling,
+      evidence: evidence.map(({ value }) => value),
+    })),
+    [
+      {
+        checkId: "example-rule",
+        handling: {
+          status: "excepted",
+          exceptionId: "allow-reviewed-copy",
+          reason: "该候选已经由维护者确认。",
+        },
+        evidence: ["source marker"],
+      },
+      {
+        checkId: "example-rule",
+        handling: {
+          status: "excepted",
+          exceptionId: "allow-reviewed-copy",
+          reason: "该候选已经由维护者确认。",
+        },
+        evidence: ["target marker"],
+      },
+      {
+        checkId: "other-rule",
+        handling: { status: "active" },
+        evidence: ["source marker"],
+      },
+    ],
+  );
+  assert.equal(result.exceptionApplicability[0]?.status, "applicable");
 });

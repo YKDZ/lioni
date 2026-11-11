@@ -191,10 +191,6 @@ const sharedLoaderFailure = await capture(() =>
   analyzeQuality(config, { memo }),
 );
 setSharedReadFails(false);
-setTermsLoaderMode("contract-error");
-const loaderContractError = await capture(() =>
-  analyzeQuality(config, { memo }),
-);
 setTermsLoaderMode("reader-contract-error");
 const readerContractError = await capture(() =>
   analyzeQuality(config, { memo }),
@@ -224,7 +220,6 @@ const evidence = {
   changedDependency,
   isolatedLoaderFailure,
   sharedLoaderFailure,
-  loaderContractError,
   readerContractError,
 };
 

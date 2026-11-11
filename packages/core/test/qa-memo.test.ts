@@ -10,13 +10,12 @@ import {
 import {
   analyzeQuality,
   createQualityProfiler,
+  defineChecker,
   defineConfig,
-  QualityCheckBindingError,
+  QualityCheckerContractError,
   QualityDataReaderContractError,
-  StandardSchemaContractError,
-  type QualityDataReader,
 } from "../src/index.ts";
-import { defineTestQualityCheck } from "./quality-check-fixture.ts";
+import { defineTestChecker } from "./quality-check-fixture.ts";
 import {
   schemaFromExamples,
   sourceSchemaFromExamples,
@@ -72,20 +71,22 @@ function configFor(compute: (memo: MemoScope) => void) {
     },
     quality: {
       checks: ["first", "second"].map((id) =>
-        defineTestQualityCheck<typeof source, typeof translation, string>({
+        defineChecker.withTypes<typeof source, typeof translation, string>()({
           id,
-          configuration: {},
-          check: ({ memo }) => {
+          version: "memo-prepare-v1",
+          inputSchema: schemaFromExamples(null),
+          prepare: ({ memo }) => {
             compute(memo);
-            return complete();
+            return { status: "ready", input: null };
           },
+          check: complete,
         }),
       ),
     },
   });
 }
 
-void test("配置不执行计算，同次 QA 共享范围，运行结束关闭且下一次重新计算", async () => {
+void test("声明不执行计算，同次 QA 共享范围，运行结束关闭且下一次重新计算", async () => {
   let calls = 0;
   const observed: MemoScope[] = [];
   const operation = (text: string) => ({ text, ordinal: ++calls });
@@ -109,18 +110,19 @@ void test("配置不执行计算，同次 QA 共享范围，运行结束关闭�
 
 void test("同次检查资料可显式共享，借入长期 memo 也会在下次运行刷新", async () => {
   let reads = 0;
-  const observed: unknown[] = [];
+  const observed: { readonly revision: number }[] = [];
   const memo = createMemoScope();
   const loadPolicy = () => ({ revision: ++reads });
   const base = configFor(() => {});
   const checks = ["first", "second"].map((id) =>
-    defineTestQualityCheck({
+    defineChecker({
       id,
-      configuration: {},
-      loadDependencies: ({ qualityData }: { qualityData: QualityDataReader }) =>
-        qualityData.read(loadPolicy),
+      version: "shared-policy-v1",
+      inputSchema: schemaFromExamples({ revision: 0 }),
+      load: ({ qualityData }) => qualityData.read(loadPolicy),
+      prepare: ({ loaded }) => ({ status: "ready", input: loaded }),
       check(input) {
-        observed.push(input.dependencies);
+        observed.push(input);
         return complete();
       },
     }),
@@ -128,9 +130,10 @@ void test("同次检查资料可显式共享，借入长期 memo 也会在下次
   const config = { ...base, quality: { checks } };
 
   try {
-    await analyzeQuality(config, { memo });
+    const first = await analyzeQuality(config, { memo });
     assert.equal(reads, 1);
     assert.deepEqual(observed, [{ revision: 1 }, { revision: 1 }]);
+    assert.equal(JSON.stringify(first).includes('"revision":1'), false);
 
     await analyzeQuality(config, { memo });
     assert.equal(reads, 2);
@@ -154,7 +157,12 @@ void test("共享读取资料可嵌入各项输入并复用同一项纯计算", 
   let compiles = 0;
   const originals: SharedTerms[] = [];
   const compiledInputs: SharedTerms[] = [];
-  const checkerInputs: SharedTerms[] = [];
+  const loadedTerms: SharedTerms[] = [];
+  const checkerInputs: {
+    readonly language: string;
+    readonly terms: SharedTerms;
+    readonly compiled: object;
+  }[] = [];
   const checkerDependencies: {
     readonly language: string;
     readonly terms: SharedTerms;
@@ -171,22 +179,40 @@ void test("共享读取资料可嵌入各项输入并复用同一项纯计算", 
   };
   const base = configFor(() => {});
   const checks = ["first", "second"].map((id) =>
-    defineTestQualityCheck({
+    defineChecker({
       id,
-      configuration: {},
-      loadDependencies: async ({ qualityData }) => ({
+      version: "shared-terms-v1",
+      inputSchema: schemaFromExamples<{
+        readonly language: string;
+        readonly terms: SharedTerms;
+        readonly compiled: object;
+      }>({
+        language: "zh-CN",
+        terms: { revision: 0, entries: [{ text: "" }] },
+        compiled: {},
+      }),
+      load: async ({ qualityData }) => ({
         language: "zh-CN",
         terms: await qualityData.read(loadTerms),
       }),
-      check({ dependencies, memo }) {
-        const preparedDependencies = dependencies as {
-          readonly language: string;
-          readonly terms: SharedTerms;
+      prepare({ loaded, memo }) {
+        loadedTerms.push(loaded.terms);
+        const compiled = memo.memo(compile)(loaded.terms);
+        return {
+          status: "ready",
+          input: {
+            language: loaded.language,
+            terms: loaded.terms,
+            compiled,
+          },
         };
-        const terms = preparedDependencies.terms;
-        checkerDependencies.push(preparedDependencies);
-        checkerInputs.push(terms);
-        memo.memo(compile)(terms);
+      },
+      check(input) {
+        checkerDependencies.push({
+          language: input.language,
+          terms: input.terms,
+        });
+        checkerInputs.push(input);
         return complete();
       },
     }),
@@ -200,19 +226,16 @@ void test("共享读取资料可嵌入各项输入并复用同一项纯计算", 
   const fixedTerms = compiledInputs[0];
   assert.ok(fixedTerms);
   assert.notStrictEqual(fixedTerms, originals[0]);
-  assert.notStrictEqual(fixedTerms.entries, originals[0]?.entries);
-  assert.notStrictEqual(fixedTerms.entries[0], originals[0]?.entries[0]);
-  assert.strictEqual(fixedTerms, checkerInputs[0]);
-  assert.strictEqual(fixedTerms, checkerInputs[1]);
+  assert.strictEqual(loadedTerms[0], loadedTerms[1]);
+  assert.notStrictEqual(loadedTerms[0], originals[0]);
+  assert.notStrictEqual(checkerInputs[0]?.terms, fixedTerms);
+  assert.deepEqual(checkerInputs[0]?.terms, fixedTerms);
+  assert.deepEqual(checkerInputs[1]?.terms, fixedTerms);
   assert.equal(checkerDependencies[0]?.language, "zh-CN");
   assert.notStrictEqual(checkerDependencies[0], checkerDependencies[1]);
-  assert.strictEqual(
-    checkerDependencies[0]?.terms,
-    checkerDependencies[1]?.terms,
-  );
-  assert.ok(Object.isFrozen(fixedTerms));
-  assert.ok(Object.isFrozen(fixedTerms.entries));
-  assert.ok(Object.isFrozen(fixedTerms.entries[0]));
+  assert.ok(Object.isFrozen(checkerInputs[0]?.terms));
+  assert.ok(Object.isFrozen(checkerInputs[0]?.terms.entries));
+  assert.ok(Object.isFrozen(checkerInputs[0]?.terms.entries[0]));
 
   await analyzeQuality(config);
 
@@ -220,24 +243,26 @@ void test("共享读取资料可嵌入各项输入并复用同一项纯计算", 
   assert.equal(reads, 2);
   assert.equal(compiles, 2);
   assert.ok(refreshedTerms);
-  assert.notStrictEqual(refreshedTerms, fixedTerms);
-  assert.strictEqual(refreshedTerms, checkerInputs[2]);
-  assert.strictEqual(refreshedTerms, checkerInputs[3]);
+  assert.notStrictEqual(loadedTerms[2], loadedTerms[0]);
+  assert.strictEqual(loadedTerms[2], loadedTerms[3]);
+  assert.deepEqual(checkerInputs[2]?.terms, loadedTerms[2]);
+  assert.deepEqual(checkerInputs[3]?.terms, loadedTerms[3]);
 });
 
-void test("默认指纹只纳入当前检查项的动态资料", async () => {
+void test("相同最终输入保持指纹，动态资料进入输入后会改变指纹", async () => {
   let revision = 1;
   const base = configFor(() => {});
   const checks = [
-    defineTestQualityCheck({
+    defineTestChecker({
       id: "stable-input",
-      configuration: {},
       check: complete,
     }),
-    defineTestQualityCheck({
+    defineChecker({
       id: "changing-input",
-      configuration: {},
-      loadDependencies: () => ({ revision }),
+      version: "changing-input-v1",
+      inputSchema: schemaFromExamples({ revision: 0 }),
+      load: () => ({ revision }),
+      prepare: ({ loaded }) => ({ status: "ready", input: loaded }),
       check: complete,
     }),
   ];
@@ -271,30 +296,35 @@ void test("共享资料失败只读取一次并隔离到相关检查，独立检
     quality: {
       checks: [
         ...["first", "second"].map((id) =>
-          defineTestQualityCheck({
+          defineChecker({
             id,
-            configuration: {},
-            loadDependencies: ({ qualityData }) =>
-              qualityData.read(loadShared, "policy"),
+            version: "shared-failure-v1",
+            inputSchema: schemaFromExamples(null),
+            load: ({ qualityData }) => qualityData.read(loadShared, "policy"),
+            prepare: () => assert.fail("资料失败后不得准备候选"),
             check() {
               throw new Error("资料失败后不得执行规则");
             },
           }),
         ),
-        defineTestQualityCheck({
+        defineChecker({
           id: "ordinary-type-error",
-          configuration: {},
-          loadDependencies() {
+          version: "ordinary-type-error-v1",
+          inputSchema: schemaFromExamples(null),
+          load() {
             throw new TypeError("普通宿主读取失败");
           },
+          prepare: () => assert.fail("读取失败后不得准备候选"),
           check() {
             throw new Error("读取失败后不得执行规则");
           },
         }),
-        defineTestQualityCheck({
+        defineChecker({
           id: "independent",
-          configuration: {},
-          loadDependencies: () => ({ available: true }),
+          version: "independent-v1",
+          inputSchema: schemaFromExamples({ available: true }),
+          load: () => ({ available: true }),
+          prepare: ({ loaded }) => ({ status: "ready", input: loaded }),
           check() {
             independentRuns += 1;
             return complete();
@@ -320,25 +350,21 @@ void test("共享资料失败只读取一次并隔离到相关检查，独立检
     ],
   );
   assert.equal(result.checks[0]?.issues[0]?.message, sharedFailure.message);
-  assert.ok(
-    result.checks.every((check) => !Object.hasOwn(check, "dependencies")),
-  );
   const profile = profiler.report();
   for (const check of profile.checks.slice(0, 3)) {
-    assert.equal(
-      check.timings.find(({ stage }) => stage === "dependencies")?.calls,
-      1,
-    );
+    assert.equal(check.timings.find(({ stage }) => stage === "load")?.calls, 1);
   }
 });
 
 void test("无效读取函数作为读取器契约错误中止 QA", async () => {
   const base = configFor(() => {});
   let checkRuns = 0;
-  const badCheck = defineTestQualityCheck({
+  const badCheck = defineChecker({
     id: "invalid-reader",
-    configuration: {},
-    loadDependencies: ({ qualityData }) => qualityData.read(undefined as never),
+    version: "invalid-reader-v1",
+    inputSchema: schemaFromExamples(null),
+    load: ({ qualityData }) => qualityData.read(undefined as never),
+    prepare: () => assert.fail("无效读取器不能进入准备阶段"),
     check() {
       checkRuns += 1;
       return complete();
@@ -356,31 +382,6 @@ void test("无效读取函数作为读取器契约错误中止 QA", async () => 
   assert.equal(checkRuns, 0);
 });
 
-void test("共享资料嵌入 loader 自有非 JSON 值时仍按契约错误中止", async () => {
-  const base = configFor(() => {});
-  const loadTerms = () => ({ entries: [{ text: "Save" }] });
-  const check = defineTestQualityCheck({
-    id: "invalid-shared-output",
-    configuration: {},
-    loadDependencies: async ({ qualityData }) => ({
-      terms: await qualityData.read(loadTerms),
-      unsupported: new Map(),
-    }),
-    check: complete,
-  });
-  const config = { ...base, quality: { checks: [check] } };
-
-  await assert.rejects(analyzeQuality(config), (error: unknown) => {
-    assert.ok(error instanceof StandardSchemaContractError);
-    assert.equal(error.kind, "invalid-json");
-    assert.equal(
-      error.valueDescription,
-      "QA 检查项 invalid-shared-output 的检查资料.unsupported",
-    );
-    return true;
-  });
-});
-
 void test("直接配置检查器并按运行读取资料，筛选不裁剪事实且空选择保持为空", async () => {
   const source = { id: "save", source: "Save" };
   const secondSource = { id: "cancel", source: "Cancel" };
@@ -391,14 +392,18 @@ void test("直接配置检查器并按运行读取资料，筛选不裁剪事实
   const observed: unknown[] = [];
   const observedContexts: unknown[] = [];
   const dependencySourceKeys: string[][] = [];
-  const checker = defineTestQualityCheck<
+  const checker = defineChecker.withTypes<
     typeof source,
     typeof translation,
     string
-  >({
+  >()({
     id: "candidate-observer",
-    configuration: {},
-    async loadDependencies({ facts, memo }) {
+    version: "candidate-observer-v1",
+    inputSchema: schemaFromExamples({
+      content: "",
+      run: 0,
+    }),
+    async load({ facts, memo }) {
       dependencyReads += 1;
       assert.equal(sourceReads, dependencyReads);
       dependencySourceKeys.push(facts.source.units.map(({ key }) => key));
@@ -406,14 +411,21 @@ void test("直接配置检查器并按运行读取资料，筛选不裁剪事实
       memo.memo(() => "loaded")();
       return { run: dependencyReads };
     },
-    check: ({ candidate, facts, relationships }) => {
-      observed.push(candidate.content);
+    prepare: ({ candidate, facts, relationships, loaded }) => {
       observedContexts.push({
         translationRecords: facts.translations.records.map(
           ({ content }) => content,
         ),
         relationships,
       });
+      return {
+        status: "ready",
+        input: { content: candidate.content, run: loaded.run },
+      };
+    },
+    check: ({ content, run }) => {
+      assert.ok(run >= 1);
+      observed.push(content);
       return complete();
     },
   });
@@ -483,7 +495,7 @@ void test("直接配置检查器并按运行读取资料，筛选不裁剪事实
     { sourceKey: "save", language: "zh-CN", content: "保存" },
     { sourceKey: "cancel", language: "zh-CN", content: "取消" },
   ]);
-  assert.equal(Object.hasOwn(first.checks[0] ?? {}, "dependencies"), false);
+  assert.equal(JSON.stringify(first).includes('"run":1'), false);
 
   const second = await analyzeQuality(config, {
     candidates: [
@@ -496,7 +508,7 @@ void test("直接配置检查器并按运行读取资料，筛选不裁剪事实
   assert.deepEqual(second.candidates, [
     { sourceKey: "cancel", language: "zh-CN", content: "取消候选 B" },
   ]);
-  assert.equal(Object.hasOwn(second.checks[0] ?? {}, "dependencies"), false);
+  assert.equal(JSON.stringify(second).includes('"run":2'), false);
   assert.deepEqual(
     second.factCoverage.associations.map(
       ({ candidateSelected }) => candidateSelected,
@@ -579,24 +591,24 @@ void test("显式候选沿用正式 QA 共享范围并在返回后关闭自有�
 void test("检查失败和绑定异常均释放自有范围，借用范围仍归宿主管理", async () => {
   for (const reason of [
     new Error("分析失败"),
-    new QualityCheckBindingError("first", "projection", new Error("投影失败")),
+    new QualityCheckerContractError("first", "prepare", "准备时发生契约错误。"),
   ]) {
     let observed: MemoScope | undefined;
     const config = configFor((memo) => {
       observed = memo;
       throw reason;
     });
-    if (reason instanceof QualityCheckBindingError)
+    if (reason instanceof QualityCheckerContractError)
       await assert.rejects(analyzeQuality(config), (error) => error === reason);
     else assert.equal((await analyzeQuality(config)).status, "failed");
     assert.ok(observed);
     assert.throws(() => observed!.memo(() => 1), MemoScopeClosedError);
   }
   const memo = createMemoScope();
-  const reason = new QualityCheckBindingError(
+  const reason = new QualityCheckerContractError(
     "first",
-    "projection",
-    new Error("投影失败"),
+    "prepare",
+    "准备时发生契约错误。",
   );
   await assert.rejects(
     analyzeQuality(

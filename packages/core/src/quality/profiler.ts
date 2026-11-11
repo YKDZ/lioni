@@ -10,7 +10,7 @@ export type QualityProfileStage =
   | "configuration"
   | "exceptions"
   | "facts"
-  | "dependencies"
+  | "load"
   | "candidates"
   | "checks"
   | "cleanup"

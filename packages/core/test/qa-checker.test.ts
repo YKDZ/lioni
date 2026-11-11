@@ -154,10 +154,16 @@ void describe("三阶段自定义检查", () => {
             ["a", value],
             ["b", value * 10],
           ]);
-          return (key: string) => index.get(key) ?? 0;
+          return {
+            marker: "runtime-only-checker-context",
+            lookup: (key: string) => index.get(key) ?? 0,
+          };
         },
         prepare({ candidate, loaded }) {
-          return { status: "ready", input: loaded(candidate.sourceKey) };
+          return {
+            status: "ready",
+            input: loaded.lookup(candidate.sourceKey),
+          };
         },
         check(input) {
           evaluated.push(input);
@@ -180,10 +186,10 @@ void describe("三阶段自定义检查", () => {
     assert.equal(reads, 1);
     const roundTrip = JSON.parse(JSON.stringify(first)) as typeof first;
     assert.deepEqual(roundTrip, first);
-    for (const result of first.checks) {
-      assert.equal(Object.hasOwn(result, "configuration"), false);
-      assert.equal(Object.hasOwn(result, "dependencies"), false);
-    }
+    assert.equal(
+      JSON.stringify(first).includes("runtime-only-checker-context"),
+      false,
+    );
 
     await analyzeQuality(qa, options);
     assert.deepEqual(loads, ["first", "second", "first", "second"]);

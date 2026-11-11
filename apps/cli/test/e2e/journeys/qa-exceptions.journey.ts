@@ -239,7 +239,6 @@ export default defineConfig({
       "utf8",
     );
     assert.match(exceptionFile, /^format: lioni\.qa-exceptions\/v2$/mu);
-    assert.doesNotMatch(exceptionFile, /configurationFingerprint/u);
   },
 };
 

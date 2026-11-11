@@ -3,13 +3,13 @@ import { describe, it } from "node:test";
 
 import {
   analyzeQuality,
+  defineChecker,
   defineConfig,
   readComparisonSnapshot,
   readFacts,
   type FrameworkConfig,
   type QualityConfiguration,
 } from "../src/index.ts";
-import { defineTestQualityCheck } from "./quality-check-fixture.ts";
 import {
   fixtureTranslationKey,
   schemaFromExamples,
@@ -139,17 +139,24 @@ void describe("本次执行的语言范围", () => {
     const checkedLanguages: string[] = [];
     const { config, reads } = fixture({
       checks: [
-        defineTestQualityCheck<Unit, Translation, string>({
+        defineChecker.withTypes<Unit, Translation, string>()({
           id: "language-observer",
-          configuration: {},
-          loadDependencies: ({ facts }) => {
+          version: "language-observer-v1",
+          inputSchema: schemaFromExamples({ language: "" }),
+          load: ({ facts }) => {
             preparedLanguages.push(
               facts.translations.reads.map(({ language }) => language),
             );
             return {};
           },
-          check({ candidate }) {
-            checkedLanguages.push(candidate.language);
+          prepare({ candidate }) {
+            return {
+              status: "ready",
+              input: { language: candidate.language },
+            };
+          },
+          check({ language }) {
+            checkedLanguages.push(language);
             return {
               status: "complete",
               diagnostics: [],

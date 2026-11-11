@@ -10,9 +10,8 @@ import { fileURLToPath } from "node:url";
 import {
   analyzeQuality,
   createQualityProfiler,
+  defineChecker,
   defineConfig,
-  defineQualityCheck,
-  type JsonValue,
   type QualityCheckOutcome,
   type QualityCheckResultCache,
   type QualityObject,
@@ -43,7 +42,28 @@ type Workload = {
 };
 
 type JsonPayload = {
-  readonly records: readonly { readonly key: string; readonly value: string }[];
+  readonly records: { readonly key: string; readonly value: string }[];
+};
+type CheckerInput = {
+  readonly candidate: {
+    readonly sourceKey: string;
+    readonly language: string;
+    readonly content: string;
+  };
+  readonly payload: {
+    readonly records: readonly {
+      readonly key: string;
+      readonly value: string;
+    }[];
+  };
+  readonly evidencePayload?:
+    | {
+        readonly records: readonly {
+          readonly key: string;
+          readonly value: string;
+        }[];
+      }
+    | undefined;
 };
 type CacheValue = NonNullable<
   Awaited<ReturnType<QualityCheckResultCache["get"]>>
@@ -88,8 +108,19 @@ const payloadRecordValue = "x".repeat(64);
 const unitSchema = z.object({ source: z.string() });
 const translationSchema = z.object({ id: z.string() });
 const contentSchema = z.string();
-const configurationSchema = z.object({}).strict();
 type Unit = z.output<typeof unitSchema>;
+const payloadSchema = z.object({
+  records: z.array(z.object({ key: z.string(), value: z.string() })),
+});
+const checkerInputSchema = z.object({
+  candidate: z.object({
+    sourceKey: z.string(),
+    language: z.string(),
+    content: z.string(),
+  }),
+  payload: payloadSchema,
+  evidencePayload: payloadSchema.optional(),
+});
 
 function createPayload(targetBytes: number, prefix: string): JsonPayload {
   const count = Math.max(1, Math.ceil(targetBytes / 88));
@@ -183,67 +214,96 @@ function createConfig(
   ruleExecutions: { count: number },
 ) {
   const readDependencyPayload = () => dependencyPayload;
-  const checks = Array.from({ length: workload.checkCount }, (_, index) =>
-    defineQualityCheck<
-      Unit,
-      unknown,
-      typeof configurationSchema,
-      QualityObject,
-      string,
-      never
-    >({
-      id: `artifact-cost-check-${index + 1}`,
-      version: "artifact-cost-v1",
-      configurationSchema,
-      configuration: {},
-      loadDependencies: ({ qualityData }) =>
-        qualityData.read(readDependencyPayload),
-      fingerprintInput: ({ candidate, dependencies }) => ({
-        candidate,
-        payload:
-          workload.family === "shared-dependency"
-            ? (dependencies as JsonPayload as JsonValue)
-            : (basisPayload as JsonValue),
-      }),
-      check: ({ candidate, dependencies }) => {
-        ruleExecutions.count++;
-        assert.equal(
-          (dependencies as JsonPayload).records.length,
-          dependencyPayload.records.length,
-        );
-        if (evidencePayload === undefined) return emptyOutcome();
+  const check = (input: CheckerInput): QualityCheckOutcome => {
+    ruleExecutions.count++;
+    assert.ok(input.payload.records.length > 0);
+    if (input.evidencePayload === undefined) return emptyOutcome();
 
-        const object = {
-          kind: "translation-unit",
-          key: candidate.sourceKey,
-          language: candidate.language,
-        };
-        const location = { language: candidate.language, range: "memory" };
-        return {
-          status: "complete",
-          diagnostics: [
+    const object = {
+      kind: "translation-unit",
+      key: input.candidate.sourceKey,
+      language: input.candidate.language,
+    };
+    const location = { language: input.candidate.language, range: "memory" };
+    return {
+      status: "complete",
+      diagnostics: [
+        {
+          severity: "warning",
+          object,
+          location,
+          message: "固定诊断依据负载",
+          evidence: [
             {
-              severity: "warning",
+              role: "input",
               object,
               location,
-              message: "固定诊断依据负载",
-              evidence: [
-                { role: "input", object, location, value: evidencePayload },
-              ],
+              value: input.evidencePayload,
             },
           ],
-          issues: [],
-          coverage: {
-            selected: 1,
-            evaluated: 1,
-            notApplicable: 0,
-            incomplete: 0,
-            failed: 0,
-          },
-        };
+        },
+      ],
+      issues: [],
+      coverage: {
+        selected: 1,
+        evaluated: 1,
+        notApplicable: 0,
+        incomplete: 0,
+        failed: 0,
       },
-    }),
-  );
+    };
+  };
+  const checks = Array.from({ length: workload.checkCount }, (_, index) => {
+    const id = "artifact-cost-check-" + (index + 1);
+    const common = {
+      id,
+      version: "artifact-cost-v1",
+      inputSchema: checkerInputSchema,
+      check,
+    };
+    if (workload.family === "shared-dependency")
+      return defineChecker.withTypes<Unit, unknown, string, never>()<
+        typeof checkerInputSchema,
+        QualityObject,
+        string,
+        JsonPayload
+      >({
+        ...common,
+        load: ({ qualityData }) => qualityData.read(readDependencyPayload),
+        prepare: ({ candidate, loaded }) => ({
+          status: "ready",
+          input: {
+            candidate: {
+              sourceKey: candidate.sourceKey,
+              language: candidate.language,
+              content: candidate.content,
+            },
+            payload: loaded,
+            ...(evidencePayload === undefined ? {} : { evidencePayload }),
+          },
+        }),
+      });
+    return defineChecker.withTypes<Unit, unknown, string, never>()<
+      typeof checkerInputSchema,
+      QualityObject,
+      string,
+      undefined
+    >({
+      ...common,
+      prepare: ({ candidate }) => ({
+        status: "ready",
+        input: {
+          candidate: {
+            sourceKey: candidate.sourceKey,
+            language: candidate.language,
+            content: candidate.content,
+          },
+          payload: basisPayload,
+          ...(evidencePayload === undefined ? {} : { evidencePayload }),
+        },
+      }),
+    });
+  });
 
   return defineConfig({
     source: {
@@ -253,16 +313,20 @@ function createConfig(
           {
             range: "memory",
             enumeration: "complete",
-            records: [
-              { value: { source: "in-memory" }, bodyAvailability: "available" },
-            ],
+            records: Array.from(
+              { length: workload.candidateCount },
+              (_, index) => ({
+                value: { source: `candidate-${index}` },
+                bodyAvailability: "available" as const,
+              }),
+            ),
           },
         ],
       }),
     },
-    keyOf: () => "memory-fact",
+    keyOf: ({ source }) => source,
     translations: {
-      languages: [],
+      languages: ["en"],
       schema: translationSchema,
       contentSchema,
       contentOf: () => "unused",
@@ -296,7 +360,6 @@ function summarizeAllocation(profile: { readonly head: HeapProfileNode }): {
   readonly sampledBytes: number;
   readonly productStackSampledBytes: number;
   readonly snapshotJsonValueStackSampledBytes: number;
-  readonly qualityInputSnapshotStackSampledBytes: number;
   readonly topFrames: readonly {
     readonly frame: string;
     readonly sampledBytes: number;
@@ -306,7 +369,6 @@ function summarizeAllocation(profile: { readonly head: HeapProfileNode }): {
   let sampledBytes = 0;
   let productStackSampledBytes = 0;
   let snapshotJsonValueStackSampledBytes = 0;
-  let qualityInputSnapshotStackSampledBytes = 0;
   function visit(node: HeapProfileNode, ancestors: readonly string[]): void {
     sampledBytes += node.selfSize;
     const { callFrame } = node;
@@ -317,11 +379,6 @@ function summarizeAllocation(profile: { readonly head: HeapProfileNode }): {
       productStackSampledBytes += node.selfSize;
     if (stack.includes("snapshotJsonValue"))
       snapshotJsonValueStackSampledBytes += node.selfSize;
-    if (
-      stack.includes("prepareQualityInput") &&
-      stack.includes("snapshotJsonValue")
-    )
-      qualityInputSnapshotStackSampledBytes += node.selfSize;
     if (node.selfSize > 0) {
       frames.set(stack, (frames.get(stack) ?? 0) + node.selfSize);
     }
@@ -332,7 +389,6 @@ function summarizeAllocation(profile: { readonly head: HeapProfileNode }): {
     sampledBytes,
     productStackSampledBytes,
     snapshotJsonValueStackSampledBytes,
-    qualityInputSnapshotStackSampledBytes,
     topFrames: [...frames]
       .map(([frame, bytes]) => ({ frame, sampledBytes: bytes }))
       .sort((left, right) => right.sampledBytes - left.sampledBytes)
@@ -350,15 +406,26 @@ function summarizeProfiler(report: QualityProfileReport) {
           0),
       0,
     );
+  const calls = (stage: string) =>
+    report.checks.reduce(
+      (total, check) =>
+        total +
+        (check.timings.find((timing) => timing.stage === stage)?.calls ?? 0),
+      0,
+    );
   const prepareInputMs = duration("prepareInput");
   const fingerprintMs = duration("fingerprint");
   return {
     totalMs: report.totalMs,
+    loadMs: duration("load"),
+    loadCalls: calls("load"),
     prepareInputMs,
+    prepareInputCalls: calls("prepareInput"),
     fingerprintMs,
     prepareAndFingerprintMs: prepareInputMs + fingerprintMs,
     cacheReadMs: duration("cacheRead"),
     executeMs: duration("execute"),
+    executeCalls: calls("execute"),
     snapshotMs: duration("snapshot"),
     cacheWriteMs: duration("cacheWrite"),
     resultsMs: duration("results"),
@@ -549,6 +616,15 @@ async function runWorker(): Promise<void> {
         profilerSummary.cacheWrites,
         workload.cacheMode === "cold" ? expectedExecutions : 0,
       );
+      assert.equal(
+        profilerSummary.loadCalls,
+        workload.family === "shared-dependency" ? workload.checkCount : 0,
+      );
+      assert.equal(profilerSummary.prepareInputCalls, expectedExecutions);
+      assert.equal(
+        profilerSummary.executeCalls,
+        workload.cacheMode === "cold" ? expectedExecutions : 0,
+      );
     }
     const fingerprintDigest = createHash("sha256")
       .update(
@@ -612,7 +688,6 @@ function aggregateSamples(
             readonly sampledBytes: number;
             readonly productStackSampledBytes: number;
             readonly snapshotJsonValueStackSampledBytes: number;
-            readonly qualityInputSnapshotStackSampledBytes: number;
             readonly topFrames: readonly {
               readonly frame: string;
               readonly sampledBytes: number;
@@ -646,11 +721,6 @@ function aggregateSamples(
     result.medianSnapshotJsonValueStackSampledBytes = median(
       allocationSamples.map(
         (allocation) => allocation?.snapshotJsonValueStackSampledBytes ?? 0,
-      ),
-    );
-    result.medianQualityInputSnapshotStackSampledBytes = median(
-      allocationSamples.map(
-        (allocation) => allocation?.qualityInputSnapshotStackSampledBytes ?? 0,
       ),
     );
     result.topAllocatingFrames = [...topFrames]
@@ -690,7 +760,6 @@ function assertAllocationScalingBudgets(
         readonly medianSampledAllocationBytes: number;
         readonly medianProductStackSampledBytes: number;
         readonly medianSnapshotJsonValueStackSampledBytes: number;
-        readonly medianQualityInputSnapshotStackSampledBytes: number;
       },
       basisPayloadBytes: report.basisPayloadBytes as number,
     }))
@@ -748,18 +817,12 @@ function assertAllocationScalingBudgets(
       workload.candidateCount * workload.checkCount * basisPayloadBytes,
   );
 
-  // 大依据场景中若重新通过 JSON 快照函数复制整份依据，采样分配会显著越过半份依据。
+  // 大依据只进入逐候选最终输入，因此 JSON 快照采样证明它仍被固定。
   const largeBasis = findAxisRows("basis-bytes").at(-1);
   assert.ok(largeBasis !== undefined);
   assert.ok(
-    largeBasis.allocation.medianSnapshotJsonValueStackSampledBytes <
-      largeBasis.basisPayloadBytes / 2,
-    "大依据场景重新出现了输入规模的 JSON 快照分配。",
-  );
-  assert.equal(
-    largeBasis.allocation.medianQualityInputSnapshotStackSampledBytes,
-    0,
-    "输入指纹准备阶段不应再次通过 JSON 快照函数复制依据。",
+    largeBasis.allocation.medianSnapshotJsonValueStackSampledBytes > 0,
+    "没有采到最终检查输入的固定分配。",
   );
 }
 
@@ -847,7 +910,7 @@ async function runBenchmark(): Promise<void> {
       facts: "one in-memory source fact; no translation reads",
       resultCache: "in-memory Map using public QA cache contract",
       allocationGates:
-        "按工作单位归一化的产品栈采样分配不得超过小规模的4倍；输入准备阶段不得通过 JSON 快照栈复制依据",
+        "按工作单位归一化的产品栈采样分配不得超过小规模的4倍；最终输入固定阶段须被分配采样覆盖",
     },
     workloads: reports,
   };

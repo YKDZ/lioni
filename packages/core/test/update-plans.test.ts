@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import {
   createUpdatePlan,
+  defineChecker,
   defineConfig,
   defaultCompare,
   defaultUpdatePolicy,
@@ -18,7 +19,6 @@ import {
   type StandardSchemaV1,
   type UpdatePlanItem,
 } from "../src/index.ts";
-import { defineTestQualityCheck } from "./quality-check-fixture.ts";
 import {
   jsonValueSchema,
   schemaFromExamples,
@@ -109,13 +109,15 @@ function makeConfig(
       : {
           quality: {
             checks: [
-              defineTestQualityCheck<Unit, Translation, string>({
+              defineChecker.withTypes<Unit, Translation, string>()({
                 id: "deferred-policy",
-                configuration: {},
-                loadDependencies: () => {
+                version: "deferred-policy-v1",
+                inputSchema: schemaFromExamples(null),
+                load: () => {
                   options.onQualityData?.();
                   return {};
                 },
+                prepare: () => ({ status: "ready", input: null }),
                 check: () => ({
                   status: "complete",
                   diagnostics: [],

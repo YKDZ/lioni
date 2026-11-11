@@ -6,9 +6,9 @@ import { describe, it } from "node:test";
 
 import {
   analyzeQuality,
-  bindQualityCheck,
   createQualityException,
   createQualityProfiler,
+  defineChecker,
   defineConfig,
   type CacheableQualityCheckOutcome,
   type JsonValue,
@@ -23,7 +23,7 @@ import {
   StandardSchemaContractError,
 } from "../src/index.ts";
 import { createDirectoryQualityCheckResultCache } from "../src/node/index.ts";
-import { defineTestQualityCheck } from "./quality-check-fixture.ts";
+import { defineTestChecker } from "./quality-check-fixture.ts";
 import {
   jsonValueSchema,
   schemaFromExamples,
@@ -90,7 +90,7 @@ void describe("QA 结果缓存", () => {
       cache,
       exceptionStore,
       precedingChecks: [
-        reviewCheck(() => {}, "prior-review-v1", {}, "prior-review"),
+        reviewCheck(() => {}, "prior-review-v1", "strict", "prior-review"),
       ],
     });
     const excepted = await analyzeQuality(shiftedConfig);
@@ -192,9 +192,8 @@ void describe("QA 结果缓存", () => {
     const rawFinding = rawOutcome.diagnostics[0];
     assert.ok(rawFinding);
     let checkCount = 0;
-    const check = defineTestQualityCheck<Unit, Translation, JsonValue>({
+    const check = defineTestChecker<Unit, Translation, JsonValue>({
       id: "stable-result",
-      configuration: {},
       check() {
         checkCount += 1;
         return rawOutcome;
@@ -260,9 +259,8 @@ void describe("QA 结果缓存", () => {
         cacheWrites += 1;
       },
     };
-    const check = defineTestQualityCheck<Unit, Translation, JsonValue>({
+    const check = defineTestChecker<Unit, Translation, JsonValue>({
       id: "ordinary-error",
-      configuration: {},
       check() {
         checkCount += 1;
         throw new Error("规则运行失败。");
@@ -290,9 +288,8 @@ void describe("QA 结果缓存", () => {
 
     for (const scenario of scenarios) {
       let checkCount = 0;
-      const check = defineTestQualityCheck<Unit, Translation, JsonValue>({
+      const check = defineTestChecker<Unit, Translation, JsonValue>({
         id: `outcome-${scenario.status}`,
-        configuration: {},
         check() {
           checkCount += 1;
           return outcomeFor(scenario.status);
@@ -385,8 +382,8 @@ void describe("QA 结果缓存", () => {
     }
   });
 
-  void it("命中时仍重新选择、投影并校验，契约错误不会被缓存吞掉", async () => {
-    const counts = { select: 0, project: 0, schema: 0, check: 0 };
+  void it("缓存命中时仍准备并校验输入，契约错误不会被缓存吞掉", async () => {
+    const counts = { prepare: 0, schema: 0, check: 0 };
     let rejectProjectedInput = false;
     let cacheReads = 0;
     const cache = createMemoryCache(() => {
@@ -400,16 +397,16 @@ void describe("QA 结果缓存", () => {
     await analyzeQuality(config);
     await analyzeQuality(config);
 
-    assert.deepEqual(counts, { select: 2, project: 2, schema: 2, check: 1 });
+    assert.deepEqual(counts, { prepare: 2, schema: 2, check: 1 });
     assert.equal(cacheReads, 2);
 
     rejectProjectedInput = true;
     await assert.rejects(analyzeQuality(config), StandardSchemaContractError);
-    assert.deepEqual(counts, { select: 3, project: 3, schema: 3, check: 1 });
+    assert.deepEqual(counts, { prepare: 3, schema: 3, check: 1 });
     assert.equal(cacheReads, 2);
   });
 
-  void it("候选、最终配置或实现版本变化时重新计算", async () => {
+  void it("候选输入或实现版本变化时重新计算", async () => {
     let checkCount = 0;
     const cache = createMemoryCache();
     const createCheck = (version: string, policy: string) =>
@@ -418,7 +415,7 @@ void describe("QA 结果缓存", () => {
           checkCount += 1;
         },
         version,
-        { policy },
+        policy,
       );
     const originalConfig = createTestConfig(
       createCheck("review-v1", "strict"),
@@ -546,9 +543,10 @@ function createMemoryCache(onRead?: () => void): QualityCheckResultCache {
 }
 
 type PreparedInput = { readonly source: string; readonly target: JsonValue };
+type ReviewInput = { readonly content: JsonValue; readonly policy: string };
 
 function preparedReviewCheck(
-  counts: { select: number; project: number; schema: number; check: number },
+  counts: { prepare: number; schema: number; check: number },
   rejectProjectedInput: () => boolean,
 ): QualityCheckDefinition<Unit, Translation, QualityObject, JsonValue> {
   const projectedInputSchema: StandardSchemaV1<PreparedInput, PreparedInput> = {
@@ -574,29 +572,15 @@ function preparedReviewCheck(
       },
     },
   };
-  return bindQualityCheck<
-    Unit,
-    Translation,
-    typeof jsonValueSchema,
-    typeof projectedInputSchema,
-    { readonly content: JsonValue },
-    QualityObject,
-    JsonValue
-  >({
+  return defineChecker.withTypes<Unit, Translation, JsonValue>()({
     id: "message-review",
     version: "review-v1",
-    configurationSchema: jsonValueSchema,
-    configuration: {},
     inputSchema: projectedInputSchema,
-    select({ candidate }) {
-      counts.select += 1;
-      return { status: "selected", subject: { content: candidate.content } };
-    },
-    project({ subject }) {
-      counts.project += 1;
+    prepare({ candidate }) {
+      counts.prepare += 1;
       return {
         status: "ready",
-        value: { source: "Hello", target: subject.content },
+        input: { source: "Hello", target: candidate.content },
       };
     },
     check() {
@@ -665,13 +649,23 @@ function createTestConfig(
 function reviewCheck(
   onCheck: () => void,
   version = "review-v1",
-  configuration: JsonValue = {},
+  policy = "strict",
   checkId = "message-review",
 ): QualityCheckDefinition<Unit, Translation, QualityObject, JsonValue> {
-  return defineTestQualityCheck<Unit, Translation, JsonValue>({
+  const inputSchema = schemaFromExamples<ReviewInput>({
+    content: "",
+    policy: "",
+  });
+  return defineChecker.withTypes<Unit, Translation, JsonValue>()({
     id: checkId,
     version,
-    configuration,
+    inputSchema,
+    prepare({ candidate }) {
+      return {
+        status: "ready",
+        input: { content: candidate.content, policy },
+      };
+    },
     check() {
       onCheck();
       return reviewOutcome();

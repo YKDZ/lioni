@@ -27,7 +27,6 @@ type SdkEvidence = {
   readonly changedDependency: CapturedRun;
   readonly isolatedLoaderFailure: CapturedRun;
   readonly sharedLoaderFailure: CapturedRun;
-  readonly loaderContractError: CapturedRun;
   readonly readerContractError: CapturedRun;
 };
 
@@ -85,11 +84,10 @@ testArtifactConsumer(
     assert.match(sdk.full.report ?? "", /候选范围：已选候选 1 条/u);
 
     assert.deepEqual(checkIds(sdk.direct), ["syntax"]);
-    assert.ok(!sdk.direct.events.includes("configuration:terms"));
     assert.ok(!sdk.direct.events.includes("loader:terms"));
     assert.ok(!sdk.direct.events.includes("rule:terms:normalized-v1"));
     assert.equal(eventCount(sdk.direct, "shared:read"), 1);
-    assert.equal(eventCount(sdk.direct, "compile:shared:v1"), 0);
+    assert.equal(eventCount(sdk.direct, "compile:shared:v1"), 1);
     assert.equal(
       sdk.full.result?.checks.find(({ checkId }) => checkId === "syntax")
         ?.executions[0]?.inputFingerprint,
@@ -113,8 +111,7 @@ testArtifactConsumer(
 
     assert.deepEqual(checkIds(sdk.duplicateIds), ["syntax", "terms"]);
     assert.deepEqual(checkIds(sdk.groupUnion), ["syntax", "terms"]);
-    assert.equal(eventCount(sdk.groupUnion, "compile:shared:v1"), 0);
-    assert.ok(!sdk.groupUnion.events.includes("configuration:unlisted"));
+    assert.equal(eventCount(sdk.groupUnion, "compile:shared:v1"), 1);
     assert.ok(!sdk.groupUnion.events.includes("loader:unlisted"));
     assert.ok(!sdk.groupUnion.events.includes("rule:unlisted:normalized-v1"));
     assert.ok(!sdk.groupUnion.events.includes("rule:syntax:normalized-v1"));
@@ -160,7 +157,7 @@ testArtifactConsumer(
     assert.equal(explicitCandidates.result.candidates.length, 1);
     assert.ok(!explicitCandidates.events.includes("candidate:build"));
     assert.equal(eventCount(explicitCandidates, "shared:read"), 1);
-    assert.equal(eventCount(explicitCandidates, "compile:shared:v1"), 0);
+    assert.equal(eventCount(explicitCandidates, "compile:shared:v1"), 1);
     assert.ok(
       !explicitCandidates.events.some((event) => event.startsWith("rule:")),
     );
@@ -239,12 +236,6 @@ testArtifactConsumer(
       ),
     );
 
-    assert.ok(sdk.loaderContractError.error);
-    assert.ok(
-      !sdk.loaderContractError.events.some((event) =>
-        event.startsWith("rule:"),
-      ),
-    );
     assert.ok(sdk.readerContractError.error);
     assert.ok(
       !sdk.readerContractError.events.some((event) =>
@@ -277,7 +268,6 @@ testArtifactConsumer(
       /检查项范围：配置 3 项，本次子集 1 项（terms）/u,
     );
     const oneCheckEvents = await eventsIn(root);
-    assert.ok(!oneCheckEvents.includes("configuration:syntax"));
     assert.ok(!oneCheckEvents.includes("loader:syntax"));
     assert.ok(
       !oneCheckEvents.some((event) => event.startsWith("rule:syntax:")),

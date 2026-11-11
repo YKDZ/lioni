@@ -3,14 +3,12 @@ import { test } from "node:test";
 
 import {
   analyzeQuality,
+  defineChecker,
   defineConfig,
-  defineQualityCheck,
   formatQualityReport,
   type JsonValue,
-  type QualityObject,
-  type StandardSchemaV1,
 } from "../src/index.ts";
-import { defineTestQualityCheck } from "./quality-check-fixture.ts";
+import { defineTestChecker } from "./quality-check-fixture.ts";
 import {
   jsonValueSchema,
   schemaFromExamples,
@@ -27,13 +25,15 @@ void test("按分组并集去重并保持配置顺序执行，未归组项不运
   const executed: string[] = [];
   const loaded: string[] = [];
   const checker = (id: string) =>
-    defineTestQualityCheck<Unit, Translation, JsonValue>({
+    defineChecker.withTypes<Unit, Translation, JsonValue>()({
       id,
-      configuration: {},
-      loadDependencies() {
+      version: "selection-v1",
+      inputSchema: schemaFromExamples(null),
+      load() {
         loaded.push(id);
         return {};
       },
+      prepare: () => ({ status: "ready", input: null }),
       check: () => {
         executed.push(id);
         return {
@@ -118,82 +118,13 @@ void test("按分组并集去重并保持配置顺序执行，未归组项不运
   assert.match(formatQualityReport(fullRun), /本次全量 3 项/u);
 });
 
-void test("未选检查项的无效配置不会被校验", async () => {
-  const source: Unit = { id: "save", source: "Save" };
-  const rejectingSchema: StandardSchemaV1<JsonValue, JsonValue> = {
-    "~standard": {
-      version: 1,
-      vendor: "quality-selection-test",
-      validate() {
-        return { issues: [{ message: "该配置不应被访问。" }] };
-      },
-    },
-  };
-  const selected = defineTestQualityCheck<Unit, unknown, JsonValue>({
-    id: "selected",
-    configuration: {},
-    check: () => ({
-      status: "complete",
-      diagnostics: [],
-      issues: [],
-      coverage: {
-        selected: 1,
-        evaluated: 1,
-        notApplicable: 0,
-        incomplete: 0,
-        failed: 0,
-      },
-    }),
-  });
-  const ignored = defineQualityCheck.withTypes<
-    Unit,
-    unknown,
-    typeof rejectingSchema,
-    QualityObject,
-    JsonValue
-  >()({
-    id: "ignored",
-    version: "v1",
-    configurationSchema: rejectingSchema,
-    configuration: {},
-    check: () => ({
-      status: "complete",
-      diagnostics: [],
-      issues: [],
-      coverage: {
-        selected: 1,
-        evaluated: 1,
-        notApplicable: 0,
-        incomplete: 0,
-        failed: 0,
-      },
-    }),
-  });
-  const config = defineConfig({
-    source: {
-      schema: sourceSchemaFromExamples<Unit>(source),
-      read: () => ({ scopes: [] }),
-    },
-    keyOf: ({ id }) => id,
-    quality: { checks: [selected, ignored] },
-  });
-
-  const result = await analyzeQuality(config, { checkIds: ["selected"] });
-
-  assert.deepEqual(
-    result.checks.map(({ checkId, status }) => [checkId, status]),
-    [["selected", "not-run"]],
-  );
-});
-
 void test("目录和选择错误在读取例外及项目事实前被拒绝", async () => {
   const source = { id: "save", source: "Save" };
   const makeConfig = (groups: Readonly<Record<string, readonly string[]>>) => {
     let sourceReads = 0;
     let exceptionReads = 0;
-    const check = defineTestQualityCheck<Unit, unknown, JsonValue>({
+    const check = defineTestChecker<Unit, unknown, JsonValue>({
       id: "known",
-      configuration: {},
       check: () => ({
         status: "complete",
         diagnostics: [],

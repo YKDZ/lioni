@@ -64,15 +64,12 @@ testArtifactConsumer(
     assert.equal(quality.diagnostics.length, 1);
     const qualityCheck = quality.checks[0];
     assert.ok(qualityCheck);
-    assert.equal("configuration" in qualityCheck, false);
-    assert.equal("dependencies" in qualityCheck, false);
     const execution = qualityCheck.executions[0];
     assert.ok(execution?.inputFingerprint);
     assert.deepEqual(Object.keys(execution?.fingerprintSummary ?? {}).sort(), [
       "inputFingerprint",
       "version",
     ]);
-    assert.doesNotMatch(report.stdout, /configurationFingerprint/u);
     const selectedReport = await runProcess(executable, [
       "qa",
       "lioni.config.ts",
@@ -124,7 +121,6 @@ testArtifactConsumer(
     const exceptionContents = await readFile(exceptionPath, "utf8");
     assert.match(exceptionContents, /^format: lioni\.qa-exceptions\/v2$/mu);
     assert.match(exceptionContents, /approved-number/u);
-    assert.doesNotMatch(exceptionContents, /configurationFingerprint/u);
     await writeFile(
       path.join(root, "fr.json"),
       JSON.stringify([

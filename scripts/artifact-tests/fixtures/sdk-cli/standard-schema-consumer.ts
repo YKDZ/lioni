@@ -5,6 +5,7 @@ import {
   defineChecker,
   defineConfig,
   readFacts,
+  type QualityCheckOutcome,
   type StandardSchemaV1,
 } from "@lioni/lioni";
 import { z } from "zod";
@@ -65,7 +66,11 @@ const checker = defineChecker.withTypes<Unit, Unit, string>()({
     const index: ReadonlyMap<string, string> = new Map([
       ["Save", "Enregistrer"],
     ]);
-    return { lookup: (key: string) => index.get(key), index };
+    return {
+      lookup: (key: string) => index.get(key),
+      index,
+      runtimeMarker: "runtime-only-checker-context",
+    };
   },
   prepare({ candidate, sourceUnit, loaded }) {
     const expected = loaded.lookup(candidate.sourceKey);
@@ -81,7 +86,7 @@ const checker = defineChecker.withTypes<Unit, Unit, string>()({
       },
     };
   },
-  check({ key, language, file, text, expected }) {
+  check({ key, language, file, text, expected }): QualityCheckOutcome {
     return {
       status: "complete",
       diagnostics:
@@ -128,8 +133,7 @@ const result = await analyzeQuality(qaConfig, {
 assert.deepEqual(JSON.parse(JSON.stringify(result)), result);
 assert.equal(result.diagnostics[0]?.message, "请使用 Enregistrer。");
 assert.equal(result.diagnostics[0]?.location.range, "messages.ts");
-assert.equal(Object.hasOwn(result.checks[0] ?? {}, "configuration"), false);
-assert.equal(Object.hasOwn(result.checks[0] ?? {}, "dependencies"), false);
+assert.doesNotMatch(JSON.stringify(result), /runtime-only-checker-context/u);
 assert.deepEqual(
   Object.keys(result.checks[0]?.executions[0]?.fingerprintSummary ?? {}).sort(),
   ["inputFingerprint", "version"],
