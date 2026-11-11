@@ -7,9 +7,7 @@ import {
   defineConfig,
   type BodyAvailability,
   type JsonValue,
-  type QualityCheckInput,
   type SemanticEditCandidate,
-  type SourceUnitFact,
 } from "@lioni/core";
 import { z } from "zod";
 
@@ -45,26 +43,6 @@ const translationSchema: z.ZodType<Translation, Translation> = z.object({
   text: jsonValueSchema,
 });
 
-function selectNumberSubject(
-  input: QualityCheckInput<Unit, Translation, unknown, JsonValue>,
-) {
-  const sourceUnit = input.sourceUnit;
-  if (sourceUnit === null)
-    return {
-      status: "incomplete" as const,
-      issue: { code: "sourceUnavailable", message: "找不到对应原文。" },
-    };
-  return {
-    status: "selected" as const,
-    subject: {
-      sourceUnit,
-      sourceKey: input.candidate.sourceKey,
-      language: input.candidate.language,
-      content: input.candidate.content,
-    },
-  };
-}
-
 const mixedBodySchema: z.ZodType<MixedBody, MixedBody> = z.union([
   z.string(),
   z.array(z.string()),
@@ -86,55 +64,6 @@ const mixedUnitSchema: z.ZodType<MixedUnit, MixedUnit> = z.discriminatedUnion(
 );
 const mixedTranslationSchema: z.ZodType<MixedTranslation, MixedTranslation> =
   z.object({ nativeKey: z.string(), text: mixedBodySchema });
-
-function selectMixedText(
-  input: QualityCheckInput<
-    MixedUnit,
-    MixedTranslation,
-    unknown,
-    MixedBody,
-    never
-  >,
-) {
-  const sourceUnit = input.sourceUnit;
-  if (sourceUnit === null)
-    return {
-      status: "incomplete" as const,
-      issue: { code: "sourceUnavailable", message: "找不到对应原文。" },
-    };
-
-  const content = input.candidate.content;
-  if (sourceUnit.unit.kind === "list") {
-    if (
-      Array.isArray(content) &&
-      content.every((entry: unknown) => typeof entry === "string")
-    )
-      return { status: "not-applicable" as const };
-    return {
-      status: "incomplete" as const,
-      issue: { code: "candidateShape", message: "列表候选结构不匹配。" },
-    };
-  }
-
-  if (typeof content !== "string")
-    return {
-      status: "incomplete" as const,
-      issue: { code: "candidateShape", message: "文本候选必须是字符串。" },
-    };
-  const textSourceUnit: SourceUnitFact<TextUnit> = {
-    ...sourceUnit,
-    unit: sourceUnit.unit,
-  };
-  return {
-    status: "selected" as const,
-    subject: {
-      sourceUnit: textSourceUnit,
-      sourceKey: input.candidate.sourceKey,
-      language: input.candidate.language,
-      content,
-    },
-  };
-}
 
 function configFor(
   source: JsonValue | undefined,
@@ -188,20 +117,53 @@ function configFor(
         ],
       }),
     },
-    quality: {
-      checks: [
-        createNumberChecker({
-          hostVersion: "number-test-v1",
-          select: selectNumberSubject,
-          sourceText: (unit) => unit.source,
-          translationText: (content) => content,
-          translationLocation: (translation, _subject, location) =>
-            translation === undefined
-              ? location
-              : { ...location, key: translation.nativeKey },
-        }),
-      ],
+    quality: { checks: [createNumberChecker()] },
+  });
+}
+
+function defaultNumberConfigFor(source: string, target: string) {
+  return defineConfig({
+    source: {
+      schema: sourceSchema,
+      read: () => ({
+        scopes: [
+          {
+            range: "source.json",
+            enumeration: "complete",
+            records: [
+              {
+                value: { source, identity: "message" },
+                bodyAvailability: "available",
+              },
+            ],
+          },
+        ],
+      }),
     },
+    keyOf: ({ identity }) => identity,
+    translations: {
+      languages: ["fr"],
+      keyOf: (translation) => translation.nativeKey,
+      schema: translationSchema,
+      contentSchema: jsonValueSchema,
+      contentOf: ({ text }) => text,
+      read: (_language, units) => ({
+        scopes: [
+          {
+            range: "fr.json",
+            enumeration: "complete",
+            covers: units.map(({ key }) => key),
+            records: [
+              {
+                value: { text: target, nativeKey: "message" },
+                bodyAvailability: "available",
+              },
+            ],
+          },
+        ],
+      }),
+    },
+    quality: { checks: [createNumberChecker()] },
   });
 }
 
@@ -210,6 +172,34 @@ async function check(source: string, target: string) {
 }
 
 void describe("阿拉伯数字对应检查", () => {
+  void it("构造时立即拒绝无效准备适配", () => {
+    assert.throws(
+      () => createNumberChecker({ prepare: null as never }),
+      /prepare 必须是函数/u,
+    );
+  });
+
+  void it("用默认工厂检查字符串正文并报告资源位置与证据", async () => {
+    const result = await analyzeQuality(
+      defaultNumberConfigFor("Wait 12 seconds", "Attendre 21 secondes"),
+    );
+
+    assert.equal(result.diagnostics.length, 1);
+    assert.equal(result.diagnostics[0]?.checkId, "number-correspondence");
+    assert.deepEqual(result.diagnostics[0]?.location, {
+      language: "fr",
+      range: "fr.json",
+      key: "message",
+    });
+    assert.deepEqual(
+      result.diagnostics[0]?.evidence.map(({ role, value }) => [role, value]),
+      [
+        ["source", "Wait 12 seconds"],
+        ["target", "Attendre 21 secondes"],
+      ],
+    );
+  });
+
   void it("允许完整数字重排，同时保留重复次数", async () => {
     for (const [source, target] of [
       ["12 and 3.14", "3.14 et 12"],
@@ -275,7 +265,7 @@ void describe("阿拉伯数字对应检查", () => {
     assert.deepEqual(diagnostic.location, {
       language: "fr",
       range: "fr.json",
-      key: "message",
+      key: "hash:message",
     });
     assert.equal(diagnostic.object.key, "hash:message");
     assert.deepEqual(
@@ -308,27 +298,54 @@ void describe("阿拉伯数字对应检查", () => {
     });
   });
 
-  void it("通过宿主提供的取值函数检查结构化候选，仅比较正文中的数字", async () => {
+  void it("通过显式准备适配读取结构化候选正文", async () => {
+    const structuredChecker = createNumberChecker.withTypes<
+      Unit,
+      Translation,
+      JsonValue,
+      never
+    >()({
+      prepare: ({ sourceUnit, translation, candidate }) => {
+        const source = sourceUnit.unit.source;
+        const content = candidate.content;
+        const target =
+          content !== null &&
+          typeof content === "object" &&
+          !Array.isArray(content) &&
+          typeof (content as { readonly text?: JsonValue }).text === "string"
+            ? (content as { readonly text: string }).text
+            : undefined;
+        if (typeof source !== "string" || target === undefined)
+          return {
+            status: "incomplete",
+            issue: {
+              code: "textUnavailable",
+              message: "无法从结构化正文中取得字符串。",
+            },
+          };
+        return {
+          status: "ready",
+          source,
+          target,
+          sourceLocation: {
+            language: "en",
+            range: "structured-source.json",
+            key: "message",
+          },
+          targetLocation: {
+            language: candidate.language,
+            range: translation?.range ?? null,
+            key:
+              translation?.bodyAvailability === "available"
+                ? translation.translation.nativeKey
+                : candidate.sourceKey,
+          },
+        };
+      },
+    });
     const config = {
       ...configFor("12 seconds", "12 secondes"),
-      quality: {
-        checks: [
-          createNumberChecker({
-            hostVersion: "number-test-v1",
-            select: selectNumberSubject,
-            sourceText: (unit) => unit.source,
-            translationText: (content) => {
-              if (
-                content !== null &&
-                typeof content === "object" &&
-                !Array.isArray(content)
-              )
-                return (content as { readonly text?: JsonValue }).text;
-              return undefined;
-            },
-          }),
-        ],
-      },
+      quality: { checks: [structuredChecker] },
     };
     for (const [text, diagnosticCount] of [
       ["12 secondes", 0],
@@ -345,15 +362,37 @@ void describe("阿拉伯数字对应检查", () => {
       });
       assert.equal(result.status, "complete");
       assert.equal(result.diagnostics.length, diagnosticCount);
+      if (diagnosticCount === 1) {
+        assert.deepEqual(result.diagnostics[0]?.location, {
+          language: "fr",
+          range: "fr.json",
+          key: "message",
+        });
+        assert.deepEqual(result.diagnostics[0]?.evidence[0]?.location, {
+          language: "en",
+          range: "structured-source.json",
+          key: "message",
+        });
+        assert.deepEqual(
+          result.diagnostics[0]?.evidence.map(({ role, value }) => [
+            role,
+            value,
+          ]),
+          [
+            ["source", "12 seconds"],
+            ["target", { text, unrelatedNumber: 123 }],
+          ],
+        );
+      }
     }
   });
 
-  void it("原文缺失、正文不可用和非文本内容如实报告未完成", async () => {
+  void it("原文正文不可用或默认无法取得字符串时报告未完成", async () => {
     for (const [config, candidate] of [
-      [configFor(undefined, "12"), "12"],
       [configFor("12", "12", "unavailable"), "12"],
       [configFor(null, "12"), "12"],
       [configFor("12", null), null],
+      [configFor({ text: "12" }, { text: "12" }), { text: "12" }],
     ] as const) {
       const result = await analyzeQuality(config, {
         candidates: [
@@ -380,12 +419,29 @@ void describe("阿拉伯数字对应检查", () => {
       { nativeKey: "message", text: "Total 21" },
       { nativeKey: "rows", text: ["Version 2024"] },
     ];
-    const checker = createNumberChecker({
-      hostVersion: "number-test-v1",
-      select: selectMixedText,
-      sourceText: (unit) => unit.source,
-      translationText: (content) =>
-        typeof content === "string" ? content : undefined,
+    const checker = createNumberChecker.withTypes<
+      MixedUnit,
+      MixedTranslation,
+      MixedBody,
+      never
+    >()({
+      prepare: ({ sourceUnit, candidate }) => {
+        if (sourceUnit.unit.kind === "list")
+          return { status: "not-applicable" };
+        if (typeof candidate.content !== "string")
+          return {
+            status: "incomplete",
+            issue: {
+              code: "textUnavailable",
+              message: "文本候选必须是字符串。",
+            },
+          };
+        return {
+          status: "ready",
+          source: sourceUnit.unit.source,
+          target: candidate.content,
+        };
+      },
     });
     const numberCheckId: "number-correspondence" = checker.id;
     void numberCheckId;
@@ -508,15 +564,7 @@ void describe("数字检查的显式依据", () => {
         }),
       },
       quality: {
-        checks: [
-          createNumberChecker({
-            hostVersion: "explicit-number-v1",
-            select: selectNumberSubject,
-            sourceText: (unit) => unit.source,
-            translationText: (content) => content,
-            fingerprintInput: ({ projected }) => projected,
-          }),
-        ],
+        checks: [createNumberChecker()],
         groups: { daily: ["number-correspondence"] },
         exceptionStore: {
           load: async () => exceptions,

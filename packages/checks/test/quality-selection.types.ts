@@ -9,6 +9,7 @@ import { requireAllowedTranslation } from "@lioni/terminology";
 import { z } from "zod";
 
 import {
+  createNumberChecker,
   createTermChecker,
   createVueI18nChecks,
   type VueI18nChecksOptions,
@@ -146,9 +147,10 @@ const vueOptions: VueI18nChecksOptions<VueUnit, VueTranslation, VueBody> = {
   project: () => vueProjection,
   reference: () => vueProjection,
 };
-const vueChecks = createVueI18nChecks<VueUnit, VueTranslation, VueBody>(
-  vueOptions,
-);
+const vueChecks = [
+  ...createVueI18nChecks<VueUnit, VueTranslation, VueBody>(vueOptions),
+  createNumberChecker(),
+] as const;
 type VueCheckId =
   | "vue-i18n/source-syntax"
   | "vue-i18n/target-syntax"
@@ -159,7 +161,8 @@ type VueCheckId =
   | "vue-i18n/quantities"
   | "terminology/require-allowed-translation"
   | "terminology/reject-forbidden-translation"
-  | "message-family-consistency";
+  | "message-family-consistency"
+  | "number-correspondence";
 const vueIds: readonly VueCheckId[] = vueChecks.map(({ id }) => id);
 void vueIds;
 
@@ -209,11 +212,17 @@ void staticVueConfig;
 function verifyVueSelectionTypes() {
   void analyzeQuality(vueConfig, { groups: ["syntax"] });
   void analyzeQuality(vueConfig, {
-    checkIds: ["vue-i18n/source-syntax", "message-family-consistency"],
+    checkIds: [
+      "vue-i18n/source-syntax",
+      "message-family-consistency",
+      "number-correspondence",
+    ],
   });
 
   // @ts-expect-error Vue 集合 ID 联合拒绝拼写错误。
   void analyzeQuality(vueConfig, { checkIds: ["vue-i18n/source-syntaxx"] });
+  // @ts-expect-error 内置数字检查 ID 保留精确字面量。
+  void analyzeQuality(vueConfig, { checkIds: ["number-correspondance"] });
   // @ts-expect-error Vue 分组名称必须来自宿主配置。
   void analyzeQuality(vueConfig, { groups: ["unconfigured"] });
 }

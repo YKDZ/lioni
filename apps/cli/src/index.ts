@@ -180,7 +180,7 @@ export type {
   MessageFamilySubject,
   MessageFragment,
   NumberCheckerOptions,
-  NumberCheckerSubject,
+  NumberCheckerPreparation,
   NumberTextInput,
   ProtectedLiteralIssue,
   QuantityBranch,
