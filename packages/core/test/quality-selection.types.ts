@@ -1,14 +1,4 @@
-import {
-  analyzeQuality,
-  bindQualityCheck,
-  defineConfig,
-  defineQualityCheck,
-  type FrameworkConfig,
-  type QualityCheckInput,
-  type QualityCheckDefinition,
-  type QualityCheckOutcome,
-  type QualityObject,
-} from "../src/index.ts";
+import { analyzeQuality, defineChecker, defineConfig } from "../src/index.ts";
 import {
   schemaFromExamples,
   sourceSchemaFromExamples,
@@ -18,13 +8,14 @@ type Unit = {
   readonly source: string;
   readonly context: { readonly line: number };
 };
-type Translation = {
-  readonly id: string;
-  readonly body: Body;
-};
-type UnavailableTranslation = { readonly id: string; readonly missing: true };
+type Translation = { readonly id: string; readonly body: Body };
 type Body = { readonly text: string; readonly state: "draft" | "reviewed" };
-type Settings = { readonly minimum: number };
+type Unavailable = { readonly id: string; readonly missing: true };
+type PreparedInput = {
+  readonly sourceText: string;
+  readonly candidateText: Body;
+  readonly minimum: number;
+};
 
 const sourceSchema = sourceSchemaFromExamples<Unit>({
   source: "Save",
@@ -34,7 +25,7 @@ const translationSchema = schemaFromExamples<Translation>({
   id: "save-fr",
   body: { text: "Enregistrer", state: "draft" },
 });
-const unavailableSchema = schemaFromExamples<UnavailableTranslation>({
+const unavailableSchema = schemaFromExamples<Unavailable>({
   id: "save-de",
   missing: true,
 });
@@ -42,269 +33,54 @@ const bodySchema = schemaFromExamples<Body>({
   text: "Enregistrer",
   state: "draft",
 });
-const settingsSchema = schemaFromExamples<Settings>({ minimum: 1 });
-const projectedSchema = schemaFromExamples<{ readonly text: string }>({
-  text: "Save",
+const stringBodySchema = schemaFromExamples("");
+const preparedSchema = schemaFromExamples<PreparedInput>({
+  sourceText: "Save",
+  candidateText: { text: "Enregistrer", state: "draft" },
+  minimum: 1,
 });
 
-const explicitCheck = defineQualityCheck.withTypes<
-  Unit,
-  Translation,
-  typeof settingsSchema,
-  QualityObject,
-  Body,
-  UnavailableTranslation
->()({
-  id: "custom/explicit",
-  version: "1",
-  configurationSchema: settingsSchema,
-  configuration: { minimum: 1 },
-  check(input) {
-    const source: string | undefined = input.facts.source.units[0]?.unit.source;
-    const translationId: string | undefined =
-      input.facts.translations.records[0]?.translation.id;
-    const candidateBody: Body = input.candidate.content;
-    const minimum: number = input.configuration.minimum;
-    void source;
-    void translationId;
-    void candidateBody;
-    void minimum;
-    // @ts-expect-error 原文正文仍是字符串。
-    const invalidSource: number | undefined =
-      input.facts.source.units[0]?.unit.source;
-    // @ts-expect-error 候选正文仍保留宿主声明类型。
-    const invalidBody: string = input.candidate.content;
-    void invalidSource;
-    void invalidBody;
-    return completeOutcome();
+const checker = defineChecker.withTypes<Unit, Translation, Body, Unavailable>()(
+  {
+    id: "custom/explicit",
+    version: "1",
+    inputSchema: preparedSchema,
+    load({ candidates }) {
+      return new Map(candidates.map(({ sourceKey }) => [sourceKey, 1]));
+    },
+    prepare({ candidate, sourceUnit, translation, association, loaded }) {
+      const sourceText: string = sourceUnit.unit.source;
+      const translationId: string | undefined = translation?.translation.id;
+      const candidateBody: Body = candidate.content;
+      const associationStatus: string = association.status;
+      const minimum: number = loaded.get(candidate.sourceKey) ?? 0;
+      void translationId;
+      void associationStatus;
+      return {
+        status: "ready",
+        input: { sourceText, candidateText: candidateBody, minimum },
+      };
+    },
+    check(input) {
+      const candidateText: Body = input.candidateText;
+      const minimum: number = input.minimum;
+      void candidateText;
+      void minimum;
+      // @ts-expect-error The checker only receives its validated business input.
+      void input.candidate;
+      // @ts-expect-error Candidate body retains the host declaration type.
+      const invalidBody: string = input.candidateText;
+      void invalidBody;
+      return completeOutcome();
+    },
   },
-});
-const explicitId: "custom/explicit" = explicitCheck.id;
+);
+const explicitId: "custom/explicit" = checker.id;
 void explicitId;
 
-const inferredCheckFunction: (
-  input: QualityCheckInput<
-    Unit,
-    Translation,
-    Settings,
-    Body,
-    UnavailableTranslation
-  >,
-) => QualityCheckOutcome = () => completeOutcome();
-const inferredCheck = defineQualityCheck({
-  id: "custom/inferred",
-  version: "1",
-  configurationSchema: settingsSchema,
-  configuration: { minimum: 1 },
-  check: inferredCheckFunction,
-});
-const inferredId: "custom/inferred" = inferredCheck.id;
-void inferredId;
-
-function createFactoryCheck(): QualityCheckDefinition<
-  Unit,
-  Translation,
-  QualityObject,
-  Body,
-  UnavailableTranslation,
-  "factory/default"
->;
-function createFactoryCheck<const TId extends string>(
-  id: TId,
-): QualityCheckDefinition<
-  Unit,
-  Translation,
-  QualityObject,
-  Body,
-  UnavailableTranslation,
-  TId
->;
-function createFactoryCheck(
-  id = "factory/default",
-): QualityCheckDefinition<
-  Unit,
-  Translation,
-  QualityObject,
-  Body,
-  UnavailableTranslation,
-  string
-> {
-  return defineQualityCheck.withTypes<
-    Unit,
-    Translation,
-    typeof settingsSchema,
-    QualityObject,
-    Body,
-    UnavailableTranslation
-  >()({
-    id,
-    version: "1",
-    configurationSchema: settingsSchema,
-    configuration: { minimum: 1 },
-    check: () => completeOutcome(),
-  });
-}
-const fixedFactoryId: "factory/default" = createFactoryCheck().id;
-const overriddenFactoryId: "host/factory-check" =
-  createFactoryCheck("host/factory-check").id;
-void fixedFactoryId;
-void overriddenFactoryId;
-
-declare const runtimeCheckId: string;
-const runtimeCheck = createFactoryCheck(runtimeCheckId);
-const runtimeCheckIdRemainsWide: string = runtimeCheck.id;
-void runtimeCheckIdRemainsWide;
-
-const projectionCheck = bindQualityCheck<
-  Unit,
-  Translation,
-  typeof settingsSchema,
-  typeof projectedSchema,
-  { readonly sourceText: string },
-  QualityObject,
-  Body,
-  UnavailableTranslation,
-  "custom/projection"
->({
-  id: "custom/projection",
-  version: "1",
-  configurationSchema: settingsSchema,
-  configuration: { minimum: 1 },
-  inputSchema: projectedSchema,
-  select(input) {
-    const source: string | undefined = input.facts.source.units[0]?.unit.source;
-    const candidateBody: Body = input.candidate.content;
-    void source;
-    void candidateBody;
-    return { status: "selected", subject: { sourceText: "Save" } };
-  },
-  project({ subject }) {
-    const sourceText: string = subject.sourceText;
-    return { status: "ready", value: { text: sourceText } };
-  },
-  check(input) {
-    const projectedText: string = input.projected.text;
-    // @ts-expect-error 投影结果仍是所声明的 schema 输出类型。
-    const invalidProjectedText: number = input.projected.text;
-    void projectedText;
-    void invalidProjectedText;
-    return completeOutcome();
-  },
-});
-const projectionId: "custom/projection" = projectionCheck.id;
-void projectionId;
-
-const config = defineConfig.withTypes<
-  Unit,
-  typeof sourceSchema,
-  typeof translationSchema,
-  typeof unavailableSchema,
-  typeof bodySchema
->()({
-  source: {
-    schema: sourceSchema,
-    read: () => ({
-      scopes: [
-        {
-          range: "messages.json",
-          enumeration: "complete" as const,
-          records: [
-            {
-              value: { source: "Save", context: { line: 3 } },
-              bodyAvailability: "available" as const,
-            },
-          ],
-        },
-      ],
-    }),
-  },
-  keyOf: (unit) => String(unit.context.line),
-  translations: {
-    languages: ["fr", "de"],
-    keyOf: (translation) => translation.id,
-    schema: translationSchema,
-    unavailableSchema,
-    contentSchema: bodySchema,
-    contentOf: (translation) => translation.body,
-    read: () => ({ scopes: [] }),
-  },
-  quality: {
-    checks: [explicitCheck, inferredCheck, projectionCheck],
-    groups: {
-      daily: ["custom/explicit"],
-      allCustom: ["custom/inferred", "custom/explicit", "custom/projection"],
-    },
-  },
-});
-
-const passedById = analyzeQuality(config, {
-  checkIds: ["custom/explicit", "custom/inferred", "custom/projection"],
-});
-const passedByGroup = analyzeQuality(config, { groups: ["daily"] });
-void passedById;
-void passedByGroup;
-
-const broadRuntimeConfig: FrameworkConfig<
-  Unit,
-  Translation,
-  Body,
-  UnavailableTranslation
-> = {
-  ...config,
-  quality: {
-    checks: [runtimeCheck],
-    groups: { runtime: [runtimeCheckId] },
-  },
-};
-const dynamicSelection = analyzeQuality(broadRuntimeConfig, {
-  checkIds: [runtimeCheckId],
-});
-void dynamicSelection;
-
-// @ts-expect-error 未声明的检查项不能通过运行选项反向扩大 ID 联合。
-void analyzeQuality(config, { checkIds: ["custom/typo"] });
-// @ts-expect-error 分组名称来自静态配置。
-void analyzeQuality(config, { groups: ["nightly"] });
-void analyzeQuality(config, {
-  checkIds: ["custom/explicit"],
-  // @ts-expect-error 同次运行只能指定 ID 或分组。
-  groups: ["daily"],
-});
-
-const invalidGroupConfig = defineConfig.withTypes<
-  Unit,
-  typeof sourceSchema,
-  typeof translationSchema,
-  typeof unavailableSchema,
-  typeof bodySchema
->()({
-  source: {
-    schema: sourceSchema,
-    read: () => ({ scopes: [] }),
-  },
-  keyOf: (unit) => String(unit.context.line),
-  translations: {
-    languages: ["fr", "de"],
-    keyOf: (translation) => translation.id,
-    schema: translationSchema,
-    unavailableSchema,
-    contentSchema: bodySchema,
-    contentOf: (translation) => translation.body,
-    read: () => ({ scopes: [] }),
-  },
-  quality: {
-    checks: [explicitCheck],
-    groups: {
-      // @ts-expect-error 组成员不能扩张由 checks 推断的 ID 联合。
-      daily: ["custom/explicit", "custom/typo"],
-    },
-  },
-});
-void invalidGroupConfig;
-
-function completeOutcome(): QualityCheckOutcome {
+function completeOutcome() {
   return {
-    status: "complete",
+    status: "complete" as const,
     diagnostics: [],
     issues: [],
     coverage: {
@@ -316,3 +92,72 @@ function completeOutcome(): QualityCheckOutcome {
     },
   };
 }
+
+const config = defineConfig.withTypes<
+  Unit,
+  typeof sourceSchema,
+  typeof translationSchema,
+  typeof unavailableSchema,
+  typeof bodySchema
+>()({
+  source: {
+    schema: sourceSchema,
+    read: () => ({ scopes: [] }),
+  },
+  keyOf: (unit) => String(unit.context.line),
+  translations: {
+    languages: ["fr", "de"],
+    keyOf: (translation) => translation.id,
+    schema: translationSchema,
+    unavailableSchema,
+    contentSchema: bodySchema,
+    contentOf: (translation) => translation.body,
+    read: () => ({ scopes: [] }),
+  },
+  quality: {
+    checks: [checker],
+    groups: { daily: ["custom/explicit"] },
+  },
+});
+
+function verifySelectionTypes() {
+  void analyzeQuality(config, { groups: ["daily"] });
+  void analyzeQuality(config, { checkIds: ["custom/explicit"] });
+
+  // @ts-expect-error SDK consumers receive the exact configured checker IDs.
+  void analyzeQuality(config, { checkIds: ["custom/explict"] });
+  // @ts-expect-error SDK consumers receive the configured group-name union.
+  void analyzeQuality(config, { groups: ["nightly"] });
+}
+void verifySelectionTypes;
+
+type NarrowUnit = {
+  readonly source: string;
+  readonly context: { readonly key: string };
+};
+type WideUnit = { readonly source: string };
+const wideSourceSchema = sourceSchemaFromExamples<WideUnit>({ source: "Save" });
+const narrowChecker = defineChecker.withTypes<NarrowUnit, unknown, string>()({
+  id: "context-dependent",
+  version: "1",
+  inputSchema: schemaFromExamples(""),
+  prepare({ sourceUnit }) {
+    return { status: "ready", input: sourceUnit.unit.context.key };
+  },
+  check: completeOutcome,
+});
+
+defineConfig.withTypes<
+  WideUnit,
+  typeof wideSourceSchema,
+  never,
+  never,
+  typeof stringBodySchema
+>()({
+  source: { schema: wideSourceSchema, read: () => ({ scopes: [] }) },
+  keyOf: (unit) => unit.source,
+  quality: {
+    // @ts-expect-error A checker that needs context cannot run on a host without it.
+    checks: [narrowChecker],
+  },
+});

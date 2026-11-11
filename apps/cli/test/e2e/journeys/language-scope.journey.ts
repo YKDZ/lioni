@@ -18,22 +18,27 @@ const journey: CliJourney = {
     await writeFile(
       path.join(workDir, "lioni.config.ts"),
       `import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
-import { defineConfig, defineQualityCheck } from "${sdkImport}";
+import { defineConfig, defineChecker } from "${sdkImport}";
 import * as z from "zod";
 
 const resource = (language) => new URL("./" + language + ".json", import.meta.url);
-const check = defineQualityCheck({
+const check = defineChecker({
   id: "selected-language",
   version: "1",
-  configurationSchema: z.object({}),
-  configuration: {},
-  check({ candidate }) {
+  inputSchema: z.object({ sourceKey: z.string(), language: z.string() }),
+  prepare({ candidate }) {
+    return {
+      status: "ready",
+      input: { sourceKey: candidate.sourceKey, language: candidate.language },
+    };
+  },
+  check(input) {
     return {
       status: "complete",
       diagnostics: [{
         severity: "warning",
-        object: { kind: "translation-unit", key: candidate.sourceKey, language: candidate.language },
-        location: { language: candidate.language, range: candidate.language + ".json" },
+        object: { kind: "translation-unit", key: input.sourceKey, language: input.language },
+        location: { language: input.language, range: input.language + ".json" },
         message: "已检查所选语言。",
         evidence: [],
       }],

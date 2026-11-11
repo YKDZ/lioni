@@ -414,8 +414,6 @@ export default defineConfig({
     const check = qaResult.data.checks[0];
     assert.equal(check?.checkId, "host-rule");
     assert.equal(check?.version, "inspect-journey-qa-v1");
-    assert.equal("configuration" in (check ?? {}), false);
-    assert.equal("dependencies" in (check ?? {}), false);
     assert.deepEqual(
       Object.keys(check?.executions[0]?.fingerprintSummary ?? {}).sort(),
       ["inputFingerprint", "version"],

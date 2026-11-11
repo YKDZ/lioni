@@ -4,8 +4,9 @@ import { test } from "node:test";
 import {
   analyzeQuality,
   createQualityProfiler,
+  defineChecker,
   defineConfig,
-  QualityCheckBindingError,
+  QualityCheckerContractError,
 } from "../src/index.ts";
 
 void test("配置验证抛错后仍可读取中断的性能证据，原异常保持一致", async () => {
@@ -30,9 +31,8 @@ void test("配置验证抛错后仍可读取中断的性能证据，原异常保
   assert.deepEqual(JSON.parse(JSON.stringify(evidence)), evidence);
 });
 
-import { createMemoScope, type MemoScope } from "@lioni/memo";
+import { createMemoScope } from "@lioni/memo";
 
-import { defineTestQualityCheck } from "./quality-check-fixture.ts";
 import {
   schemaFromExamples,
   sourceSchemaFromExamples,
@@ -52,10 +52,7 @@ const complete = () => ({
   },
 });
 
-function configFor(
-  compute: (memo: MemoScope) => void,
-  keys: readonly string[] = ["save"],
-) {
+function configFor(runCheck: () => void, keys: readonly string[] = ["save"]) {
   const sources = keys.map((id) => ({ id, source: "Save" }));
   const translations = keys.map((id) => ({ id, text: "保存" }));
   return defineConfig({
@@ -97,15 +94,19 @@ function configFor(
     },
     quality: {
       checks: ["first", "second"].map((id) =>
-        defineTestQualityCheck<
+        defineChecker.withTypes<
           (typeof sources)[number],
           (typeof translations)[number],
           string
-        >({
+        >()({
           id,
-          configuration: {},
-          check: ({ memo }) => {
-            compute(memo);
+          version: "profile-v1",
+          inputSchema: schemaFromExamples(""),
+          load: () => "loaded",
+          prepare: ({ loaded }) => ({ status: "ready", input: loaded }),
+          check: (input) => {
+            assert.equal(input, "loaded");
+            runCheck();
             return complete();
           },
         }),
@@ -136,6 +137,17 @@ void test("完整运行只输出结构化证据，缓存命中仍记录准备且
   const first = await analyzeQuality(config, { profiler: cold });
   assert.equal(cold.report().status, "completed");
   assert.equal(calls, 2);
+  for (const check of cold.report().checks) {
+    assert.equal(check.timings.find(({ stage }) => stage === "load")?.calls, 1);
+    assert.equal(
+      check.timings.find(({ stage }) => stage === "prepareInput")?.calls,
+      1,
+    );
+    assert.equal(
+      check.timings.find(({ stage }) => stage === "execute")?.calls,
+      1,
+    );
+  }
   const warm = createQualityProfiler({ slowestCandidates: 0 });
   const second = await analyzeQuality(config, { profiler: warm });
   assert.deepEqual(second, first);
@@ -172,7 +184,11 @@ void test("普通规则失败完成采集，契约异常保留未完成候选和
     profiler.report().checks[0]?.slowestCandidates[0]?.status,
     "failed",
   );
-  const reason = new QualityCheckBindingError("first", "projection", ordinary);
+  const reason = new QualityCheckerContractError(
+    "first",
+    "check",
+    "返回了无效结果。",
+  );
   const interrupted = createQualityProfiler();
   await assert.rejects(
     analyzeQuality(
@@ -287,19 +303,21 @@ void test("仅汇总模式仍保留完整、失败、不完整、不适用及中
     "incomplete",
     "not-applicable",
   ] as const;
-  const reason = new QualityCheckBindingError(
+  const reason = new QualityCheckerContractError(
     "mixed",
-    "projection",
-    new Error("中断"),
+    "check",
+    "返回了无效结果。",
   );
   const keys = Array.from(
     { length: 5 },
     (_, candidateIndex) => `save-${candidateIndex}`,
   );
   const base = configFor(() => {}, keys);
-  const check = defineTestQualityCheck({
+  const check = defineChecker({
     id: "mixed",
-    configuration: {},
+    version: "mixed-v1",
+    inputSchema: schemaFromExamples(null),
+    prepare: () => ({ status: "ready", input: null }),
     check() {
       const status = statuses[index++];
       if (status === undefined) throw reason;

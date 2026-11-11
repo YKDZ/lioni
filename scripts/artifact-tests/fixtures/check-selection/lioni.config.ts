@@ -2,7 +2,7 @@ import path from "node:path";
 
 import {
   defineConfig,
-  defineQualityCheck,
+  defineChecker,
   type QualityCheckOutcome,
   type QualityObject,
   type StandardSchemaV1,
@@ -67,7 +67,10 @@ const translations: Translation[] = [
 const dependencySchema = z.object({
   key: z.string(),
   revision: z.string(),
-  origin: z.enum(["shared", "independent"]),
+});
+const preparedDependencySchema = z.object({
+  key: z.string(),
+  revision: z.string(),
 });
 
 function assertQualityData(value: unknown): asserts value is QualityData {
@@ -91,42 +94,53 @@ const exceptionStore = {
 function createChecker<const TId extends "syntax" | "terms" | "unlisted">(
   id: TId,
 ) {
-  const configurationSchema = z
-    .object({ name: z.literal(id) })
-    .superRefine(() => recordEvent(`configuration:${id}`));
-
-  return defineQualityCheck.withTypes<
-    Unit,
-    Translation,
-    typeof configurationSchema,
+  const inputSchema = z.object({
+    candidateSourceKey: z.string(),
+    candidateLanguage: z.string(),
+    dependency: preparedDependencySchema,
+  });
+  return defineChecker.withTypes<Unit, Translation, string>()<
+    typeof inputSchema,
     QualityObject,
-    string
-  >()({
+    TId,
+    QualityData
+  >({
     id,
     version: "artifact.check-selection/v1",
-    configurationSchema,
-    configuration: { name: id },
-    async loadDependencies({ qualityData }) {
+    inputSchema,
+    async load({ qualityData }) {
       recordEvent(`loader:${id}`);
       if (id === "terms") {
         const mode = getTermsLoaderMode();
         if (mode === "failure") throw new Error("术语检查资料读取失败。");
-        if (mode === "contract-error") return { invalid: () => undefined };
         if (mode === "reader-contract-error") {
           const invalidRead = qualityData.read as unknown as (
             reader: undefined,
           ) => Promise<unknown>;
-          return await invalidRead(undefined);
+          await invalidRead(undefined);
+          throw new Error("无效读取器未被拒绝。");
         }
       }
 
       const reader = id === "unlisted" ? readIndependentData : readSharedData;
-      return await qualityData.read(reader, "catalog");
+      const value = await qualityData.read(reader, "catalog");
+      assertQualityData(value);
+      return value;
+    },
+    prepare({ candidate, loaded, memo }) {
+      assertQualityData(loaded);
+      const dependency = memo.memo(compileQualityData)(loaded);
+      return {
+        status: "ready",
+        input: {
+          candidateSourceKey: candidate.sourceKey,
+          candidateLanguage: candidate.language,
+          dependency,
+        },
+      };
     },
     check(input): QualityCheckOutcome {
-      const loadedData = input.dependencies;
-      assertQualityData(loadedData);
-      const dependency = input.memo.memo(compileQualityData)(loadedData);
+      const dependency = input.dependency;
       recordEvent(`rule:${id}:${dependency.revision}`);
       const diagnostics =
         id === "syntax"
@@ -135,13 +149,13 @@ function createChecker<const TId extends "syntax" | "terms" | "unlisted">(
                 severity: "error" as const,
                 object: {
                   kind: "translation-unit",
-                  key: input.candidate.sourceKey,
-                  language: input.candidate.language,
+                  key: input.candidateSourceKey,
+                  language: input.candidateLanguage,
                 },
                 location: {
-                  language: input.candidate.language,
+                  language: input.candidateLanguage,
                   range: "fr.json",
-                  key: input.candidate.sourceKey,
+                  key: input.candidateSourceKey,
                 },
                 message: `语法检查依据 ${dependency.revision}`,
                 evidence: [],

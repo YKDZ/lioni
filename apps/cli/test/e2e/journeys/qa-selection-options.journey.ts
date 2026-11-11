@@ -16,15 +16,15 @@ const journey: CliJourney = {
     const sdkImport = mode === "source" ? "@lioni/core" : "@lioni/lioni";
     await writeFile(
       path.join(workDir, "lioni.config.ts"),
-      `import { defineConfig, defineQualityCheck } from "${sdkImport}";
+      `import { defineConfig, defineChecker } from "${sdkImport}";
 import * as z from "zod";
 
 function checker(id) {
-  return defineQualityCheck({
+  return defineChecker({
     id,
     version: "qa-selection-options-v1",
-    configurationSchema: z.object({}),
-    configuration: {},
+    inputSchema: z.object({ mode: z.literal("strict") }),
+    prepare: () => ({ status: "ready", input: { mode: "strict" } }),
     check() {
       return {
         status: "complete",

@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { analyzeQuality, defineConfig, type JsonValue } from "../src/index.ts";
-import { defineTestQualityCheck } from "./quality-check-fixture.ts";
+import {
+  analyzeQuality,
+  defineChecker,
+  defineConfig,
+  StandardSchemaContractError,
+  type JsonValue,
+} from "../src/index.ts";
 import {
   jsonValueSchema,
   schemaFromExamples,
@@ -56,11 +61,15 @@ function fixture(
     { key: "save", text: "保存", language: "zh-CN" },
   ];
   const languages = input.languages ?? ["zh-CN", "fr"];
-  const check = defineTestQualityCheck<Unit, Translation, JsonValue>({
+  const check = defineChecker.withTypes<Unit, Translation, JsonValue>()({
     id: "candidate-observer",
-    configuration: {},
-    check(checkInput) {
+    version: "candidate-observer-v1",
+    inputSchema: schemaFromExamples(null),
+    prepare(checkInput) {
       input.observe?.(checkInput);
+      return { status: "ready", input: null };
+    },
+    check() {
       return {
         status: "complete",
         diagnostics: [],
@@ -327,5 +336,87 @@ void describe("QA 候选入口与身份", () => {
       analyzeQuality(fixture(), { candidates: null as never }),
       /candidates 必须是译文候选数组/,
     );
+  });
+
+  void it("在准备检查器前拒绝不符合宿主正文 schema 的候选", async () => {
+    let prepared = false;
+    const source = { key: "save", source: "Save" };
+    const config = defineConfig({
+      source: {
+        schema: sourceSchemaFromExamples(source),
+        read: () => ({
+          scopes: [
+            {
+              range: "messages.json",
+              enumeration: "complete",
+              records: [{ value: source, bodyAvailability: "available" }],
+            },
+          ],
+        }),
+      },
+      keyOf: ({ key }) => key,
+      translations: {
+        languages: ["fr"],
+        schema: schemaFromExamples({ key: "save", text: "" }),
+        contentSchema: schemaFromExamples(""),
+        contentOf: ({ text }) => text,
+        keyOf: ({ key }) => key,
+        read: () => ({
+          scopes: [
+            {
+              range: "messages.fr.json",
+              covers: ["save"],
+              enumeration: "complete",
+              records: [],
+            },
+          ],
+        }),
+      },
+      quality: {
+        checks: [
+          defineChecker({
+            id: "candidate-body",
+            version: "candidate-body-v1",
+            inputSchema: schemaFromExamples(null),
+            prepare: () => {
+              prepared = true;
+              return { status: "ready", input: null };
+            },
+            check: () => ({
+              status: "complete",
+              diagnostics: [],
+              issues: [],
+              coverage: {
+                selected: 1,
+                evaluated: 1,
+                notApplicable: 0,
+                incomplete: 0,
+                failed: 0,
+              },
+            }),
+          }),
+        ],
+      },
+    });
+
+    await assert.rejects(
+      analyzeQuality(config, {
+        candidates: [
+          {
+            sourceKey: "save",
+            language: "fr",
+            content: { text: "Enregistrer" } as never,
+          },
+        ],
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof StandardSchemaContractError);
+        assert.equal(error.kind, "schema-mismatch");
+        assert.equal(error.valueDescription, "译文候选正文");
+        return true;
+      },
+    );
+
+    assert.equal(prepared, false);
   });
 });

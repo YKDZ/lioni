@@ -1,64 +1,29 @@
 import {
-  defineQualityCheck,
+  defineChecker,
   type Awaitable,
-  type JsonValue,
-  type QualityCheckDefinition,
-  type QualityCheckInput,
-  type QualityObject,
   type QualityCheckOutcome,
-  type QualityDataLoadInput,
-  type StandardSchemaV1,
   type TranslationUnitInput,
 } from "../src/index.ts";
+import { schemaFromExamples } from "./source-schema.ts";
 
-const identityConfigurationSchema: StandardSchemaV1<JsonValue, JsonValue> = {
-  "~standard": {
-    version: 1,
-    vendor: "core-test-quality-check",
-    validate(value) {
-      return { value: value as JsonValue };
-    },
-  },
-};
+const emptyInputSchema = schemaFromExamples(null);
 
-export function defineTestQualityCheck<
+/** 用空 JSON 输入简化不读取上下文的检查器测试。 */
+export function defineTestChecker<
   TUnit extends TranslationUnitInput = TranslationUnitInput,
   TTranslation = unknown,
   TBody = unknown,
-  TUnavailable = never,
+  TUnavailable = unknown,
 >(definition: {
   readonly id: string;
   readonly version?: string;
-  readonly configuration: JsonValue;
-  readonly loadDependencies?: (
-    input: QualityDataLoadInput<TUnit, TTranslation, TBody, TUnavailable>,
-  ) => Awaitable<unknown>;
-  readonly check: (
-    input: QualityCheckInput<
-      TUnit,
-      TTranslation,
-      JsonValue,
-      TBody,
-      TUnavailable
-    >,
-  ) => Awaitable<QualityCheckOutcome>;
-}): QualityCheckDefinition<
-  TUnit,
-  TTranslation,
-  QualityObject,
-  TBody,
-  TUnavailable
-> {
-  return defineQualityCheck<
-    TUnit,
-    TTranslation,
-    typeof identityConfigurationSchema,
-    QualityObject,
-    TBody,
-    TUnavailable
-  >({
-    ...definition,
+  readonly check: (input: null) => Awaitable<QualityCheckOutcome>;
+}) {
+  return defineChecker.withTypes<TUnit, TTranslation, TBody, TUnavailable>()({
+    id: definition.id,
     version: definition.version ?? "core-test-v1",
-    configurationSchema: identityConfigurationSchema,
+    inputSchema: emptyInputSchema,
+    prepare: () => ({ status: "ready", input: null }),
+    check: definition.check,
   });
 }

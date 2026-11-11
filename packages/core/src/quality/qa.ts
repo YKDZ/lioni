@@ -1468,7 +1468,7 @@ export async function runQualityChecksWithQualityData<
       if (boundRequest.candidates.length > 0 && load !== undefined) {
         const endDependencies = options.profile?.checkStage(
           definition.id,
-          "dependencies",
+          "load",
         );
         try {
           const loaded = await load({

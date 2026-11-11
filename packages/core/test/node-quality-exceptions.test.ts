@@ -58,7 +58,6 @@ void describe("Node.js QA 例外存储", () => {
         "utf8",
       );
       assert.match(contents, /^format: lioni\.qa-exceptions\/v2$/mu);
-      assert.doesNotMatch(contents, /configurationFingerprint/u);
     });
   });
 
