@@ -184,7 +184,12 @@ export type {
   ProtectedLiteralIssue,
   QuantityBranch,
   QuantityBranchIssue,
+  TermCheckerGroupLocations,
+  TermCheckerInput,
+  TermCheckerLoaded,
+  TermCheckerLocationInput,
   TermCheckerOptions,
+  TermCheckerPreparation,
 } from "@lioni/checks";
 export { createVueI18nChecks } from "@lioni/checks";
 export type {
@@ -219,6 +224,7 @@ export {
   TermbaseYamlError,
 } from "@lioni/terminology";
 export type {
+  CompiledTerms,
   DiscoverTermsOptions,
   TermCandidate,
   TermCandidateGenerationInput,

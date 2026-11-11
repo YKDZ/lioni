@@ -1,8 +1,5 @@
 import {
-  assertJsonValue,
   type QualityCheckDefinition,
-  type QualityCheckInput,
-  type QualityCheckSelection,
   type QualityDataLoadInput,
   type QualityObject,
   type TranslationUnitInput,
@@ -39,10 +36,7 @@ import type {
   VueI18nReferenceProjector,
 } from "../quality-types.ts";
 import { createVueI18nScopeResolver } from "../scope.ts";
-import {
-  parseVueI18nMessage,
-  VUE_I18N_MESSAGE_COMPILER_VERSION,
-} from "../vue-i18n-messages.ts";
+import { parseVueI18nMessage } from "../vue-i18n-messages.ts";
 
 type TermSubject = {
   readonly key: string;
@@ -93,30 +87,32 @@ export function createVueI18nTerminologyChecks<
     {
       rule: requireAllowedTranslation(),
       identity: options.identities.allowedTerminology,
-      name: "allowed-terminology",
     },
     {
       rule: rejectForbiddenTranslation(),
       identity: options.identities.forbiddenTerminology,
-      name: "forbidden-terminology",
     },
   ] as const;
   // 两条术语规则共用同一编译任务，按本次依赖缓存一份结果。
   const compile = (data: TermbaseData) =>
     compileTerms(createTermbase(data), { analysis: options.analysis });
-  const loadDependencies = async ({
+  const loadLanguages = async ({
     facts,
     memo,
     qualityData,
   }: QualityDataLoadInput<TUnit, TTranslation, TBody, TUnavailable>) => {
-    const [languages, terms] = await Promise.all([
-      qualityData.read(options.loadLanguages, facts, memo),
-      qualityData.read(options.loadTerms, facts, memo),
-    ]);
-    return { languages, terms };
+    return qualityData.read(options.loadLanguages, facts, memo);
+  };
+  const loadTerms = async ({
+    facts,
+    memo,
+    qualityData,
+  }: QualityDataLoadInput<TUnit, TTranslation, TBody, TUnavailable>) => {
+    const data = await qualityData.read(options.loadTerms, facts, memo);
+    return memo.memo(compile)(data);
   };
 
-  return rules.map(({ rule, identity, name }) =>
+  return rules.map(({ rule, identity }) =>
     createTermChecker.withTypes<
       TUnit,
       TTranslation,
@@ -125,44 +121,20 @@ export function createVueI18nTerminologyChecks<
       TUnavailable
     >()({
       id: identity.id,
-      hostVersion: terminologyVersion(name, identity),
-      loadDependencies,
-      terms: (input) => {
-        const dependencies = input.dependencies as {
-          readonly terms: TermbaseData;
-        };
-        return input.memo.memo(compile)(dependencies.terms);
-      },
+      terms: loadTerms,
+      load: loadLanguages,
       rule,
-      // 投影已表达实际文本与语言；位置参与结果缓存，其他消息资源不构成本项依据。
-      fingerprintInput: ({ candidate, projected, subject }) => {
-        const basis = {
-          sourceKey: candidate.sourceKey,
-          language: candidate.language,
-          projected,
-          locations: subject.projection.locations,
-        };
-        assertJsonValue(basis, "术语检查依据");
-        return basis;
-      },
-      select: async (
-        input: QualityCheckInput<
-          TUnit,
-          TTranslation,
-          unknown,
-          TBody,
-          TUnavailable
-        >,
-      ): Promise<QualityCheckSelection<TermSubject>> => {
-        const dependencies = input.dependencies as {
-          readonly languages: readonly VueI18nLanguagePolicy[];
-        };
-        const policy = readVueI18nLanguagePolicies(dependencies.languages).get(
+      prepare: async (input) => {
+        const policy = readVueI18nLanguagePolicies(input.loaded.context).get(
           input.candidate.language,
         );
         if (policy === undefined) return { status: "not-applicable" };
         const projection = await memoizedVueI18nProjection(
-          input,
+          {
+            ...input,
+            configuration: undefined,
+            dependencies: input.loaded.context,
+          },
           options.project,
         );
         if (projection.target.status === "missing")
@@ -180,46 +152,34 @@ export function createVueI18nTerminologyChecks<
             "原文正文不可用，术语检查未执行。",
           );
         if (!projection.target.text.trim()) return { status: "not-applicable" };
+        const subject: TermSubject = {
+          key: projection.key,
+          language: projection.language,
+          source: projection.source.text,
+          target: projection.target.text,
+          policy,
+          projection,
+        };
         return {
-          status: "selected",
-          subject: {
-            key: projection.key,
-            language: projection.language,
-            source: projection.source.text,
-            target: projection.target.text,
-            policy,
-            projection,
+          status: "ready",
+          subject,
+          comparison: {
+            groups: [
+              {
+                ref: subject.key,
+                source: {
+                  language: policy.sourceLanguage,
+                  fragments: [{ ref: subject.key, text: subject.source }],
+                },
+                target: {
+                  language: policy.targetLanguage,
+                  fragments: [{ ref: subject.key, text: subject.target }],
+                },
+              },
+            ],
           },
         };
       },
-      project: (input) => ({
-        status: "ready",
-        value: {
-          groups: [
-            {
-              ref: input.subject.key,
-              source: {
-                language: input.subject.policy.sourceLanguage,
-                fragments: [
-                  {
-                    ref: input.subject.key,
-                    text: input.subject.source,
-                  },
-                ],
-              },
-              target: {
-                language: input.subject.policy.targetLanguage,
-                fragments: [
-                  {
-                    ref: input.subject.key,
-                    text: input.subject.target,
-                  },
-                ],
-              },
-            },
-          ],
-        },
-      }),
       location: ({ side, subject }) => subject.projection.locations[side],
     }),
   );
@@ -423,17 +383,6 @@ function familyInput(
       },
     ],
   };
-}
-
-function terminologyVersion(
-  name: string,
-  identity: VueI18nCheckIdentity,
-): string {
-  return [
-    `vue-i18n-suite/${name}/v1`,
-    `@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
-    identity.hostVersion,
-  ].join("+");
 }
 
 function incompleteSelection(code: string, message: string) {

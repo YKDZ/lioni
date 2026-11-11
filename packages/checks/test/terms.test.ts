@@ -55,14 +55,16 @@ const translationSchema: z.ZodType<Translation, Translation> = z.object({
 function createScenario(
   options: {
     readonly countTermBoundary?: boolean;
-    readonly narrowFingerprint?: boolean;
     readonly loadTerms?: () => Promise<CompiledTerms>;
     readonly resultCache?: QualityCheckResultCache;
+    readonly useDefaultLocations?: boolean;
+    readonly includeWorkspaceTranslation?: boolean;
   } = {},
 ) {
   let storedBody: Body = { visible: "工作区", hidden: "作业区" };
   let sourceTitle = "workspace";
   let otherText = "消息 B";
+  let targetLocationFile = "locale.json";
   let exceptions: readonly QualityException[] = [];
   let invalidProjection = false;
   let targetComplete = true;
@@ -189,52 +191,50 @@ function createScenario(
 
   const checks = [
     createTermChecker<Unit, Translation, string, Body>({
-      hostVersion: "terms-test-v1",
       terms: options.loadTerms ?? terms,
-      ...(options.narrowFingerprint
-        ? {
-            fingerprintInput: ({ projected, candidate }) => ({
-              projected,
-              sourceKey: candidate.sourceKey,
-              language: candidate.language,
-            }),
-          }
-        : {}),
       rule: requireAllowedTranslation(),
-      select: ({ candidate }) => ({
-        status: "selected",
-        subject: candidate.sourceKey,
-      }),
-      project,
-      location: ({ ref, language, sourceKey }) => ({
-        language,
-        range: { file: "locale.json", ref },
-        key: sourceKey,
-      }),
+      prepare: ({ candidate, sourceUnit }) => {
+        const projection = project({ candidate, sourceUnit });
+        return projection.status === "incomplete"
+          ? projection
+          : {
+              status: "ready" as const,
+              comparison: projection.value,
+              subject: candidate.sourceKey,
+            };
+      },
+      ...(options.useDefaultLocations
+        ? {}
+        : {
+            location: ({ ref, language, sourceKey }) => ({
+              language,
+              range: { file: targetLocationFile, ref },
+              key: sourceKey,
+            }),
+          }),
     }),
     createTermChecker<Unit, Translation, string, Body>({
-      hostVersion: "terms-test-v1",
       terms: options.loadTerms ?? terms,
-      ...(options.narrowFingerprint
-        ? {
-            fingerprintInput: ({ projected, candidate }) => ({
-              projected,
-              sourceKey: candidate.sourceKey,
-              language: candidate.language,
-            }),
-          }
-        : {}),
       rule: rejectForbiddenTranslation(),
-      select: ({ candidate }) => ({
-        status: "selected",
-        subject: candidate.sourceKey,
-      }),
-      project,
-      location: ({ ref, language, sourceKey }) => ({
-        language,
-        range: { file: "locale.json", ref },
-        key: sourceKey,
-      }),
+      prepare: ({ candidate, sourceUnit }) => {
+        const projection = project({ candidate, sourceUnit });
+        return projection.status === "incomplete"
+          ? projection
+          : {
+              status: "ready" as const,
+              comparison: projection.value,
+              subject: candidate.sourceKey,
+            };
+      },
+      ...(options.useDefaultLocations
+        ? {}
+        : {
+            location: ({ ref, language, sourceKey }) => ({
+              language,
+              range: { file: targetLocationFile, ref },
+              key: sourceKey,
+            }),
+          }),
     }),
   ];
 
@@ -280,10 +280,14 @@ function createScenario(
             enumeration: targetComplete ? "complete" : "partial",
             covers: sourceUnits.map(({ key }) => key),
             records: [
-              {
-                value: { id: "workspace", body: storedBody },
-                bodyAvailability: "available",
-              },
+              ...(options.includeWorkspaceTranslation === false
+                ? []
+                : [
+                    {
+                      value: { id: "workspace", body: storedBody },
+                      bodyAvailability: "available" as const,
+                    },
+                  ]),
               {
                 value: {
                   id: "other",
@@ -333,6 +337,9 @@ function createScenario(
     terms,
     setOtherText: (value: string) => {
       otherText = value;
+    },
+    setTargetLocationFile: (value: string) => {
+      targetLocationFile = value;
     },
     setSourceTitle: (value: string) => {
       sourceTitle = value;
@@ -644,57 +651,145 @@ void test("术语投影不符合 Standard Schema 时保持正式契约错误", a
   );
 });
 
-void test("术语工厂显式收窄依据后仅相关变化影响例外，默认仍包含完整事实", async () => {
-  for (const narrowFingerprint of [false, true]) {
-    const scenario = createScenario({ narrowFingerprint });
-    const candidates = [
-      {
-        sourceKey: "workspace",
-        language: "zh",
-        content: { visible: "作业区", hidden: "工作区" },
-      },
-    ];
-    const run = () => analyzeQuality(scenario.config, { candidates });
-    const first = await run();
-    scenario.setExceptions(
-      first.checks.flatMap((check) =>
-        check.executions.map((execution) =>
-          createQualityException({
-            id: execution.checkId,
-            reason: "接受消息 A 的译法",
-            execution,
-          }),
-        ),
+void test("术语指纹包含当前文本与位置，不包含无关消息", async () => {
+  const scenario = createScenario();
+  const candidates = [
+    {
+      sourceKey: "workspace",
+      language: "zh",
+      content: { visible: "作业区", hidden: "工作区" },
+    },
+  ];
+  const run = () => analyzeQuality(scenario.config, { candidates });
+  const first = await run();
+  scenario.setExceptions(
+    first.checks.flatMap((check) =>
+      check.executions.map((execution) =>
+        createQualityException({
+          id: execution.checkId,
+          reason: "接受消息 A 的译法",
+          execution,
+        }),
       ),
-    );
-    assert.deepEqual(
-      (await run()).exceptionApplicability.map((item) => item.status),
-      ["applicable", "applicable"],
-    );
-    scenario.setOtherText("修改消息 B");
-    const unrelated = await run();
-    assert.deepEqual(
-      unrelated.exceptionApplicability.map((item) => item.status),
-      narrowFingerprint
-        ? ["applicable", "applicable"]
-        : ["basis-changed", "basis-changed"],
-    );
-    assert.deepEqual(
-      unrelated.diagnostics.map((item) => item.handling.status),
-      narrowFingerprint ? ["excepted", "excepted"] : ["active", "active"],
-    );
-    scenario.setSourceTitle("workspace changed");
-    assert.deepEqual(
-      (await run()).exceptionApplicability.map((item) => item.status),
-      ["basis-changed", "basis-changed"],
-    );
-    scenario.setSourceTitle("workspace");
-    scenario.setOtherText("消息 B");
-    assert.deepEqual(
-      (await run()).exceptionApplicability.map((item) => item.status),
-      ["applicable", "applicable"],
-    );
-  }
+    ),
+  );
+  assert.deepEqual(
+    (await run()).exceptionApplicability.map((item) => item.status),
+    ["applicable", "applicable"],
+  );
+
+  scenario.setOtherText("修改消息 B");
+  const unrelated = await run();
+  assert.deepEqual(
+    unrelated.exceptionApplicability.map((item) => item.status),
+    ["applicable", "applicable"],
+  );
+  assert.deepEqual(
+    unrelated.diagnostics.map((item) => item.handling.status),
+    ["excepted", "excepted"],
+  );
+
+  scenario.setTargetLocationFile("moved-locale.json");
+  assert.deepEqual(
+    (await run()).exceptionApplicability.map((item) => item.status),
+    ["basis-changed", "basis-changed"],
+  );
+  scenario.setTargetLocationFile("locale.json");
+  assert.deepEqual(
+    (await run()).exceptionApplicability.map((item) => item.status),
+    ["applicable", "applicable"],
+  );
+
+  scenario.setSourceTitle("workspace changed");
+  assert.deepEqual(
+    (await run()).exceptionApplicability.map((item) => item.status),
+    ["basis-changed", "basis-changed"],
+  );
+  scenario.setSourceTitle("workspace");
+  scenario.setOtherText("消息 B");
+  assert.deepEqual(
+    (await run()).exceptionApplicability.map((item) => item.status),
+    ["applicable", "applicable"],
+  );
+});
+
+void test("术语默认位置沿用资源范围，新增译文保留身份但不伪造范围", async () => {
+  const candidate = {
+    sourceKey: "workspace",
+    language: "zh",
+    content: { visible: "作业区", hidden: "工作区" },
+  };
+  const existing = createScenario({ useDefaultLocations: true });
+  const existingResult = await analyzeQuality(existing.config, {
+    candidates: [candidate],
+  });
+  const existingEvidence = existingResult.diagnostics
+    .flatMap(({ evidence }) => evidence)
+    .filter((evidence) => evidence.role.endsWith("-term"));
+  const sourceEvidence = existingEvidence.find(
+    ({ role }) => role === "source-term",
+  );
+  const targetEvidence = existingEvidence.find(
+    ({ role }) => role === "target-term",
+  );
+  assert.equal(sourceEvidence?.location.range, "messages.json");
+  assert.equal(targetEvidence?.location.range, "locale.json");
+  assert.equal(targetEvidence?.location.key, "workspace");
+  assert.equal(targetEvidence?.location.language, "zh");
+
+  const added = createScenario({
+    useDefaultLocations: true,
+    includeWorkspaceTranslation: false,
+  });
+  const addedResult = await analyzeQuality(added.config, {
+    candidates: [candidate],
+  });
+  const target = addedResult.diagnostics
+    .flatMap(({ evidence }) => evidence)
+    .find(({ role }) => role === "target-term");
+  assert.equal(target?.location.range, null);
+  assert.equal(target?.location.key, "workspace");
+  assert.equal(target?.location.language, "zh");
+});
+
+void test("术语资料只在检查项已选且存在候选时加载", async () => {
+  let reads = 0;
+  const terms = createScenario().terms;
+  const scenario = createScenario({
+    loadTerms: async () => {
+      reads += 1;
+      return terms;
+    },
+  });
+
+  await analyzeQuality(scenario.config, { candidates: [] });
+  assert.equal(reads, 0);
+
+  const candidate = scenario.candidate();
+  await analyzeQuality(scenario.config, {
+    candidates: [candidate],
+    checkIds: ["terminology/require-allowed-translation"],
+  });
+  assert.equal(reads, 1);
+
+  await analyzeQuality(scenario.config, {
+    candidates: [candidate],
+    checkIds: ["terminology/reject-forbidden-translation"],
+  });
+  assert.equal(reads, 2);
+});
+
+void test("术语规则参数在工厂创建时校验", () => {
+  const scenario = createScenario();
+  assert.throws(
+    () =>
+      createTermChecker<Unit, Translation, string, Body>({
+        terms: scenario.terms,
+        rule: { id: "unknown-rule" } as never,
+        prepare: () => ({ status: "not-applicable" }),
+      }),
+    /rule 必须是受支持的术语规则/u,
+  );
 });
 
 void test("术语工厂以本次异步加载的资料绑定指纹和计算，缓存不能掩盖资料变化", async () => {
@@ -707,7 +802,6 @@ void test("术语工厂以本次异步加载的资料绑定指纹和计算，缓
   >();
   let hits = 0;
   const scenario = createScenario({
-    narrowFingerprint: true,
     loadTerms: async () => {
       reads++;
       return terms;

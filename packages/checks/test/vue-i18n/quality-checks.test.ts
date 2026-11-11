@@ -1026,7 +1026,7 @@ void test("所选 Vue 术语资料不是 JSON 时保持契约错误", async () =
   );
 });
 
-void test("所选 Vue 术语资料不符合术语 schema 时以绑定错误中止", async () => {
+void test("所选 Vue 术语资料不符合术语 schema 时以契约错误中止", async () => {
   const policy = policyFor({ sourceMessages: { label: "Hello" } });
   const fixture = createQualityFixture({
     policies: [policy],
@@ -1036,7 +1036,8 @@ void test("所选 Vue 术语资料不符合术语 schema 时以绑定错误中�
   await assert.rejects(
     fixture.run([candidate("label", "你好")], [checkIds.allowedTerminology]),
     (error: unknown) => {
-      assert.ok(error instanceof QualityCheckBindingError);
+      assert.ok(error instanceof StandardSchemaContractError);
+      assert.equal(error.kind, "schema-mismatch");
       assert.ok(error.cause instanceof TermContractError);
       return true;
     },
