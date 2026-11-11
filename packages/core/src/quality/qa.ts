@@ -25,6 +25,7 @@ import {
   validateWithStandardSchema,
 } from "../standard-schema.ts";
 import type {
+  IsSameType,
   PreservingStandardSchema,
   StandardSchemaV1,
 } from "../standard-schema.ts";
@@ -133,9 +134,13 @@ export type QualityCoverage = {
   readonly failed: number;
 };
 
-type ReadonlyQualityValue<TValue> = TValue extends object
-  ? { readonly [TKey in keyof TValue]: ReadonlyQualityValue<TValue[TKey]> }
-  : TValue;
+/** JsonValue 联合本身已递归只读；普通可赋值对象仍须逐层变为只读。 */
+type ReadonlyQualityValue<TValue> =
+  IsSameType<TValue, JsonValue> extends true
+    ? TValue
+    : TValue extends object
+      ? { readonly [TKey in keyof TValue]: ReadonlyQualityValue<TValue[TKey]> }
+      : TValue;
 
 type MutableQualityCoverage = {
   -readonly [TKey in keyof QualityCoverage]: QualityCoverage[TKey];

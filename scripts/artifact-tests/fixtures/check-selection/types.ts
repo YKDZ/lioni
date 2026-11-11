@@ -6,7 +6,12 @@ import {
   type MessageFamilyCheckerOptions,
   type QualityCheckDefinition,
   type QualityObject,
+  type TermCheckerGroupLocations,
+  type TermCheckerInput,
+  type TermCheckerLoaded,
+  type TermCheckerLocationInput,
   type TermCheckerOptions,
+  type TermCheckerPreparation,
 } from "@lioni/lioni";
 
 import config from "./lioni.config.ts";
@@ -32,6 +37,15 @@ type Unit = {
 };
 type Translation = { readonly id: string; readonly body: Body };
 type Subject = { readonly sourceText: string };
+
+const termAdapterTypes = null as unknown as {
+  readonly input: TermCheckerInput;
+  readonly loaded: TermCheckerLoaded<unknown>;
+  readonly location: TermCheckerLocationInput<Subject>;
+  readonly locations: TermCheckerGroupLocations;
+  readonly preparation: TermCheckerPreparation<Subject>;
+};
+void termAdapterTypes;
 
 declare const optionalFamilyIdOptions: MessageFamilyCheckerOptions<
   Unit,
