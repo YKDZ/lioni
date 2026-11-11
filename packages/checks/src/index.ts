@@ -1,7 +1,7 @@
 export { compareNumberText, createNumberChecker } from "./numbers.ts";
 export type {
   NumberCheckerOptions,
-  NumberCheckerSubject,
+  NumberCheckerPreparation,
   NumberTextInput,
 } from "./numbers.ts";
 export { createTermChecker } from "./terms.ts";

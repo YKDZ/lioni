@@ -6,10 +6,13 @@ import path from "node:path";
 import {
   analyzeQuality,
   createQualityProfiler,
+  createNumberChecker,
+  defineChecker,
   readFacts,
   StandardSchemaContractError,
 } from "@lioni/lioni";
 import { createDirectoryQualityCheckResultCache } from "@lioni/lioni/node";
+import * as z from "zod";
 
 import config, { createConfig } from "./lioni.config.ts";
 
@@ -89,6 +92,17 @@ assert.deepEqual(
 const quality = await analyzeQuality(config);
 assert.equal(quality.status, "complete");
 assert.equal(quality.diagnostics.length, 1);
+const defaultNumberConfig = {
+  ...config,
+  quality: { ...config.quality, checks: [createNumberChecker()] },
+};
+const defaultNumberQuality = await analyzeQuality(defaultNumberConfig, {
+  candidates: [
+    { sourceKey: "catalog", language: "fr", content: "Enregistrer 2 fichiers" },
+  ],
+});
+assert.equal(defaultNumberQuality.status, "complete");
+assert.deepEqual(defaultNumberQuality.diagnostics, []);
 const qualityCheck = quality.checks[0];
 assert.ok(qualityCheck);
 assert.equal("configuration" in qualityCheck, false);
@@ -144,11 +158,38 @@ const invalidDependencyData = () => {
   value.self = value;
   return value;
 };
+const configForInvalidData = createConfig();
+const configuredQuality = configForInvalidData.quality ?? { checks: [] };
+const invalidDataConfig = {
+  ...configForInvalidData,
+  quality: {
+    ...configuredQuality,
+    checks: [
+      ...(configuredQuality.checks ?? []),
+      defineChecker({
+        id: "artifact/invalid-quality-data",
+        version: "1",
+        inputSchema: z.string(),
+        load: ({ qualityData }) => qualityData.read(invalidDependencyData),
+        prepare: () => ({ status: "not-applicable" }),
+        check: () => ({
+          status: "complete",
+          diagnostics: [],
+          issues: [],
+          coverage: {
+            selected: 1,
+            evaluated: 1,
+            notApplicable: 0,
+            incomplete: 0,
+            failed: 0,
+          },
+        }),
+      }),
+    ],
+  },
+};
 await assert.rejects(
-  analyzeQuality(
-    createConfig(({ qualityData }) => qualityData.read(invalidDependencyData)),
-    { profiler: interrupted },
-  ),
+  analyzeQuality(invalidDataConfig, { profiler: interrupted }),
   (error: unknown) =>
     error instanceof StandardSchemaContractError &&
     error.kind === "invalid-json",
