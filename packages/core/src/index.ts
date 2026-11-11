@@ -394,11 +394,11 @@ export type QualityConfiguration<
 > = {
   /** 直接声明本次运行使用的检查器；检查器的校验与执行由 SDK 管理。 */
   readonly checks?: readonly QualityCheckDefinition<
-    TUnit,
-    TTranslation,
+    NoInfer<TUnit>,
+    NoInfer<TTranslation>,
     QualityObject,
-    TBody,
-    TUnavailable,
+    NoInfer<TBody>,
+    NoInfer<TUnavailable>,
     TCheckId
   >[];
   /** 项目自定义分组；每个成员只能引用 checks 中声明的检查项 ID。 */

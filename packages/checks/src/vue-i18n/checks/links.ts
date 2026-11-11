@@ -2,15 +2,18 @@ import type { QualityIssue, TranslationUnitInput } from "@lioni/core";
 import type { MemoScope } from "@lioni/memo";
 
 import { memoizedVueI18nMessage } from "../message-memo.ts";
+import type { VueI18nPreparer } from "../quality-projection.ts";
 import type {
   VueI18nDataReader,
   VueI18nCheckIdentity,
   VueI18nMessageProjection,
   VueI18nPolicy,
   VueI18nPolicyData,
-  VueI18nProjector,
 } from "../quality-types.ts";
-import { VUE_I18N_MESSAGE_COMPILER_VERSION } from "../vue-i18n-messages.ts";
+import {
+  parseVueI18nMessage,
+  VUE_I18N_MESSAGE_COMPILER_VERSION,
+} from "../vue-i18n-messages.ts";
 import {
   completeOutcome,
   createVueI18nMessageCheck,
@@ -28,8 +31,8 @@ export function createLinkTargetExistsCheck<
   TUnavailable = never,
   TId extends string = string,
 >(options: {
-  readonly identity: VueI18nCheckIdentity<TId>;
-  readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
+  readonly identity: Pick<VueI18nCheckIdentity<TId>, "id">;
+  readonly prepare?: VueI18nPreparer<TUnit, TTranslation, TBody, TUnavailable>;
   readonly loadPolicies: VueI18nDataReader<
     TUnit,
     TTranslation,
@@ -40,8 +43,8 @@ export function createLinkTargetExistsCheck<
 }) {
   return createVueI18nMessageCheck({
     id: options.identity.id,
-    version: version("link-target-exists", options.identity),
-    project: options.project,
+    version: version("link-target-exists"),
+    adapter: options.prepare,
     loadPolicies: options.loadPolicies,
     policyRequirements: ["resources"],
     requiresSource: false,
@@ -62,14 +65,14 @@ export function createLinkTargetExistsCheck<
           : [],
       );
     },
-    check: (input, _policy, targets) => {
-      const projection = input.projected;
+    check: (input, targets) => {
+      const projection = input;
       if (projection.target.status !== "available")
         return incompleteOutcome([
           issue("targetUnavailable", "目标消息正文不可用。", projection),
         ]);
       const targetText = projection.target.text;
-      const message = memoizedVueI18nMessage(targetText, input.memo);
+      const message = parseVueI18nMessage(targetText);
       if (message.errors.length > 0)
         return incompleteOutcome([
           issue(
@@ -117,8 +120,8 @@ export function createLinkCycleCheck<
   TUnavailable = never,
   TId extends string = string,
 >(options: {
-  readonly identity: VueI18nCheckIdentity<TId>;
-  readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
+  readonly identity: Pick<VueI18nCheckIdentity<TId>, "id">;
+  readonly prepare?: VueI18nPreparer<TUnit, TTranslation, TBody, TUnavailable>;
   readonly loadPolicies: VueI18nDataReader<
     TUnit,
     TTranslation,
@@ -129,45 +132,45 @@ export function createLinkCycleCheck<
 }) {
   return createVueI18nMessageCheck({
     id: options.identity.id,
-    version: version("link-cycle", options.identity),
-    project: options.project,
+    version: version("link-cycle"),
+    adapter: options.prepare,
     loadPolicies: options.loadPolicies,
     policyRequirements: ["resources"],
     requiresSource: false,
     requiresTarget: true,
     prepare: reachableMessages,
-    check: (input, _policy, messages) => {
-      if (input.projected.target.status !== "available")
+    check: (input, messages) => {
+      if (input.target.status !== "available")
         return incompleteOutcome([
-          issue("targetUnavailable", "目标消息正文不可用。", input.projected),
+          issue("targetUnavailable", "目标消息正文不可用。", input),
         ]);
-      const search = findCycle(input.projected, messages, input.memo);
-      const targetText = input.projected.target.text;
-      const fallbackRange = fullRange(input.projected.target.text);
+      const search = findCycle(input, messages);
+      const targetText = input.target.text;
+      const fallbackRange = fullRange(input.target.text);
       const diagnostics =
         search.path === undefined
           ? []
           : [
               finding(
-                input.projected,
+                input,
                 "linked-message-cycle",
                 `关联消息形成循环：${search.path.join(" → ")}。`,
                 search.range ?? fallbackRange,
                 [
                   {
                     role: "target-message",
-                    object: translationObject(input.projected),
+                    object: translationObject(input),
                     location: messageLocation(
-                      input.projected,
+                      input,
                       search.range ?? fallbackRange,
                     ),
                     value: targetText,
                   },
                   {
                     role: "link-cycle",
-                    object: translationObject(input.projected),
+                    object: translationObject(input),
                     location: messageLocation(
-                      input.projected,
+                      input,
                       search.range ?? fallbackRange,
                     ),
                     value: search.path,
@@ -233,7 +236,6 @@ type CycleSearch = {
 function findCycle(
   projection: VueI18nMessageProjection,
   messages: readonly ReachableMessage[],
-  memo: MemoScope,
 ): CycleSearch {
   const byKey = new Map(messages.map((message) => [message.key, message.text]));
   const active = new Map<string, number>();
@@ -255,7 +257,7 @@ function findCycle(
     stack.push(key);
     const text = byKey.get(key) ?? undefined;
     if (text !== undefined) {
-      const message = memoizedVueI18nMessage(text, memo);
+      const message = parseVueI18nMessage(text);
       if (message.errors.length > 0) {
         issues.push(
           issue(
@@ -288,9 +290,9 @@ function findCycle(
   };
 }
 
-function version(kind: string, identity: VueI18nCheckIdentity): string {
+function version(kind: string): string {
   const base = `vue-i18n-suite/${kind}/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`;
-  return identity.hostVersion ? `${base}+${identity.hostVersion}` : base;
+  return base;
 }
 
 function hasOwn(

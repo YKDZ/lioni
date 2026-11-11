@@ -1,7 +1,7 @@
 export { compareNumberText, createNumberChecker } from "./numbers.ts";
 export type {
   NumberCheckerOptions,
-  NumberCheckerSubject,
+  NumberCheckerPreparation,
   NumberTextInput,
 } from "./numbers.ts";
 export { createTermChecker } from "./terms.ts";
@@ -56,3 +56,13 @@ export type {
   VueI18nSourceMessage,
   VueI18nTargetMessage,
 } from "./vue-i18n/quality-types.ts";
+export { prepareVueI18nMessage } from "./vue-i18n/quality-projection.ts";
+export type {
+  VueI18nPrepareInput,
+  VueI18nPreparer,
+} from "./vue-i18n/quality-projection.ts";
+export {
+  createVueI18nSourceSyntaxChecker,
+  createVueI18nTargetSyntaxChecker,
+} from "./vue-i18n/vue-i18n-syntax-checkers.ts";
+export { createVueI18nVariableCorrespondenceChecker } from "./vue-i18n/vue-i18n-variable-checker.ts";
