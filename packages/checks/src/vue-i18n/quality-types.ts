@@ -17,11 +17,13 @@ import type {
 } from "../message-family-checker.ts";
 import type {
   VueI18nMessageProjection,
+  VueI18nPreparer,
   VueI18nProjector,
 } from "./quality-projection.ts";
 
 export type {
   VueI18nMessageProjection,
+  VueI18nPreparer,
   VueI18nProjectionInput,
   VueI18nProjector,
   VueI18nSourceMessage,
@@ -140,6 +142,8 @@ export type VueI18nChecksOptions<
   TBody,
   TUnavailable = never,
 > = {
+  /** 为本候选提取 Vue 消息及其位置；未提供时沿用字符串正文默认适配。 */
+  readonly prepare?: VueI18nPreparer<TUnit, TTranslation, TBody, TUnavailable>;
   /** 宿主投影、位置映射和策略语义变化时更新，用于使缓存失效。 */
   readonly hostVersion: string;
   /** 将本次候选、事实和依赖映射为 Vue I18n 消息。 */

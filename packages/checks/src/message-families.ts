@@ -69,9 +69,22 @@ const messageFamilyGroupSchema = z
   })
   .readonly();
 
+const qualityLocationSchema = z.custom<QualityLocation>((value) => {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    return false;
+  const location = value as Record<string, unknown>;
+  return (
+    (location.language === null || typeof location.language === "string") &&
+    Object.hasOwn(location, "range") &&
+    (!Object.hasOwn(location, "key") || typeof location.key === "string")
+  );
+});
+
 const messageFamilyInputShapeSchema = z
   .object({
     groups: z.array(messageFamilyGroupSchema).readonly(),
+    /** 与投影文本一起固定的候选位置；通用参照仍从事实回退。 */
+    location: qualityLocationSchema.optional(),
     /** false 表示仍有未投影的消息组；单个目标正文缺失由 target.complete 表达。 */
     complete: z.boolean().optional(),
     issues: z.array(messageFamilyIssueSchema).readonly().optional(),
@@ -105,6 +118,7 @@ export type MessageFamilyGroup = {
 };
 export type MessageFamilyInput = {
   readonly groups: readonly MessageFamilyGroup[];
+  readonly location?: QualityLocation | undefined;
   readonly complete?: boolean | undefined;
   readonly issues?: readonly MessageFamilyIssue[] | undefined;
 };

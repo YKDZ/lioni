@@ -115,6 +115,26 @@ async function run(
             sourceUnit!.unit.source,
             candidate.content,
           ),
+        prepare: ({ sourceUnit, candidate }) => {
+          const prepared = projection(
+            candidate.sourceKey,
+            sourceUnit.unit.source,
+            candidate.content,
+          );
+          return {
+            status: "ready",
+            input: {
+              ...prepared,
+              locations: {
+                ...prepared.locations,
+                target: {
+                  ...prepared.locations.target,
+                  range: "prepared-by-adapter.json",
+                },
+              },
+            },
+          };
+        },
         loadPolicies: () => [policy],
         reference: ({ sourceUnit, translation }) => {
           assert.equal(translation.bodyAvailability, "available");
@@ -153,6 +173,12 @@ const second = { key: "second", source: "Active", text: "有效" };
 const other = { key: "other", source: "Delete", text: "删除" };
 const before = await run([first, second, other]);
 assert.equal(before.diagnostics.length, 1);
+assert.equal(before.diagnostics[0]?.location.range, "prepared-by-adapter.json");
+assert.equal(
+  before.diagnostics[0]?.evidence.find(({ role }) => role === "saved-reference")
+    ?.location.range,
+  "zh-CN.json",
+);
 const execution = before.checks[0]?.executions[0];
 assert.ok(execution);
 exceptions.push(

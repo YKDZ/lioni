@@ -26,6 +26,7 @@ import {
 } from "../dependencies.ts";
 import { memoizedVueI18nMessage } from "../message-memo.ts";
 import { memoizedVueI18nProjection } from "../quality-projection.ts";
+import { prepareVueI18nMessage } from "../quality-projection.ts";
 import type {
   VueI18nCheckIdentity,
   VueI18nDataReader,
@@ -34,6 +35,7 @@ import type {
   VueI18nPolicy,
   VueI18nPolicyData,
   VueI18nProjector,
+  VueI18nPreparer,
   VueI18nReferenceProjector,
 } from "../quality-types.ts";
 import { createVueI18nScopeResolver } from "../scope.ts";
@@ -230,7 +232,7 @@ export function createVueI18nMessageFamilyCheck<
   TUnavailable = never,
   TId extends string = string,
 >(options: {
-  readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
+  readonly prepare?: VueI18nPreparer<TUnit, TTranslation, TBody, TUnavailable>;
   readonly loadPolicies: VueI18nDataReader<
     TUnit,
     TTranslation,
@@ -287,10 +289,9 @@ export function createVueI18nMessageFamilyCheck<
         .policies.get(input.candidate.language);
       if (policy === undefined || input.sourceUnit === null)
         return { status: "not-applicable" };
-      const projection = await memoizedVueI18nProjection(
-        { ...input, configuration: undefined, dependencies: input.loaded },
-        options.project,
-      );
+      const prepared = await prepareVueI18nMessage(input, options.prepare);
+      if (prepared.status !== "ready") return prepared;
+      const projection = prepared.input;
       const unavailable = sourceAvailability(projection);
       if (unavailable !== undefined) return unavailable;
       const targetUnavailable = targetAvailability(projection);
@@ -333,11 +334,13 @@ function familyInput(
   projection: VueI18nMessageProjection,
   policies: ReadonlyMap<string, VueI18nPolicy>,
 ): MessageFamilyInput {
+  const location = projection.locations.target;
   const policy = policies.get(projection.language);
   if (policy === undefined)
     return {
       complete: false,
       groups: [],
+      location,
       issues: [
         {
           code: "missing-language-policy",
@@ -350,6 +353,7 @@ function familyInput(
     return {
       complete: false,
       groups: [],
+      location,
       issues: [
         {
           code: "sourceBodyUnavailable",
@@ -363,6 +367,7 @@ function familyInput(
     return {
       complete: false,
       groups: [],
+      location,
       issues: [
         {
           code: "sourceMessageSyntaxInvalid",
@@ -394,6 +399,7 @@ function familyInput(
 
   const scope = createVueI18nScopeResolver(policy)(projection.key);
   return {
+    location,
     groups: [
       {
         ref: projection.key,

@@ -1,6 +1,7 @@
 import {
   createVueI18nChecks,
   type VueI18nMessageProjection,
+  type VueI18nPreparer,
   type VueI18nPolicy,
   type VueI18nChecksOptions,
 } from "@lioni/checks";
@@ -113,6 +114,12 @@ export function createQualityFixture(input: {
   readonly exceptionStore?: QualityExceptionStore;
   readonly unavailableSourceKeys?: readonly string[];
   readonly onProject?: () => void;
+  readonly prepare?: VueI18nPreparer<Unit, Translation, Body>;
+  readonly reference?: VueI18nChecksOptions<
+    Unit,
+    Translation,
+    Body
+  >["reference"];
   readonly alterProjection?: (
     projection: VueI18nMessageProjection,
   ) => VueI18nMessageProjection;
@@ -136,13 +143,12 @@ export function createQualityFixture(input: {
         }
       : input.dataReaders;
 
-  const project = (
+  const projectMessage = (
     qualityInput: Omit<
       QualityCheckInput<Unit, Translation, unknown, Body>,
       "configuration" | "dependencies"
     >,
   ): VueI18nMessageProjection => {
-    input.onProject?.();
     const candidate = qualityInput.candidate;
     const policy = byLanguage.get(candidate.language);
     if (!policy) throw new Error(`缺少目标语言策略：${candidate.language}。`);
@@ -164,8 +170,23 @@ export function createQualityFixture(input: {
     });
     return input.alterProjection?.(projected) ?? projected;
   };
+  const project = (
+    qualityInput: Omit<
+      QualityCheckInput<Unit, Translation, unknown, Body>,
+      "configuration" | "dependencies"
+    >,
+  ): VueI18nMessageProjection => {
+    input.onProject?.();
+    return projectMessage(qualityInput);
+  };
+  const prepare =
+    input.prepare ??
+    ((qualityInput: Parameters<typeof project>[0]) => ({
+      status: "ready" as const,
+      input: projectMessage(qualityInput),
+    }));
 
-  const reference = (
+  const defaultReference = (
     value: Parameters<
       VueI18nChecksOptions<Unit, Translation, Body>["reference"]
     >[0],
@@ -187,6 +208,7 @@ export function createQualityFixture(input: {
           : { status: "unavailable" },
     });
   };
+  const reference = input.reference ?? defaultReference;
 
   const sourceSchema = z.object({
     key: z.string(),
@@ -259,6 +281,7 @@ export function createQualityFixture(input: {
       checks: createVueI18nChecks<Unit, Translation, Body>({
         hostVersion: "vue-i18n-quality-test-v1",
         project,
+        prepare,
         reference,
         ...dataReaders,
       }),
