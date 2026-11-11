@@ -320,8 +320,9 @@ void test("共享资料失败只读取一次并隔离到相关检查，独立检
     ],
   );
   assert.equal(result.checks[0]?.issues[0]?.message, sharedFailure.message);
-  assert.equal(Object.hasOwn(result.checks[0] ?? {}, "dependencies"), false);
-  assert.deepEqual(result.checks[3]?.dependencies, { available: true });
+  assert.ok(
+    result.checks.every((check) => !Object.hasOwn(check, "dependencies")),
+  );
   const profile = profiler.report();
   for (const check of profile.checks.slice(0, 3)) {
     assert.equal(
@@ -482,7 +483,7 @@ void test("直接配置检查器并按运行读取资料，筛选不裁剪事实
     { sourceKey: "save", language: "zh-CN", content: "保存" },
     { sourceKey: "cancel", language: "zh-CN", content: "取消" },
   ]);
-  assert.deepEqual(first.checks[0]?.dependencies, { run: 1 });
+  assert.equal(Object.hasOwn(first.checks[0] ?? {}, "dependencies"), false);
 
   const second = await analyzeQuality(config, {
     candidates: [
@@ -495,7 +496,7 @@ void test("直接配置检查器并按运行读取资料，筛选不裁剪事实
   assert.deepEqual(second.candidates, [
     { sourceKey: "cancel", language: "zh-CN", content: "取消候选 B" },
   ]);
-  assert.deepEqual(second.checks[0]?.dependencies, { run: 2 });
+  assert.equal(Object.hasOwn(second.checks[0] ?? {}, "dependencies"), false);
   assert.deepEqual(
     second.factCoverage.associations.map(
       ({ candidateSelected }) => candidateSelected,

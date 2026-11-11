@@ -89,6 +89,17 @@ assert.deepEqual(
 const quality = await analyzeQuality(config);
 assert.equal(quality.status, "complete");
 assert.equal(quality.diagnostics.length, 1);
+const qualityCheck = quality.checks[0];
+assert.ok(qualityCheck);
+assert.equal("configuration" in qualityCheck, false);
+assert.equal("dependencies" in qualityCheck, false);
+const execution = qualityCheck.executions[0];
+assert.ok(execution?.inputFingerprint);
+assert.deepEqual(Object.keys(execution?.fingerprintSummary ?? {}).sort(), [
+  "inputFingerprint",
+  "version",
+]);
+assert.doesNotMatch(JSON.stringify(quality), /configurationFingerprint/u);
 const cacheDirectory = await mkdtemp(
   path.join(os.tmpdir(), "lioni-artifact-cache-"),
 );

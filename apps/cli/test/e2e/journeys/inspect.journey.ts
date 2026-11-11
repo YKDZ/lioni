@@ -78,33 +78,54 @@ export default defineConfig({
     );
     await writeFile(
       path.join(workDir, "qa.config.ts"),
-      `import { defineConfig, defineQualityCheck } from "${sdkImport}";
+      `import { defineConfig, defineChecker } from "${sdkImport}";
 import * as z from "zod";
 import baseConfig from "./lioni.config.ts";
 
-const enabledConfigurationSchema = z.object({ enabled: z.boolean() });
+const inputSchema = z.strictObject({
+  enabled: z.boolean(),
+  sourceKey: z.string(),
+  language: z.string(),
+  content: z.string(),
+});
 
 export default defineConfig({
   ...baseConfig,
   quality: {
-    checks: [defineQualityCheck({
+    checks: [defineChecker({
       id: "host-rule",
       version: "inspect-journey-qa-v1",
-      configurationSchema: enabledConfigurationSchema,
-      configuration: { enabled: true },
-      loadDependencies: () => ({ selectedBy: "defineQualityCheck" }),
-      check({ configuration, candidate }) {
+      inputSchema,
+      load() {
+        const enabledBySource = new Map([["src/messages.ts:18", true]]);
         return {
-          status: configuration.enabled ? "complete" : "not-applicable",
-          diagnostics: configuration.enabled ? [{
+          enabledBySource,
+          isEnabled: (sourceKey) => enabledBySource.get(sourceKey) ?? false,
+        };
+      },
+      prepare({ candidate, loaded }) {
+        return {
+          status: "ready",
+          input: {
+            enabled: loaded.isEnabled(candidate.sourceKey),
+            sourceKey: candidate.sourceKey,
+            language: candidate.language,
+            content: candidate.content,
+          },
+        };
+      },
+      check(input) {
+        return {
+          status: input.enabled ? "complete" : "not-applicable",
+          diagnostics: input.enabled ? [{
             severity: "warning",
             object: {
               kind: "translation-unit",
-              key: candidate.sourceKey,
-              language: candidate.language
+              key: input.sourceKey,
+              language: input.language
             },
             location: {
-              language: candidate.language,
+              language: input.language,
               range: "src/messages.ts:18"
             },
             message: "候选需要人工复核。",
@@ -348,8 +369,6 @@ export default defineConfig({
         checks: readonly {
           checkId: string;
           version: string;
-          configuration: { enabled: boolean };
-          dependencies?: { selectedBy: string };
           status: string;
           diagnostics: readonly {
             checkId: string;
@@ -366,7 +385,6 @@ export default defineConfig({
             inputFingerprint?: string;
             fingerprintSummary?: {
               version: string;
-              configurationFingerprint: string;
               inputFingerprint: string;
             };
           }[];
@@ -396,10 +414,13 @@ export default defineConfig({
     const check = qaResult.data.checks[0];
     assert.equal(check?.checkId, "host-rule");
     assert.equal(check?.version, "inspect-journey-qa-v1");
-    assert.deepEqual(check?.configuration, { enabled: true });
-    assert.deepEqual(check?.dependencies, {
-      selectedBy: "defineQualityCheck",
-    });
+    assert.equal("configuration" in (check ?? {}), false);
+    assert.equal("dependencies" in (check ?? {}), false);
+    assert.deepEqual(
+      Object.keys(check?.executions[0]?.fingerprintSummary ?? {}).sort(),
+      ["inputFingerprint", "version"],
+    );
+    assert.doesNotMatch(qa?.stdout ?? "", /isEnabled|enabledBySource/u);
     assert.equal(check?.status, "complete");
     assert.equal(qaResult.data.diagnostics.length, 1);
     assert.equal(qaResult.data.diagnostics[0]?.checkId, "host-rule");
@@ -440,7 +461,7 @@ export default defineConfig({
     );
     assert.equal(
       check?.executions[0]?.fingerprintSummary?.version,
-      "lioni.check-input/v1:inspect-journey-qa-v1",
+      "inspect-journey-qa-v1",
     );
     assert.equal(
       qaText?.exitCode,
