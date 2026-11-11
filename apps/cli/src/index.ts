@@ -179,7 +179,7 @@ export type {
   MessageFamilySignature,
   MessageFragment,
   NumberCheckerOptions,
-  NumberCheckerSubject,
+  NumberCheckerPreparation,
   NumberTextInput,
   ProtectedLiteralIssue,
   QuantityBranch,

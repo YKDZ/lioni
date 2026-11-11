@@ -1,53 +1,65 @@
-import type {
-  Awaitable,
-  QualityCheckDefinition,
-  QualityCheckInput,
-  QualityCheckOutcome,
-  QualityDataLoadInput,
-  QualityCheckRuleInput,
-  QualityCheckSelection,
-  QualityEvidence,
-  QualityInputBasis,
-  QualityLocation,
-  QualityObject,
-  QualitySubject,
-  SourceUnitFact,
-  TranslationUnitInput,
+import {
+  defineChecker,
+  type Awaitable,
+  type CheckerPrepareInput,
+  type QualityCheckDefinition,
+  type QualityCheckOutcome,
+  type QualityIssue,
+  type QualityLocation,
+  type QualityObject,
+  type QualitySubject,
+  type TranslationUnitInput,
 } from "@lioni/core";
-import { assertJsonValue, bindQualityCheck } from "@lioni/core";
 import { z } from "zod";
 
-const numberCheckerConfigurationSchema = z.object({
-  format: z.literal("ascii-decimal-v1"),
-  comparison: z.literal("exact-multiset"),
-});
-type NumberCheckerConfiguration = {
-  readonly format: "ascii-decimal-v1";
-  readonly comparison: "exact-multiset";
-};
+const qualityLocationSchema = z
+  .object({
+    language: z.string().nullable(),
+    range: z.unknown(),
+    key: z.string().optional(),
+  })
+  .passthrough();
 
 const numberTextInputSchema = z.object({
   source: z.string(),
   target: z.string(),
+  subject: z.object({ key: z.string(), language: z.string() }),
+  sourceLocation: qualityLocationSchema,
+  targetLocation: qualityLocationSchema,
+  targetContent: z.unknown(),
 });
+type CheckerNumberTextInput = z.input<typeof numberTextInputSchema>;
+
 export type NumberTextInput = {
   readonly source: string;
   readonly target: string;
+  readonly subject: QualitySubject;
+  readonly sourceLocation: QualityLocation;
+  readonly targetLocation: QualityLocation;
+  readonly targetContent: unknown;
 };
 
-export type NumberCheckerSubject<
-  TUnit extends TranslationUnitInput,
-  TContent,
+export type NumberCheckerPreparation =
+  | {
+      readonly status: "ready";
+      readonly source: string;
+      readonly target: string;
+      readonly sourceLocation?: QualityLocation;
+      readonly targetLocation?: QualityLocation;
+    }
+  | { readonly status: "not-applicable" }
+  | { readonly status: "incomplete"; readonly issue: QualityIssue };
+
+export type NumberCheckerOptions<
+  TUnit extends TranslationUnitInput = TranslationUnitInput,
+  TTranslation = unknown,
+  TBody = unknown,
+  TUnavailable = unknown,
 > = {
-  readonly sourceUnit: SourceUnitFact<TUnit>;
-  readonly sourceKey: string;
-  readonly language: string;
-  readonly content: TContent;
-};
-
-const numberCheckerConfiguration: NumberCheckerConfiguration = {
-  format: "ascii-decimal-v1",
-  comparison: "exact-multiset",
+  /** 为结构化正文明确提供文本提取与适用范围。 */
+  readonly prepare?: (
+    input: CheckerPrepareInput<TUnit, TTranslation, TBody, TUnavailable>,
+  ) => Awaitable<NumberCheckerPreparation>;
 };
 
 type NumberCheckerDefinition<
@@ -55,233 +67,139 @@ type NumberCheckerDefinition<
   TTranslation,
   TBody,
   TUnavailable,
-  TId extends string = "number-correspondence",
 > = QualityCheckDefinition<
   TUnit,
   TTranslation,
   QualityObject,
   TBody,
   TUnavailable,
-  TId
+  "number-correspondence"
 >;
 
-export type NumberCheckerOptions<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TSelectedUnit extends TUnit,
-  TContent,
+/** 默认比较字符串正文；结构化正文可通过 prepare 明确提供适配。 */
+function createNumberCheckerImplementation<
+  TUnit extends TranslationUnitInput = TranslationUnitInput,
+  TTranslation = unknown,
   TBody = unknown,
-  TUnavailable = never,
-> = {
-  /** 宿主选择与文本提取逻辑的版本。 */
-  readonly hostVersion: string;
-  /** 只在数字检查已选且存在候选时读取其专属资料。 */
-  readonly loadDependencies?: (
-    input: QualityDataLoadInput<TUnit, TTranslation, TBody, TUnavailable>,
-  ) => Awaitable<unknown>;
-  readonly select: (
-    input: QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
-  ) => Awaitable<
-    QualityCheckSelection<NumberCheckerSubject<TSelectedUnit, TContent>>
-  >;
-  /** 声明显式宿主依赖；工厂另行纳入实际文本、关联、位置和诊断证据，省略时保留全事实默认。回调返回后核心立即校验并摘要；此处只读访问共享输入。 */
-  readonly fingerprintInput?: (
-    input: QualityCheckRuleInput<
-      TUnit,
-      TTranslation,
-      NumberCheckerConfiguration,
-      NumberCheckerSubject<TSelectedUnit, TContent>,
-      NumberTextInput,
-      TBody,
-      TUnavailable
-    >,
-  ) => QualityInputBasis;
-  readonly sourceText: (unit: TSelectedUnit) => unknown;
-  readonly translationText: (content: TContent) => unknown;
-  readonly sourceLocation?: (
-    unit: TSelectedUnit,
-    subject: QualitySubject,
-    defaultLocation: QualityLocation,
-  ) => QualityLocation;
-  readonly translationLocation?: (
-    translation: TTranslation | undefined,
-    subject: QualitySubject,
-    defaultLocation: QualityLocation,
-  ) => QualityLocation;
-};
-
-/** 按宿主选择的范围和投影，比较 ASCII 十进制数字及其出现次数。 */
-export function createNumberChecker<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TSelectedUnit extends TUnit,
-  TContent,
-  TBody = unknown,
-  TUnavailable = never,
+  TUnavailable = unknown,
 >(
-  options: NumberCheckerOptions<
-    TUnit,
-    TTranslation,
-    TSelectedUnit,
-    TContent,
-    TBody,
-    TUnavailable
-  >,
+  options: NumberCheckerOptions<TUnit, TTranslation, TBody, TUnavailable> = {},
 ): NumberCheckerDefinition<TUnit, TTranslation, TBody, TUnavailable> {
-  type Selected = NumberCheckerSubject<TSelectedUnit, TContent>;
-  type Subject = {
-    readonly value: Selected;
-    readonly projected: NumberTextInput;
-    readonly report: Parameters<typeof compareNumberText>[0];
-    readonly association: QualityInputBasis;
-  };
-  const fingerprintInput = options.fingerprintInput;
-  const loadDependencies = options.loadDependencies;
-  return bindQualityCheck<
-    TUnit,
-    TTranslation,
-    typeof numberCheckerConfigurationSchema,
-    typeof numberTextInputSchema,
-    Subject,
-    QualityObject,
-    TBody,
-    TUnavailable,
-    "number-correspondence"
-  >({
+  if (options === null || typeof options !== "object" || Array.isArray(options))
+    throw new TypeError("数字检查器选项必须是对象。");
+  if (options.prepare !== undefined && typeof options.prepare !== "function")
+    throw new TypeError("数字检查器 prepare 必须是函数。");
+
+  return defineChecker.withTypes<TUnit, TTranslation, TBody, TUnavailable>()({
     id: "number-correspondence",
-    version: `checks.number-correspondence/v2+${options.hostVersion}`,
-    configurationSchema: numberCheckerConfigurationSchema,
-    configuration: numberCheckerConfiguration,
+    version: "checks.number-correspondence/v3",
     inputSchema: numberTextInputSchema,
-    ...(loadDependencies === undefined ? {} : { loadDependencies }),
-    select: async (input) => {
-      const selection = await options.select(input);
-      if (selection.status !== "selected") return selection;
-      const selected = selection.subject;
-      if (selected.sourceUnit.bodyAvailability !== "available")
-        return {
-          status: "incomplete",
-          issue: {
-            code: "sourceUnavailable",
-            message: "原文正文不可用，无法核对数字。",
-          },
-        };
-      const source = options.sourceText(selected.sourceUnit.unit);
-      const target = options.translationText(selected.content);
-      if (typeof source !== "string" || typeof target !== "string")
-        return {
-          status: "incomplete",
-          issue: {
-            code: "textUnavailable",
-            message: "无法取得原文或候选译文的文本。",
-          },
-        };
-      const subject = {
-        key: selected.sourceKey,
-        language: selected.language,
+    async prepare(input) {
+      const preparation =
+        options.prepare === undefined
+          ? input.sourceUnit.bodyAvailability === "available"
+            ? defaultNumberPreparation(input)
+            : sourceUnavailablePreparation()
+          : await options.prepare(input);
+      if (preparation.status !== "ready") return preparation;
+      if (input.sourceUnit.bodyAvailability !== "available")
+        return sourceUnavailablePreparation();
+
+      const sourceRange =
+        input.facts.source.read.scopes[input.sourceUnit.scopeIndex]?.range ??
+        null;
+      const sourceLocation = { language: null, range: sourceRange };
+      const targetLocation = {
+        language: input.candidate.language,
+        range: input.translation?.range ?? null,
+        key: input.candidate.sourceKey,
       };
-      const association = input.facts.associations.find(
-        ({ sourceKey, language }) =>
-          sourceKey === subject.key && language === subject.language,
-      );
-      const record =
-        association?.status === "matched" &&
-        association.translationIndexes.length === 1
-          ? input.facts.translations.records[association.translationIndexes[0]!]
-          : undefined;
-      const translation =
-        record?.bodyAvailability === "available"
-          ? record.translation
-          : undefined;
-      const defaultSourceLocation: QualityLocation = {
-        language: null,
-        range:
-          input.facts.source.read.scopes[selected.sourceUnit.scopeIndex]?.range,
-      };
-      const defaultTargetLocation: QualityLocation = {
-        language: subject.language,
-        range: record?.range ?? null,
-        key: subject.key,
-      };
-      const sourceLocation =
-        options.sourceLocation?.(
-          selected.sourceUnit.unit,
-          subject,
-          defaultSourceLocation,
-        ) ?? defaultSourceLocation;
-      const targetLocation =
-        options.translationLocation?.(
-          translation,
-          subject,
-          defaultTargetLocation,
-        ) ?? defaultTargetLocation;
-      return {
-        status: "selected",
+      const checkerInput = {
+        source: preparation.source,
+        target: preparation.target,
         subject: {
-          value: selected,
-          projected: { source, target },
-          report: {
-            source,
-            target,
-            subject,
-            sourceLocation,
-            targetLocation,
-            targetContent: selected.content,
-          },
-          association: {
-            status: association?.status ?? "missing",
-            translations: (association?.translationIndexes ?? []).map(
-              (index) => {
-                const translation = input.facts.translations.records[index]!;
-                return {
-                  identity: translation.identity ?? null,
-                  availability: translation.bodyAvailability,
-                };
-              },
-            ),
-          },
+          key: input.candidate.sourceKey,
+          language: input.candidate.language,
         },
+        sourceLocation: preparation.sourceLocation ?? sourceLocation,
+        targetLocation: preparation.targetLocation ?? targetLocation,
+        targetContent: input.candidate.content,
+      } as CheckerNumberTextInput;
+      return {
+        status: "ready",
+        input: checkerInput,
       };
     },
-    project: ({ subject }) => ({ status: "ready", value: subject.projected }),
-    ...(fingerprintInput === undefined
-      ? {}
-      : {
-          fingerprintInput: (
-            input: QualityCheckRuleInput<
-              TUnit,
-              TTranslation,
-              NumberCheckerConfiguration,
-              Subject,
-              NumberTextInput,
-              TBody,
-              TUnavailable
-            >,
-          ) => {
-            const basis = {
-              input: fingerprintInput({
-                ...input,
-                subject: input.subject.value,
-              }),
-              report: input.subject.report,
-              association: input.subject.association,
-            };
-            assertJsonValue(basis, "数字检查输入依据");
-            return basis;
-          },
-        }),
-    check: ({ subject }) => compareNumberText(subject.report),
+    check: checkPreparedNumberText,
   });
 }
 
-export function compareNumberText(input: {
-  readonly source: string;
-  readonly target: string;
-  readonly subject: QualitySubject;
-  readonly sourceLocation: QualityLocation;
-  readonly targetLocation: QualityLocation;
-  readonly targetContent: unknown;
-}): QualityCheckOutcome {
+function createNumberCheckerWithTypes<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody = unknown,
+  TUnavailable = unknown,
+>() {
+  return (
+    options: NumberCheckerOptions<
+      TUnit,
+      TTranslation,
+      TBody,
+      TUnavailable
+    > = {},
+  ) =>
+    createNumberCheckerImplementation<TUnit, TTranslation, TBody, TUnavailable>(
+      options,
+    );
+}
+
+/** 内置版本、默认文本提取和定位由本包维护。 */
+export const createNumberChecker = Object.assign(
+  createNumberCheckerImplementation,
+  { withTypes: createNumberCheckerWithTypes },
+);
+
+function checkPreparedNumberText(
+  input: CheckerNumberTextInput,
+): QualityCheckOutcome {
+  return compareNumberText(input as unknown as NumberTextInput);
+}
+
+function sourceUnavailablePreparation(): Extract<
+  NumberCheckerPreparation,
+  { readonly status: "incomplete" }
+> {
+  return {
+    status: "incomplete",
+    issue: {
+      code: "sourceUnavailable",
+      message: "原文正文不可用，无法核对数字。",
+    },
+  };
+}
+
+function defaultNumberPreparation<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  input: CheckerPrepareInput<TUnit, TTranslation, TBody, TUnavailable>,
+): NumberCheckerPreparation {
+  const source = input.sourceUnit.unit.source;
+  const target = input.candidate.content;
+  if (typeof source !== "string" || typeof target !== "string")
+    return {
+      status: "incomplete",
+      issue: {
+        code: "textUnavailable",
+        message: "无法取得原文或候选译文的字符串正文。",
+      },
+    };
+  return { status: "ready", source, target };
+}
+
+export function compareNumberText(input: NumberTextInput): QualityCheckOutcome {
   const sourceNumbers = numbersIn(input.source);
   const targetNumbers = numbersIn(input.target);
   const missing = difference(sourceNumbers, targetNumbers);
@@ -291,7 +209,7 @@ export function compareNumberText(input: {
     key: input.subject.key,
     language: input.subject.language,
   };
-  const evidence: readonly QualityEvidence[] = [
+  const evidence = [
     {
       role: "source",
       object: { kind: "translation-unit", key: input.subject.key },
@@ -304,7 +222,7 @@ export function compareNumberText(input: {
       location: input.targetLocation,
       value: input.targetContent,
     },
-  ];
+  ] as const;
   return {
     status: "complete",
     diagnostics:
