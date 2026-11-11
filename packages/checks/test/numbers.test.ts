@@ -387,7 +387,15 @@ void describe("阿拉伯数字对应检查", () => {
     }
   });
 
-  void it("原文正文不可用或默认无法取得字符串时报告未完成", async () => {
+  void it("拒绝未读取原文的候选，并报告正文不可用或无法取得字符串", async () => {
+    await assert.rejects(
+      analyzeQuality(configFor(undefined, "12"), {
+        candidates: [
+          { sourceKey: "hash:message", language: "fr", content: "12" },
+        ],
+      }),
+      /原文键.*不存在于本次已读取的原文/,
+    );
     for (const [config, candidate] of [
       [configFor("12", "12", "unavailable"), "12"],
       [configFor(null, "12"), "12"],

@@ -14,14 +14,12 @@ import {
 import * as z from "zod";
 
 import {
-  getCandidateMode,
   getTermsLoaderMode,
   compileQualityData,
   readIndependentData,
   readSharedData,
   type QualityData,
   recordEvent,
-  shouldBuilderReadShared,
 } from "./state.ts";
 
 type Unit = { readonly id: string; readonly source: string };
@@ -227,17 +225,6 @@ export default defineConfig.withTypes<
       daily: ["terms", "syntax"],
       syntaxOnly: ["syntax"],
       empty: [],
-    },
-    async buildCandidates({ defaultCandidates, memo, qualityData }) {
-      recordEvent("candidate:build");
-      if (shouldBuilderReadShared()) {
-        const data = await qualityData.read(readSharedData, "catalog");
-        memo.memo(compileQualityData)(data);
-      }
-      const mode = getCandidateMode();
-      if (mode === "throw") throw new Error("候选构造失败。");
-      if (mode === "empty") return [];
-      return defaultCandidates;
     },
     exceptionStore,
     resultCache: createDirectoryQualityCheckResultCache(

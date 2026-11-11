@@ -21,7 +21,6 @@ type SdkEvidence = {
   readonly termsOnly: CapturedRun;
   readonly invalidSelections: Readonly<Record<string, CapturedRun>>;
   readonly candidates: {
-    readonly noBuiltCandidates: CapturedRun;
     readonly noProvidedCandidates: CapturedRun;
     readonly explicitCandidates: CapturedRun;
   };
@@ -30,7 +29,6 @@ type SdkEvidence = {
   readonly sharedLoaderFailure: CapturedRun;
   readonly loaderContractError: CapturedRun;
   readonly readerContractError: CapturedRun;
-  readonly candidateBuilderFailure: CapturedRun;
 };
 
 function checkIds(run: CapturedRun): readonly string[] {
@@ -91,7 +89,7 @@ testArtifactConsumer(
     assert.ok(!sdk.direct.events.includes("loader:terms"));
     assert.ok(!sdk.direct.events.includes("rule:terms:normalized-v1"));
     assert.equal(eventCount(sdk.direct, "shared:read"), 1);
-    assert.equal(eventCount(sdk.direct, "compile:shared:v1"), 1);
+    assert.equal(eventCount(sdk.direct, "compile:shared:v1"), 0);
     assert.equal(
       sdk.full.result?.checks.find(({ checkId }) => checkId === "syntax")
         ?.executions[0]?.inputFingerprint,
@@ -115,7 +113,7 @@ testArtifactConsumer(
 
     assert.deepEqual(checkIds(sdk.duplicateIds), ["syntax", "terms"]);
     assert.deepEqual(checkIds(sdk.groupUnion), ["syntax", "terms"]);
-    assert.equal(eventCount(sdk.groupUnion, "compile:shared:v1"), 1);
+    assert.equal(eventCount(sdk.groupUnion, "compile:shared:v1"), 0);
     assert.ok(!sdk.groupUnion.events.includes("configuration:unlisted"));
     assert.ok(!sdk.groupUnion.events.includes("loader:unlisted"));
     assert.ok(!sdk.groupUnion.events.includes("rule:unlisted:normalized-v1"));
@@ -150,17 +148,7 @@ testArtifactConsumer(
       assert.equal(invalid.events.length, 0);
     }
 
-    const { noBuiltCandidates, noProvidedCandidates, explicitCandidates } =
-      sdk.candidates;
-    assert.ok(noBuiltCandidates.result);
-    assert.equal(noBuiltCandidates.result.candidates.length, 0);
-    assert.equal(noBuiltCandidates.result.status, "not-run");
-    assert.ok(
-      !noBuiltCandidates.events.some((event) => event.startsWith("loader:")),
-    );
-    assert.ok(
-      !noBuiltCandidates.events.some((event) => event.startsWith("rule:")),
-    );
+    const { noProvidedCandidates, explicitCandidates } = sdk.candidates;
     assert.ok(!noProvidedCandidates.events.includes("candidate:build"));
     assert.ok(
       !noProvidedCandidates.events.some((event) => event.startsWith("loader:")),
@@ -263,18 +251,6 @@ testArtifactConsumer(
         event.startsWith("rule:"),
       ),
     );
-    assert.ok(sdk.candidateBuilderFailure.error);
-    assert.ok(
-      !sdk.candidateBuilderFailure.events.some((event) =>
-        event.startsWith("loader:"),
-      ),
-    );
-    assert.ok(
-      !sdk.candidateBuilderFailure.events.some((event) =>
-        event.startsWith("rule:"),
-      ),
-    );
-
     const executable = path.join(
       root,
       "node_modules",

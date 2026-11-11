@@ -203,10 +203,14 @@ function isMixedBody(value: unknown): value is MixedBody {
   );
 }
 
-function readMixedSource(unrelatedSource = "Reference 7") {
+function readMixedSource(
+  unrelatedSource = "Reference 7",
+  extraTextUnits: readonly TextUnit[] = [],
+) {
   const units: readonly MixedUnit[] = [
     { kind: "text", key: "message", source: "Total 12" },
     { kind: "list", key: "rows", source: [unrelatedSource] },
+    ...extraTextUnits,
   ];
   return {
     schema: mixedUnitSchema,
@@ -266,17 +270,16 @@ function qualityConfig(
     MixedBody,
     MixedUnavailableTranslation
   >[],
-  candidates: readonly SemanticEditCandidate<MixedBody>[],
   unrelatedSource = "Reference 7",
   relationships: readonly QualityRelationship[] = [],
+  extraTextUnits: readonly TextUnit[] = [],
 ) {
   return defineConfig({
-    source: readMixedSource(unrelatedSource),
+    source: readMixedSource(unrelatedSource, extraTextUnits),
     keyOf: ({ key }) => key,
     translations: mixedTranslations,
     quality: {
       checks,
-      buildCandidates: () => candidates,
       relationships,
     },
   });
@@ -374,13 +377,12 @@ void describe("quality check bindings", () => {
         check: () => completeOutcome(),
       });
       const profiler = createQualityProfiler();
-      const result = await analyzeQuality(
-        qualityConfig(
-          [checker],
-          [{ sourceKey: "message", language: "fr", content: "Bonjour" }],
-        ),
-        { profiler },
-      );
+      const result = await analyzeQuality(qualityConfig([checker]), {
+        candidates: [
+          { sourceKey: "message", language: "fr", content: "Bonjour" },
+        ],
+        profiler,
+      });
       const timings =
         profiler.report().checks[0]?.slowestCandidates[0]?.timings ?? [];
 
@@ -401,7 +403,7 @@ void describe("quality check bindings", () => {
   void it("按候选生成稳定指纹并将诊断关联到对应执行", async () => {
     const candidates = [
       { sourceKey: "message", language: "fr", content: "Bonjour" },
-      { sourceKey: "message", language: "fr", content: "Salut" },
+      { sourceKey: "rows", language: "fr", content: "Salut" },
     ];
     const createResult = async (
       version: string,
@@ -450,7 +452,8 @@ void describe("quality check bindings", () => {
           ]),
       });
       return analyzeQuality(
-        qualityConfig([checker], candidates, unrelatedSource, relationships),
+        qualityConfig([checker], unrelatedSource, relationships),
+        { candidates },
       );
     };
 
@@ -650,7 +653,7 @@ void describe("quality check bindings", () => {
   void it("绑定检查从同次执行快照中的已校验投影生成指纹", async () => {
     const candidates = [
       { sourceKey: "message", language: "fr", content: "Bonjour" },
-      { sourceKey: "message", language: "fr", content: "Salut" },
+      { sourceKey: "notice", language: "fr", content: "Salut" },
     ];
     const fingerprintProjections: ProjectedText[] = [];
     const checkedProjections: ProjectedText[] = [];
@@ -729,11 +732,16 @@ void describe("quality check bindings", () => {
         ]);
       },
     });
-    const config = qualityConfig([checker], candidates);
+    const config = qualityConfig(
+      [checker],
+      "Reference 7",
+      [],
+      [{ kind: "text", key: "notice", source: "A second message" }],
+    );
 
-    const first = await analyzeQuality(config);
+    const first = await analyzeQuality(config, { candidates });
     glossaryVersion = "glossary-v2";
-    const second = await analyzeQuality(config);
+    const second = await analyzeQuality(config, { candidates });
 
     assert.equal(selected, 4);
     assert.equal(projected, 4);
@@ -828,12 +836,11 @@ void describe("quality check bindings", () => {
       check: () => completeOutcome(),
     });
 
-    const result = await analyzeQuality(
-      qualityConfig(
-        [checker],
-        [{ sourceKey: "message", language: "fr", content: "Bonjour" }],
-      ),
-    );
+    const result = await analyzeQuality(qualityConfig([checker]), {
+      candidates: [
+        { sourceKey: "message", language: "fr", content: "Bonjour" },
+      ],
+    });
 
     assert.equal(result.status, "complete");
     assert.equal(
@@ -846,7 +853,7 @@ void describe("quality check bindings", () => {
     const candidates = [
       { sourceKey: "message", language: "fr", content: "Total 12" },
       { sourceKey: "rows", language: "fr", content: ["Reference 7"] },
-      { sourceKey: "message", language: "fr", content: ["wrong shape"] },
+      { sourceKey: "notice", language: "fr", content: ["wrong shape"] },
     ];
     const checker = bindQualityCheck({
       id: "text-number-context",
@@ -941,9 +948,14 @@ void describe("quality check bindings", () => {
         return completeOutcome(diagnostics);
       },
     });
-    const config = qualityConfig([checker], candidates);
+    const config = qualityConfig(
+      [checker],
+      "Reference 7",
+      [],
+      [{ kind: "text", key: "notice", source: "Notice" }],
+    );
 
-    const result = await analyzeQuality(config);
+    const result = await analyzeQuality(config, { candidates });
 
     assert.equal(result.status, "incomplete");
     assert.deepEqual(result.candidates, candidates);
@@ -1002,17 +1014,21 @@ void describe("quality check bindings", () => {
       project: () => ({ status: "ready", value: 42 }),
       check: () => completeOutcome(),
     });
-    const config = qualityConfig(
-      [checker],
-      [{ sourceKey: "message", language: "fr", content: "Total 12" }],
-    );
+    const config = qualityConfig([checker]);
 
-    await assert.rejects(analyzeQuality(config), (error: unknown) => {
-      assert.ok(error instanceof StandardSchemaContractError);
-      assert.equal(error.kind, "schema-mismatch");
-      assert.match(error.valueDescription, /投影/u);
-      return true;
-    });
+    await assert.rejects(
+      analyzeQuality(config, {
+        candidates: [
+          { sourceKey: "message", language: "fr", content: "Total 12" },
+        ],
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof StandardSchemaContractError);
+        assert.equal(error.kind, "schema-mismatch");
+        assert.match(error.valueDescription, /投影/u);
+        return true;
+      },
+    );
   });
 
   void it("keeps a thrown projection separate from an ordinary checker failure", async () => {
@@ -1039,17 +1055,21 @@ void describe("quality check bindings", () => {
       },
       check: () => completeOutcome(),
     });
-    const config = qualityConfig(
-      [checker],
-      [{ sourceKey: "message", language: "fr", content: "Total 12" }],
-    );
+    const config = qualityConfig([checker]);
 
-    await assert.rejects(analyzeQuality(config), (error: unknown) => {
-      assert.ok(error instanceof QualityCheckBindingError);
-      assert.equal(error.stage, "projection");
-      assert.equal(error.qualityCheckId, "throwing-projection");
-      return true;
-    });
+    await assert.rejects(
+      analyzeQuality(config, {
+        candidates: [
+          { sourceKey: "message", language: "fr", content: "Total 12" },
+        ],
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof QualityCheckBindingError);
+        assert.equal(error.stage, "projection");
+        assert.equal(error.qualityCheckId, "throwing-projection");
+        return true;
+      },
+    );
   });
 
   void it("rejects a narrow checker installed directly in a wider project", () => {
