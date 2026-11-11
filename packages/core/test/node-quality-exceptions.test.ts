@@ -20,7 +20,6 @@ const execution = {
   inputFingerprint: "sha256:complete-input",
   fingerprintSummary: {
     version: "2",
-    configurationFingerprint: "sha256:configuration",
     inputFingerprint: "sha256:business-input",
   },
 };
@@ -54,6 +53,12 @@ void describe("Node.js QA 例外存储", () => {
       assert.deepEqual(await store.load(), []);
       await store.upsert(exception);
       assert.deepEqual(await store.load(), [exception]);
+      const contents = await readFile(
+        path.join(directory, "lioni.exceptions.yaml"),
+        "utf8",
+      );
+      assert.match(contents, /^format: lioni\.qa-exceptions\/v2$/mu);
+      assert.doesNotMatch(contents, /configurationFingerprint/u);
     });
   });
 
@@ -64,7 +69,7 @@ void describe("Node.js QA 例外存储", () => {
         filePath,
         [
           "# 人工维护的批准记录",
-          "format: lioni.qa-exceptions/v1",
+          "format: lioni.qa-exceptions/v2",
           "exceptions:",
           "  - id: save-copy-meaning-fr",
           "    reason: 译文保留了预期动作。",
@@ -74,7 +79,6 @@ void describe("Node.js QA 例外存储", () => {
           "    inputFingerprint: sha256:complete-input",
           "    fingerprintSummary:",
           '      version: "2"',
-          "      configurationFingerprint: sha256:configuration",
           "      inputFingerprint: sha256:business-input",
           "",
         ].join("\n"),
@@ -83,6 +87,29 @@ void describe("Node.js QA 例外存储", () => {
       const store = createFileQualityExceptionStore(filePath);
 
       assert.deepEqual(await store.load(), [exception]);
+    });
+  });
+
+  void it("拒绝旧例外并保留原文件供用户重建", async () => {
+    await withDirectory(async (directory) => {
+      const filePath = path.join(directory, "lioni.exceptions.yaml");
+      const oldContents = [
+        "format: lioni.qa-exceptions/v1",
+        "exceptions: []",
+        "",
+      ].join("\n");
+      await writeFile(filePath, oldContents, "utf8");
+      const store = createFileQualityExceptionStore(filePath);
+
+      await assert.rejects(store.load(), {
+        name: "QualityExceptionFormatError",
+        reason: "unsupported",
+        message: /先保留并移开.*运行 QA.*重新建立/u,
+      });
+      await assert.rejects(store.upsert(exception), {
+        name: "QualityExceptionFormatError",
+      });
+      assert.equal(await readFile(filePath, "utf8"), oldContents);
     });
   });
 
@@ -97,7 +124,7 @@ void describe("Node.js QA 例外存储", () => {
 
       await writeFile(
         filePath,
-        "format: lioni.qa-exceptions/v2\nexceptions: []\n",
+        "format: lioni.qa-exceptions/v1\nexceptions: []\n",
         "utf8",
       );
       await assert.rejects(store.load(), {
@@ -112,7 +139,7 @@ void describe("Node.js QA 例外存储", () => {
       await writeFile(
         filePath,
         [
-          "format: lioni.qa-exceptions/v1",
+          "format: lioni.qa-exceptions/v2",
           "exceptions:",
           "  - id: first",
           "    reason: 第一个理由",
@@ -120,14 +147,14 @@ void describe("Node.js QA 例外存储", () => {
           "    sourceKey: save",
           "    language: fr",
           "    inputFingerprint: sha256:complete-input",
-          '    fingerprintSummary: { version: "2", configurationFingerprint: sha256:configuration, inputFingerprint: sha256:business-input }',
+          '    fingerprintSummary: { version: "2", inputFingerprint: sha256:business-input }',
           "  - id: first",
           "    reason: 重复身份",
           "    checkId: copy/meaning",
           "    sourceKey: save",
           "    language: fr",
           "    inputFingerprint: sha256:complete-input",
-          '    fingerprintSummary: { version: "2", configurationFingerprint: sha256:configuration, inputFingerprint: sha256:business-input }',
+          '    fingerprintSummary: { version: "2", inputFingerprint: sha256:business-input }',
           "",
         ].join("\n"),
         "utf8",
@@ -151,7 +178,7 @@ void describe("Node.js QA 例外存储", () => {
         filePath,
         [
           "# 文件说明保留",
-          "format: lioni.qa-exceptions/v1",
+          "format: lioni.qa-exceptions/v2",
           "exceptions:",
           "  # 第一条说明保留",
           "  - id: save-copy-meaning-fr",
@@ -162,7 +189,6 @@ void describe("Node.js QA 例外存储", () => {
           "    inputFingerprint: sha256:complete-input",
           "    fingerprintSummary:",
           '      version: "2"',
-          "      configurationFingerprint: sha256:configuration",
           "      inputFingerprint: sha256:business-input",
           "  # 第二条说明保留",
           "  - id: another-exception",
@@ -173,7 +199,6 @@ void describe("Node.js QA 例外存储", () => {
           "    inputFingerprint: sha256:other-input",
           "    fingerprintSummary:",
           '      version: "2"',
-          "      configurationFingerprint: sha256:configuration",
           "      inputFingerprint: sha256:other-business-input",
           "",
         ].join("\n"),
@@ -202,7 +227,6 @@ void describe("Node.js QA 例外存储", () => {
           inputFingerprint: "sha256:other-input",
           fingerprintSummary: {
             version: "2",
-            configurationFingerprint: "sha256:configuration",
             inputFingerprint: "sha256:other-business-input",
           },
         },

@@ -16,7 +16,7 @@ import type {
 } from "../quality/quality-exceptions.ts";
 
 const EMPTY_QUALITY_EXCEPTION_FILE =
-  "format: lioni.qa-exceptions/v1\nexceptions: []\n";
+  "format: lioni.qa-exceptions/v2\nexceptions: []\n";
 
 /** 为指定路径创建可手工维护的 YAML 例外存储。 */
 export function createFileQualityExceptionStore(
@@ -39,7 +39,7 @@ export function createFileQualityExceptionStore(
       else next[idIndex] = exception;
 
       const nextValue: QualityExceptionFile = {
-        format: "lioni.qa-exceptions/v1",
+        format: "lioni.qa-exceptions/v2",
         exceptions: next,
       };
       validateQualityExceptionFile(nextValue);
@@ -72,11 +72,6 @@ export function createFileQualityExceptionStore(
             summaryNode,
             "version",
             exception.fingerprintSummary.version,
-          );
-          setString(
-            summaryNode,
-            "configurationFingerprint",
-            exception.fingerprintSummary.configurationFingerprint,
           );
           setString(
             summaryNode,
@@ -180,8 +175,6 @@ function sameException(
     current.language === next.language &&
     current.inputFingerprint === next.inputFingerprint &&
     current.fingerprintSummary.version === next.fingerprintSummary.version &&
-    current.fingerprintSummary.configurationFingerprint ===
-      next.fingerprintSummary.configurationFingerprint &&
     current.fingerprintSummary.inputFingerprint ===
       next.fingerprintSummary.inputFingerprint
   );
