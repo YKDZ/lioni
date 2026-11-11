@@ -36,7 +36,6 @@ type Subject = { readonly sourceText: string };
 declare const optionalFamilyIdOptions: MessageFamilyCheckerOptions<
   Unit,
   Translation,
-  Unit,
   Body
 >;
 const dynamicFamily = createMessageFamilyChecker(optionalFamilyIdOptions);
@@ -53,7 +52,7 @@ void dynamicFamilyId;
 void dynamicFamilyContext;
 
 declare const familyOptionsWithoutId: Omit<
-  MessageFamilyCheckerOptions<Unit, Translation, Unit, Body>,
+  MessageFamilyCheckerOptions<Unit, Translation, Body>,
   "id"
 >;
 const defaultFamily = createMessageFamilyChecker(familyOptionsWithoutId);

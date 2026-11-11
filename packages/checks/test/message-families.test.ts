@@ -10,21 +10,18 @@ import type {
   MessageFamilyInput,
   MessageFamilyLimits,
   MessageFamilyContext,
-  MessageFamilySubject,
   MessageFamilyReferenceProjection,
 } from "@lioni/checks";
 import {
   analyzeQuality,
   createQualityException,
   defineConfig,
-  type QualityCheckInput,
+  type CheckerPrepareInput,
+  type SourceUnitFact,
   type QualityDataLoadInput,
   type QualityException,
   type QualityExceptionStore,
-  type SourceUnitFact,
   StandardSchemaContractError,
-  QualityCheckBindingError,
-  snapshotJsonValue,
   type QualityCheckResultCache,
 } from "@lioni/core";
 import { createMemoScope } from "@lioni/memo";
@@ -51,6 +48,13 @@ const stringSchema = z.string();
 type Unit = z.output<typeof unitSchema>;
 type Translation = z.output<typeof translationSchema>;
 
+type MessageFamilySubject<TUnit extends Unit, TBody> = {
+  readonly sourceUnit: SourceUnitFact<TUnit>;
+  readonly sourceKey: string;
+  readonly language: string;
+  readonly content: TBody;
+};
+
 function checkerFor(
   options: {
     readonly id?: string;
@@ -60,7 +64,6 @@ function checkerFor(
     readonly referenceProjectionByKey?: Readonly<
       Record<string, MessageFamilyInput>
     >;
-    readonly explicitBasis?: boolean;
     readonly referenceProjections?: { count: number };
     readonly analysis?: TextAnalysis;
     readonly loadDependencies?: (
@@ -150,46 +153,30 @@ function checkerFor(
           options.referenceProjection)) ?? result
     );
   };
-  return createMessageFamilyChecker<Unit, Translation, Unit, string>({
+  return createMessageFamilyChecker<Unit, Translation, string, never, unknown>({
     id: options.id ?? "message-family-consistency",
-    hostVersion: "message-families-test-v1",
     ...(options.loadDependencies === undefined
       ? {}
-      : { loadDependencies: options.loadDependencies }),
-    select: (input: QualityCheckInput<Unit, Translation, unknown, string>) => {
-      const selectedUnit = input.sourceUnit;
-      if (selectedUnit === null)
-        return {
-          status: "incomplete",
-          issue: { code: "sourceUnavailable", message: "找不到原文单元。" },
-        };
+      : { load: options.loadDependencies }),
+    prepare: (
+      input: CheckerPrepareInput<Unit, Translation, string, never, unknown>,
+    ) => {
       if (input.candidate.language !== "zh")
         return { status: "not-applicable" };
       return {
-        status: "selected",
-        subject: {
-          sourceUnit: selectedUnit as SourceUnitFact<Unit>,
-          sourceKey: input.candidate.sourceKey,
-          language: input.candidate.language,
-          content: input.candidate.content,
-        },
+        status: "ready",
+        input: projectMessage({
+          kind: "candidate",
+          subject: {
+            sourceUnit: input.sourceUnit,
+            sourceKey: input.candidate.sourceKey,
+            language: input.candidate.language,
+            content: input.candidate.content,
+          },
+        }),
       };
     },
-    project: ({ subject }) => projectMessage({ kind: "candidate", subject }),
     reference: projectMessage,
-    ...(options.explicitBasis
-      ? {
-          fingerprintInput: ({ projected, subject }) =>
-            snapshotJsonValue(
-              {
-                projected,
-                sourceKey: subject.sourceKey,
-                language: subject.language,
-              },
-              "测试消息族依据",
-            ),
-        }
-      : {}),
     analysis:
       options.analysis ?? createTextAnalysis({ recognizers: [asciiNumbers()] }),
     sourceTemplate: slotPolicy,
@@ -202,19 +189,6 @@ function checkerFor(
 }
 
 void test("消息族正式入口验证展示上限并保留投影证据", async () => {
-  await assert.rejects(
-    analyzeQuality(
-      configFor(
-        [{ id: "editing", source: "Save" }],
-        [],
-        checkerFor({ limits: { maxCategories: 0 } }),
-      ),
-      {
-        candidates: [{ sourceKey: "editing", language: "zh", content: "保存" }],
-      },
-    ),
-    StandardSchemaContractError,
-  );
   assert.throws(
     () =>
       compareMessageFamily(
@@ -316,8 +290,7 @@ void test("一致且没有诊断时也在投影入口拒绝特殊键中的非 JS
         },
       ),
       (error: unknown) => {
-        let cause = error;
-        while (cause instanceof QualityCheckBindingError) cause = cause.cause;
+        const cause = error;
         assert.ok(cause instanceof StandardSchemaContractError);
         assert.equal(cause.kind, "schema-mismatch");
         assert.deepEqual(cause.issues?.[0]?.path, ["groups", 0, "ref"]);
@@ -337,7 +310,7 @@ void test("同次 QA 的固定消息族策略只准备每份保存参照一次",
     configFor(
       units,
       units.map(({ id }) => ({ id, text: "你好" })),
-      checkerFor({ explicitBasis: true, referenceProjections: projected }),
+      checkerFor({ referenceProjections: projected }),
     ),
     {
       candidates: units.map(({ id }) => ({
@@ -361,7 +334,7 @@ void test("排除旧物理记录后的族依据不随候选顺序和旧自身正
     source: "Hello",
   }));
   const translations = units.map(({ id }) => ({ id, text: "你好" }));
-  const checker = checkerFor({ explicitBasis: true });
+  const checker = checkerFor({});
   const first = { sourceKey: "message-0", language: "zh", content: "你好" };
   const other = { sourceKey: "message-1", language: "zh", content: "你好" };
   const run = (candidates: (typeof first)[]) =>
@@ -417,7 +390,7 @@ void test("非法旧参照不阻止自身替换，但作为其他候选参照时
     analyzeQuality(config, {
       candidates: [self, { ...self, sourceKey: "other" }],
     }),
-    QualityCheckBindingError,
+    StandardSchemaContractError,
   );
 });
 
@@ -467,7 +440,7 @@ void test("借入同一 memo 的后续运行仍使用新的事实与等价依赖
   const checker = checkerFor({
     loadDependencies: () => ({ relaxed }),
     targetEquivalence: (signature, _language, context) =>
-      (context.dependencies as { relaxed: boolean }).relaxed
+      (context.loaded as { relaxed: boolean }).relaxed
         ? "allowed"
         : signatureKey(signature),
   });
@@ -497,16 +470,16 @@ void test("借入同一 memo 的后续运行仍使用新的事实与等价依赖
   }
 });
 
-void test("全部候选不适用时不投影任何候选或保存参照", async () => {
-  const checker = createMessageFamilyChecker<Unit, Translation, Unit, string>({
-    hostVersion: "not-applicable-v1",
-    select: () => ({ status: "not-applicable" }),
-    project: () => {
-      throw new Error("不应投影候选");
-    },
-    reference: () => {
-      throw new Error("不应准备参照");
-    },
+void test("候选不适用时仍共享准备一次保存参照", async () => {
+  const checker = createMessageFamilyChecker<
+    Unit,
+    Translation,
+    string,
+    never,
+    unknown
+  >({
+    prepare: () => ({ status: "not-applicable" }),
+    reference: () => ({ groups: [] }),
   });
   const result = await analyzeQuality(
     configFor(
@@ -525,7 +498,7 @@ void test("旧消息族版本例外在重新执行时失配，未运行时保持
     { id: "saved", source: "Hello" },
   ];
   const translations = [{ id: "saved", text: "您好" }];
-  const checker = checkerFor({ explicitBasis: true });
+  const checker = checkerFor({});
   const candidates = [
     { sourceKey: "editing", language: "zh", content: "你好" },
   ];
@@ -584,29 +557,16 @@ void test("唯一旧译文正文不可用时仍能完整检查替换候选", asy
   const checker = createMessageFamilyChecker<
     Unit,
     Translation,
-    Unit,
     string,
     Translation
   >({
-    hostVersion: "unavailable-test-v1",
-    select: (input) =>
-      input.sourceUnit === null
-        ? {
-            status: "incomplete",
-            issue: { code: "sourceUnavailable", message: "找不到原文。" },
-          }
-        : {
-            status: "selected",
-            subject: {
-              sourceUnit: input.sourceUnit,
-              sourceKey: input.candidate.sourceKey,
-              language: input.candidate.language,
-              content: input.candidate.content,
-            },
-          },
-    project: ({ subject }) => projection(subject.sourceKey, subject.content),
+    prepare: ({ candidate }) => ({
+      status: "ready",
+      input: projection(candidate.sourceKey, candidate.content),
+    }),
     reference: (reference) => {
-      assert.equal(reference.sourceKey, "saved");
+      if (reference.sourceKey === "editing")
+        throw new Error("自身旧正文不可用");
       return projection(reference.sourceKey, "你好");
     },
   });
@@ -829,7 +789,7 @@ void test("排除当前替代记录并保留其他内容相同的事实", async 
     start: 4,
     end: 7,
   });
-  assert.equal(projected.count, 2);
+  assert.equal(projected.count, 3);
 });
 
 void test("声明的目标等价表达可合并，未声明签名仍独立计类", async () => {
@@ -1031,10 +991,9 @@ void test("非法 UTF-16 保护范围作为投影契约错误拒绝", async () =
         candidates: [{ sourceKey: "editing", language: "zh", content: "😀" }],
       }),
       (error: unknown) =>
-        error instanceof QualityCheckBindingError &&
-        error.cause instanceof StandardSchemaContractError &&
-        error.cause.kind === "schema-mismatch" &&
-        error.cause.message.includes("保护范围"),
+        error instanceof StandardSchemaContractError &&
+        error.kind === "schema-mismatch" &&
+        error.message.includes("保护范围"),
     );
   }
 });
@@ -1121,7 +1080,7 @@ void test("目标结构分析不完整时保留已知参照差异并标记不完
   );
 });
 
-void test("例外保留警告处理状态，未声明依据的通用工厂仍保守对待其他事实", async () => {
+void test("例外保留警告处理状态，无关消息不改变消息族依据", async () => {
   let exceptions: readonly QualityException[] = [];
   const exceptionStore: QualityExceptionStore = {
     async load() {
@@ -1192,7 +1151,7 @@ void test("例外保留警告处理状态，未声明依据的通用工厂仍保
     ),
     { candidates },
   );
-  assert.equal(changed.exceptionApplicability[0]?.status, "basis-changed");
+  assert.equal(changed.exceptionApplicability[0]?.status, "applicable");
 });
 
 void test("固定等价策略的上下文不暴露当前候选", async () => {
@@ -1267,7 +1226,6 @@ void test("显式消息族依据复用无关编辑的缓存和例外，并跟随
     },
   };
   const checker = checkerFor({
-    explicitBasis: true,
     limits: { maxCategories: 1, maxSourcesPerCategory: 1 },
   });
   const candidates = [
@@ -1416,7 +1374,6 @@ void test("同一保存记录的同类别重复组稳定选择完整证据，缓
         ],
         [{ id: "saved", text: "A" }],
         checkerFor({
-          explicitBasis: true,
           candidateProjection: { groups: [group("C")] },
           referenceProjection: { groups: texts.map(group) },
           targetEquivalence: (signature) =>
@@ -1440,4 +1397,108 @@ void test("同一保存记录的同类别重复组稳定选择完整证据，缓
   assert.equal(before.diagnostics.length, 1);
   assert.deepEqual(cached.diagnostics, fresh.diagnostics);
   assert.deepEqual(before.diagnostics, fresh.diagnostics);
+});
+
+void test("消息族工厂立即拒绝非法展示上限", () => {
+  assert.throws(() => checkerFor({ limits: { maxCategories: 0 } }), /展示上限/);
+});
+
+void test("显式候选语言决定参照目录，加载的运行时资料只供准备使用", async () => {
+  const projectedLanguages: string[] = [];
+  let loads = 0;
+  const projection = (language: string): MessageFamilyInput => ({
+    groups: [
+      {
+        ref: "message",
+        scope: "ui",
+        source: {
+          language: "en",
+          fragments: [{ ref: "source", text: "Hello" }],
+        },
+        target: {
+          language,
+          fragments: [{ ref: "target", text: "こんにちは" }],
+        },
+      },
+    ],
+  });
+  const checker = createMessageFamilyChecker.withTypes<
+    Unit,
+    Translation,
+    string
+  >()({
+    load: ({ candidates }) => {
+      loads++;
+      return new Set(candidates.map(({ language }) => language));
+    },
+    prepare: ({ candidate, loaded }) => {
+      assert.ok(loaded.has(candidate.language));
+      return { status: "ready", input: projection(candidate.language) };
+    },
+    reference: (reference, { loaded }) => {
+      assert.ok(loaded.has(reference.language));
+      projectedLanguages.push(reference.language);
+      return projection(reference.language);
+    },
+  });
+  const base = configFor(
+    [{ id: "message", source: "Hello" }],
+    [{ id: "message", text: "こんにちは" }],
+    checker,
+  );
+  const result = await analyzeQuality(
+    defineConfig({
+      ...base,
+      translations: { ...base.translations!, languages: ["zh", "ja"] },
+    }),
+    {
+      candidates: [
+        { sourceKey: "message", language: "ja", content: "こんにちは" },
+      ],
+    },
+  );
+  assert.equal(loads, 1);
+  assert.deepEqual(projectedLanguages, ["ja"]);
+  assert.equal(result.status, "not-applicable");
+  assert.ok(result.checks[0]!.executions[0]!.inputFingerprint);
+});
+
+void test("已知其他族的目标缺口保持局部，归属未知的缺口限制当前族", async () => {
+  for (const unknown of [false, true]) {
+    const config = configFor(
+      [
+        { id: "editing", source: "Hello" },
+        { id: "saved", source: "Hello" },
+        { id: "other", source: "Goodbye" },
+      ],
+      [
+        { id: "saved", text: "你好" },
+        { id: "other", text: "再见" },
+      ],
+      checkerFor({
+        referenceProjectionByKey: {
+          other: unknown
+            ? { complete: false, groups: [] }
+            : {
+                groups: [
+                  {
+                    ref: "other",
+                    scope: "ui",
+                    source: {
+                      language: "en",
+                      fragments: [{ ref: "other", text: "Goodbye" }],
+                    },
+                    target: { language: "zh", complete: false, fragments: [] },
+                  },
+                ],
+              },
+        },
+      }),
+    );
+    const result = await analyzeQuality(config, {
+      candidates: [{ sourceKey: "editing", language: "zh", content: "您好" }],
+    });
+    assert.equal(result.status, unknown ? "incomplete" : "complete");
+    assert.equal(result.diagnostics.length, 1);
+  }
 });
