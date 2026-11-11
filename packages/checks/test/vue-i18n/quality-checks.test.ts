@@ -802,39 +802,32 @@ void test("每次质量运行读取一次 Vue 动态规则并使用最新术语�
   assert.deepEqual(findings(second, checkIds.forbiddenTerminology), []);
 });
 
-void test("语法、术语和消息族检查只收到各自声明的资料", async () => {
+void test("同次 Vue 检查按声明共享读取各类资料一次", async () => {
   const policy = policyFor({
     sourceMessages: { label: "Hello {name}" },
     targetMessages: { label: "你好 {name}" },
   });
   const terms: TermbaseData = { concepts: [] };
-  const result = await createQualityFixture({
+  const reads = { languages: 0, policies: 0, terms: 0 };
+  await createQualityFixture({
     policies: [policy],
     terms,
     dataReaders: {
-      loadLanguages: () => [{ sourceLanguage: "en", targetLanguage: "zh-CN" }],
-      loadPolicies: () => [policy],
-      loadTerms: () => terms,
+      loadLanguages: () => {
+        reads.languages++;
+        return [{ sourceLanguage: "en", targetLanguage: "zh-CN" }];
+      },
+      loadPolicies: () => {
+        reads.policies++;
+        return [policy];
+      },
+      loadTerms: () => {
+        reads.terms++;
+        return terms;
+      },
     },
   }).run([candidate("label", "你好 {name}")]);
-
-  const sourceSyntax = result.checks.find(
-    ({ checkId }) => checkId === checkIds.sourceSyntax,
-  );
-  const allowedTerminology = result.checks.find(
-    ({ checkId }) => checkId === checkIds.allowedTerminology,
-  );
-  const messageFamily = result.checks.find(
-    ({ checkId }) => checkId === checkIds.messageFamilyConsistency,
-  );
-  assert.deepEqual(sourceSyntax?.dependencies, [
-    { sourceLanguage: "en", targetLanguage: "zh-CN" },
-  ]);
-  assert.deepEqual(allowedTerminology?.dependencies, {
-    languages: [{ sourceLanguage: "en", targetLanguage: "zh-CN" }],
-    terms,
-  });
-  assert.deepEqual(messageFamily?.dependencies, [policy]);
+  assert.deepEqual(reads, { languages: 1, policies: 1, terms: 1 });
 });
 
 void test("只选 Vue 语法时不读取术语库或消息族策略", async () => {
