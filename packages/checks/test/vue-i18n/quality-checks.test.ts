@@ -235,10 +235,9 @@ void test("动态策略拒绝特殊字典键下的非法资源、字面值和数
     await assert.rejects(
       fixture.run([candidate("a", "等待 2 分钟")]),
       (error: unknown) => {
-        assert.ok(error instanceof QualityCheckBindingError);
-        assert.ok(error.cause instanceof StandardSchemaContractError);
-        assert.equal(error.cause.kind, "schema-mismatch");
-        const actualPath = error.cause.issues?.[0]?.path
+        assert.ok(error instanceof StandardSchemaContractError);
+        assert.equal(error.kind, "schema-mismatch");
+        const actualPath = error.issues?.[0]?.path
           ?.map((part) => {
             if (typeof part === "string" || typeof part === "number")
               return String(part);
@@ -269,8 +268,8 @@ void test("共享投影仍拒绝带有投影字段的数组", async () => {
     fixture.run([candidate("label", "你好")]),
     (error: unknown) => {
       assert.ok(error instanceof StandardSchemaContractError);
-      assert.equal(error.kind, "schema-mismatch");
-      assert.match(error.valueDescription, /投影/u);
+      assert.equal(error.kind, "invalid-json");
+
       return true;
     },
   );

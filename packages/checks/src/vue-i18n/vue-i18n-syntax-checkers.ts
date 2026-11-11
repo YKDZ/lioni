@@ -1,34 +1,24 @@
 import type {
   QualityCheckOutcome,
-  QualityCheckProjectionInput,
   QualityEvidence,
   QualityObject,
   TranslationUnitInput,
 } from "@lioni/core";
-import { assertJsonValue, bindQualityCheck } from "@lioni/core";
-import type { MemoScope } from "@lioni/memo";
-import { z } from "zod";
+import { defineChecker } from "@lioni/core";
 
 import { readVueI18nLanguagePolicies } from "./dependencies.ts";
-import { memoizedVueI18nMessage } from "./message-memo.ts";
 import {
-  memoizedVueI18nProjection,
+  prepareVueI18nMessage,
+  type VueI18nPreparer,
   vueI18nMessageProjectionSchema,
 } from "./quality-projection.ts";
 import type {
   VueI18nDataReader,
   VueI18nLanguagePolicy,
   VueI18nMessageProjection,
-  VueI18nProjector,
 } from "./quality-types.ts";
+import { parseVueI18nMessage } from "./vue-i18n-messages.ts";
 import { VUE_I18N_MESSAGE_COMPILER_VERSION } from "./vue-i18n-messages.ts";
-
-const configurationSchema = z.object({ compilerVersion: z.string() });
-type Configuration = z.output<typeof configurationSchema>;
-
-const configuration: Configuration = {
-  compilerVersion: VUE_I18N_MESSAGE_COMPILER_VERSION,
-};
 
 export type VueI18nSourceSyntaxCheckerOptions<
   TUnit extends TranslationUnitInput,
@@ -38,9 +28,8 @@ export type VueI18nSourceSyntaxCheckerOptions<
   TId extends string = string,
 > = {
   readonly id: TId;
-  readonly hostVersion: string;
-  readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
-  readonly loadLanguages: VueI18nDataReader<
+  readonly prepare?: VueI18nPreparer<TUnit, TTranslation, TBody, TUnavailable>;
+  readonly loadLanguages?: VueI18nDataReader<
     TUnit,
     TTranslation,
     TBody,
@@ -77,38 +66,24 @@ export function createVueI18nSourceSyntaxChecker<
     TBody,
     TUnavailable,
     TId
-  >,
+  > = { id: "vue-i18n/source-syntax" as TId },
 ) {
-  type Subject = VueI18nMessageProjection;
-  return bindQualityCheck<
-    TUnit,
-    TTranslation,
-    typeof configurationSchema,
-    typeof vueI18nMessageProjectionSchema,
-    Subject,
-    QualityObject,
-    TBody,
-    TUnavailable,
-    TId
-  >({
+  return defineChecker.withTypes<TUnit, TTranslation, TBody, TUnavailable>()({
     id: options.id,
-    version: `checks.vue-i18n/source-syntax/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}+${options.hostVersion}`,
-    configurationSchema,
-    configuration,
+    version: `checks.vue-i18n/source-syntax/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
     inputSchema: vueI18nMessageProjectionSchema,
-    loadDependencies: ({ facts, memo, qualityData }) =>
-      qualityData.read(options.loadLanguages, facts, memo),
-    select: async (input) => {
-      if (
-        !readVueI18nLanguagePolicies(input.dependencies).has(
-          input.candidate.language,
-        )
-      )
+    load: async ({ facts, memo, qualityData }) =>
+      options.loadLanguages
+        ? readVueI18nLanguagePolicies(
+            await qualityData.read(options.loadLanguages, facts, memo),
+          )
+        : null,
+    prepare: async (input) => {
+      if (input.loaded !== null && !input.loaded.has(input.candidate.language))
         return { status: "not-applicable" };
-      const projection = await memoizedVueI18nProjection(
-        input,
-        options.project,
-      );
+      const prepared = await prepareVueI18nMessage(input, options.prepare);
+      if (prepared.status !== "ready") return prepared;
+      const projection = prepared.input;
       if (projection.target.status === "missing")
         return { status: "not-applicable" };
       if (projection.target.status === "unavailable")
@@ -123,32 +98,18 @@ export function createVueI18nSourceSyntaxChecker<
           "sourceUnavailable",
           "原文正文不可用，无法检查 Vue I18n 语法。",
         );
-      return { status: "selected", subject: projection };
-    },
-    project: (
-      input: QualityCheckProjectionInput<
-        TUnit,
-        TTranslation,
-        Configuration,
-        Subject,
-        TBody,
-        TUnavailable
-      >,
-    ) => ({ status: "ready", value: input.subject }),
-    fingerprintInput: ({ projected }) => {
-      assertJsonValue(projected, "Vue I18n 检查投影");
-      return projected;
+      return { status: "ready", input: projection };
     },
     check: (input) => {
-      const text = input.projected.source;
+      const text = input.source;
       if (text.status !== "available")
         return incompleteOutcome("sourceUnavailable", "原文正文不可用。");
-      return syntaxOutcome("source", input.projected, text.text, input.memo);
+      return syntaxOutcome("source", input, text.text);
     },
   });
 }
 
-/** 按候选正文检查目标语法，允许没有原文记录的目标键。 */
+/** 按候选正文检查目标语法，允许原文正文不可用。 */
 export function createVueI18nTargetSyntaxChecker<
   TUnit extends TranslationUnitInput,
   TTranslation,
@@ -162,38 +123,24 @@ export function createVueI18nTargetSyntaxChecker<
     TBody,
     TUnavailable,
     TId
-  >,
+  > = { id: "vue-i18n/target-syntax" as TId },
 ) {
-  type Subject = VueI18nMessageProjection;
-  return bindQualityCheck<
-    TUnit,
-    TTranslation,
-    typeof configurationSchema,
-    typeof vueI18nMessageProjectionSchema,
-    Subject,
-    QualityObject,
-    TBody,
-    TUnavailable,
-    TId
-  >({
+  return defineChecker.withTypes<TUnit, TTranslation, TBody, TUnavailable>()({
     id: options.id,
-    version: `checks.vue-i18n/target-syntax/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}+${options.hostVersion}`,
-    configurationSchema,
-    configuration,
+    version: `checks.vue-i18n/target-syntax/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
     inputSchema: vueI18nMessageProjectionSchema,
-    loadDependencies: ({ facts, memo, qualityData }) =>
-      qualityData.read(options.loadLanguages, facts, memo),
-    select: async (input) => {
-      if (
-        !readVueI18nLanguagePolicies(input.dependencies).has(
-          input.candidate.language,
-        )
-      )
+    load: async ({ facts, memo, qualityData }) =>
+      options.loadLanguages
+        ? readVueI18nLanguagePolicies(
+            await qualityData.read(options.loadLanguages, facts, memo),
+          )
+        : null,
+    prepare: async (input) => {
+      if (input.loaded !== null && !input.loaded.has(input.candidate.language))
         return { status: "not-applicable" };
-      const projection = await memoizedVueI18nProjection(
-        input,
-        options.project,
-      );
+      const prepared = await prepareVueI18nMessage(input, options.prepare);
+      if (prepared.status !== "ready") return prepared;
+      const projection = prepared.input;
       if (projection.target.status === "missing")
         return { status: "not-applicable" };
       if (projection.target.status === "unavailable")
@@ -201,27 +148,13 @@ export function createVueI18nTargetSyntaxChecker<
           "candidateBodyUnavailable",
           "目标消息正文不可用，Vue I18n 检查未执行。",
         );
-      return { status: "selected", subject: projection };
-    },
-    project: (
-      input: QualityCheckProjectionInput<
-        TUnit,
-        TTranslation,
-        Configuration,
-        Subject,
-        TBody,
-        TUnavailable
-      >,
-    ) => ({ status: "ready", value: input.subject }),
-    fingerprintInput: ({ projected }) => {
-      assertJsonValue(projected, "Vue I18n 检查投影");
-      return projected;
+      return { status: "ready", input: projection };
     },
     check: (input) => {
-      const text = input.projected.target;
+      const text = input.target;
       if (text.status !== "available")
         return incompleteOutcome("targetUnavailable", "目标消息正文不可用。");
-      return syntaxOutcome("target", input.projected, text.text, input.memo);
+      return syntaxOutcome("target", input, text.text);
     },
   });
 }
@@ -230,9 +163,8 @@ function syntaxOutcome(
   side: "source" | "target",
   projection: VueI18nMessageProjection,
   text: string,
-  memo: MemoScope,
 ): QualityCheckOutcome {
-  const parsed = memoizedVueI18nMessage(text, memo);
+  const parsed = parseVueI18nMessage(text);
   const location = projection.locations[side];
   const object: QualityObject = {
     kind: side === "source" ? "source-unit" : "translation-unit",

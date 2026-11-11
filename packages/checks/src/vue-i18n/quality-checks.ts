@@ -15,6 +15,7 @@ import {
   createVueI18nTerminologyChecks,
 } from "./checks/terminology-families.ts";
 import { missingVueI18nData } from "./dependencies.ts";
+import { memoizedVueI18nProjection } from "./quality-projection.ts";
 import type { VueI18nChecksOptions } from "./quality-types.ts";
 import type {
   VueI18nLanguagePolicy,
@@ -48,45 +49,53 @@ export function createVueI18nChecks<
     id,
     hostVersion: options.hostVersion,
   });
+  const prepare = async (
+    input: import("./quality-projection.ts").VueI18nPrepareInput<
+      TUnit,
+      TTranslation,
+      TBody,
+      TUnavailable
+    >,
+  ) => ({
+    status: "ready" as const,
+    input: await memoizedVueI18nProjection(input, options.project),
+  });
   const analysis = createVueI18nAnalysis();
 
   return [
     createVueI18nSourceSyntaxChecker({
       id: "vue-i18n/source-syntax",
-      hostVersion: options.hostVersion,
-      project: options.project,
+      prepare,
       loadLanguages,
     }),
     createVueI18nTargetSyntaxChecker({
       id: "vue-i18n/target-syntax",
-      hostVersion: options.hostVersion,
-      project: options.project,
+      prepare,
       loadLanguages,
     }),
     createVueI18nVariableCorrespondenceChecker({
       id: "vue-i18n/variable-correspondence",
-      hostVersion: options.hostVersion,
-      project: options.project,
+      prepare,
       loadLanguages,
     }),
     createLinkTargetExistsCheck({
       identity: identity("vue-i18n/link-target-exists"),
-      project: options.project,
+      prepare,
       loadPolicies,
     }),
     createLinkCycleCheck({
       identity: identity("vue-i18n/link-cycle"),
-      project: options.project,
+      prepare,
       loadPolicies,
     }),
     createProtectedLiteralCheck({
       identity: identity("vue-i18n/protected-literals"),
-      project: options.project,
+      prepare,
       loadPolicies,
     }),
     createQuantityCheck({
       identity: identity("vue-i18n/quantities"),
-      project: options.project,
+      prepare,
       loadPolicies,
     }),
     ...createVueI18nTerminologyChecks({
