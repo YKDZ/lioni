@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 
-import { defineConfig, readFacts, type StandardSchemaV1 } from "@lioni/lioni";
+import {
+  analyzeQuality,
+  defineChecker,
+  defineConfig,
+  readFacts,
+  type StandardSchemaV1,
+} from "@lioni/lioni";
+import { z } from "zod";
 
 type Unit = { source: string; context: { file: string } };
 // 专门验证非 Zod、异步的标准协议接入；普通业务夹具由其宿主选择 Zod。
@@ -43,3 +50,81 @@ const config = defineConfig({
 });
 const facts = await readFacts(config);
 assert.deepEqual(facts.source.units[0]?.unit, input);
+
+const checker = defineChecker.withTypes<Unit, Unit, string>()({
+  id: "action-copy",
+  version: "1",
+  inputSchema: z.object({
+    key: z.string(),
+    language: z.string(),
+    file: z.string(),
+    text: z.string(),
+    expected: z.string(),
+  }),
+  load() {
+    const index: ReadonlyMap<string, string> = new Map([
+      ["Save", "Enregistrer"],
+    ]);
+    return { lookup: (key: string) => index.get(key), index };
+  },
+  prepare({ candidate, sourceUnit, loaded }) {
+    const expected = loaded.lookup(candidate.sourceKey);
+    if (expected === undefined) return { status: "not-applicable" };
+    return {
+      status: "ready",
+      input: {
+        key: candidate.sourceKey,
+        language: candidate.language,
+        file: sourceUnit.unit.context.file,
+        text: candidate.content,
+        expected,
+      },
+    };
+  },
+  check({ key, language, file, text, expected }) {
+    return {
+      status: "complete",
+      diagnostics:
+        text === expected
+          ? []
+          : [
+              {
+                severity: "warning",
+                object: { kind: "translation-unit", key, language },
+                location: { language, range: file },
+                message: `请使用 ${expected}。`,
+                evidence: [],
+              },
+            ],
+      issues: [],
+      coverage: {
+        selected: 1,
+        evaluated: 1,
+        notApplicable: 0,
+        incomplete: 0,
+        failed: 0,
+      },
+    };
+  },
+});
+
+const qaConfig = defineConfig({
+  source: config.source,
+  keyOf: config.keyOf,
+  translations: {
+    languages: ["fr"],
+    schema: sourceSchema,
+    contentSchema: z.string(),
+    keyOf: () => "Save",
+    contentOf: ({ source }) => source,
+    read: () => ({ scopes: [] }),
+  },
+  quality: { checks: [checker] },
+});
+const result = await analyzeQuality(qaConfig, {
+  checkIds: ["action-copy"],
+  candidates: [{ sourceKey: "Save", language: "fr", content: "Sauver" }],
+});
+assert.deepEqual(JSON.parse(JSON.stringify(result)), result);
+assert.equal(result.diagnostics[0]?.message, "请使用 Enregistrer。");
+assert.equal(result.diagnostics[0]?.location.range, "messages.ts");

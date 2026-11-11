@@ -48,6 +48,7 @@ import type {
 } from "./semantic-edits.ts";
 import {
   assertJsonValue,
+  freezeJsonValue,
   isStandardSchema,
   StandardSchemaContractError,
   validateWithStandardSchema,
@@ -121,14 +122,20 @@ export type {
   UpsertQualityExceptionFromReportInput,
 } from "./quality/quality-exceptions.ts";
 export {
+  QualityCheckerContractError,
   QualityCheckBindingError,
   QualityDataReaderContractError,
   createDefaultQualityInputBasis,
+  defineChecker,
   defineQualityCheck,
   bindQualityCheck,
   runQualityChecks,
 } from "./quality/qa.ts";
 export type {
+  CheckerDefinition,
+  CheckerLoadInput,
+  CheckerPreparation,
+  CheckerPrepareInput,
   QualityCheckStatus,
   QualityObject,
   QualityLocation,
@@ -960,7 +967,7 @@ export async function analyzeQuality<
           candidate,
           config,
         );
-        candidates.push(freezeQualityCandidate(validated));
+        candidates.push(freezeJsonValue(validated));
       }
       validateQualityCandidateScope(facts, candidates);
 
@@ -1140,20 +1147,6 @@ function defaultQualityCandidates<
           },
         ];
   });
-}
-
-function freezeQualityCandidate<TBody>(
-  candidate: SemanticEditCandidate<TBody>,
-): SemanticEditCandidate<TBody> {
-  freezeJsonValue(candidate.content);
-  return Object.freeze(candidate);
-}
-
-function freezeJsonValue(value: unknown): void {
-  if (typeof value !== "object" || value === null || Object.isFrozen(value))
-    return;
-  for (const nested of Object.values(value)) freezeJsonValue(nested);
-  Object.freeze(value);
 }
 
 function validateSourceRead(value: unknown): void {
