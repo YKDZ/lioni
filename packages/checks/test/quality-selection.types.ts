@@ -17,7 +17,6 @@ import {
   createNumberChecker,
   createTermChecker,
   createVueI18nChecks,
-<<<<<<< HEAD
   createVueI18nSourceSyntaxChecker,
   createVueI18nTargetSyntaxChecker,
   createVueI18nVariableCorrespondenceChecker,
@@ -149,8 +148,13 @@ const vueProjection: VueI18nMessageProjection = {
   },
 };
 const vueOptions: VueI18nChecksOptions<VueUnit, VueTranslation, VueBody> = {
-  hostVersion: "type-plan/v1",
-  project: () => vueProjection,
+  prepare: ({ candidate, sourceUnit }) => {
+    const sourceText: string = sourceUnit.unit.source;
+    const candidateBody: VueBody = candidate.content;
+    void sourceText;
+    void candidateBody;
+    return { status: "ready", input: vueProjection };
+  },
   reference: () => vueProjection,
 };
 const vueChecks = [

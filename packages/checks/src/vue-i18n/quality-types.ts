@@ -18,14 +18,11 @@ import type {
 import type {
   VueI18nMessageProjection,
   VueI18nPreparer,
-  VueI18nProjector,
 } from "./quality-projection.ts";
 
 export type {
   VueI18nMessageProjection,
   VueI18nPreparer,
-  VueI18nProjectionInput,
-  VueI18nProjector,
   VueI18nSourceMessage,
   VueI18nTargetMessage,
 } from "./quality-projection.ts";
@@ -48,7 +45,7 @@ export type VueI18nLanguagePolicy = {
   readonly targetLanguage: string;
 };
 
-/** 完整 Vue 策略；供既有项目投影和事实构造使用。 */
+/** Vue I18n 消息检查共用的语言、资源与规则策略。 */
 export type VueI18nPolicy = VueI18nLanguagePolicy & {
   readonly resources: {
     readonly source: {
@@ -103,7 +100,6 @@ export type VueI18nDataReader<
 
 export type VueI18nCheckIdentity<TId extends string = string> = {
   readonly id: TId;
-  readonly hostVersion: string;
 };
 
 export type VueI18nMessageReference<
@@ -142,12 +138,8 @@ export type VueI18nChecksOptions<
   TBody,
   TUnavailable = never,
 > = {
-  /** 为本候选提取 Vue 消息及其位置；未提供时沿用字符串正文默认适配。 */
+  /** 每候选准备一次 Vue 消息及其位置；未提供时沿用字符串正文默认适配。 */
   readonly prepare?: VueI18nPreparer<TUnit, TTranslation, TBody, TUnavailable>;
-  /** 宿主投影、位置映射和策略语义变化时更新，用于使缓存失效。 */
-  readonly hostVersion: string;
-  /** 将本次候选、事实和依赖映射为 Vue I18n 消息。 */
-  readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
   /** 只提供语言范围；语法、变量和术语检查不要求消息族策略或术语容器。 */
   readonly loadLanguages?: VueI18nDataReader<
     TUnit,

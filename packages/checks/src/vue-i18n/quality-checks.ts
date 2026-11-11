@@ -46,10 +46,7 @@ export function createVueI18nChecks<
   const loadTerms =
     options.loadTerms ??
     missingVueI18nData<TermbaseData>("Vue I18n 术语库读取器");
-  const identity = <const TId extends string>(id: TId) => ({
-    id,
-    hostVersion: options.hostVersion,
-  });
+  const identity = <const TId extends string>(id: TId) => ({ id });
   const analysis = createVueI18nAnalysis();
 
   return [
@@ -89,7 +86,7 @@ export function createVueI18nChecks<
       loadPolicies,
     }),
     ...createVueI18nTerminologyChecks({
-      project: options.project,
+      ...messagePreparation,
       analysis,
       loadLanguages,
       loadTerms,

@@ -3,7 +3,6 @@ import test from "node:test";
 
 import {
   createQualityException,
-  QualityCheckBindingError,
   StandardSchemaContractError,
   type QualityException,
   type QualityCheckResultCache,
@@ -366,10 +365,20 @@ void test("非法语法使变量比较未完成，缺译、不可用和真实空
     }).run([candidate("orphan", "bad } target")]),
     /原文键.*不存在于本次已读取的原文/,
   );
-  const unavailableSource = await createQualityFixture({
+  const unavailableSourceFixture = createQualityFixture({
     policies: [policy],
     unavailableSourceKeys: ["label"],
-  }).run([candidate("label", "你好")]);
+    alterProjection: (projection) => ({
+      ...projection,
+      source: { status: "available", text: "Hello {name}" },
+    }),
+  });
+  const unavailableSource = await unavailableSourceFixture.run([
+    candidate("label", "你好"),
+  ]);
+  const unavailableSourceWithMissingTarget = await unavailableSourceFixture.run(
+    [candidate("label", "无关占位", "zh-CN", "missing")],
+  );
 
   assert.equal(
     check(invalid, checkIds.variableCorrespondence)?.status,
@@ -405,7 +414,23 @@ void test("非法语法使变量比较未完成，缺译、不可用和真实空
     check(unavailableSource, checkIds.sourceSyntax)?.status,
     "incomplete",
   );
+  assert.equal(
+    check(unavailableSource, checkIds.variableCorrespondence)?.status,
+    "incomplete",
+  );
+  assert.equal(
+    check(unavailableSource, checkIds.allowedTerminology)?.status,
+    "incomplete",
+  );
+  assert.equal(
+    check(unavailableSource, checkIds.messageFamilyConsistency)?.status,
+    "incomplete",
+  );
   assert.deepEqual(findings(unavailableSource, checkIds.targetSyntax), []);
+  assert.equal(
+    check(unavailableSourceWithMissingTarget, checkIds.sourceSyntax)?.status,
+    "not-applicable",
+  );
 });
 
 void test("目标独有关联仍检查，缺失目标可见，当前候选覆盖保存正文参与循环判断", async () => {
@@ -743,14 +768,14 @@ void test("同次运行中的各检查共享一次候选消息投影", async () 
   });
   const result = await createQualityFixture({
     policies: [policy],
-    onProject: () => projections++,
+    onPrepare: () => projections++,
   }).run([candidate("label", "你好 {name}")]);
 
   assert.ok(result.checks.length > 1);
   assert.equal(projections, 1);
 });
 
-void test("组合基础检查与消息族共用准备适配并保留候选位置", async () => {
+void test("组合基础、术语与消息族共用准备适配并保留候选位置", async () => {
   let preparations = 0;
   let candidateRange = { file: "prepared-target.json", revision: 4 };
   let savedRange = { file: "saved-target.json", revision: 2 };
@@ -790,8 +815,10 @@ void test("组合基础检查与消息族共用准备适配并保留候选位置
         },
       };
     },
-    prepare: ({ candidate, sourceUnit }) => {
+    prepare: (input) => {
       preparations++;
+      assert.equal(Object.hasOwn(input, "loaded"), false);
+      const { candidate, sourceUnit } = input;
       assert.ok(sourceUnit);
       return {
         status: "ready",
@@ -830,6 +857,8 @@ void test("组合基础检查与消息族共用准备适配并保留候选位置
     checkIds.sourceSyntax,
     checkIds.targetSyntax,
     checkIds.variableCorrespondence,
+    checkIds.allowedTerminology,
+    checkIds.forbiddenTerminology,
     checkIds.messageFamilyConsistency,
   ];
   const result = await fixture.run(

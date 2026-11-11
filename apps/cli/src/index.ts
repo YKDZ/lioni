@@ -200,7 +200,6 @@ export type {
   VueI18nPolicy,
   VueI18nPolicyData,
   VueI18nPolicyRequirement,
-  VueI18nProjector,
   VueI18nQuantityPolicy,
   VueI18nReferenceProjector,
   VueI18nScopeRule,

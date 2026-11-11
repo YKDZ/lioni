@@ -1,6 +1,7 @@
 import {
   createVueI18nChecks,
   type VueI18nMessageProjection,
+  type VueI18nPrepareInput,
   type VueI18nPreparer,
   type VueI18nPolicy,
   type VueI18nChecksOptions,
@@ -9,7 +10,6 @@ import {
   analyzeQuality,
   defineConfig,
   type JsonValue,
-  type QualityCheckInput,
   type QualityCheckResultCache,
   type QualityExceptionStore,
   type SemanticEditCandidate,
@@ -113,7 +113,7 @@ export function createQualityFixture(input: {
   readonly resultCache?: QualityCheckResultCache;
   readonly exceptionStore?: QualityExceptionStore;
   readonly unavailableSourceKeys?: readonly string[];
-  readonly onProject?: () => void;
+  readonly onPrepare?: () => void;
   readonly prepare?: VueI18nPreparer<Unit, Translation, Body>;
   readonly reference?: VueI18nChecksOptions<
     Unit,
@@ -143,11 +143,8 @@ export function createQualityFixture(input: {
         }
       : input.dataReaders;
 
-  const projectMessage = (
-    qualityInput: Omit<
-      QualityCheckInput<Unit, Translation, unknown, Body>,
-      "configuration" | "dependencies"
-    >,
+  const buildMessageProjection = (
+    qualityInput: VueI18nPrepareInput<Unit, Translation, Body>,
   ): VueI18nMessageProjection => {
     const candidate = qualityInput.candidate;
     const policy = byLanguage.get(candidate.language);
@@ -158,7 +155,7 @@ export function createQualityFixture(input: {
       sourceUnit: qualityInput.sourceUnit,
       sourceRange:
         qualityInput.facts.source.read.scopes[
-          qualityInput.sourceUnit?.scopeIndex ?? 0
+          qualityInput.sourceUnit.scopeIndex
         ]?.range ?? policy.resources.source.range,
       targetRange: policy.resources.target.range,
       target:
@@ -170,21 +167,15 @@ export function createQualityFixture(input: {
     });
     return input.alterProjection?.(projected) ?? projected;
   };
-  const project = (
-    qualityInput: Omit<
-      QualityCheckInput<Unit, Translation, unknown, Body>,
-      "configuration" | "dependencies"
-    >,
-  ): VueI18nMessageProjection => {
-    input.onProject?.();
-    return projectMessage(qualityInput);
-  };
   const prepare =
     input.prepare ??
-    ((qualityInput: Parameters<typeof project>[0]) => ({
-      status: "ready" as const,
-      input: projectMessage(qualityInput),
-    }));
+    ((qualityInput: Parameters<typeof buildMessageProjection>[0]) => {
+      input.onPrepare?.();
+      return {
+        status: "ready" as const,
+        input: buildMessageProjection(qualityInput),
+      };
+    });
 
   const defaultReference = (
     value: Parameters<
@@ -279,8 +270,6 @@ export function createQualityFixture(input: {
         ? {}
         : { exceptionStore: input.exceptionStore }),
       checks: createVueI18nChecks<Unit, Translation, Body>({
-        hostVersion: "vue-i18n-quality-test-v1",
-        project,
         prepare,
         reference,
         ...dataReaders,

@@ -108,13 +108,6 @@ async function run(
     },
     quality: {
       checks: createVueI18nChecks<Unit, Translation, string>({
-        hostVersion: "artifact-families/v1",
-        project: ({ sourceUnit, candidate }) =>
-          projection(
-            candidate.sourceKey,
-            sourceUnit!.unit.source,
-            candidate.content,
-          ),
         prepare: ({ sourceUnit, candidate }) => {
           const prepared = projection(
             candidate.sourceKey,

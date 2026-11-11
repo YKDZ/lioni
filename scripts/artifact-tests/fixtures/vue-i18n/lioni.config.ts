@@ -149,9 +149,6 @@ export function createConfig(
         },
       },
       checks: createVueI18nChecks<Unit, Translation, string>({
-        hostVersion: "artifact-consumer-v1",
-        project: ({ sourceUnit, candidate }) =>
-          projection(sourceUnit?.unit.source, candidate.content),
         reference: ({ sourceUnit, translation }) =>
           projection(
             sourceUnit.unit.source,
