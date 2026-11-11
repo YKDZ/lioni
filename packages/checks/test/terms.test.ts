@@ -325,13 +325,6 @@ function createScenario(
         },
       },
       checks,
-      buildCandidates: () => [
-        {
-          sourceKey: "workspace",
-          language: "zh",
-          content: { visible: "工作区", hidden: "作业区" },
-        },
-      ],
     },
   });
 
@@ -353,6 +346,11 @@ function createScenario(
     setExceptions: (value: readonly QualityException[]) => {
       exceptions = value;
     },
+    candidate: () => ({
+      sourceKey: "workspace",
+      language: "zh",
+      content: storedBody,
+    }),
     storedBody: () => storedBody,
     segmentationCalls: () => segmentationCalls,
     termBoundaryCalls: () => termBoundaryCalls,
@@ -363,7 +361,9 @@ void test("术语检查只投影宿主选定的 JSON 字段，并复用同次 QA
   const scenario = createScenario();
   assert.equal(scenario.segmentationCalls(), 0);
 
-  const accepted = await analyzeQuality(scenario.config);
+  const accepted = await analyzeQuality(scenario.config, {
+    candidates: [scenario.candidate()],
+  });
   assert.equal(accepted.status, "complete");
   assert.deepEqual(accepted.diagnostics, []);
   assert.equal(scenario.segmentationCalls(), 1);
@@ -419,7 +419,9 @@ void test("术语检查只投影宿主选定的 JSON 字段，并复用同次 QA
 void test("两项术语规则复用同次 QA 术语识别", async () => {
   const scenario = createScenario({ countTermBoundary: true });
 
-  const result = await analyzeQuality(scenario.config);
+  const result = await analyzeQuality(scenario.config, {
+    candidates: [scenario.candidate()],
+  });
 
   assert.equal(result.status, "complete");
   assert.equal(scenario.segmentationCalls(), 1);
@@ -634,7 +636,7 @@ void test("术语投影不符合 Standard Schema 时保持正式契约错误", a
   scenario.setInvalidProjection(true);
 
   await assert.rejects(
-    analyzeQuality(scenario.config),
+    analyzeQuality(scenario.config, { candidates: [scenario.candidate()] }),
     (error) =>
       error instanceof StandardSchemaContractError &&
       error.kind === "schema-mismatch" &&
