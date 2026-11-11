@@ -17,10 +17,10 @@ import {
   createNumberChecker,
   createTermChecker,
   createVueI18nChecks,
-  type TermCheckerLoaded,
   createVueI18nSourceSyntaxChecker,
   createVueI18nTargetSyntaxChecker,
   createVueI18nVariableCorrespondenceChecker,
+  type TermCheckerLoaded,
   type VueI18nChecksOptions,
   type VueI18nMessageProjection,
 } from "../src/index.ts";
@@ -148,8 +148,13 @@ const vueProjection: VueI18nMessageProjection = {
   },
 };
 const vueOptions: VueI18nChecksOptions<VueUnit, VueTranslation, VueBody> = {
-  hostVersion: "type-plan/v1",
-  project: () => vueProjection,
+  prepare: ({ candidate, sourceUnit }) => {
+    const sourceText: string = sourceUnit.unit.source;
+    const candidateBody: VueBody = candidate.content;
+    void sourceText;
+    void candidateBody;
+    return { status: "ready", input: vueProjection };
+  },
   reference: () => vueProjection,
 };
 const vueChecks = [

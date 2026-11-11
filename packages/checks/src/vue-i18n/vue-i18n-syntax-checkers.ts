@@ -131,7 +131,10 @@ export function createVueI18nSourceSyntaxChecker<
         );
       if (projection.source.status === "absent")
         return { status: "not-applicable" };
-      if (projection.source.status === "unavailable")
+      if (
+        projection.source.status === "unavailable" ||
+        input.sourceUnit.bodyAvailability !== "available"
+      )
         return incompleteSelection(
           "sourceUnavailable",
           "原文正文不可用，无法检查 Vue I18n 语法。",

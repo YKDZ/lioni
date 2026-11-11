@@ -107,14 +107,6 @@ export function createVueI18nMessageCheck<
       const prepared = await prepareVueI18nMessage(input, options.adapter);
       if (prepared.status !== "ready") return prepared;
       const projection = prepared.input;
-      if (
-        projection.key !== input.candidate.sourceKey ||
-        projection.language !== input.candidate.language
-      )
-        return incompleteSelection(
-          "messageProjectionIdentityMismatch",
-          "消息准备结果的键或语言与本次候选不一致。",
-        );
       if (options.requiresTarget) {
         if (projection.target.status === "missing")
           return { status: "not-applicable" };
@@ -127,7 +119,10 @@ export function createVueI18nMessageCheck<
       if (options.requiresSource) {
         if (projection.source.status === "absent")
           return { status: "not-applicable" };
-        if (projection.source.status === "unavailable")
+        if (
+          projection.source.status === "unavailable" ||
+          input.sourceUnit.bodyAvailability !== "available"
+        )
           return incompleteSelection(
             "sourceUnavailable",
             "原文正文不可用，检查未执行。",

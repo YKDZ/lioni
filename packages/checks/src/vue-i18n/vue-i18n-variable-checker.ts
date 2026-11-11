@@ -129,7 +129,10 @@ export function createVueI18nVariableCorrespondenceChecker<
         );
       if (projection.source.status === "absent")
         return { status: "not-applicable" };
-      if (projection.source.status === "unavailable")
+      if (
+        projection.source.status === "unavailable" ||
+        input.sourceUnit.bodyAvailability !== "available"
+      )
         return incompleteSelection(
           "sourceUnavailable",
           "原文正文不可用，无法检查变量对应。",

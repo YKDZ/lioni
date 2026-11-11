@@ -22,7 +22,7 @@ import {
   readVueI18nLanguagePolicies,
 } from "../dependencies.ts";
 import { memoizedVueI18nMessage } from "../message-memo.ts";
-import { memoizedVueI18nProjection } from "../quality-projection.ts";
+import { prepareVueI18nMessage } from "../quality-projection.ts";
 import type {
   VueI18nCheckIdentity,
   VueI18nDataReader,
@@ -30,20 +30,11 @@ import type {
   VueI18nMessageProjection,
   VueI18nPolicy,
   VueI18nPolicyData,
-  VueI18nProjector,
+  VueI18nPreparer,
   VueI18nReferenceProjector,
 } from "../quality-types.ts";
 import { createVueI18nScopeResolver } from "../scope.ts";
 import { parseVueI18nMessage } from "../vue-i18n-messages.ts";
-
-type TermSubject = {
-  readonly key: string;
-  readonly language: string;
-  readonly source: string;
-  readonly target: string;
-  readonly policy: VueI18nLanguagePolicy;
-  readonly projection: VueI18nMessageProjection;
-};
 
 export function createVueI18nTerminologyChecks<
   TUnit extends TranslationUnitInput,
@@ -53,7 +44,7 @@ export function createVueI18nTerminologyChecks<
   TAllowedId extends string = string,
   TForbiddenId extends string = string,
 >(options: {
-  readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
+  readonly prepare?: VueI18nPreparer<TUnit, TTranslation, TBody, TUnavailable>;
   readonly analysis: TextAnalysis;
   readonly loadLanguages: VueI18nDataReader<
     TUnit,
@@ -99,7 +90,9 @@ export function createVueI18nTerminologyChecks<
     memo,
     qualityData,
   }: QualityDataLoadInput<TUnit, TTranslation, TBody, TUnavailable>) => {
-    return qualityData.read(options.loadLanguages, facts, memo);
+    return readVueI18nLanguagePolicies(
+      await qualityData.read(options.loadLanguages, facts, memo),
+    );
   };
   const loadTerms = async ({
     facts,
@@ -114,7 +107,7 @@ export function createVueI18nTerminologyChecks<
     createTermChecker.withTypes<
       TUnit,
       TTranslation,
-      TermSubject,
+      VueI18nMessageProjection,
       TBody,
       TUnavailable
     >()({
@@ -123,18 +116,15 @@ export function createVueI18nTerminologyChecks<
       load: loadLanguages,
       rule,
       prepare: async (input) => {
-        const policy = readVueI18nLanguagePolicies(input.loaded.context).get(
-          input.candidate.language,
-        );
+        const policy = input.loaded.context.get(input.candidate.language);
         if (policy === undefined) return { status: "not-applicable" };
-        const projection = await memoizedVueI18nProjection(
-          {
-            ...input,
-            configuration: undefined,
-            dependencies: input.loaded.context,
-          },
-          options.project,
+        const { loaded: _loaded, ...messageInput } = input;
+        const prepared = await prepareVueI18nMessage(
+          messageInput,
+          options.prepare,
         );
+        if (prepared.status !== "ready") return prepared;
+        const projection = prepared.input;
         if (projection.target.status === "missing")
           return { status: "not-applicable" };
         if (projection.target.status === "unavailable")
@@ -144,41 +134,40 @@ export function createVueI18nTerminologyChecks<
           );
         if (projection.source.status === "absent")
           return { status: "not-applicable" };
-        if (projection.source.status === "unavailable")
+        if (
+          projection.source.status === "unavailable" ||
+          input.sourceUnit.bodyAvailability !== "available"
+        )
           return incompleteSelection(
             "sourceUnavailable",
             "原文正文不可用，术语检查未执行。",
           );
         if (!projection.target.text.trim()) return { status: "not-applicable" };
-        const subject: TermSubject = {
-          key: projection.key,
-          language: projection.language,
-          source: projection.source.text,
-          target: projection.target.text,
-          policy,
-          projection,
-        };
         return {
           status: "ready",
-          subject,
+          subject: projection,
           comparison: {
             groups: [
               {
-                ref: subject.key,
+                ref: projection.key,
                 source: {
                   language: policy.sourceLanguage,
-                  fragments: [{ ref: subject.key, text: subject.source }],
+                  fragments: [
+                    { ref: projection.key, text: projection.source.text },
+                  ],
                 },
                 target: {
                   language: policy.targetLanguage,
-                  fragments: [{ ref: subject.key, text: subject.target }],
+                  fragments: [
+                    { ref: projection.key, text: projection.target.text },
+                  ],
                 },
               },
             ],
           },
         };
       },
-      location: ({ side, subject }) => subject.projection.locations[side],
+      location: ({ side, subject }) => subject.locations[side],
     }),
   );
 }
@@ -190,7 +179,7 @@ export function createVueI18nMessageFamilyCheck<
   TUnavailable = never,
   TId extends string = string,
 >(options: {
-  readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
+  readonly prepare?: VueI18nPreparer<TUnit, TTranslation, TBody, TUnavailable>;
   readonly loadPolicies: VueI18nDataReader<
     TUnit,
     TTranslation,
@@ -247,10 +236,9 @@ export function createVueI18nMessageFamilyCheck<
         .policies.get(input.candidate.language);
       if (policy === undefined || input.sourceUnit === null)
         return { status: "not-applicable" };
-      const projection = await memoizedVueI18nProjection(
-        { ...input, configuration: undefined, dependencies: input.loaded },
-        options.project,
-      );
+      const prepared = await prepareVueI18nMessage(input, options.prepare);
+      if (prepared.status !== "ready") return prepared;
+      const projection = prepared.input;
       const unavailable = sourceAvailability(projection);
       if (unavailable !== undefined) return unavailable;
       const targetUnavailable = targetAvailability(projection);
@@ -293,11 +281,13 @@ function familyInput(
   projection: VueI18nMessageProjection,
   policies: ReadonlyMap<string, VueI18nPolicy>,
 ): MessageFamilyInput {
+  const location = projection.locations.target;
   const policy = policies.get(projection.language);
   if (policy === undefined)
     return {
       complete: false,
       groups: [],
+      location,
       issues: [
         {
           code: "missing-language-policy",
@@ -310,6 +300,7 @@ function familyInput(
     return {
       complete: false,
       groups: [],
+      location,
       issues: [
         {
           code: "sourceBodyUnavailable",
@@ -323,6 +314,7 @@ function familyInput(
     return {
       complete: false,
       groups: [],
+      location,
       issues: [
         {
           code: "sourceMessageSyntaxInvalid",
@@ -354,6 +346,7 @@ function familyInput(
 
   const scope = createVueI18nScopeResolver(policy)(projection.key);
   return {
+    location,
     groups: [
       {
         ref: projection.key,

@@ -48,8 +48,6 @@ export type {
   VueI18nPolicy,
   VueI18nPolicyData,
   VueI18nPolicyRequirement,
-  VueI18nProjectionInput,
-  VueI18nProjector,
   VueI18nReferenceProjector,
   VueI18nScopeRule,
   VueI18nQuantityPolicy,
