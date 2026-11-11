@@ -115,7 +115,7 @@ void describe("quality checks", () => {
     const result = await analyzeQuality(configFor(dependencies));
 
     assert.equal(result.status, "complete");
-    assert.deepEqual(result.checks[0]?.dependencies, dependencies);
+    assert.equal(Object.hasOwn(result.checks[0] ?? {}, "dependencies"), false);
     assert.notStrictEqual(observedDependencies, dependencies);
     assert.deepEqual(observedDependencies, dependencies);
     assert.equal(result.checks[0]?.issues.length, 0);
@@ -476,7 +476,7 @@ void describe("quality checks", () => {
 
     assert.equal(result.status, "failed");
     assert.equal(result.version, facts.version);
-    assert.deepEqual(result.checks[0]?.dependencies, dependencies);
+    assert.equal(Object.hasOwn(result.checks[0] ?? {}, "dependencies"), false);
     assert.equal(result.checks[0]?.issues[0]?.message, "checker crashed");
   });
 

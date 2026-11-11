@@ -387,7 +387,7 @@ export type QualityCheckInput<
 /** 可作为检查输入依据的 JSON 值；回调结果会由核心在交接前验证并摘要。 */
 export type QualityInputBasis = JsonValue;
 
-const qualityInputFingerprintFormat = "lioni.check-input/v1";
+const qualityInputFingerprintFormat = "lioni.check-input/v2";
 
 export type QualityDefaultInput = {
   readonly facts: unknown;
@@ -415,7 +415,6 @@ export function createDefaultQualityInputBasis(
 
 export type QualityInputFingerprintSummary = {
   readonly version: string;
-  readonly configurationFingerprint: string;
   readonly inputFingerprint: string;
 };
 
@@ -562,7 +561,7 @@ type QualityInputPreparationContext = {
   readonly candidateIndex: number;
   readonly sourceKey: string;
   readonly language: string;
-  readonly configurationFingerprint: string;
+  readonly configurationFingerprint?: string;
   readonly validateDefaultInputComponents: () => void;
   readonly getDefaultInputComponents: () => DefaultQualityInputFingerprintComponents;
   readonly startFingerprint: () => void;
@@ -1294,11 +1293,17 @@ function prepareFingerprint(
   readonly fingerprint: Required<QualityInputFingerprint>;
   readonly cacheKey: string;
 } {
+  const completeInputFingerprintBasis =
+    context.configurationFingerprint === undefined
+      ? inputBasisFingerprint
+      : fingerprintJsonObjectComponents([
+          ["configuration", context.configurationFingerprint],
+          ["inputFingerprint", inputBasisFingerprint],
+        ]);
   const fingerprint = qualityInputFingerprint(
     id,
     version,
-    context.configurationFingerprint,
-    inputBasisFingerprint,
+    completeInputFingerprintBasis,
   );
   return {
     fingerprint,
@@ -1316,9 +1321,6 @@ export type QualityCheckResult<TObject extends QualityObject = QualityObject> =
   {
     readonly checkId: string;
     readonly version: string;
-    readonly configuration: unknown;
-    /** 仅记录本检查项成功加载并固定的资料。 */
-    readonly dependencies?: unknown;
     readonly status: QualityCheckStatus;
     readonly diagnostics: readonly QualityDiagnostic<TObject>[];
     readonly issues: readonly QualityIssue<TObject>[];
@@ -1576,17 +1578,18 @@ export async function runQualityChecksWithQualityData<
             };
           return defaultInputComponents;
         };
-      const endConfiguration = options.profile?.checkStage(
-        id,
-        "configurationFingerprint",
-      );
-      const configuration = snapshotQualityData(
-        prepared.configuration === undefined ? {} : prepared.configuration,
-      );
-      const configurationFingerprint = fingerprintQualityInputBasis(
-        configuration as JsonValue,
-      );
-      endConfiguration?.();
+      let configurationFingerprint: string | undefined;
+      if (prepared.configuration !== undefined) {
+        const endConfiguration = options.profile?.checkStage(
+          id,
+          "configurationFingerprint",
+        );
+        const configuration = snapshotQualityData(prepared.configuration);
+        configurationFingerprint = fingerprintQualityInputBasis(
+          configuration as JsonValue,
+        );
+        endConfiguration?.();
+      }
       const diagnostics: QualityDiagnostic[] = [];
       const issues: QualityIssue[] = [];
       const executions: QualityCheckExecution[] = [];
@@ -1633,7 +1636,9 @@ export async function runQualityChecksWithQualityData<
             candidateIndex,
             sourceKey: candidate.sourceKey,
             language: candidate.language,
-            configurationFingerprint,
+            ...(configurationFingerprint === undefined
+              ? {}
+              : { configurationFingerprint }),
             validateDefaultInputComponents,
             getDefaultInputComponents,
             startFingerprint() {
@@ -1732,11 +1737,6 @@ export async function runQualityChecksWithQualityData<
       results.push({
         checkId: id,
         version: prepared.version,
-        configuration,
-        ...(prepared.configuration !== undefined &&
-        dependencyFailure === undefined
-          ? { dependencies }
-          : {}),
         status: aggregateStatus(statuses),
         diagnostics,
         issues,
@@ -1832,14 +1832,11 @@ function failedQualityCheckOutcome<TBody>(
 function qualityInputFingerprint(
   checkId: string,
   version: string,
-  configurationFingerprint: string,
   inputBasisFingerprint: string,
 ): Required<QualityInputFingerprint> {
-  const summaryVersion = `${qualityInputFingerprintFormat}:${version}`;
   return {
     inputFingerprint: fingerprintJsonObjectComponents([
       ["checkId", fingerprintJsonValue(checkId)],
-      ["configurationFingerprint", configurationFingerprint],
       [
         "fingerprintFormat",
         fingerprintJsonValue(qualityInputFingerprintFormat),
@@ -1848,8 +1845,7 @@ function qualityInputFingerprint(
       ["version", fingerprintJsonValue(version)],
     ]),
     fingerprintSummary: {
-      version: summaryVersion,
-      configurationFingerprint,
+      version,
       inputFingerprint: inputBasisFingerprint,
     },
   };

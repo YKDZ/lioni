@@ -180,6 +180,10 @@ void describe("三阶段自定义检查", () => {
     assert.equal(reads, 1);
     const roundTrip = JSON.parse(JSON.stringify(first)) as typeof first;
     assert.deepEqual(roundTrip, first);
+    for (const result of first.checks) {
+      assert.equal(Object.hasOwn(result, "configuration"), false);
+      assert.equal(Object.hasOwn(result, "dependencies"), false);
+    }
 
     await analyzeQuality(qa, options);
     assert.deepEqual(loads, ["first", "second", "first", "second"]);
