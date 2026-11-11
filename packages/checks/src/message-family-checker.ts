@@ -39,7 +39,6 @@ import {
 import type {
   MessageFamilyComparison,
   MessageFamilyGroup,
-  MessageFamilyIndex,
   MessageFamilyInput,
   MessageFamilyIssue,
   MessageFamilyLimits,
@@ -142,30 +141,27 @@ type SignedMessageGroup = {
 };
 
 type ProjectedReferences = {
-  readonly index: MessageFamilyIndex;
+  readonly references: readonly Omit<
+    MessageFamilyReference,
+    "translationIndex"
+  >[];
   readonly incomplete: boolean;
   readonly issues: readonly MessageFamilyIssue[];
-  readonly basis: readonly unknown[];
 };
 
-type ReferenceEvidence = Pick<
-  ProjectedReferences,
-  "incomplete" | "issues" | "basis"
->;
+type ReferenceEvidence = Pick<ProjectedReferences, "incomplete" | "issues">;
 
 type CheckInput = {
   readonly sourceKey: string;
   readonly language: string;
   readonly projected: MessageFamilyInput;
   readonly groups: readonly SignedMessageGroup[];
-  readonly savedReferences: readonly MessageFamilyReference[];
+  readonly savedReferences: readonly Omit<
+    MessageFamilyReference,
+    "translationIndex"
+  >[];
   readonly location: QualityLocation;
   readonly sourceAvailability: string;
-  readonly replacement: {
-    readonly status: string;
-    readonly coverageStatus: string;
-    readonly translations: readonly unknown[];
-  };
   readonly associationIncomplete: boolean;
   readonly references: ReferenceEvidence;
   readonly limits: MessageFamilyLimits;
@@ -431,7 +427,23 @@ function messageFamilyChecker<
         );
       }),
     );
-    return { projected, projectionIssues, signedGroups };
+    return {
+      projected,
+      projectionIssues,
+      signedGroups: signedGroups.map((signed) => ({
+        ...signed,
+        sourceSignatures: signed.sourceSignatures.map(
+          messageFamilySignatureEvidence,
+        ),
+        ...(signed.targetSignatures === undefined
+          ? {}
+          : {
+              targetSignatures: signed.targetSignatures.map(
+                messageFamilySignatureEvidence,
+              ),
+            }),
+      })),
+    };
   }
 
   const preparedRecords = new WeakMap<
@@ -476,7 +488,6 @@ function messageFamilyChecker<
   ): Promise<ReferenceEvidence> {
     const facts = input.facts;
     const issues: MessageFamilyIssue[] = [];
-    const basis: unknown[] = [];
     let incomplete = false;
     if (readEvidence) {
       if (
@@ -492,7 +503,6 @@ function messageFamilyChecker<
             "原文读取不完整，可能缺少消息族参照。",
           ),
         );
-        basis.push({ sourceRead: facts.source.read });
       }
       const translationRead = facts.translations.reads.find(
         (read) => read.language === language,
@@ -514,22 +524,12 @@ function messageFamilyChecker<
             { language },
           ),
         );
-        basis.push({ translationRead: translationRead ?? null });
       }
     }
     for (const association of associations) {
       if (association.language !== language) continue;
       const sourceKey = association.sourceKey;
       const sourceUnit = sourceByKey.get(sourceKey);
-      const associationBasis = {
-        sourceKey,
-        language,
-        status: association.status,
-        coverageStatus: association.coverageStatus,
-        translations: association.translationIndexes
-          .map((index) => facts.translations.records[index]?.identity ?? null)
-          .sort(stableCompare),
-      };
       if (sourceUnit === undefined) {
         incomplete = true;
         issues.push(
@@ -539,7 +539,6 @@ function messageFamilyChecker<
             { language, sourceKey },
           ),
         );
-        basis.push(associationBasis);
         continue;
       }
       const associationIssues: MessageFamilyIssue[] = [];
@@ -599,7 +598,6 @@ function messageFamilyChecker<
           knownFamilies = false;
       }
       let relevant = false;
-      const projectedBasis: unknown[] = [];
       for (const translationIndex of association.translationIndexes) {
         if (translationIndex === replacedIndex) continue;
         const translation = facts.translations.records[translationIndex];
@@ -625,22 +623,11 @@ function messageFamilyChecker<
         relevant ||= projectionRelevant;
         if (!knownFamilies || projectionRelevant) {
           associationIssues.push(...projectionIssues);
-          projectedBasis.push({
-            identity: translation.identity,
-            location: translation.range,
-            complete: projected.complete ?? true,
-            issues: projectionIssues,
-          });
         }
         for (const signed of signedGroups) {
           if (signed.familyKey !== "" && !familyKeys.has(signed.familyKey))
             continue;
           issues.push(...signed.issues);
-          projectedBasis.push({
-            identity: translation.identity,
-            location: translation.range,
-            ...signedBasis(signed),
-          });
           if (
             signed.familyKey === "" ||
             signed.targetKey === undefined ||
@@ -654,21 +641,15 @@ function messageFamilyChecker<
       if (
         relevant ||
         (!knownFamilies &&
-          (associationIssues.length > 0 || projectedBasis.length > 0))
+          (associationIssues.length > 0 || preparedRecords.size > 0))
       ) {
         issues.push(...associationIssues);
         incomplete ||= associationIncomplete;
-        basis.push({
-          association: associationBasis,
-          sourceAvailability: sourceUnit.bodyAvailability,
-          projections: projectedBasis.sort(stableCompare),
-        });
       }
     }
     return {
       incomplete,
       issues: issues.sort(stableCompare),
-      basis: basis.sort(stableCompare),
     };
   }
 
@@ -783,6 +764,30 @@ function messageFamilyChecker<
       }
     }
     const index = indexMessageFamilies(references);
+    // 稳定证据顺序在 load 中固定；物理索引只用于排除自身记录，不进入最终输入。
+    const orderedFamilies = new Map(
+      [...index.families].map(([familyKey, family]) => [
+        familyKey,
+        [...family.categories.values()]
+          .flatMap((category) => [...category.references.values()])
+          .map((reference) => {
+            const { translationIndex: _translationIndex, ...evidence } =
+              reference;
+            return {
+              translationIndex: reference.translationIndex,
+              reference: evidence,
+              key: messageFamilyEvidenceKey(evidence),
+            };
+          })
+          .sort((left, right) =>
+            left.key < right.key ? -1 : left.key > right.key ? 1 : 0,
+          )
+          .map(({ translationIndex, reference }) => ({
+            translationIndex,
+            reference,
+          })),
+      ]),
+    );
 
     return async (
       excluded: number | undefined,
@@ -804,10 +809,13 @@ function messageFamilyChecker<
         false,
       );
       return {
-        index,
+        references: [...familyKeys]
+          .sort()
+          .flatMap((familyKey) => orderedFamilies.get(familyKey) ?? [])
+          .filter(({ translationIndex }) => translationIndex !== excluded)
+          .map(({ reference }) => reference),
         incomplete: reads.incomplete || evidence.incomplete,
         issues: [...reads.issues, ...evidence.issues].sort(stableCompare),
-        basis: [...reads.basis, ...evidence.basis].sort(stableCompare),
       };
     };
   }
@@ -869,32 +877,6 @@ function messageFamilyChecker<
         excluded,
         new Set(groups.map(({ familyKey }) => familyKey)),
       );
-      const relevantReferences = [
-        ...new Set(groups.map(({ familyKey }) => familyKey)),
-      ]
-        .flatMap((familyKey) => {
-          const family = references.index.families.get(familyKey);
-          return family === undefined ? [] : [family];
-        })
-        .flatMap((family) =>
-          [...family.categories.values()].flatMap((category) => [
-            ...category.references.values(),
-          ]),
-        )
-        .filter(({ translationIndex }) => translationIndex !== excluded)
-        .map(
-          ({ translationIndex: _translationIndex, ...reference }) => reference,
-        )
-        .sort(stableCompare);
-      const recordIndexes = new Map<string, number>();
-      const savedReferences = relevantReferences.map((reference) => {
-        const identity = messageFamilyEvidenceKey(
-          reference.translationIdentity,
-        );
-        if (!recordIndexes.has(identity))
-          recordIndexes.set(identity, recordIndexes.size);
-        return { ...reference, translationIndex: recordIndexes.get(identity)! };
-      });
       return {
         status: "ready",
         input: {
@@ -914,15 +896,7 @@ function messageFamilyChecker<
                   ),
                 }),
           })),
-          savedReferences: savedReferences.map((reference) => ({
-            ...reference,
-            sourceSignatures: reference.sourceSignatures.map(
-              messageFamilySignatureEvidence,
-            ),
-            targetSignatures: reference.targetSignatures.map(
-              messageFamilySignatureEvidence,
-            ),
-          })),
+          savedReferences: references.references,
           location: translationLocation(
             input.facts,
             sourceKey,
@@ -930,16 +904,6 @@ function messageFamilyChecker<
             excluded,
           ),
           sourceAvailability: input.sourceUnit.bodyAvailability,
-          replacement: {
-            status: input.association.status,
-            coverageStatus: input.association.coverageStatus,
-            translations: input.association.translationIndexes
-              .map(
-                (index) =>
-                  input.facts.translations.records[index]?.identity ?? null,
-              )
-              .sort(stableCompare),
-          },
           associationIncomplete:
             excluded === undefined &&
             (input.association.coverageStatus !== "complete" ||
@@ -947,7 +911,6 @@ function messageFamilyChecker<
           references: {
             incomplete: references.incomplete,
             issues: references.issues,
-            basis: references.basis,
           },
           limits,
         },
@@ -1014,7 +977,21 @@ function messageFamilyChecker<
         readonly evidence: readonly QualityEvidence[];
       }[] = [];
       let comparable = false;
-      const referenceIndex = indexMessageFamilies(input.savedReferences);
+      // 既有比较算法按物理记录去重；这里从稳定身份恢复当前输入内的局部索引。
+      const recordIndexes = new Map<string, number>();
+      const referenceIndex = indexMessageFamilies(
+        input.savedReferences.map((reference) => {
+          const identity = messageFamilyEvidenceKey(
+            reference.translationIdentity,
+          );
+          if (!recordIndexes.has(identity))
+            recordIndexes.set(identity, recordIndexes.size);
+          return {
+            ...reference,
+            translationIndex: recordIndexes.get(identity)!,
+          };
+        }),
+      );
 
       for (const signed of input.groups) {
         const group = signed.group;
@@ -1376,20 +1353,6 @@ function stableCompare(left: unknown, right: unknown): number {
   const leftKey = messageFamilyEvidenceKey(left);
   const rightKey = messageFamilyEvidenceKey(right);
   return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
-}
-
-function signedBasis(signed: SignedMessageGroup) {
-  return {
-    group: signed.group,
-    familyKey: signed.familyKey,
-    sourceSignatures: signed.sourceSignatures.map(
-      messageFamilySignatureEvidence,
-    ),
-    targetSignatures:
-      signed.targetSignatures?.map(messageFamilySignatureEvidence) ?? null,
-    targetKey: signed.targetKey ?? null,
-    issues: signed.issues,
-  };
 }
 
 function candidateRecordIndex<
