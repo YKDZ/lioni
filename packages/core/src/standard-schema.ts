@@ -214,35 +214,15 @@ export function snapshotJsonValue(
   return copyJsonValue(value, valueDescription, options);
 }
 
-/** 在复制并校验普通 JSON 输入时，保留调用方已固定的子对象身份。 */
-export function snapshotJsonValuePreservingShared(
-  value: unknown,
-  valueDescription: string,
-  isShared: (value: object) => boolean,
-): JsonValue {
-  return visitJsonValue(
-    value,
-    valueDescription,
-    {},
-    true,
-    isShared,
-  ) as JsonValue;
-}
-
-/** 冻结已验证的 JSON 数据，并可登记供本次运行共享的对象。 */
-export function freezeJsonValue<TValue>(
-  value: TValue,
-  sharedValues?: WeakSet<object>,
-): TValue {
+/** 冻结已验证的 JSON 数据。 */
+export function freezeJsonValue<TValue>(value: TValue): TValue {
   if (typeof value !== "object" || value === null || Object.isFrozen(value))
     return value;
   Object.freeze(value);
-  sharedValues?.add(value);
   if (Array.isArray(value)) {
-    for (const item of value) freezeJsonValue(item, sharedValues);
+    for (const item of value) freezeJsonValue(item);
   } else {
-    for (const item of Object.values(value))
-      freezeJsonValue(item, sharedValues);
+    for (const item of Object.values(value)) freezeJsonValue(item);
   }
   return value;
 }
@@ -260,7 +240,6 @@ function visitJsonValue(
   valueDescription: string,
   options: { readonly omitUndefinedObjectProperties?: boolean },
   copy: boolean,
-  isShared?: (value: object) => boolean,
 ): JsonValue | undefined {
   const active = new Set<object>();
   const copies = copy ? new WeakMap<object, JsonValue>() : undefined;
@@ -283,7 +262,6 @@ function visitJsonValue(
       path.length === 0 ? valueDescription : `${valueDescription}${path}`;
     if (typeof current !== "object") throw invalidJson(location);
     if (active.has(current)) throw invalidJson(location);
-    if (isShared?.(current) === true) return current as JsonValue;
     const existingCopy = copies?.get(current);
     if (existingCopy !== undefined) return existingCopy;
     active.add(current);

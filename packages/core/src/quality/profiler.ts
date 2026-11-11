@@ -3,7 +3,7 @@ import type { QualityCheckStatus } from "./qa.ts";
 /**
  * 框架阶段、检查项准备及候选处理子阶段；同名阶段按所在层级解释。
  * facts 包含资源读取与关联；checks 包含公共准备、检查计算和例外汇总。
- * prepareInput 包含选择、投影、验证及依据回调；fingerprint 仅为摘要与缓存键计算。
+ * prepareInput 包含逐候选输入准备与验证；fingerprint 仅为摘要与缓存键计算。
  * snapshot 为检查结果快照，results 为候选诊断及执行记录整理。
  */
 export type QualityProfileStage =
@@ -14,8 +14,6 @@ export type QualityProfileStage =
   | "candidates"
   | "checks"
   | "cleanup"
-  | "configurationPreparation"
-  | "configurationFingerprint"
   | "prepareInput"
   | "fingerprint"
   | "cacheRead"
