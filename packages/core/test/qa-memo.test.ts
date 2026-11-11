@@ -15,7 +15,6 @@ import {
   QualityDataReaderContractError,
   StandardSchemaContractError,
   type QualityDataReader,
-  type SemanticEditCandidate,
 } from "../src/index.ts";
 import { defineTestQualityCheck } from "./quality-check-fixture.ts";
 import {
@@ -38,7 +37,7 @@ const complete = () => ({
 });
 
 function configFor(compute: (memo: MemoScope) => void) {
-  const source = { source: "Save" };
+  const source = { id: "save", source: "Save" };
   const translation = { id: "save", text: "保存" };
   return defineConfig({
     source: {
@@ -113,7 +112,6 @@ void test("同次检查资料可显式共享，借入长期 memo 也会在下次
   const observed: unknown[] = [];
   const memo = createMemoScope();
   const loadPolicy = () => ({ revision: ++reads });
-  let candidateBuilds = 0;
   const base = configFor(() => {});
   const checks = ["first", "second"].map((id) =>
     defineTestQualityCheck({
@@ -127,33 +125,15 @@ void test("同次检查资料可显式共享，借入长期 memo 也会在下次
       },
     }),
   );
-  const config = {
-    ...base,
-    quality: {
-      checks,
-      async buildCandidates({
-        defaultCandidates,
-        qualityData,
-      }: {
-        readonly defaultCandidates: readonly SemanticEditCandidate<string>[];
-        readonly qualityData: QualityDataReader;
-      }) {
-        candidateBuilds += 1;
-        await qualityData.read(loadPolicy);
-        return defaultCandidates;
-      },
-    },
-  };
+  const config = { ...base, quality: { checks } };
 
   try {
     await analyzeQuality(config, { memo });
     assert.equal(reads, 1);
-    assert.equal(candidateBuilds, 1);
     assert.deepEqual(observed, [{ revision: 1 }, { revision: 1 }]);
 
     await analyzeQuality(config, { memo });
     assert.equal(reads, 2);
-    assert.equal(candidateBuilds, 2);
     assert.deepEqual(observed, [
       { revision: 1 },
       { revision: 1 },
@@ -211,25 +191,7 @@ void test("共享读取资料可嵌入各项输入并复用同一项纯计算", 
       },
     }),
   );
-  const config = {
-    ...base,
-    quality: {
-      checks,
-      async buildCandidates({
-        defaultCandidates,
-        memo,
-        qualityData,
-      }: {
-        readonly defaultCandidates: readonly SemanticEditCandidate<string>[];
-        readonly memo: MemoScope;
-        readonly qualityData: QualityDataReader;
-      }) {
-        const terms = await qualityData.read(loadTerms);
-        memo.memo(compile)(terms);
-        return defaultCandidates;
-      },
-    },
-  };
+  const config = { ...base, quality: { checks } };
 
   await analyzeQuality(config);
 
@@ -419,11 +381,12 @@ void test("共享资料嵌入 loader 自有非 JSON 值时仍按契约错误中�
 });
 
 void test("直接配置检查器并按运行读取资料，筛选不裁剪事实且空选择保持为空", async () => {
-  const source = { source: "Save" };
+  const source = { id: "save", source: "Save" };
+  const secondSource = { id: "cancel", source: "Cancel" };
   const translation = { id: "save", text: "保存" };
+  const secondTranslation = { id: "cancel", text: "取消" };
   let dependencyReads = 0;
   let sourceReads = 0;
-  let candidateBuilds = 0;
   const observed: unknown[] = [];
   const observedContexts: unknown[] = [];
   const dependencySourceKeys: string[][] = [];
@@ -465,13 +428,14 @@ void test("直接配置检查器并按运行读取资料，筛选不裁剪事实
               enumeration: "complete",
               records: [
                 { value: source, bodyAvailability: "available" as const },
+                { value: secondSource, bodyAvailability: "available" as const },
               ],
             },
           ],
         };
       },
     },
-    keyOf: () => "save",
+    keyOf: ({ id }) => id,
     translations: {
       languages: ["zh-CN"],
       keyOf: fixtureTranslationKey,
@@ -483,9 +447,13 @@ void test("直接配置检查器并按运行读取资料，筛选不裁剪事实
           {
             range: "zh-CN.json",
             enumeration: "complete",
-            covers: ["save"],
+            covers: ["save", "cancel"],
             records: [
               { value: translation, bodyAvailability: "available" as const },
+              {
+                value: secondTranslation,
+                bodyAvailability: "available" as const,
+              },
             ],
           },
         ],
@@ -493,15 +461,14 @@ void test("直接配置检查器并按运行读取资料，筛选不裁剪事实
     },
     quality: {
       checks: [checker],
-      buildCandidates({ defaultCandidates }) {
-        candidateBuilds += 1;
-        return defaultCandidates;
-      },
       relationships: [
         {
           kind: "translation-family",
           key: "catalog",
-          members: [{ key: "save", language: "zh-CN" }],
+          members: [
+            { key: "save", language: "zh-CN" },
+            { key: "cancel", language: "zh-CN" },
+          ],
         },
       ],
     },
@@ -511,60 +478,64 @@ void test("直接配置检查器并按运行读取资料，筛选不裁剪事实
   const first = await analyzeQuality(config);
   assert.equal(first.status, "complete");
   assert.equal(dependencyReads, 1);
-  assert.equal(candidateBuilds, 1);
   assert.deepEqual(first.candidates, [
     { sourceKey: "save", language: "zh-CN", content: "保存" },
+    { sourceKey: "cancel", language: "zh-CN", content: "取消" },
   ]);
   assert.deepEqual(first.checks[0]?.dependencies, { run: 1 });
 
   const second = await analyzeQuality(config, {
     candidates: [
-      { sourceKey: "external", language: "zh-CN", content: "外部候选 A" },
-      { sourceKey: "external", language: "zh-CN", content: "外部候选 B" },
+      { sourceKey: "save", language: "zh-CN", content: "保存候选 A" },
+      { sourceKey: "cancel", language: "zh-CN", content: "取消候选 B" },
     ],
     selectCandidates: (candidates) => candidates.slice(1),
   });
   assert.equal(dependencyReads, 2);
-  assert.equal(candidateBuilds, 1);
   assert.deepEqual(second.candidates, [
-    { sourceKey: "external", language: "zh-CN", content: "外部候选 B" },
+    { sourceKey: "cancel", language: "zh-CN", content: "取消候选 B" },
   ]);
   assert.deepEqual(second.checks[0]?.dependencies, { run: 2 });
-  assert.equal(second.factCoverage.associations[0]?.candidateSelected, false);
+  assert.deepEqual(
+    second.factCoverage.associations.map(
+      ({ candidateSelected }) => candidateSelected,
+    ),
+    [false, true],
+  );
   const third = await analyzeQuality(config, {
     selectCandidates: () => [],
   });
   assert.equal(dependencyReads, 2);
-  assert.equal(candidateBuilds, 2);
   assert.deepEqual(third.candidates, []);
   assert.equal(third.status, "not-run");
   assert.equal(third.checks[0]?.status, "not-run");
-  assert.deepEqual(observed, ["保存", "外部候选 B"]);
-  assert.deepEqual(observedContexts, [
-    {
-      translationRecords: ["保存"],
+  assert.deepEqual(observed, ["保存", "取消", "取消候选 B"]);
+  assert.equal(observedContexts.length, 3);
+  for (const context of observedContexts)
+    assert.deepEqual(context, {
+      translationRecords: ["保存", "取消"],
       relationships: [
         {
           kind: "translation-family",
           key: "catalog",
-          members: [{ key: "save", language: "zh-CN" }],
+          members: [
+            { key: "save", language: "zh-CN" },
+            { key: "cancel", language: "zh-CN" },
+          ],
         },
       ],
-    },
-    {
-      translationRecords: ["保存"],
-      relationships: [
-        {
-          kind: "translation-family",
-          key: "catalog",
-          members: [{ key: "save", language: "zh-CN" }],
-        },
-      ],
-    },
-  ]);
+    });
   assert.equal(second.factCoverage.translations.length, 1);
-  assert.deepEqual(dependencySourceKeys, [["save"], ["save"]]);
-  assert.equal(third.factCoverage.associations[0]?.candidateSelected, false);
+  assert.equal(second.factCoverage.associations.length, 2);
+  assert.deepEqual(dependencySourceKeys, [
+    ["save", "cancel"],
+    ["save", "cancel"],
+  ]);
+  assert.ok(
+    third.factCoverage.associations.every(
+      ({ candidateSelected }) => !candidateSelected,
+    ),
+  );
 });
 
 void test("调用方范围可以跨运行复用，core 不取得关闭权", async () => {

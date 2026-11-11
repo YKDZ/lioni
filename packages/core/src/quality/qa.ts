@@ -22,6 +22,7 @@ import {
   validateWithStandardSchema,
 } from "../standard-schema.ts";
 import type { StandardSchemaV1 } from "../standard-schema.ts";
+import { validateQualityCandidateScope } from "./candidate-contract.ts";
 import type {
   QualityProfileSession,
   QualityProfileCandidateSession,
@@ -1072,6 +1073,7 @@ export async function runQualityChecks<
   >[],
   options: QualityExecutionOptions = {},
 ): Promise<QualityRunResult<QualityObject, TBody>> {
+  validateQualityCandidateScope(facts, request.candidates);
   const qualityData = createQualityDataReader();
   try {
     return await runQualityChecksWithQualityData(

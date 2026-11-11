@@ -25,12 +25,12 @@ import {
 } from "./language-scope.ts";
 import { isPlainRecord, isRecord } from "./object-guards.ts";
 import type { UpdatePolicy } from "./plans.ts";
+import { validateQualityCandidateScope } from "./quality/candidate-contract.ts";
 import {
   createQualityDataReader,
   runQualityChecksWithQualityData,
   type QualityCheckDefinition,
   type QualityRunResult,
-  type QualityDataReader,
   type QualityObject,
   type QualityRelationship,
 } from "./quality/qa.ts";
@@ -396,13 +396,6 @@ export type QualityConfiguration<
   >[];
   /** 项目自定义分组；每个成员只能引用 checks 中声明的检查项 ID。 */
   readonly groups?: TGroups;
-  /** 基于当前事实扩展默认候选；返回值随后仍由 selectCandidates 筛选。 */
-  readonly buildCandidates?: (input: {
-    readonly facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>;
-    readonly defaultCandidates: readonly SemanticEditCandidate<TBody>[];
-    readonly memo: MemoScope;
-    readonly qualityData: QualityDataReader;
-  }) => Awaitable<readonly SemanticEditCandidate<TBody>[]>;
   /** 关系上下文不随候选筛选裁剪。 */
   readonly relationships?: readonly QualityRelationship[];
   /** 显式启用原始结果缓存；命中后仍应用当前 QA 例外，存储故障不阻断检查。 */
@@ -727,12 +720,9 @@ function validateQualityConfiguration(value: unknown): void {
     );
   if (value.checks !== undefined && !Array.isArray(value.checks))
     invalidFrameworkConfig("defineConfig 的 quality.checks 必须是检查器数组。");
-  if (
-    value.buildCandidates !== undefined &&
-    typeof value.buildCandidates !== "function"
-  )
+  if (Object.hasOwn(value, "buildCandidates"))
     invalidFrameworkConfig(
-      "defineConfig 的 quality.buildCandidates 必须是函数。",
+      "defineConfig 的 quality.buildCandidates 已移除；请在 analyzeQuality 前构造 candidates。",
     );
   if (value.relationships !== undefined && !Array.isArray(value.relationships))
     invalidFrameworkConfig(
@@ -922,9 +912,9 @@ export async function analyzeQuality<
       NoInfer<TCheckId>,
       NoInfer<keyof TGroups & string>
     > & {
-      /** 直接提供候选源；显式选择语言时，所有候选必须属于该范围。 */
+      /** 在 QA 前构造候选；身份必须引用本次读取到的原文键和译文语言。 */
       readonly candidates?: readonly SemanticEditCandidate<TBody>[];
-      /** 在候选构造后筛选、排序或截取；返回项必须来自传入的集合。 */
+      /** 仅筛选或重排传入的候选；返回项必须来自传入集合且身份不能重复。 */
       readonly selectCandidates?: (
         candidates: readonly SemanticEditCandidate<TBody>[],
       ) => readonly SemanticEditCandidate<TBody>[];
@@ -957,52 +947,38 @@ export async function analyzeQuality<
     const qualityData = createQualityDataReader();
     try {
       stage = profile?.stage("candidates");
-      const defaultCandidates = defaultQualityCandidates(facts);
       const candidateSource =
-        options.candidates ??
-        (quality?.buildCandidates === undefined
-          ? defaultCandidates
-          : await quality.buildCandidates({
-              facts,
-              defaultCandidates,
-              memo,
-              qualityData: qualityData.reader,
-            }));
+        options.candidates === undefined
+          ? defaultQualityCandidates(facts)
+          : options.candidates;
       if (!Array.isArray(candidateSource))
-        throw new TypeError(
-          "defineConfig 的 quality.buildCandidates 必须返回候选数组。",
-        );
+        throw new TypeError("candidates 必须是译文候选数组。");
 
-      const languages = new Set(
-        facts.translations.reads.map(({ language }) => language),
-      );
       const candidates: SemanticEditCandidate<TBody>[] = [];
       for (const candidate of candidateSource) {
         const validated = await validateSemanticEditCandidate(
           candidate,
           config,
         );
-        if (
-          options.languages !== undefined &&
-          !languages.has(validated.language)
-        )
-          throw new TypeError(
-            `译文候选语言 ${JSON.stringify(validated.language)} 不在本次执行范围内。`,
-          );
-        candidates.push(validated);
+        candidates.push(freezeQualityCandidate(validated));
       }
+      validateQualityCandidateScope(facts, candidates);
 
-      const selection =
-        options.selectCandidates === undefined
-          ? candidates
-          : options.selectCandidates(Object.freeze(candidates.slice()));
-      if (!Array.isArray(selection))
-        throw new TypeError("selectCandidates 必须返回候选数组。");
-      const candidateSet = new Set(candidates);
-      if (selection.some((candidate) => !candidateSet.has(candidate)))
-        throw new TypeError(
-          "selectCandidates 只能筛选或重排传入的候选；请通过 candidates 或 quality.buildCandidates 构造候选。",
+      let selection: readonly SemanticEditCandidate<TBody>[] = candidates;
+      if (options.selectCandidates !== undefined) {
+        const selected = options.selectCandidates(
+          Object.freeze(candidates.slice()),
         );
+        if (!Array.isArray(selected))
+          throw new TypeError("selectCandidates 必须返回候选数组。");
+        const candidateSet = new Set(candidates);
+        if (selected.some((candidate) => !candidateSet.has(candidate)))
+          throw new TypeError(
+            "selectCandidates 只能筛选或重排传入的候选；请通过 candidates 提供候选。",
+          );
+        selection = selected;
+        validateQualityCandidateScope(facts, selection);
+      }
 
       stage?.();
       stage = profile?.stage("checks");
@@ -1152,7 +1128,6 @@ function defaultQualityCandidates<
   facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
 ): SemanticEditCandidate<TBody>[] {
   return facts.associations.flatMap((association) => {
-    if (association.status !== "matched") return [];
     const record =
       facts.translations.records[association.translationIndexes[0] as number];
     return record === undefined || record.bodyAvailability !== "available"
@@ -1165,6 +1140,20 @@ function defaultQualityCandidates<
           },
         ];
   });
+}
+
+function freezeQualityCandidate<TBody>(
+  candidate: SemanticEditCandidate<TBody>,
+): SemanticEditCandidate<TBody> {
+  freezeJsonValue(candidate.content);
+  return Object.freeze(candidate);
+}
+
+function freezeJsonValue(value: unknown): void {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value))
+    return;
+  for (const nested of Object.values(value)) freezeJsonValue(nested);
+  Object.freeze(value);
 }
 
 function validateSourceRead(value: unknown): void {
