@@ -180,7 +180,7 @@ void describe("本次执行的语言范围", () => {
     );
   });
 
-  void it("显式范围拒绝调用方或宿主准备的越界候选，省略范围保留外部候选支持", async () => {
+  void it("候选语言必须属于本次配置与选择范围", async () => {
     const outside = { sourceKey: "save", language: "ja", content: "保存" };
     const explicit = fixture();
     await assert.rejects(
@@ -191,11 +191,10 @@ void describe("本次执行的语言范围", () => {
       /译文候选语言 "ja" 不在本次执行范围内/,
     );
 
-    const prepared = fixture({ buildCandidates: () => [outside] });
-    await assert.rejects(
-      analyzeQuality(prepared.config, { languages: ["fr"] }),
-      /译文候选语言 "ja" 不在本次执行范围内/,
-    );
+    const allLanguages = await analyzeQuality(explicit.config, {
+      candidates: [outside],
+    });
+    assert.deepStrictEqual(allLanguages.candidates, [outside]);
     const accepted = await analyzeQuality(explicit.config, {
       languages: ["ja"],
       candidates: [outside],
@@ -203,9 +202,9 @@ void describe("本次执行的语言范围", () => {
     assert.deepStrictEqual(accepted.candidates, [outside]);
 
     const external = { ...outside, language: "es" };
-    const unscoped = await analyzeQuality(explicit.config, {
-      candidates: [external],
-    });
-    assert.deepStrictEqual(unscoped.candidates, [external]);
+    await assert.rejects(
+      analyzeQuality(explicit.config, { candidates: [external] }),
+      /译文候选语言 "es" 不在本次执行范围内/,
+    );
   });
 });

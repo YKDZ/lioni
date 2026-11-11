@@ -12,8 +12,6 @@ import config from "./lioni.config.ts";
 import {
   readEvents,
   resetEvents,
-  setBuilderReadsShared,
-  setCandidateMode,
   setSharedReadFails,
   setSharedRevision,
   setTermsLoaderMode,
@@ -93,8 +91,6 @@ await rm(exceptionFile, { force: true });
 await rm(cacheDirectory, { recursive: true, force: true });
 
 setSharedRevision("v1");
-setCandidateMode("default");
-setBuilderReadsShared(true);
 setSharedReadFails(false);
 setTermsLoaderMode("none");
 
@@ -165,9 +161,6 @@ const ungroupedUnknownGroup = await capture(() =>
   analyzeQuality(ungroupedConfig, { groups: ["daily"] } as never),
 );
 
-setCandidateMode("empty");
-const noBuiltCandidates = await capture(() => analyzeQuality(config, { memo }));
-setCandidateMode("default");
 const noProvidedCandidates = await capture(() =>
   analyzeQuality(config, { candidates: [], memo }),
 );
@@ -193,7 +186,6 @@ const isolatedLoaderFailure = await capture(() =>
 setTermsLoaderMode("none");
 
 setSharedRevision("v4");
-setBuilderReadsShared(false);
 setSharedReadFails(true);
 const sharedLoaderFailure = await capture(() =>
   analyzeQuality(config, { memo }),
@@ -208,13 +200,6 @@ const readerContractError = await capture(() =>
   analyzeQuality(config, { memo }),
 );
 setTermsLoaderMode("none");
-
-setBuilderReadsShared(true);
-setCandidateMode("throw");
-const candidateBuilderFailure = await capture(() =>
-  analyzeQuality(config, { memo }),
-);
-setCandidateMode("default");
 
 const evidence = {
   full,
@@ -233,7 +218,6 @@ const evidence = {
     ungroupedUnknownGroup,
   },
   candidates: {
-    noBuiltCandidates,
     noProvidedCandidates,
     explicitCandidates,
   },
@@ -242,7 +226,6 @@ const evidence = {
   sharedLoaderFailure,
   loaderContractError,
   readerContractError,
-  candidateBuilderFailure,
 };
 
 process.stdout.write(JSON.stringify(evidence));

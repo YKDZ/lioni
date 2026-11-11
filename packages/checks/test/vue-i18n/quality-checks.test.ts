@@ -356,14 +356,17 @@ void test("非法语法使变量比较未完成，缺译、不可用和真实空
     candidate("label", "bad } target", "zh-CN", "missing"),
   ]);
   const empty = await fixture.run([candidate("label", "")]);
-  const targetOnly = await createQualityFixture({
-    policies: [
-      policyFor({
-        sourceMessages: {},
-        targetMessages: { orphan: "bad } target" },
-      }),
-    ],
-  }).run([candidate("orphan", "bad } target")]);
+  await assert.rejects(
+    createQualityFixture({
+      policies: [
+        policyFor({
+          sourceMessages: {},
+          targetMessages: { orphan: "bad } target" },
+        }),
+      ],
+    }).run([candidate("orphan", "bad } target")]),
+    /原文键.*不存在于本次已读取的原文/,
+  );
   const unavailableSource = await createQualityFixture({
     policies: [policy],
     unavailableSourceKeys: ["label"],
@@ -400,11 +403,6 @@ void test("非法语法使变量比较未完成，缺译、不可用和真实空
   const emptySource = await fixture.run([candidate("absent", "")]);
   assert.equal(check(emptySource, checkIds.sourceSyntax)?.status, "complete");
   assert.equal(
-    check(targetOnly, checkIds.sourceSyntax)?.status,
-    "not-applicable",
-  );
-  assert.equal(findings(targetOnly, checkIds.targetSyntax).length, 1);
-  assert.equal(
     check(unavailableSource, checkIds.sourceSyntax)?.status,
     "incomplete",
   );
@@ -417,7 +415,7 @@ void test("目标独有关联仍检查，缺失目标可见，当前候选覆盖
     targetMessages: { label: "Saved text", other: "译文" },
   });
   const fixture = createQualityFixture({ policies: [policy] });
-  const missing = await fixture.run([candidate("orphan", "@:missing.key")]);
+  const missing = await fixture.run([candidate("other", "@:missing.key")]);
   const cycle = await fixture.run([candidate("label", "@:label")]);
 
   assert.equal(findings(missing, checkIds.linkTargetExists).length, 1);

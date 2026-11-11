@@ -514,25 +514,27 @@ void describe("configured analysis workflow", () => {
     assert.equal(observed?.facts.associations[0]?.status, "matched");
   });
 
-  void it("builds external candidates and rejects malformed check configuration", async () => {
-    let observedCandidates: readonly {
-      sourceKey: string;
-      language: string;
-      content: string;
-    }[] = [];
-    let candidateBuilds = 0;
-    let glossaryReads = 0;
-    const loadGlossary = () => {
-      glossaryReads += 1;
-      return { glossaryVersion: "v1" };
-    };
+  void it("程序化调用在 QA 前构造候选并拒绝无效检查配置", async () => {
     const config = defineConfig({
       source: {
         schema: sourceSchemaFromExamples<Unit>({
           id: "unused",
           source: "unused",
         }),
-        read: () => ({ scopes: [] }),
+        read: () => ({
+          scopes: [
+            {
+              range: "messages.json",
+              enumeration: "complete" as const,
+              records: [
+                {
+                  value: { id: "external", source: "外部" },
+                  bodyAvailability: "available" as const,
+                },
+              ],
+            },
+          ],
+        }),
       },
       keyOf: ({ id }) => id,
       translations: {
@@ -555,29 +557,19 @@ void describe("configured analysis workflow", () => {
           ],
         }),
       },
-      quality: {
-        buildCandidates: async ({ defaultCandidates, facts, qualityData }) => {
-          candidateBuilds += 1;
-          assert.deepEqual(defaultCandidates, []);
-          assert.deepEqual(facts.source.units, []);
-          assert.deepEqual(await qualityData.read(loadGlossary), {
-            glossaryVersion: "v1",
-          });
-          observedCandidates = [
-            { sourceKey: "external", language: "ja", content: "外部" },
-          ];
-          return observedCandidates;
-        },
-      },
+      quality: {},
     });
 
-    const result = await analyzeQuality(config);
+    const candidate = {
+      sourceKey: "external",
+      language: "fr",
+      content: "外部",
+    };
+    const result = await analyzeQuality(config, { candidates: [candidate] });
 
     assert.deepEqual(result.candidates, [
-      { sourceKey: "external", language: "ja", content: "外部" },
+      { sourceKey: "external", language: "fr", content: "外部" },
     ]);
-    assert.equal(candidateBuilds, 1);
-    assert.equal(glossaryReads, 1);
     assert.equal(result.status, "not-run");
 
     const invalidConfig = defineConfig({
@@ -654,7 +646,7 @@ void describe("configured analysis workflow", () => {
 
   void it("applies the single configured exception source after checking", async () => {
     const { candidate, config } = diagnosedEditScenario();
-    const candidates = [candidate, { ...candidate, content: "Sauvegarder" }];
+    const candidates = [candidate];
     const report = await analyzeQuality(config, { candidates });
     assert.deepEqual(report.exceptions, []);
     assert.deepEqual(report.exceptionApplicability, []);
@@ -698,10 +690,6 @@ void describe("configured analysis workflow", () => {
             reason: "该候选的表达已由维护者确认。",
           },
         },
-        {
-          checkId: "needs-review",
-          handling: { status: "active" },
-        },
       ],
     );
     assert.deepEqual(result.exceptionApplicability, [
@@ -713,16 +701,6 @@ void describe("configured analysis workflow", () => {
         executionId: 0,
         candidateIndex: 0,
         status: "applicable",
-      },
-      {
-        exceptionId: "save-needs-review",
-        checkId: "needs-review",
-        sourceKey: "save",
-        language: "fr",
-        executionId: 1,
-        candidateIndex: 1,
-        status: "basis-changed",
-        reasons: ["business-input"],
       },
     ]);
   });

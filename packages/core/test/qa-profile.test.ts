@@ -52,27 +52,33 @@ const complete = () => ({
   },
 });
 
-function configFor(compute: (memo: MemoScope) => void) {
-  const source = { source: "Save" };
-  const translation = { id: "save", text: "保存" };
+function configFor(
+  compute: (memo: MemoScope) => void,
+  keys: readonly string[] = ["save"],
+) {
+  const sources = keys.map((id) => ({ id, source: "Save" }));
+  const translations = keys.map((id) => ({ id, text: "保存" }));
   return defineConfig({
     source: {
-      schema: sourceSchemaFromExamples(source),
+      schema: sourceSchemaFromExamples(sources[0]!),
       read: () => ({
         scopes: [
           {
             range: "en.json",
             enumeration: "complete",
-            records: [{ value: source, bodyAvailability: "available" }],
+            records: sources.map((value) => ({
+              value,
+              bodyAvailability: "available" as const,
+            })),
           },
         ],
       }),
     },
-    keyOf: () => "save",
+    keyOf: ({ id }) => id,
     translations: {
       languages: ["zh-CN"],
       keyOf: fixtureTranslationKey,
-      schema: schemaFromExamples(translation),
+      schema: schemaFromExamples(translations[0]!),
       contentSchema: schemaFromExamples(""),
       contentOf: ({ text }) => text,
       read: () => ({
@@ -80,15 +86,22 @@ function configFor(compute: (memo: MemoScope) => void) {
           {
             range: "zh-CN.json",
             enumeration: "complete",
-            covers: ["save"],
-            records: [{ value: translation, bodyAvailability: "available" }],
+            covers: keys,
+            records: translations.map((value) => ({
+              value,
+              bodyAvailability: "available" as const,
+            })),
           },
         ],
       }),
     },
     quality: {
       checks: ["first", "second"].map((id) =>
-        defineTestQualityCheck<typeof source, typeof translation, string>({
+        defineTestQualityCheck<
+          (typeof sources)[number],
+          (typeof translations)[number],
+          string
+        >({
           id,
           configuration: {},
           check: ({ memo }) => {
@@ -177,16 +190,17 @@ void test("普通规则失败完成采集，契约异常保留未完成候选和
   assert.equal(evidence.checks[1]?.candidateCount, 0);
 });
 
-void test("每项检查以候选总成本保留慢项，重复键不会合并且只保存定位证据", async (context) => {
+void test("每项检查以候选总成本保留慢项并只保存定位证据", async (context) => {
   let clock = 0;
   context.mock.method(performance, "now", () => clock);
   let ordinal = 0;
+  const keys = Array.from({ length: 4 }, (_, index) => `save-${index}`);
   const config = configFor(() => {
     clock += ++ordinal * 10;
-  });
+  }, keys);
   const profiler = createQualityProfiler({ slowestCandidates: 2 });
-  const candidates = Array.from({ length: 4 }, () => ({
-    sourceKey: "save",
+  const candidates = keys.map((sourceKey) => ({
+    sourceKey,
     language: "zh-CN",
     content: "正文不应进入性能证据",
   }));
@@ -278,7 +292,11 @@ void test("仅汇总模式仍保留完整、失败、不完整、不适用及中
     "projection",
     new Error("中断"),
   );
-  const base = configFor(() => {});
+  const keys = Array.from(
+    { length: 5 },
+    (_, candidateIndex) => `save-${candidateIndex}`,
+  );
+  const base = configFor(() => {}, keys);
   const check = defineTestQualityCheck({
     id: "mixed",
     configuration: {},
@@ -305,8 +323,8 @@ void test("仅汇总模式仍保留完整、失败、不完整、不适用及中
       { ...base, quality: { checks: [check] } },
       {
         profiler,
-        candidates: Array.from({ length: 5 }, () => ({
-          sourceKey: "save",
+        candidates: keys.map((sourceKey) => ({
+          sourceKey,
           language: "zh-CN",
           content: "保存",
         })),
