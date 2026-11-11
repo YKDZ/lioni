@@ -5,7 +5,14 @@ export type {
   NumberTextInput,
 } from "./numbers.ts";
 export { createTermChecker } from "./terms.ts";
-export type { TermCheckerOptions } from "./terms.ts";
+export type {
+  TermCheckerGroupLocations,
+  TermCheckerInput,
+  TermCheckerLoaded,
+  TermCheckerLocationInput,
+  TermCheckerOptions,
+  TermCheckerPreparation,
+} from "./terms.ts";
 export {
   compareMessageFamily,
   indexMessageFamilies,

@@ -32,6 +32,32 @@ const simple = defineChecker({
 });
 simple.id satisfies "simple";
 
+type NestedInput = { payload: { key: string }; entries: string[] };
+const nestedInputSchema: StandardSchemaV1<NestedInput, NestedInput> = {
+  "~standard": {
+    version: 1,
+    vendor: "lioni-test",
+    validate: (value) => ({ value: value as NestedInput }),
+  },
+};
+const nested = defineChecker({
+  id: "nested-readonly",
+  version: "1",
+  inputSchema: nestedInputSchema,
+  prepare: () => ({
+    status: "ready" as const,
+    input: { payload: { key: "message" }, entries: ["one"] },
+  }),
+  check(input) {
+    // @ts-expect-error 可修改 JSON 对象必须在最终输入中递归只读。
+    input.payload.key = "changed";
+    // @ts-expect-error 普通数组不能通过 JsonValue 可赋值关系绕过只读。
+    input.entries.push("two");
+    return check();
+  },
+});
+nested.id satisfies "nested-readonly";
+
 type Unit = { source: { message: string } };
 const typed = defineChecker.withTypes<Unit, unknown, string>()({
   id: "typed",

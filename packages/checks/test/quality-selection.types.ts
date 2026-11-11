@@ -1,16 +1,22 @@
 import type {
+  CheckerPrepareInput,
   FrameworkConfig,
   QualityCheckOutcome,
   QualityObject,
   TranslationUnitInput,
 } from "@lioni/core";
 import { analyzeQuality, defineConfig } from "@lioni/core";
-import { requireAllowedTranslation } from "@lioni/terminology";
+import {
+  requireAllowedTranslation,
+  type CompiledTerms,
+  type TermComparisonInput,
+} from "@lioni/terminology";
 import { z } from "zod";
 
 import {
   createTermChecker,
   createVueI18nChecks,
+  type TermCheckerLoaded,
   type VueI18nChecksOptions,
   type VueI18nMessageProjection,
 } from "../src/index.ts";
@@ -25,34 +31,30 @@ type Body = { readonly text: string; readonly state: "draft" | "reviewed" };
 type Subject = { readonly sourceText: string };
 
 const checkerOptions = {
-  hostVersion: "host/v1",
-  terms: () => {
+  terms: (): CompiledTerms => {
     throw new Error("仅供静态类型检查使用。");
   },
-  select(input: {
-    readonly candidate: { readonly content: Body };
-    readonly facts: {
-      readonly source: { readonly units: readonly { readonly unit: Unit }[] };
-    };
-  }) {
-    const sourceText: string | undefined =
-      input.facts.source.units[0]?.unit.source;
+  prepare(
+    input: CheckerPrepareInput<
+      Unit,
+      Translation,
+      Body,
+      UnavailableTranslation,
+      TermCheckerLoaded<undefined>
+    >,
+  ) {
+    const sourceText: string = input.sourceUnit.unit.source;
     const candidate: Body = input.candidate.content;
     void candidate;
     return {
-      status: "selected" as const,
-      subject: { sourceText: sourceText ?? "Save" },
-    };
-  },
-  project(input: { readonly subject: Subject }) {
-    return {
       status: "ready" as const,
-      value: {
+      subject: { sourceText: sourceText ?? "Save" },
+      comparison: {
         groups: [
           {
             source: {
               language: "en",
-              fragments: [{ ref: "source", text: input.subject.sourceText }],
+              fragments: [{ ref: "source", text: sourceText }],
             },
             target: {
               language: "fr",
@@ -60,7 +62,7 @@ const checkerOptions = {
             },
           },
         ],
-      },
+      } satisfies TermComparisonInput,
     };
   },
 };
