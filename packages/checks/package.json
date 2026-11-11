@@ -30,7 +30,7 @@
     "typecheck": "tsc -p tsconfig.node.json --noEmit --pretty false"
   },
   "dependencies": {
-    "@intlify/message-compiler": "11.4.17",
+    "@intlify/message-compiler": "11.4.18",
     "@lioni/core": "workspace:*",
     "@lioni/memo": "workspace:*",
     "@lioni/terminology": "workspace:*",
