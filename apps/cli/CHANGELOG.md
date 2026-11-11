@@ -1,13 +1,25 @@
 # 更新日志
 
-## 未发布
+## 0.3.0
 
-- 源译关联收紧为每种语言内消息 key 一对一相等，删除 `translations.matches`。`translations.keyOf` 改为返回与原文相同键空间的字符串；译文身份改为 `{ language, key }`，删除 `namespace` 和 `TranslationIdentityParts`。重复译文 key 报接入错误，缺译与孤立译文继续保留。
-- 比较基线与更新计划格式升级为 v2，旧格式不再读取；接入迁移后需重新记录比较基线并生成更新计划。
-- 运行环境要求升级为 Node.js `^26.13.0`，不再支持 Node.js 24。
-- 更新命令行契约、Vue-i18n 消息编译器和构建工具；编译器版本变化同步参与检查依据，旧检查结果缓存按新依据重新计算，QA 例外继续按既有规则判断适用性。
-- 自定义 QA 检查项统一使用 `defineChecker` 的 `load`、逐候选 `prepare` 和最终输入 `check`；移除 `defineQualityCheck`、`bindQualityCheck`、独立 `select`/`project`、配置 schema、`fingerprintInput` 和 `loadDependencies`。普通工厂参数在构造时校验，影响判断的值须进入最终输入；内置检查不再要求宿主维护 `hostVersion`。候选通过 `analyzeQuality` 的 `candidates` 选项或默认候选规则提供，不再由 `quality.buildCandidates` 生成。
-- QA 指纹与例外摘要采用 v2。旧检查结果缓存按新输入指纹重算；旧例外文件保留且不自动换算或重绑。需要保留的例外应先保留并移开旧文件，再依据新 QA 报告重新建立。
+### 检查器与候选契约
+
+- 自定义 QA 检查统一通过 `defineChecker` 声明可选的 `load`、逐候选 `prepare` 和只消费最终输入的 `check`。移除旧 `defineQualityCheck`、`bindQualityCheck`、独立 `select`/`project`、配置 schema、`fingerprintInput` 和 `loadDependencies`；内置检查不再要求宿主维护 `hostVersion`。
+- 检查输入 schema 采用保值验证，不允许转换、删字段或补默认值。文本提取、归一化和参数准备须在此前完成；最终固定输入同时作为规则输入和缓存、例外依据。
+- 未传入候选时，默认检查已读取、同键匹配且正文可用的现存译文；显式空集合不执行检查，部分集合只限制检查对象。未知原文键、越界语言和同键同语言重复候选直接报错。删除配置级 `quality.buildCandidates`，需要生成候选时在调用 QA 前完成。
+- 数字检查支持 `createNumberChecker()` 直接检查字符串正文；结构化正文通过工厂的 `prepare` 明确适配。术语、消息族和 Vue I18n 检查统一采用新的准备契约，保留原始单元与定位信息。
+- SDK 支持按检查项或项目分组选择执行范围，CLI `qa` 新增可重复的 `--check` 与 `--group`，两者不能同时使用。未选检查项及无候选运行不加载专属资料。
+
+### 源译关联与运行环境
+
+- 源译关联收紧为每种语言内消息键一对一相等。删除 `translations.matches`；`translations.keyOf` 返回与原文相同键空间的字符串。译文身份改为 `{ language, key }`，删除 `namespace` 和 `TranslationIdentityParts`。重复译文键报接入错误，缺译与孤立译文继续保留。
+- Node.js 要求升级为 `^26.13.0`，不再支持 Node.js 24；同步更新命令行契约、Vue I18n 消息编译器和构建工具。
+
+### 升级步骤
+
+- 将宿主适配器和自定义检查迁移到上述契约，并调整消费旧身份、检查配置及报告字段的代码。
+- 比较基线与更新计划升级为 v2，旧格式不再读取；完成接入迁移后重新记录比较基线并生成更新计划。
+- QA 输入指纹与例外格式升级为 v2，旧检查结果缓存重新计算。旧例外文件不会自动转换、重绑或删除；先保留并移开旧文件，再运行 QA，并依据新报告重新建立需要保留的例外。
 
 ## 0.2.3
 
