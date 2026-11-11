@@ -177,7 +177,6 @@ export type {
   MessageFamilyReference,
   MessageFamilyReferenceProjection,
   MessageFamilySignature,
-  MessageFamilySubject,
   MessageFragment,
   NumberCheckerOptions,
   NumberCheckerPreparation,

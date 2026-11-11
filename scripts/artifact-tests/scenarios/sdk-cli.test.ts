@@ -62,6 +62,17 @@ testArtifactConsumer(
       .data;
     assert.equal(quality.status, "complete");
     assert.equal(quality.diagnostics.length, 1);
+    const qualityCheck = quality.checks[0];
+    assert.ok(qualityCheck);
+    assert.equal("configuration" in qualityCheck, false);
+    assert.equal("dependencies" in qualityCheck, false);
+    const execution = qualityCheck.executions[0];
+    assert.ok(execution?.inputFingerprint);
+    assert.deepEqual(Object.keys(execution?.fingerprintSummary ?? {}).sort(), [
+      "inputFingerprint",
+      "version",
+    ]);
+    assert.doesNotMatch(report.stdout, /configurationFingerprint/u);
     const selectedReport = await runProcess(executable, [
       "qa",
       "lioni.config.ts",
@@ -80,8 +91,6 @@ testArtifactConsumer(
     assert.ok(
       selectedQuality.candidates.every(({ language }) => language === "de"),
     );
-    const execution = quality.checks[0]?.executions[0];
-    assert.ok(execution?.inputFingerprint);
     await writeFile(path.join(root, "qa-report.json"), report.stdout);
     await cli(
       "exceptions",
@@ -111,10 +120,11 @@ testArtifactConsumer(
         ],
       },
     });
-    assert.match(
-      await readFile(path.join(root, "lioni.exceptions.yaml"), "utf8"),
-      /approved-number/u,
-    );
+    const exceptionPath = path.join(root, "lioni.exceptions.yaml");
+    const exceptionContents = await readFile(exceptionPath, "utf8");
+    assert.match(exceptionContents, /^format: lioni\.qa-exceptions\/v2$/mu);
+    assert.match(exceptionContents, /approved-number/u);
+    assert.doesNotMatch(exceptionContents, /configurationFingerprint/u);
     await writeFile(
       path.join(root, "fr.json"),
       JSON.stringify([
@@ -136,5 +146,29 @@ testArtifactConsumer(
       },
     });
     assert.deepEqual(await readFile(baselinePath), baseline);
+
+    const oldExceptionContents =
+      "format: lioni.qa-exceptions/v1\nexceptions: []\n";
+    await writeFile(exceptionPath, oldExceptionContents, "utf8");
+    const rejectedLegacyException = await runProcess(executable, [
+      "exceptions",
+      "upsert",
+      "lioni.config.ts",
+      "qa-report.json",
+      "--check-id",
+      execution.checkId,
+      "--execution-id",
+      String(execution.executionId),
+      "--id",
+      "legacy-approval",
+      "--reason",
+      "旧格式必须重新确认。",
+    ]);
+    assert.equal(rejectedLegacyException.status, 1);
+    assert.match(
+      rejectedLegacyException.stdout + rejectedLegacyException.stderr,
+      /先保留并移开.*运行 QA.*重新建立/u,
+    );
+    assert.equal(await readFile(exceptionPath, "utf8"), oldExceptionContents);
   },
 );

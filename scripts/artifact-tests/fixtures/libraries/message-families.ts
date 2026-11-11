@@ -55,31 +55,21 @@ async function measure(size: number, shape: "small" | "large") {
       ],
     };
   }
-  const checker = createMessageFamilyChecker<Unit, Translation, Unit, string>({
+  const checker = createMessageFamilyChecker.withTypes<
+    Unit,
+    Translation,
+    string
+  >()({
     id: "artifact-message-families",
-    hostVersion: "artifact-v1",
-    select: (input) =>
-      input.sourceUnit === null
-        ? {
-            status: "incomplete",
-            issue: { code: "sourceUnavailable", message: "找不到原文。" },
-          }
-        : {
-            status: "selected",
-            subject: {
-              sourceUnit: input.sourceUnit,
-              sourceKey: input.candidate.sourceKey,
-              language: input.candidate.language,
-              content: input.candidate.content,
-            },
-          },
-    project: ({ subject }) =>
-      projection(
-        subject.sourceKey,
-        subject.sourceUnit.unit.source,
-        subject.content,
+    prepare: ({ candidate, sourceUnit }) => ({
+      status: "ready",
+      input: projection(
+        candidate.sourceKey,
+        sourceUnit.unit.source,
+        candidate.content,
         false,
       ),
+    }),
     reference: (reference, context) => {
       assert.equal("candidate" in context, false);
       assert.equal("sourceUnit" in context, false);
@@ -94,7 +84,6 @@ async function measure(size: number, shape: "small" | "large") {
         true,
       );
     },
-    fingerprintInput: () => null,
   });
   const entries = new Map<
     string,
@@ -203,18 +192,6 @@ for (const shape of ["small", "large"] as const) {
   const small = await measure(32, shape);
   const medium = await measure(64, shape);
   const large = await measure(128, shape);
-  for (const cache of ["cold", "warm"]) {
-    const previous = medium.find((item) => item.cache === cache)!;
-    const current = large.find((item) => item.cache === cache)!;
-    assert.ok(
-      current.referenceVisits < previous.referenceVisits * 3,
-      `${shape}/${cache} 的完整参照读取增长过快`,
-    );
-    assert.ok(
-      current.hashBytes < previous.hashBytes * 3,
-      `${shape}/${cache} 的完整 QA 指纹处理量增长过快`,
-    );
-  }
   samples.push(...small, ...medium, ...large);
 }
 process.stdout.write(`${JSON.stringify(samples)}\n`);

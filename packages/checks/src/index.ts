@@ -27,7 +27,6 @@ export type {
   MessageFamilyCheckerOptions,
   MessageFamilyContext,
   MessageFamilyReferenceProjection,
-  MessageFamilySubject,
 } from "./message-family-checker.ts";
 export { compareQuantityBranches } from "./quantities.ts";
 export type { QuantityBranch, QuantityBranchIssue } from "./quantities.ts";

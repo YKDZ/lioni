@@ -47,14 +47,13 @@ void describe("动态 Node 配置契约", () => {
         inputFingerprint: "sha256:input",
         fingerprintSummary: {
           version: "1",
-          configurationFingerprint: "sha256:configuration",
           inputFingerprint: "sha256:basis",
         },
       };
       await writeFile(
         path.join(directory, "lioni.exceptions.yaml"),
         [
-          "format: lioni.qa-exceptions/v1",
+          "format: lioni.qa-exceptions/v2",
           "exceptions:",
           "  - id: from-default-file",
           "    reason: 来自默认 YAML 文件。",
@@ -62,7 +61,7 @@ void describe("动态 Node 配置契约", () => {
           "    sourceKey: save",
           "    language: fr",
           "    inputFingerprint: sha256:input",
-          '    fingerprintSummary: { version: "1", configurationFingerprint: sha256:configuration, inputFingerprint: sha256:basis }',
+          '    fingerprintSummary: { version: "1", inputFingerprint: sha256:basis }',
           "",
         ].join("\n"),
         "utf8",

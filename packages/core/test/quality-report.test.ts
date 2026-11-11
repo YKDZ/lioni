@@ -48,7 +48,6 @@ const passingReport: QualityRunResult = {
     {
       checkId: "messages",
       version: "messages-v1",
-      configuration: {},
       status: "complete",
       diagnostics: [],
       issues: [],

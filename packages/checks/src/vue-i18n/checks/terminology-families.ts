@@ -19,7 +19,6 @@ import type { TemplateOptions, TextAnalysis } from "@lioni/text-analysis";
 
 import type { MessageFamilyInput } from "../../message-families.ts";
 import { createMessageFamilyChecker } from "../../message-family-checker.ts";
-import type { MessageFamilySubject } from "../../message-family-checker.ts";
 import { createTermChecker } from "../../terms.ts";
 import {
   readVueI18nFamilyPolicies,
@@ -49,13 +48,6 @@ type TermSubject = {
   readonly source: string;
   readonly target: string;
   readonly policy: VueI18nLanguagePolicy;
-  readonly projection: VueI18nMessageProjection;
-};
-
-type FamilySubject<
-  TUnit extends TranslationUnitInput,
-  TBody,
-> = MessageFamilySubject<TUnit, TBody> & {
   readonly projection: VueI18nMessageProjection;
 };
 
@@ -274,44 +266,29 @@ export function createVueI18nMessageFamilyCheck<
   return createMessageFamilyChecker<
     TUnit,
     TTranslation,
-    TUnit,
     TBody,
     TUnavailable,
-    FamilySubject<TUnit, TBody>,
+    unknown,
     TId
   >({
     id: options.identity.id,
-    hostVersion: familyVersion(options.identity),
-    loadDependencies,
+    load: loadDependencies,
     analysis: options.analysis,
     sourceTemplate,
     targetTemplate,
-    // 工厂已纳入候选与参照采用的等价签名；未使用的等价声明不构成本次依据。
-    fingerprintInput: ({ subject }) => {
-      assertJsonValue(subject.projection, "消息族候选投影");
-      return subject.projection;
-    },
     targetEquivalence: (signature, language, input) =>
       input.memo
-        .memo(resolvePolicies)(input.dependencies)
+        .memo(resolvePolicies)(input.loaded)
         .targetEquivalences.get(language)?.(signature) ??
       signatureKey(signature),
-    select: async (
-      input: QualityCheckInput<
-        TUnit,
-        TTranslation,
-        unknown,
-        TBody,
-        TUnavailable
-      >,
-    ): Promise<QualityCheckSelection<FamilySubject<TUnit, TBody>>> => {
+    prepare: async (input) => {
       const policy = input.memo
-        .memo(resolvePolicies)(input.dependencies)
+        .memo(resolvePolicies)(input.loaded)
         .policies.get(input.candidate.language);
       if (policy === undefined || input.sourceUnit === null)
         return { status: "not-applicable" };
       const projection = await memoizedVueI18nProjection(
-        input,
+        { ...input, configuration: undefined, dependencies: input.loaded },
         options.project,
       );
       const unavailable = sourceAvailability(projection);
@@ -337,25 +314,17 @@ export function createVueI18nMessageFamilyCheck<
       )
         return { status: "not-applicable" };
       return {
-        status: "selected",
-        subject: {
-          sourceUnit: input.sourceUnit,
-          sourceKey: projection.key,
-          language: projection.language,
-          content: input.candidate.content,
+        status: "ready",
+        input: familyInput(
           projection,
-        },
+          input.memo.memo(resolvePolicies)(input.loaded).policies,
+        ),
       };
     },
     reference: (reference, context) =>
       familyInput(
         options.reference(reference, context),
-        context.memo.memo(resolvePolicies)(context.dependencies).policies,
-      ),
-    project: async (input) =>
-      familyInput(
-        await memoizedVueI18nProjection(input, options.project),
-        input.memo.memo(resolvePolicies)(input.dependencies).policies,
+        context.memo.memo(resolvePolicies)(context.loaded).policies,
       ),
   });
 }
@@ -456,14 +425,6 @@ function terminologyVersion(
 ): string {
   return [
     `vue-i18n-suite/${name}/v1`,
-    `@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
-    identity.hostVersion,
-  ].join("+");
-}
-
-function familyVersion(identity: VueI18nCheckIdentity): string {
-  return [
-    "vue-i18n-suite/message-family/v5",
     `@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
     identity.hostVersion,
   ].join("+");
