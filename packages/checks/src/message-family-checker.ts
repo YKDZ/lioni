@@ -468,7 +468,7 @@ export function createMessageFamilyChecker<
       let associationIncomplete =
         sourceUnit.bodyAvailability !== "available" ||
         association.coverageStatus !== "complete" ||
-        ["unknown", "conflict", "unavailable"].includes(association.status);
+        ["unknown", "unavailable"].includes(association.status);
       if (sourceUnit.bodyAvailability !== "available")
         associationIssues.push(
           issue(
@@ -479,17 +479,15 @@ export function createMessageFamilyChecker<
         );
       if (
         association.coverageStatus !== "complete" ||
-        ["unknown", "conflict", "unavailable"].includes(association.status)
+        ["unknown", "unavailable"].includes(association.status)
       )
         associationIssues.push(
           issue(
-            association.status === "conflict"
-              ? "translationAssociationConflict"
-              : association.status === "unknown"
-                ? "translationAssociationUnknown"
-                : association.status === "unavailable"
-                  ? "translationBodyUnavailable"
-                  : "translationAssociationIncomplete",
+            association.status === "unknown"
+              ? "translationAssociationUnknown"
+              : association.status === "unavailable"
+                ? "translationBodyUnavailable"
+                : "translationAssociationIncomplete",
             `原文 ${sourceKey} 的目标译文关联不完整（${association.status}）。`,
             { language, sourceKey },
           ),
@@ -675,7 +673,7 @@ export function createMessageFamilyChecker<
           association.translationIndexes.length === 0 &&
           (sourceUnit.bodyAvailability !== "available" ||
             association.coverageStatus !== "complete" ||
-            ["unknown", "conflict", "unavailable"].includes(association.status))
+            ["unknown", "unavailable"].includes(association.status))
         )
           unknown.add(association);
         for (const translationIndex of association.translationIndexes) {
@@ -1055,15 +1053,12 @@ export function createMessageFamilyChecker<
         association === undefined ||
         association.coverageStatus !== "complete" ||
         association.status === "unknown" ||
-        association.status === "conflict" ||
         association.status === "unavailable"
       ) {
         incomplete = true;
         candidateIssues.push(
           issue(
-            association?.status === "conflict"
-              ? "candidateAssociationConflict"
-              : "candidateAssociationUnknown",
+            "candidateAssociationUnknown",
             "无法唯一确认候选替代的已保存译文，保留关联限制。",
             {
               language: input.subject.value.language,

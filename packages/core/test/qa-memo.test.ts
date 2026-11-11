@@ -21,7 +21,7 @@ import { defineTestQualityCheck } from "./quality-check-fixture.ts";
 import {
   schemaFromExamples,
   sourceSchemaFromExamples,
-  fixtureTranslationIdentity,
+  fixtureTranslationKey,
 } from "./source-schema.ts";
 
 const complete = () => ({
@@ -56,7 +56,7 @@ function configFor(compute: (memo: MemoScope) => void) {
     keyOf: () => "save",
     translations: {
       languages: ["zh-CN"],
-      keyOf: fixtureTranslationIdentity,
+      keyOf: fixtureTranslationKey,
       schema: schemaFromExamples(translation),
       contentSchema: schemaFromExamples(""),
       contentOf: ({ text }) => text,
@@ -70,7 +70,6 @@ function configFor(compute: (memo: MemoScope) => void) {
           },
         ],
       }),
-      matches: () => true,
     },
     quality: {
       checks: ["first", "second"].map((id) =>
@@ -475,7 +474,7 @@ void test("直接配置检查器并按运行读取资料，筛选不裁剪事实
     keyOf: () => "save",
     translations: {
       languages: ["zh-CN"],
-      keyOf: fixtureTranslationIdentity,
+      keyOf: fixtureTranslationKey,
       schema: schemaFromExamples(translation),
       contentSchema: schemaFromExamples(""),
       contentOf: ({ text }) => text,
@@ -491,7 +490,6 @@ void test("直接配置检查器并按运行读取资料，筛选不裁剪事实
           },
         ],
       }),
-      matches: () => true,
     },
     quality: {
       checks: [checker],

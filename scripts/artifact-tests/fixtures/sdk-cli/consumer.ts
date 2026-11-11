@@ -26,22 +26,22 @@ assert.deepEqual(
     {
       language: "fr",
       id: "catalog",
-      identity: { language: "fr", namespace: "catalog", key: "catalog" },
+      identity: { language: "fr", key: "catalog" },
     },
     {
       language: "fr",
       id: "guide",
-      identity: { language: "fr", namespace: "catalog", key: "guide" },
+      identity: { language: "fr", key: "guide" },
     },
     {
       language: "de",
       id: "catalog",
-      identity: { language: "de", namespace: "catalog", key: "catalog" },
+      identity: { language: "de", key: "catalog" },
     },
     {
       language: "de",
       id: "guide",
-      identity: { language: "de", namespace: "catalog", key: "guide" },
+      identity: { language: "de", key: "guide" },
     },
   ],
 );

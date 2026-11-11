@@ -32,7 +32,7 @@ export default defineConfig({
   keyOf: (unit) => unit.context.file + ":" + unit.context.line,
   translations: {
     languages: ["fr"],
-    keyOf: (translation) => ({ namespace: "messages", key: translation.id }),
+    keyOf: (translation) => translation.context.file + ":" + translation.context.line,
     schema: z.looseObject({ id: z.string(), text: z.string(), context: z.looseObject({ file: z.string(), line: z.number() }) }),
     contentSchema: z.string(),
     read: (_language, sourceUnits) => ({ scopes: [{
@@ -50,9 +50,6 @@ export default defineConfig({
         }
       ]
     }] }),
-    matches: (unit, translation) =>
-      unit.context.file === translation.context.file &&
-      unit.context.line === translation.context.line,
     contentOf: (translation) => translation.text
   }
 });
@@ -210,7 +207,7 @@ export default defineConfig({
             language: string;
             scopeIndex: number;
             range: string;
-            identity: { language: string; namespace: string; key: string };
+            identity: { language: string; key: string };
             translation: {
               id: string;
               text: string;
@@ -271,8 +268,7 @@ export default defineConfig({
         range: "locales/fr.json",
         identity: {
           language: "fr",
-          namespace: "messages",
-          key: "save-button",
+          key: "src/messages.ts:18",
         },
         translation: {
           id: "save-button",
@@ -289,8 +285,7 @@ export default defineConfig({
         range: "locales/fr.json",
         identity: {
           language: "fr",
-          namespace: "messages",
-          key: "legacy-notice",
+          key: "legacy/messages.ts:999",
         },
         translation: {
           id: "legacy-notice",

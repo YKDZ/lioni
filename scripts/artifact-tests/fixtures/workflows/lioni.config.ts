@@ -105,9 +105,9 @@ export default defineConfig({
     languages: ["fr"],
     schema: translationSchema,
     contentSchema: z.string(),
-    keyOf: (translation) => ({ namespace: "files", key: translation.id }),
+    keyOf: (translation) => translation.id,
     contentOf: (translation) => translation.text,
-    matches: (unit, translation) => unit.id === translation.id,
+
     async read(_language, sourceUnits) {
       const filenames = (await readdir(targetsUrl))
         .filter((file) => file.endsWith(".json"))

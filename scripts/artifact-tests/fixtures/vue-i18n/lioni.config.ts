@@ -111,8 +111,7 @@ export function createConfig(
       schema: translationSchema,
       contentSchema: stringSchema,
       contentOf: ({ text }) => text,
-      keyOf: ({ key }) => ({ namespace: "messages", key }),
-      matches: (unit, translation) => unit.key === translation.key,
+      keyOf: ({ key }) => key,
       read: () => ({
         scopes: [
           {

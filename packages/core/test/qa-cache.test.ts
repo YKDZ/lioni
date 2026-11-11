@@ -28,7 +28,7 @@ import {
   jsonValueSchema,
   schemaFromExamples,
   sourceSchemaFromExamples,
-  fixtureTranslationIdentity,
+  fixtureTranslationKey,
 } from "./source-schema.ts";
 
 type Unit = { readonly source: string };
@@ -641,7 +641,7 @@ function createTestConfig(
     keyOf: () => "message:hello",
     translations: {
       languages: ["fr"],
-      keyOf: fixtureTranslationIdentity,
+      keyOf: fixtureTranslationKey,
       schema: schemaFromExamples(translation),
       contentSchema: jsonValueSchema,
       contentOf: ({ text }) => text,
@@ -657,7 +657,6 @@ function createTestConfig(
           },
         ],
       }),
-      matches: () => true,
     },
     quality: {
       checks: [...(options.precedingChecks ?? []), check],

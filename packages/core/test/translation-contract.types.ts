@@ -1,7 +1,7 @@
 import { defineConfig } from "../src/index.ts";
 import type { StandardSchemaV1 } from "../src/index.ts";
 import {
-  fixtureTranslationIdentity,
+  fixtureTranslationKey,
   schemaFromExamples,
   sourceSchemaFromExamples,
 } from "./source-schema.ts";
@@ -71,7 +71,7 @@ const config = defineConfig({
   },
   translations: {
     languages: ["fr"],
-    keyOf: fixtureTranslationIdentity,
+    keyOf: fixtureTranslationKey,
     schema: availableSchema,
     unavailableSchema,
     contentSchema,
@@ -94,15 +94,7 @@ const config = defineConfig({
         },
       ],
     }),
-    matches(unit, translation) {
-      const sourceLine: number = translation.sourceLine;
-      const line: number = unit.context.line;
-      if ("text" in translation) {
-        const text: string = translation.text;
-        void text;
-      }
-      return sourceLine === line;
-    },
+
     contentOf(translation) {
       const text: string = translation.text;
       return text;
@@ -137,11 +129,11 @@ const interfaceBodyConfig = defineConfig({
   keyOf: (unit) => String(unit.context.line),
   translations: {
     languages: ["fr"],
-    keyOf: fixtureTranslationIdentity,
+    keyOf: fixtureTranslationKey,
     schema: interfaceTranslationSchema,
     contentSchema: interfaceBodySchema,
     read: () => ({ scopes: [] }),
-    matches: () => true,
+
     contentOf: (translation) => translation.body,
   },
 });
@@ -157,11 +149,11 @@ defineConfig({
   keyOf: (unit) => String(unit.context.line),
   translations: {
     languages: ["fr"],
-    keyOf: fixtureTranslationIdentity,
+    keyOf: fixtureTranslationKey,
     schema: availableSchema,
     contentSchema,
     read: () => ({ scopes: [] }),
-    matches: () => true,
+
     // @ts-expect-error 正文回调必须返回声明的正文类型。
     contentOf: () => 42,
   },
@@ -172,7 +164,7 @@ defineConfig({
   keyOf: (unit) => String(unit.context.line),
   translations: {
     languages: ["fr"],
-    keyOf: fixtureTranslationIdentity,
+    keyOf: fixtureTranslationKey,
     schema: availableSchema,
     contentSchema,
     read: () => ({
@@ -191,7 +183,7 @@ defineConfig({
         },
       ],
     }),
-    matches: () => true,
+
     contentOf: (translation) => translation.text,
   },
 });
@@ -209,12 +201,12 @@ defineConfig({
   keyOf: (unit) => String(unit.context.line),
   translations: {
     languages: ["fr"],
-    keyOf: fixtureTranslationIdentity,
+    keyOf: fixtureTranslationKey,
     schema: availableSchema,
     // @ts-expect-error 声明的 schema 必须保留输入和输出类型。
     contentSchema: transformingContentSchema,
     read: () => ({ scopes: [] }),
-    matches: () => true,
+
     contentOf: (translation) => translation.text.length,
   },
 });

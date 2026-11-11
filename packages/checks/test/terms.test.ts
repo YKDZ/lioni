@@ -269,10 +269,7 @@ function createScenario(
     keyOf: ({ id }) => id,
     translations: {
       languages: ["zh"],
-      keyOf: (translation) => ({
-        namespace: "messages",
-        key: translation.id,
-      }),
+      keyOf: (translation) => translation.id,
       schema: translationSchema,
       contentSchema: bodySchema,
       contentOf: ({ body }) => body,
@@ -298,7 +295,6 @@ function createScenario(
           },
         ],
       }),
-      matches: (unit, translation) => unit.id === translation.id,
     },
     translationWriteback: {
       locateExistingTarget: () => ({

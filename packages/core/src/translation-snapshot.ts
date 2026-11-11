@@ -43,7 +43,7 @@ export class TranslationIdentityContractError extends TypeError {
   ) {
     super(
       reason === "missing"
-        ? "译文身份必须提供非空的 namespace 与 key。"
+        ? "translations.keyOf 必须返回非空的消息键。"
         : `译文身份重复：${JSON.stringify(details.identity)}（第 ${(details.firstIndex ?? -1) + 1} 与第 ${(details.duplicateIndex ?? -1) + 1} 条记录）`,
     );
     this.name = "TranslationIdentityContractError";
@@ -71,7 +71,7 @@ export function validateTranslationAdapterConfig(translations: unknown): void {
     throw new StandardSchemaContractError(
       "defineConfig 配置",
       "schema-mismatch",
-      "defineConfig 的 translations 必须提供语言列表、记录与正文 schema、keyOf、read 与 contentOf 函数；matches 可按需提供。",
+      "defineConfig 的 translations 必须提供语言列表、记录与正文 schema、keyOf、read 与 contentOf 函数。",
     );
 }
 
@@ -263,15 +263,9 @@ function readTranslationIdentity(
   value: unknown,
   language: string,
 ): TranslationIdentity {
-  if (
-    !isRecord(value) ||
-    typeof value.namespace !== "string" ||
-    value.namespace.trim().length === 0 ||
-    typeof value.key !== "string" ||
-    value.key.trim().length === 0
-  )
+  if (typeof value !== "string" || value.trim().length === 0)
     throw new TranslationIdentityContractError("missing");
-  return { language, namespace: value.namespace, key: value.key };
+  return { language, key: value };
 }
 
 function assertUniqueTranslationIdentity(
@@ -279,7 +273,7 @@ function assertUniqueTranslationIdentity(
   firstIndexes: Map<string, number>,
   duplicateIndex: number,
 ): void {
-  const serialized = JSON.stringify(identity);
+  const serialized = JSON.stringify([identity.language, identity.key]);
   const firstIndex = firstIndexes.get(serialized);
   if (firstIndex !== undefined)
     throw new TranslationIdentityContractError("duplicate", {

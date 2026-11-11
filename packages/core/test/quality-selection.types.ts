@@ -221,7 +221,7 @@ const config = defineConfig.withTypes<
   keyOf: (unit) => String(unit.context.line),
   translations: {
     languages: ["fr", "de"],
-    keyOf: (translation) => ({ namespace: "messages", key: translation.id }),
+    keyOf: (translation) => translation.id,
     schema: translationSchema,
     unavailableSchema,
     contentSchema: bodySchema,
@@ -285,7 +285,7 @@ const invalidGroupConfig = defineConfig.withTypes<
   keyOf: (unit) => String(unit.context.line),
   translations: {
     languages: ["fr", "de"],
-    keyOf: (translation) => ({ namespace: "messages", key: translation.id }),
+    keyOf: (translation) => translation.id,
     schema: translationSchema,
     unavailableSchema,
     contentSchema: bodySchema,

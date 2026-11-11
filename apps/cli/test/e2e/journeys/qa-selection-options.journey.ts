@@ -51,8 +51,7 @@ export default defineConfig({
     schema: z.object({ id: z.string(), text: z.string() }),
     contentSchema: z.string(),
     contentOf: (translation) => translation.text,
-    keyOf: (translation) => ({ namespace: "messages", key: translation.id }),
-    matches: (unit, translation) => unit.id === translation.id,
+    keyOf: (translation) => translation.id,
     read: () => ({ scopes: [{
       range: "fr",
       covers: ["save"],

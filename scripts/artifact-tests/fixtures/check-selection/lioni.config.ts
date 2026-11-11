@@ -200,11 +200,10 @@ export default defineConfig.withTypes<
   keyOf: (unit) => unit.id,
   translations: {
     languages: ["fr"],
-    keyOf: (translation) => ({ namespace: "messages", key: translation.id }),
+    keyOf: (translation) => translation.id,
     schema: translationSchema,
     contentSchema: bodySchema,
     contentOf: (translation) => translation.body,
-    matches: (unit, translation) => unit.id === translation.id,
     read(_language, sourceUnits) {
       recordEvent("translations:read");
       return {

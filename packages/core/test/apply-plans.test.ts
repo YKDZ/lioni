@@ -113,14 +113,11 @@ function createScenario(
     },
     translations: {
       languages: ["fr"],
-      keyOf: ({ id }) => ({
-        namespace: "messages",
-        key: id,
-      }),
+      keyOf: ({ id }) => id,
       schema: translationSchema,
       contentSchema: jsonValueSchema,
       contentOf: ({ text }) => text,
-      matches: (unit, translation) => unit.id === translation.id,
+
       read: (_language, sourceUnits) => {
         counts.translationRead += 1;
         return {
@@ -384,12 +381,7 @@ void describe("apply update plan", () => {
   void it("显式语言范围拒绝策略在决定或写入请求中越界", async () => {
     const scenario = createScenario({ sources: [sampleSource()] });
     const original = scenario.config.translations!;
-    for (const escape of [
-      "decision",
-      "target",
-      "targets",
-      "request",
-    ] as const) {
+    for (const escape of ["decision", "target", "request"] as const) {
       const config: FrameworkConfig<Unit, Translation, JsonValue> = {
         ...scenario.config,
         translations: { ...original, languages: ["fr", "ja"] },
@@ -401,10 +393,9 @@ void describe("apply update plan", () => {
           const items = await defaultUpdatePolicy(input);
           return items.map((item) => {
             if (item.action !== "write") return item;
-            const target = { language: "ja", namespace: "messages", key: "A" };
+            const target = { language: "ja", key: "A" };
             if (escape === "decision") return { ...item, language: "ja" };
             if (escape === "target") return { ...item, target };
-            if (escape === "targets") return { ...item, targets: [target] };
             return {
               ...item,
               request: {
@@ -689,74 +680,6 @@ void describe("apply update plan", () => {
     assert.deepEqual(translationsByLanguage.ja, [sampleTranslation()]);
   });
 
-  void it("关联冲突即使明确保留也会阻止基线推进", async () => {
-    const scenario = createScenario({
-      sources: [{ id: "A", source: "Old" }],
-      translations: [{ id: "fr-old", text: "Old French", sourceId: "A" }],
-      additionalTranslationExamples: [
-        { id: "fr-old", text: "Old French", sourceId: "A" },
-        { id: "fr-extra", text: "Old French", sourceId: "A" },
-      ],
-    });
-    const translations = scenario.config.translations!;
-    const baseConfig: FrameworkConfig<Unit, Translation, JsonValue> = {
-      ...scenario.config,
-      translations: {
-        ...translations,
-        matches: (unit, translation) => unit.id === translation.sourceId,
-      },
-    };
-    const config: FrameworkConfig<Unit, Translation, JsonValue> = {
-      ...baseConfig,
-      updatePolicy: async (input) =>
-        (await defaultUpdatePolicy(input)).map((item) => {
-          if (item.action !== "review") return item;
-          const { request: _request, after: _after, ...retained } = item;
-          return {
-            ...retained,
-            action: "retain" as const,
-            reason: "项目规则明确保留法语译文。",
-          };
-        }),
-    };
-    await recordComparisonBaseline(config, scenario.baselineStore);
-    const previousBaseline = structuredClone(scenario.currentBaseline());
-    scenario.state.sources = [{ id: "A", source: "New" }];
-    scenario.state.translations.push({
-      id: "fr-extra",
-      text: "Old French",
-      sourceId: "A",
-    });
-
-    const result = await update(config, scenario.baselineStore, {
-      recordBaseline: true,
-    });
-
-    assert.equal(
-      result.plan.associations.current.some(
-        ({ status }) => status === "conflict",
-      ),
-      true,
-    );
-    assert.equal(
-      result.plan.comparisons.sourceChanges.some(
-        ({ key, status }) => key === "A" && status === "modified",
-      ),
-      true,
-    );
-    assert.deepEqual(
-      result.results.map(({ status }) => status),
-      ["retained"],
-    );
-    assert.equal(result.status, "failed");
-    assert.equal(result.baseline?.outcome, "notAdvanced");
-    assert.deepEqual(scenario.currentBaseline(), previousBaseline);
-    assert.deepEqual(scenario.state.translations, [
-      { id: "fr-old", text: "Old French", sourceId: "A" },
-      { id: "fr-extra", text: "Old French", sourceId: "A" },
-    ]);
-  });
-
   void it("更新决定待复核时不推进基线", async () => {
     const scenario = createScenario({
       sources: [sampleSource()],
@@ -975,7 +898,7 @@ void describe("apply update plan", () => {
     assert.equal(scenario.counts.baselineLoads, baselineLoadCount);
   });
 
-  void it("rejects a saved delete plan when its target record changes association", async () => {
+  void it("恢复的删除计划在目标原始记录变化后拒绝执行", async () => {
     const scenario = createScenario({
       sources: [sampleSource()],
       translations: [sampleTranslation()],

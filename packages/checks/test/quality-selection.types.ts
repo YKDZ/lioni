@@ -174,7 +174,7 @@ const vueConfig = defineConfig.withTypes<
   keyOf: (unit) => unit.context.key,
   translations: {
     languages: ["fr"],
-    keyOf: (translation) => ({ namespace: "messages", key: translation.id }),
+    keyOf: (translation) => translation.id,
     schema: translationSchema,
     contentSchema: translationBodySchema,
     contentOf: (translation) => translation.body,
@@ -235,7 +235,7 @@ function vueConfigWithInvalidGroup(): FrameworkConfig<
     keyOf: (unit) => unit.context.key,
     translations: {
       languages: ["fr"],
-      keyOf: (translation) => ({ namespace: "messages", key: translation.id }),
+      keyOf: (translation) => translation.id,
       schema: translationSchema,
       contentSchema: translationBodySchema,
       contentOf: (translation) => translation.body,

@@ -17,7 +17,7 @@ import {
   jsonValueSchema,
   schemaFromExamples,
   sourceSchemaFromExamples,
-  fixtureTranslationIdentity,
+  fixtureTranslationKey,
 } from "./source-schema.ts";
 
 type Unit = {
@@ -28,7 +28,6 @@ type Unit = {
 type Translation = {
   readonly id: string;
   readonly text: string;
-  readonly targetKey?: string;
 };
 
 function diagnosedEditScenario() {
@@ -55,7 +54,7 @@ function diagnosedEditScenario() {
     keyOf: ({ id }) => id,
     translations: {
       languages: ["fr"],
-      keyOf: fixtureTranslationIdentity,
+      keyOf: fixtureTranslationKey,
       schema: schemaFromExamples<Translation>(translation),
       contentSchema: jsonValueSchema,
       read: (_language, sourceUnits) => ({
@@ -68,7 +67,7 @@ function diagnosedEditScenario() {
           },
         ],
       }),
-      matches: (unit, translated) => unit.id === translated.id,
+
       contentOf: ({ text }) => text,
     },
     translationWriteback: {
@@ -172,7 +171,7 @@ void describe("configured analysis workflow", () => {
       keyOf: ({ id }) => id,
       translations: {
         languages: ["fr"],
-        keyOf: fixtureTranslationIdentity,
+        keyOf: fixtureTranslationKey,
         schema: schemaFromExamples({ id: "save", text: "Enregistrer" }),
         contentSchema: jsonValueSchema,
         read: (_language, sourceUnits) => ({
@@ -194,7 +193,7 @@ void describe("configured analysis workflow", () => {
             },
           ],
         }),
-        matches: (unit, translation) => unit.id === translation.id,
+
         contentOf: ({ text }) => ({ text }),
       },
       quality: {
@@ -278,7 +277,6 @@ void describe("configured analysis workflow", () => {
         schema: sourceSchemaFromExamples<Unit>(
           { id: "missing", source: "missing" },
           { id: "unavailable", source: "unavailable" },
-          { id: "conflict", source: "conflict" },
           { id: "unknown", source: "unknown" },
         ),
         read: () => ({
@@ -286,12 +284,10 @@ void describe("configured analysis workflow", () => {
             {
               range: "messages.json",
               enumeration: "complete",
-              records: ["missing", "unavailable", "conflict", "unknown"].map(
-                (id) => ({
-                  value: { id, source: id },
-                  bodyAvailability: "available" as const,
-                }),
-              ),
+              records: ["missing", "unavailable", "unknown"].map((id) => ({
+                value: { id, source: id },
+                bodyAvailability: "available" as const,
+              })),
             },
           ],
         }),
@@ -299,7 +295,7 @@ void describe("configured analysis workflow", () => {
       keyOf: ({ id }) => id,
       translations: {
         languages: ["fr", "ja"],
-        keyOf: fixtureTranslationIdentity,
+        keyOf: fixtureTranslationKey,
         schema: schemaFromExamples<Translation>({
           id: "example",
           text: "example",
@@ -319,22 +315,6 @@ void describe("configured analysis workflow", () => {
                         value: { id: "unavailable" },
                         bodyAvailability: "unavailable" as const,
                       },
-                      {
-                        value: {
-                          id: "conflict",
-                          targetKey: "conflict.one",
-                          text: "x",
-                        },
-                        bodyAvailability: "available" as const,
-                      },
-                      {
-                        value: {
-                          id: "conflict",
-                          targetKey: "conflict.two",
-                          text: "y",
-                        },
-                        bodyAvailability: "available" as const,
-                      },
                     ],
                   },
                 ]
@@ -347,7 +327,7 @@ void describe("configured analysis workflow", () => {
                   },
                 ],
         }),
-        matches: (unit, translation) => unit.id === translation.id,
+
         contentOf: (translation) => {
           if (translation.id === "unavailable") unavailableContentRead = true;
           return translation.text;
@@ -411,12 +391,6 @@ void describe("configured analysis workflow", () => {
           candidateSelected: false,
         },
         {
-          sourceKey: "conflict",
-          language: "fr",
-          status: "conflict",
-          candidateSelected: false,
-        },
-        {
           sourceKey: "unknown",
           language: "fr",
           status: "missing",
@@ -430,12 +404,6 @@ void describe("configured analysis workflow", () => {
         },
         {
           sourceKey: "unavailable",
-          language: "ja",
-          status: "unknown",
-          candidateSelected: false,
-        },
-        {
-          sourceKey: "conflict",
           language: "ja",
           status: "unknown",
           candidateSelected: false,
@@ -483,7 +451,7 @@ void describe("configured analysis workflow", () => {
       keyOf: ({ id }) => id,
       translations: {
         languages: ["fr"],
-        keyOf: fixtureTranslationIdentity,
+        keyOf: fixtureTranslationKey,
         schema: schemaFromExamples<Translation>({
           id: "save",
           text: "Enregistrer",
@@ -504,7 +472,7 @@ void describe("configured analysis workflow", () => {
             },
           ],
         }),
-        matches: (unit, translation) => unit.id === translation.id,
+
         contentOf: ({ text }) => text,
       },
       quality: {
@@ -569,7 +537,7 @@ void describe("configured analysis workflow", () => {
       keyOf: ({ id }) => id,
       translations: {
         languages: ["fr"],
-        keyOf: fixtureTranslationIdentity,
+        keyOf: fixtureTranslationKey,
         schema: schemaFromExamples<Translation>({
           id: "external",
           text: "外部",
@@ -586,7 +554,6 @@ void describe("configured analysis workflow", () => {
             },
           ],
         }),
-        matches: (unit, translation) => unit.id === translation.id,
       },
       quality: {
         buildCandidates: async ({ defaultCandidates, facts, qualityData }) => {
@@ -657,12 +624,12 @@ void describe("configured analysis workflow", () => {
     const request: TranslationWriteRequest<JsonValue, Unit> = {
       operation: "write",
       target: {
-        identity: { language: "fr", namespace: "fixture", key: "save" },
+        identity: { language: "fr", key: "save" },
       },
       content: candidate.content,
       expectedTarget: {
         status: "present",
-        identity: { language: "fr", namespace: "fixture", key: "save" },
+        identity: { language: "fr", key: "save" },
         content: "Enregistrer",
         range: "fr.json",
       },

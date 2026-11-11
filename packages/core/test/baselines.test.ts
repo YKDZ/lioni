@@ -115,10 +115,7 @@ function makeConfig(options: {
           ),
         })),
       }),
-      keyOf: (translation) => ({
-        namespace: translation.namespace,
-        key: translation.id,
-      }),
+      keyOf: (translation) => translation.id,
     },
   });
 }
@@ -203,11 +200,8 @@ void describe("comparison baselines", () => {
           record.bodyAvailability,
         ]),
         [
-          [{ language: "fr", namespace: "ui", key: "save" }, "available"],
-          [
-            { language: "fr", namespace: "legacy", key: "legacy" },
-            "unavailable",
-          ],
+          [{ language: "fr", key: "save" }, "available"],
+          [{ language: "fr", key: "legacy" }, "unavailable"],
         ],
       );
       assert.deepStrictEqual(

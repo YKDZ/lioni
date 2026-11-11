@@ -80,9 +80,9 @@ function makeConfig(
         text: "example",
       }),
       contentSchema: options.contentSchema ?? stringSchema,
-      keyOf: ({ targetId }) => ({ namespace: "messages", key: targetId }),
+      keyOf: ({ sourceId }) => sourceId,
       contentOf: ({ text }) => text,
-      matches: (unit, translation) => unit.id === translation.sourceId,
+
       read: (_language, sourceUnits) => ({
         scopes: [
           {
@@ -190,7 +190,7 @@ void describe("业务更新计划与预览", () => {
     const plan = await previewUpdate(config, store);
     const item = plan.items.find(({ action }) => action === "write");
 
-    assert.equal(plan.format, "lioni.update-plan/v1");
+    assert.equal(plan.format, "lioni.update-plan/v2");
     assert.equal(item?.request?.operation, "write");
     assert.deepStrictEqual(item?.request, {
       operation: "write",
@@ -248,9 +248,7 @@ void describe("业务更新计划与预览", () => {
     );
 
     const plan = await previewUpdate(config, store);
-    const item = plan.items.find(
-      ({ target }) => target?.key === "target-welcome",
-    );
+    const item = plan.items.find(({ target }) => target?.key === "welcome");
 
     assert.equal(item?.action, "write");
     assert.match(item?.reason ?? "", /原文已变化.*待译占位/);
@@ -260,8 +258,8 @@ void describe("业务更新计划与预览", () => {
       target: {
         identity: {
           language: "fr",
-          namespace: "messages",
-          key: "target-welcome",
+
+          key: "welcome",
         },
       },
       content: "Welcome back",
@@ -276,8 +274,8 @@ void describe("业务更新计划与预览", () => {
         status: "present",
         identity: {
           language: "fr",
-          namespace: "messages",
-          key: "target-welcome",
+
+          key: "welcome",
         },
         content: "人工译文",
         range: "locales/fr.json",
@@ -304,9 +302,7 @@ void describe("业务更新计划与预览", () => {
     );
 
     const plan = await previewUpdate(config, store);
-    const item = plan.items.find(
-      ({ target }) => target?.key === "target-welcome",
-    );
+    const item = plan.items.find(({ target }) => target?.key === "welcome");
 
     assert.equal(item?.action, "write");
     assert.equal(item?.request?.content, "Welcome back");
@@ -323,9 +319,7 @@ void describe("业务更新计划与预览", () => {
     );
 
     const plan = await previewUpdate(config, store);
-    const item = plan.items.find(
-      ({ target }) => target?.key === "target-welcome",
-    );
+    const item = plan.items.find(({ target }) => target?.key === "welcome");
 
     assert.equal(item?.action, "retain");
     assert.equal(item?.changes.source?.status, "unchanged");
@@ -357,9 +351,7 @@ void describe("业务更新计划与预览", () => {
     );
 
     const plan = await previewUpdate(config, store);
-    const item = plan.items.find(
-      ({ target }) => target?.key === "target-welcome",
-    );
+    const item = plan.items.find(({ target }) => target?.key === "welcome");
 
     assert.equal(item?.action, "blocked");
     assert.equal(item?.request, undefined);
@@ -413,12 +405,9 @@ void describe("业务更新计划与预览", () => {
         languages: ["fr"],
         schema: translationSchema,
         contentSchema: jsonValueSchema,
-        keyOf: ({ targetId }) => ({
-          namespace: "messages",
-          key: targetId,
-        }),
+        keyOf: ({ sourceId }) => sourceId,
         contentOf: ({ text }) => text,
-        matches: (unit, translation) => unit.id === translation.sourceId,
+
         read: (_language, sourceUnits) => ({
           scopes: [
             {
@@ -486,9 +475,7 @@ void describe("业务更新计划与预览", () => {
     );
 
     const plan = await previewUpdate(config, store);
-    const item = plan.items.find(
-      ({ target }) => target?.key === "target-welcome",
-    );
+    const item = plan.items.find(({ target }) => target?.key === "welcome");
 
     assert.equal(item?.action, "delete");
     assert.deepStrictEqual(item?.request, {
@@ -496,8 +483,8 @@ void describe("业务更新计划与预览", () => {
       target: {
         identity: {
           language: "fr",
-          namespace: "messages",
-          key: "target-welcome",
+
+          key: "welcome",
         },
       },
       expectedSource: {
@@ -509,8 +496,8 @@ void describe("业务更新计划与预览", () => {
         status: "present",
         identity: {
           language: "fr",
-          namespace: "messages",
-          key: "target-welcome",
+
+          key: "welcome",
         },
         content: "Bienvenue",
         range: "locales/fr.json",
@@ -526,44 +513,17 @@ void describe("业务更新计划与预览", () => {
     assert.doesNotThrow(() => validateUpdatePlan(restored));
     assert.deepStrictEqual(
       (restored as typeof plan).items.find(
-        ({ target }) => target?.key === "target-welcome",
+        ({ target }) => target?.key === "welcome",
       )?.request,
       item?.request,
     );
   });
 
-  void it("历史原文移除后目标关联发生变化时保留目标", async () => {
-    const store = await storedSnapshot(
-      [{ id: "welcome", source: "Welcome" }],
-      [{ targetId: "target-welcome", sourceId: "welcome", text: "Bienvenue" }],
-    );
-    const config = makeConfig(
-      [],
-      [
-        {
-          targetId: "target-welcome",
-          sourceId: "another-source",
-          text: "Bienvenue",
-        },
-      ],
-    );
-
-    const plan = await previewUpdate(config, store);
-    const item = plan.items.find(
-      ({ target }) => target?.key === "target-welcome",
-    );
-
-    assert.equal(item?.action, "retain");
-    assert.match(item?.reason ?? "", /匹配|关联/);
-    assert.equal(item?.request, undefined);
-  });
-
-  void it("无原文历史的目标独有项保留，并完整报告多匹配冲突", async () => {
+  void it("无原文历史的目标独有项保留", async () => {
     const config = makeConfig(
       [{ id: "welcome", source: "Welcome" }],
       [
         { targetId: "first", sourceId: "welcome", text: "一" },
-        { targetId: "second", sourceId: "welcome", text: "二" },
         { targetId: "orphan", sourceId: "missing", text: "孤立项" },
       ],
       { createPlaceholderContent: (source) => source },
@@ -571,11 +531,7 @@ void describe("业务更新计划与预览", () => {
 
     const plan = await previewUpdate(config);
 
-    const conflict = plan.items.find(({ action }) => action === "review");
-    const orphan = plan.items.find(({ target }) => target?.key === "orphan");
-    assert.equal(conflict?.action, "review");
-    assert.match(conflict?.reason ?? "", /冲突|多条/);
-    assert.equal(conflict?.changes.translations.length, 2);
+    const orphan = plan.items.find(({ target }) => target?.key === "missing");
     assert.equal(orphan?.action, "retain");
     assert.match(orphan?.reason ?? "", /历史|原文/);
   });
@@ -588,29 +544,11 @@ void describe("业务更新计划与预览", () => {
     );
 
     const plan = await previewUpdate(config, store);
-    const item = plan.items.find(({ target }) => target?.key === "new-target");
+    const item = plan.items.find(({ target }) => target?.key === "new-source");
 
     assert.equal(item?.action, "retain");
     assert.match(item?.reason ?? "", /没有充分的历史原文关联依据/);
     assert.equal(item?.request, undefined);
-  });
-
-  void it("不以相同身份键代替宿主提供的历史源译关联", async () => {
-    const store = await storedSnapshot(
-      [{ id: "same", source: "Historical source" }],
-      [{ targetId: "same", sourceId: "another-source", text: "保留我" }],
-    );
-    const config = makeConfig(
-      [],
-      [{ targetId: "same", sourceId: "another-source", text: "保留我" }],
-    );
-
-    const plan = await previewUpdate(config, store);
-    const item = plan.items.find(({ target }) => target?.key === "same");
-
-    assert.equal(plan.comparisons.sourceChanges[0]?.status, "removed");
-    assert.equal(item?.action, "retain");
-    assert.match(item?.reason ?? "", /没有充分的历史原文关联依据/);
   });
 
   void it("策略一次接收整组比较与关联事实", async () => {
@@ -726,13 +664,9 @@ void describe("业务更新计划与预览", () => {
         languages: ["fr"],
         schema: translationSchema,
         contentSchema: jsonValueSchema,
-        keyOf: ({ targetId }) => ({
-          language: "fr",
-          namespace: "messages",
-          key: targetId,
-        }),
+        keyOf: ({ sourceId }) => sourceId,
         contentOf: ({ text }) => text,
-        matches: (unit, translation) => unit.id === translation.sourceId,
+
         read: (_language, sourceUnits) => ({
           scopes: [
             {
@@ -775,6 +709,41 @@ void describe("业务更新计划与预览", () => {
     assert.equal(plan.items[0]?.action, "write");
     assert.equal(plan.items[0]?.request?.operation, "write");
     assert.equal(plan.items[0]?.after?.content, "待译：Welcome");
+  });
+
+  void it("更新计划中的源译关联按语言和消息键唯一对应", async () => {
+    const plan = await previewUpdate(
+      makeConfig(
+        [
+          { id: "first", source: "One" },
+          { id: "second", source: "Two" },
+        ],
+        [
+          { targetId: "target-first", sourceId: "first", text: "Un" },
+          { targetId: "target-second", sourceId: "second", text: "Deux" },
+        ],
+      ),
+    );
+    const first = plan.associations.current[0]!;
+    const second = plan.associations.current[1]!;
+    for (const current of [
+      [first, first],
+      [{ ...first, translationIndexes: [0, 1] }, second],
+      [first, { ...second, translationIndexes: first.translationIndexes }],
+      [
+        { ...first, translationIndexes: second.translationIndexes },
+        { ...second, translationIndexes: first.translationIndexes },
+      ],
+    ]) {
+      assert.throws(
+        () =>
+          validateUpdatePlan({
+            ...plan,
+            associations: { ...plan.associations, current },
+          }),
+        /更新计划/,
+      );
+    }
   });
 
   void it("预览采用配置的比较器，失败时不回退到默认比较", async () => {
@@ -820,7 +789,7 @@ void describe("业务更新计划与预览", () => {
               ...change,
               identity: {
                 key: change.identity.key,
-                namespace: change.identity.namespace,
+
                 language: change.identity.language,
               },
             })),
@@ -830,9 +799,7 @@ void describe("业务更新计划与预览", () => {
     );
 
     const plan = await previewUpdate(config, store);
-    const item = plan.items.find(
-      ({ target }) => target?.key === "target-welcome",
-    );
+    const item = plan.items.find(({ target }) => target?.key === "welcome");
 
     assert.equal(item?.action, "delete");
     assert.equal(item?.changes.translations[0]?.status, "unchanged");

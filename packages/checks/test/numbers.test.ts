@@ -165,14 +165,10 @@ function configFor(
     keyOf: ({ identity }) => `hash:${identity}`,
     translations: {
       languages: ["fr"],
-      keyOf: (translation) => ({
-        namespace: "messages",
-        key: translation.nativeKey,
-      }),
+      keyOf: (translation) => `hash:${translation.nativeKey}`,
       schema: translationSchema,
       contentSchema: jsonValueSchema,
       contentOf: ({ text }) => text,
-      matches: (unit, translation) => unit.identity === translation.nativeKey,
       read: (_language, units) => ({
         scopes: [
           {
@@ -412,10 +408,7 @@ void describe("阿拉伯数字对应检查", () => {
       keyOf: ({ identity }) => `hash:${identity}`,
       translations: {
         languages: ["fr"],
-        keyOf: (translation) => ({
-          namespace: "messages",
-          key: translation.nativeKey,
-        }),
+        keyOf: (translation) => `hash:${translation.nativeKey}`,
         schema: mixedTranslationSchema,
         contentSchema: mixedBodySchema,
         contentOf: ({ text }) => text,
@@ -432,7 +425,6 @@ void describe("阿拉伯数字对应检查", () => {
             },
           ],
         }),
-        matches: (unit, translation) => unit.identity === translation.nativeKey,
       },
       quality: { checks: [checker] },
     });
@@ -499,15 +491,8 @@ void describe("数字检查的显式依据", () => {
         languages: ["fr"],
         schema: translationSchema,
         contentSchema: jsonValueSchema,
-        keyOf: (translation) => ({
-          namespace: "messages",
-          key: translation.nativeKey,
-        }),
+        keyOf: (translation) => translation.nativeKey,
         contentOf: (translation) => translation.text,
-        matches: (unit, translation) =>
-          unit.identity === translation.nativeKey ||
-          (unit.identity === "message" &&
-            translation.nativeKey === "duplicate"),
         read: (_language, units) => ({
           scopes: [
             {
@@ -584,7 +569,10 @@ void describe("数字检查的显式依据", () => {
     assert.equal(moved.diagnostics[0]?.location.range, range);
     range = "fr.json";
     assert.equal((await run()).exceptionApplicability[0]?.status, "applicable");
-    translations.push({ nativeKey: "duplicate", text: "22" });
+    translations.splice(
+      translations.findIndex(({ nativeKey }) => nativeKey === "message"),
+      1,
+    );
     assert.equal(
       (await run()).exceptionApplicability[0]?.status,
       "basis-changed",

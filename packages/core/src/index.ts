@@ -57,6 +57,7 @@ import type {
   StandardSchemaV1,
   StandardSchemaTypes,
 } from "./standard-schema.ts";
+import { associateSnapshot } from "./translation-associations.ts";
 import { readTranslationFacts } from "./translation-snapshot.ts";
 
 export type { LanguageSelectionOptions } from "./language-scope.ts";
@@ -299,19 +300,15 @@ export type TranslationAdapter<
     StandardSchemaV1<TBody, TBody> &
     PreservingStandardSchema<TBody, TContentSchema>;
   readonly contentOf: (translation: NoInfer<TTranslation>) => NoInfer<TBody>;
-  /** 从译文记录提取稳定目标身份的 namespace 与 key；语言由框架补入，且不依赖正文或本次读取索引。 */
+  /** 返回与原文相同键空间中的消息键；同一语言内唯一，语言由框架补入译文身份。 */
   readonly keyOf: (
     translation: NoInfer<TTranslation | TUnavailable>,
     language: string,
-  ) => TranslationIdentityParts;
+  ) => string;
   read(
     language: string,
     sourceUnits: readonly SourceUnitFact<TUnit>[],
   ): Awaitable<TranslationRead<TTranslation, TUnavailable>>;
-  matches?: (
-    unit: NoInfer<TUnit>,
-    translation: NoInfer<TTranslation | TUnavailable>,
-  ) => boolean;
 };
 
 export type FrameworkConfig<
@@ -324,6 +321,7 @@ export type FrameworkConfig<
     Readonly<Record<string, readonly TCheckId[]>>,
 > = {
   readonly source: SourceAdapter<TUnit>;
+  /** 返回非空、唯一的消息键；每种目标语言通过相同键与原文唯一关联。 */
   readonly keyOf: (unit: TUnit) => string;
   readonly translations?: TranslationAdapter<
     TUnit,
@@ -484,7 +482,7 @@ type TranslationAdapterInput<
       SchemaOutput<TTranslationSchema> | SchemaOutput<TUnavailableSchema>
     >,
     language: string,
-  ) => TranslationIdentityParts;
+  ) => string;
   read(
     language: string,
     sourceUnits: readonly SourceUnitFact<NoInfer<TUnit>>[],
@@ -494,12 +492,6 @@ type TranslationAdapterInput<
       NoInfer<SchemaOutput<TUnavailableSchema>>
     >
   >;
-  matches?: (
-    unit: NoInfer<TUnit>,
-    translation: NoInfer<
-      SchemaOutput<TTranslationSchema> | SchemaOutput<TUnavailableSchema>
-    >,
-  ) => boolean;
 };
 
 type SchemaOutput<TSchema> = TSchema extends never
@@ -537,8 +529,7 @@ export type TranslationAssociationStatus =
   | "matched"
   | "missing"
   | "unavailable"
-  | "unknown"
-  | "conflict";
+  | "unknown";
 
 export type CoverageStatus = "complete" | "incomplete" | "failed" | "notRead";
 
@@ -588,19 +579,13 @@ export type TranslationAssociationFact = {
   readonly status: TranslationAssociationStatus;
   readonly coverageStatus: CoverageStatus;
   readonly scopeIndexes: readonly number[];
+  /** 对应同键译文的索引，至多一项；空数组的含义由读取完整性决定。 */
   readonly translationIndexes: readonly number[];
 };
 
-/** 快照中译文目标的完整稳定身份。 */
+/** 语言与消息键共同构成译文身份；消息键同时用于和原文唯一关联。 */
 export type TranslationIdentity = {
   readonly language: string;
-  readonly namespace: string;
-  readonly key: string;
-};
-
-/** 宿主提供的稳定目标身份部分；语言由框架补入。 */
-export type TranslationIdentityParts = {
-  readonly namespace: string;
   readonly key: string;
 };
 
@@ -814,6 +799,8 @@ export async function readSourceFacts<
         { preserveValue: true, requireJson: true },
       );
       const key = config.keyOf(unit);
+      if (typeof key !== "string" || key.trim().length === 0)
+        invalidFrameworkConfig("keyOf 必须返回非空的原文消息键。");
       const firstIndex = firstIndexes.get(key);
       if (firstIndex !== undefined)
         throw new DuplicateTranslationUnitKeyError(key, firstIndex, index);
@@ -902,62 +889,9 @@ export async function readFacts<
     translationAdapter?.languages ?? [],
     options,
   );
-  if (
-    translationAdapter !== undefined &&
-    translationAdapter.languages.length > 0 &&
-    typeof translationAdapter.matches !== "function"
-  )
-    invalidFrameworkConfig(
-      "readFacts 需要 translations.matches 来计算源译关联；独立快照读取无需此函数。",
-    );
   const snapshot = await collectComparisonSnapshot(config, languages);
 
-  const associations: TranslationAssociationFact[] = [];
-  for (const languageRead of snapshot.translations.reads) {
-    const languageRecords = snapshot.translations.records.filter(
-      ({ language }) => language === languageRead.language,
-    );
-    for (const sourceUnit of snapshot.source.units) {
-      const scopeIndexes = languageRead.scopes.flatMap((scope, index) =>
-        scope.covers.includes(sourceUnit.key) ? [index] : [],
-      );
-      const relevantScopes = languageRead.scopes.filter((_, index) =>
-        scopeIndexes.includes(index),
-      );
-      const coverageStatus = readStatus(
-        relevantScopes,
-        scopeIndexes.length === 0 ? languageRead.error : undefined,
-      );
-      const translationIndexes = languageRecords
-        .filter(({ scopeIndex }) => scopeIndexes.includes(scopeIndex))
-        .filter(({ translation }) =>
-          translationAdapter!.matches!(sourceUnit.unit, translation),
-        )
-        .map(({ index }) => index);
-
-      const status: TranslationAssociationStatus =
-        translationIndexes.length > 1
-          ? "conflict"
-          : translationIndexes.length === 0
-            ? coverageStatus === "complete"
-              ? "missing"
-              : "unknown"
-            : coverageStatus !== "complete"
-              ? "unknown"
-              : snapshot.translations.records[translationIndexes[0] as number]
-                    ?.bodyAvailability === "available"
-                ? "matched"
-                : "unavailable";
-      associations.push({
-        sourceKey: sourceUnit.key,
-        language: languageRead.language,
-        status,
-        coverageStatus,
-        scopeIndexes,
-        translationIndexes,
-      });
-    }
-  }
+  const associations = associateSnapshot(snapshot);
 
   const version = factsVersion({
     source: snapshot.source,

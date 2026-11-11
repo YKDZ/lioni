@@ -379,8 +379,6 @@ function allUpdateChangesProcessed<
         (item) =>
           item.sourceKey === source.key && item.language === read.language,
       );
-      // 明确保留只处理更新决定，不能消除实际源译关联冲突对基线的影响。
-      if (association?.status === "conflict") return false;
       const requiresDecision =
         changedSourceKeys.has(source.key) ||
         association === undefined ||
@@ -396,7 +394,7 @@ function allUpdateChangesProcessed<
   const translationKeys = new Set(
     plan.items.flatMap(({ changes }) =>
       changes.translations.map(({ identity }) =>
-        JSON.stringify([identity.language, identity.namespace, identity.key]),
+        JSON.stringify([identity.language, identity.key]),
       ),
     ),
   );
@@ -405,9 +403,7 @@ function allUpdateChangesProcessed<
       ({ identity, status, current }) =>
         status !== "unchanged" &&
         current !== undefined &&
-        !translationKeys.has(
-          JSON.stringify([identity.language, identity.namespace, identity.key]),
-        ),
+        !translationKeys.has(JSON.stringify([identity.language, identity.key])),
     )
   )
     return false;
@@ -428,7 +424,7 @@ function removedSourceTargetsAreProcessed<
   if (plan.previous === undefined) return true;
   const currentTargets = new Set(
     plan.current.translations.records.map(({ identity }) =>
-      JSON.stringify([identity.language, identity.namespace, identity.key]),
+      JSON.stringify([identity.language, identity.key]),
     ),
   );
   for (const sourceChange of plan.comparisons.sourceChanges) {
@@ -440,7 +436,6 @@ function removedSourceTargetsAreProcessed<
         if (previous === undefined) return false;
         const key = JSON.stringify([
           previous.identity.language,
-          previous.identity.namespace,
           previous.identity.key,
         ]);
         if (!currentTargets.has(key)) continue;
@@ -449,11 +444,7 @@ function removedSourceTargetsAreProcessed<
             item.language === association.language &&
             item.changes.translations.some(
               ({ identity }) =>
-                JSON.stringify([
-                  identity.language,
-                  identity.namespace,
-                  identity.key,
-                ]) === key,
+                JSON.stringify([identity.language, identity.key]) === key,
             ),
         );
         if (!isProcessed) return false;

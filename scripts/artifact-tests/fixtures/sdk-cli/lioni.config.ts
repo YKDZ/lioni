@@ -65,14 +65,11 @@ export function createConfig(
     keyOf: (unit) => unit.id,
     translations: {
       languages: ["fr", "de"],
-      keyOf: (translation) => ({
-        namespace: "catalog",
-        key: translation.id,
-      }),
+      keyOf: (translation) => translation.id,
       schema: translationSchema,
       contentSchema: bodySchema,
       contentOf: (translation) => translation.body,
-      matches: (unit, translation) => unit.id === translation.id,
+
       async read(language, sourceUnits) {
         const values = JSON.parse(
           await readFile(

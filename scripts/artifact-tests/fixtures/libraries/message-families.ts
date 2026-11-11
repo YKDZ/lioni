@@ -119,7 +119,7 @@ async function measure(size: number, shape: "small" | "large") {
     keyOf: ({ id }) => id,
     translations: {
       languages: ["zh"],
-      keyOf: ({ id }) => ({ namespace: "messages", key: id }),
+      keyOf: ({ id }) => id,
       schema: translationSchema,
       contentSchema: z.string(),
       contentOf: ({ text }) => text,
@@ -136,7 +136,6 @@ async function measure(size: number, shape: "small" | "large") {
           },
         ],
       }),
-      matches: (unit, translation) => unit.id === translation.id,
     },
     quality: {
       checks: [checker],

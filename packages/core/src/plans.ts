@@ -41,8 +41,9 @@ import {
   snapshotJsonValue,
   validateWithStandardSchema,
 } from "./standard-schema.ts";
+import { associateSnapshot } from "./translation-associations.ts";
 
-const UPDATE_PLAN_FORMAT = "lioni.update-plan/v1" as const;
+const UPDATE_PLAN_FORMAT = "lioni.update-plan/v2" as const;
 
 export type UpdatePlanAction =
   | "write"
@@ -86,9 +87,8 @@ type UpdatePlanItemBase<
   /** 原文身份只在该决定确实针对某个原文时出现。 */
   readonly sourceKey?: string;
   readonly language: string;
-  /** 单目标决定使用 target；多匹配冲突使用 targets 并保留全部身份。 */
+  /** 已有译文按语言与消息键定位；缺译决定只引用原文身份。 */
   readonly target?: TranslationIdentity;
-  readonly targets?: readonly TranslationIdentity[];
   readonly changes: {
     readonly source?: SourceChange<TUnit> | UpdatePlanSourceChange<TUnit>;
     readonly translations: readonly UpdatePlanTranslationChange<
@@ -198,8 +198,6 @@ export type UpdatePlanData = UpdatePlan;
 export type UpdatePlanAssociations = {
   readonly previous: readonly TranslationAssociationFact[];
   readonly current: readonly TranslationAssociationFact[];
-  /** 把历史原文重新与当前目标匹配后的关系，用于确认删除依据仍成立。 */
-  readonly currentFromPrevious?: readonly TranslationAssociationFact[];
 };
 
 export type UpdatePlanInput<
@@ -367,16 +365,6 @@ export async function defaultUpdatePolicy<
         continue;
       }
 
-      if (association.status === "conflict") {
-        items.push({
-          ...base,
-          action: "review",
-          targets: associated.map(({ identity }) => identity),
-          reason: "同一原文匹配到多条译文；保留全部条目并复核关联。",
-        });
-        continue;
-      }
-
       if (association.status === "matched") {
         const target = associated[0];
         if (target === undefined) {
@@ -529,9 +517,6 @@ export async function defaultUpdatePolicy<
         ...base,
         action: association.status === "unavailable" ? "blocked" : "review",
         ...(associated.length === 1 ? { target: associated[0]!.identity } : {}),
-        ...(associated.length > 1
-          ? { targets: associated.map(({ identity }) => identity) }
-          : {}),
         reason:
           association.status === "unavailable"
             ? "译文正文不可用；保留目标并阻止自动修改。"
@@ -540,41 +525,34 @@ export async function defaultUpdatePolicy<
     }
   }
 
-  const currentOwners = new Map<number, TranslationAssociationFact[]>();
-  for (const association of input.associations.current) {
-    for (const index of association.translationIndexes) {
-      const owners = currentOwners.get(index) ?? [];
-      owners.push(association);
-      currentOwners.set(index, owners);
-    }
-  }
+  const associatedTargets = new Set(
+    input.associations.current.flatMap(
+      ({ translationIndexes }) => translationIndexes,
+    ),
+  );
 
   for (const translation of current.translations.records) {
-    if ((currentOwners.get(translation.index)?.length ?? 0) > 0) continue;
+    if (associatedTargets.has(translation.index)) continue;
     const change = translationChanges.get(identityKey(translation.identity));
     const previousRecord = input.previous?.translations.records.find(
       ({ identity }) => sameIdentity(identity, translation.identity),
     );
-    const previousOwners =
+    const previousAssociation =
       previousRecord === undefined
-        ? []
-        : input.associations.previous.filter((association) =>
+        ? undefined
+        : input.associations.previous.find((association) =>
             association.translationIndexes.includes(previousRecord.index),
           );
-    const historicalSources = previousOwners.flatMap((association) => {
-      const sourceChange = sourceChanges.get(association.sourceKey);
-      const source =
-        sourceChange?.previous?.key === association.sourceKey
-          ? sourceChange.previous
-          : undefined;
-      return source === undefined
-        ? []
-        : [{ association, source, sourceChange }];
-    });
+    const sourceChange =
+      previousAssociation === undefined
+        ? undefined
+        : sourceChanges.get(previousAssociation.sourceKey);
+    const source =
+      sourceChange?.previous?.key === previousAssociation?.sourceKey
+        ? sourceChange?.previous
+        : undefined;
     const changes = sourceDecisionChanges(
-      historicalSources.length === 1
-        ? historicalSources[0]!.sourceChange
-        : undefined,
+      source === undefined ? undefined : sourceChange,
       change === undefined ? [] : [change],
     );
     const base = {
@@ -582,12 +560,10 @@ export async function defaultUpdatePolicy<
       target: translation.identity,
       changes,
     };
-    const uniquelyHistoricallyMatched =
-      historicalSources.length === 1 &&
-      historicalSources[0]!.association.status === "matched";
-    const removedSource = uniquelyHistoricallyMatched
-      ? historicalSources[0]
-      : undefined;
+    const removedSource =
+      source !== undefined && previousAssociation?.status === "matched"
+        ? { source, sourceChange }
+        : undefined;
 
     if (removedSource?.sourceChange?.status === "removed") {
       const read = current.translations.reads.find(
@@ -609,29 +585,6 @@ export async function defaultUpdatePolicy<
       }
 
       if (change?.status === "unchanged") {
-        const currentHistoricalAssociation =
-          input.associations.currentFromPrevious?.find(
-            ({ sourceKey, language }) =>
-              sourceKey === removedSource.source.key &&
-              language === translation.language,
-          );
-        if (
-          currentHistoricalAssociation?.status !== "matched" ||
-          !currentHistoricalAssociation.translationIndexes.includes(
-            translation.index,
-          )
-        ) {
-          const associationChanged =
-            currentHistoricalAssociation?.status === "missing";
-          items.push({
-            ...base,
-            action: associationChanged ? "retain" : "review",
-            reason: associationChanged
-              ? "目标已不再匹配被移除的历史原文；保留现有译文。"
-              : "当前目标与历史原文的关联依据不足或有冲突；保留并复核。",
-          });
-          continue;
-        }
         const previousRange =
           input.previous?.source.read.scopes[removedSource.source.scopeIndex]
             ?.range;
@@ -684,20 +637,7 @@ export async function defaultUpdatePolicy<
       continue;
     }
 
-    if (
-      previousOwners.length > 1 ||
-      previousOwners.some(({ status }) => status === "conflict")
-    ) {
-      items.push({
-        ...base,
-        action: "review",
-        reason:
-          "目标与多条历史源译关联相连，无法唯一确认删除依据；保留并复核。",
-      });
-      continue;
-    }
-
-    if (previousOwners.length === 0) {
+    if (previousAssociation === undefined) {
       items.push({
         ...base,
         action: "retain",
@@ -799,20 +739,8 @@ export async function previewUpdate<
     previous:
       previous === undefined
         ? []
-        : associateSnapshot<TUnit, TTranslation, TBody, TUnavailable>(
-            previous,
-            config,
-          ),
+        : associateSnapshot<TUnit, TTranslation, TBody, TUnavailable>(previous),
     current: current.associations,
-    currentFromPrevious:
-      previous === undefined
-        ? []
-        : associatePreviousSourcesWithCurrentTargets<
-            TUnit,
-            TTranslation,
-            TBody,
-            TUnavailable
-          >(previous, current, config),
   };
   const plan = await createUpdatePlan<TUnit, TTranslation, TBody, TUnavailable>(
     {
@@ -890,7 +818,6 @@ export function assertUpdatePlanLanguages<
     const referenced = [
       item.language,
       ...(item.target === undefined ? [] : [item.target.language]),
-      ...(item.targets ?? []).map(({ language }) => language),
       ...item.changes.translations.flatMap((change) => [
         change.identity.language,
         ...(change.previous === undefined
@@ -952,6 +879,31 @@ export function validateUpdatePlan(
     comparisonInput,
     value.comparisons,
   );
+  const associations = value.associations as UpdatePlanAssociations;
+  assertAssociationKeys(associations.previous, comparisonInput.previous);
+  assertAssociationKeys(associations.current, comparisonInput.current);
+}
+
+/** 保存计划中的关联必须仍指向同一消息键，不接受自定义交叉配对。 */
+function assertAssociationKeys(
+  associations: readonly TranslationAssociationFact[],
+  snapshot:
+    | ComparisonSnapshot<TranslationUnitInput, unknown, JsonValue, unknown>
+    | undefined,
+): void {
+  const sourceKeys = new Set(snapshot?.source.units.map(({ key }) => key));
+  for (const association of associations) {
+    if (!sourceKeys.has(association.sourceKey))
+      invalidPlan("源译关联引用了不存在的原文键。");
+    for (const index of association.translationIndexes) {
+      const record = snapshot?.translations.records[index];
+      if (
+        record?.identity.language !== association.language ||
+        record.identity.key !== association.sourceKey
+      )
+        invalidPlan("原文与译文必须按语言和消息键唯一对应。");
+    }
+  }
 }
 
 function snapshotOf<
@@ -967,116 +919,6 @@ function snapshotOf<
     source: facts.source,
     translations: facts.translations,
   };
-}
-
-function associateSnapshot<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TBody,
-  TUnavailable,
->(
-  snapshot: ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
-  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
-): TranslationAssociationFact[] {
-  const adapter = config.translations;
-  if (adapter === undefined || typeof adapter.matches !== "function") return [];
-  const associations: TranslationAssociationFact[] = [];
-  for (const languageRead of snapshot.translations.reads) {
-    for (const sourceUnit of snapshot.source.units) {
-      const scopeIndexes = languageRead.scopes.flatMap((scope, index) =>
-        scope.covers.includes(sourceUnit.key) ? [index] : [],
-      );
-      const relevantScopes = languageRead.scopes.filter((_, index) =>
-        scopeIndexes.includes(index),
-      );
-      const coverageStatus = readStatus(
-        relevantScopes,
-        scopeIndexes.length === 0 ? languageRead.error : undefined,
-      );
-      const translationIndexes = snapshot.translations.records
-        .filter(
-          ({ language, scopeIndex }) =>
-            language === languageRead.language &&
-            scopeIndexes.includes(scopeIndex),
-        )
-        .filter(({ translation }) =>
-          adapter.matches!(sourceUnit.unit, translation),
-        )
-        .map(({ index }) => index);
-      const status =
-        translationIndexes.length > 1
-          ? "conflict"
-          : translationIndexes.length === 0
-            ? coverageStatus === "complete"
-              ? "missing"
-              : "unknown"
-            : coverageStatus !== "complete"
-              ? "unknown"
-              : snapshot.translations.records[translationIndexes[0] as number]
-                    ?.bodyAvailability === "available"
-                ? "matched"
-                : "unavailable";
-      associations.push({
-        sourceKey: sourceUnit.key,
-        language: languageRead.language,
-        status,
-        coverageStatus,
-        scopeIndexes,
-        translationIndexes,
-      });
-    }
-  }
-  return associations;
-}
-
-function associatePreviousSourcesWithCurrentTargets<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TBody,
-  TUnavailable,
->(
-  previous: ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
-  current: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
-  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
-): TranslationAssociationFact[] {
-  const matches = config.translations?.matches;
-  if (matches === undefined) return [];
-
-  const associations: TranslationAssociationFact[] = [];
-  for (const languageRead of current.translations.reads) {
-    const coverageStatus = readStatus(languageRead.scopes, languageRead.error);
-    for (const sourceUnit of previous.source.units) {
-      const matchingRecords = current.translations.records.filter(
-        (record) =>
-          record.language === languageRead.language &&
-          matches(sourceUnit.unit, record.translation),
-      );
-      const translationIndexes = matchingRecords.map(({ index }) => index);
-      const status =
-        translationIndexes.length > 1
-          ? "conflict"
-          : translationIndexes.length === 0
-            ? coverageStatus === "complete"
-              ? "missing"
-              : "unknown"
-            : coverageStatus !== "complete"
-              ? "unknown"
-              : matchingRecords[0]?.bodyAvailability === "available"
-                ? "matched"
-                : "unavailable";
-      associations.push({
-        sourceKey: sourceUnit.key,
-        language: languageRead.language,
-        status,
-        coverageStatus,
-        scopeIndexes: [
-          ...new Set(matchingRecords.map(({ scopeIndex }) => scopeIndex)),
-        ],
-        translationIndexes,
-      });
-    }
-  }
-  return associations;
 }
 
 function sourceDecisionChanges<
@@ -1149,25 +991,8 @@ function sourceRangeForRemoved<
   return range;
 }
 
-function readStatus(
-  scopes: readonly {
-    readonly enumeration: "complete" | "partial" | "failed";
-  }[],
-  error?: string,
-): "complete" | "incomplete" | "failed" | "notRead" {
-  if (
-    error !== undefined ||
-    scopes.some(({ enumeration }) => enumeration === "failed")
-  )
-    return "failed";
-  if (scopes.length === 0) return "notRead";
-  return scopes.every(({ enumeration }) => enumeration === "complete")
-    ? "complete"
-    : "incomplete";
-}
-
 function identityKey(identity: TranslationIdentity): string {
-  return JSON.stringify([identity.language, identity.namespace, identity.key]);
+  return JSON.stringify([identity.language, identity.key]);
 }
 
 function sameIdentity(
@@ -1184,24 +1009,35 @@ function isPlanAssociations(value: unknown): boolean {
     value.previous.every(isAssociation) &&
     Array.isArray(value.current) &&
     value.current.every(isAssociation) &&
-    (value.currentFromPrevious === undefined ||
-      (Array.isArray(value.currentFromPrevious) &&
-        value.currentFromPrevious.every(isAssociation)))
+    hasUniqueAssociations(value.previous) &&
+    hasUniqueAssociations(value.current)
   );
 }
 
-function assertUpdatePlanAssociations(value: unknown): void {
-  if (!isRecord(value)) {
-    assertJsonValue(value, "更新计划中的关联事实");
-    return;
+function hasUniqueAssociations(
+  associations: readonly TranslationAssociationFact[],
+): boolean {
+  const subjects = new Set<string>();
+  const targets = new Set<number>();
+  for (const association of associations) {
+    const subject = JSON.stringify([
+      association.language,
+      association.sourceKey,
+    ]);
+    if (subjects.has(subject)) return false;
+    subjects.add(subject);
+    for (const index of association.translationIndexes) {
+      if (targets.has(index)) return false;
+      targets.add(index);
+    }
   }
-  const { currentFromPrevious, ...associations } = value;
-  assertJsonValue(
-    currentFromPrevious === undefined ? associations : value,
-    "更新计划中的关联事实",
-  );
-  if (currentFromPrevious !== undefined)
-    assertJsonValue(currentFromPrevious, "更新计划中的历史关联事实");
+  return true;
+}
+
+function assertUpdatePlanAssociations(value: unknown): void {
+  assertJsonValue(value, "更新计划中的关联事实");
+  if (!isPlanAssociations(value))
+    throw new TypeError("更新计划中的关联事实必须按语言和消息键唯一对应。");
 }
 
 function assertUpdatePlanItems(value: unknown): void {
@@ -1251,8 +1087,6 @@ function isPlanItem(value: unknown): boolean {
     !isRecord(value.changes) ||
     (value.sourceKey !== undefined && typeof value.sourceKey !== "string") ||
     (value.target !== undefined && !isIdentity(value.target)) ||
-    (value.targets !== undefined &&
-      (!Array.isArray(value.targets) || !value.targets.every(isIdentity))) ||
     (value.changes.source !== undefined &&
       (!isRecord(value.changes.source) ||
         typeof value.changes.source.key !== "string" ||
@@ -1356,7 +1190,7 @@ function isAssociation(value: unknown): boolean {
     isRecord(value) &&
     typeof value.sourceKey === "string" &&
     typeof value.language === "string" &&
-    ["matched", "missing", "unavailable", "unknown", "conflict"].includes(
+    ["matched", "missing", "unavailable", "unknown"].includes(
       String(value.status),
     ) &&
     ["complete", "incomplete", "failed", "notRead"].includes(
@@ -1365,6 +1199,7 @@ function isAssociation(value: unknown): boolean {
     Array.isArray(value.scopeIndexes) &&
     value.scopeIndexes.every((index) => Number.isInteger(index)) &&
     Array.isArray(value.translationIndexes) &&
+    value.translationIndexes.length <= 1 &&
     value.translationIndexes.every((index) => Number.isInteger(index))
   );
 }
@@ -1373,7 +1208,6 @@ function isIdentity(value: unknown): value is TranslationIdentity {
   return (
     isRecord(value) &&
     typeof value.language === "string" &&
-    typeof value.namespace === "string" &&
     typeof value.key === "string"
   );
 }

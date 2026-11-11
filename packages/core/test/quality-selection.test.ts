@@ -15,7 +15,7 @@ import {
   jsonValueSchema,
   schemaFromExamples,
   sourceSchemaFromExamples,
-  fixtureTranslationIdentity,
+  fixtureTranslationKey,
 } from "./source-schema.ts";
 
 type Unit = { readonly id: string; readonly source: string };
@@ -66,7 +66,7 @@ void test("按分组并集去重并保持配置顺序执行，未归组项不运
     keyOf: ({ id }) => id,
     translations: {
       languages: ["zh-CN"],
-      keyOf: fixtureTranslationIdentity,
+      keyOf: fixtureTranslationKey,
       schema: schemaFromExamples<Translation>(translation),
       contentSchema: jsonValueSchema,
       read: () => ({
@@ -79,7 +79,7 @@ void test("按分组并集去重并保持配置顺序执行，未归组项不运
           },
         ],
       }),
-      matches: (unit, target) => unit.id === target.id,
+
       contentOf: ({ text }) => text,
     },
     quality: {

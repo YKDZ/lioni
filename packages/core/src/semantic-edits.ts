@@ -610,11 +610,11 @@ export async function writeTranslationRequests<
     }
 
     for (const item of writable) {
-      if (confirmsWrite(item, after, config)) {
+      if (confirmsWrite(item, after)) {
         results[item.index] = { request: item.request, status: "written" };
         continue;
       }
-      if (batchFailed && canConfirmWriteFailure(item, after, config)) {
+      if (batchFailed && canConfirmWriteFailure(item, after)) {
         results[item.index] = {
           request: item.request,
           status: "writeFailed",
@@ -680,7 +680,7 @@ export async function writeTranslationRequests<
     }
 
     for (const item of group) {
-      results[item.index] = confirmsWrite(item, after, config)
+      results[item.index] = confirmsWrite(item, after)
         ? { request: item.request, status: "written" }
         : {
             request: item.request,
@@ -998,14 +998,10 @@ function checkSourceTargetMissing<
   const languageRead = current.translations.reads.find(
     (read) => read.language === language,
   );
-  if (
-    translations === undefined ||
-    !translations.languages.includes(language) ||
-    typeof translations.matches !== "function"
-  )
+  if (translations === undefined || !translations.languages.includes(language))
     return {
       status: "notWritable",
-      reason: "确认新目标缺失需要当前原文与目标的匹配能力。",
+      reason: "目标语言未配置。",
     };
   if (languageRead === undefined)
     return { status: "notWritable", reason: "目标语言尚未读取。" };
@@ -1017,14 +1013,11 @@ function checkSourceTargetMissing<
     relevantScopes.some(({ enumeration }) => enumeration !== "complete")
   )
     return { status: "notWritable", reason: "目标范围读取不完整。" };
-  const scopeIndexes = new Set(
-    relevantScopes.map((scope) => languageRead.scopes.indexOf(scope)),
-  );
+  // covers 表达缺失判断的读取依据，不能排除其他范围中已经读到的同键译文。
   const matching = current.translations.records.filter(
     (translation) =>
       translation.language === language &&
-      scopeIndexes.has(translation.scopeIndex) &&
-      translations.matches!(sourceUnit.unit, translation.translation),
+      translation.identity.key === sourceUnit.key,
   );
   return matching.length === 0
     ? { status: "ready" }
@@ -1078,7 +1071,6 @@ function confirmsWrite<
 >(
   prepared: PreparedWrite<TUnit, TTranslation, TBody, TUnavailable>,
   after: WriteSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
-  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
 ): boolean {
   const { request } = prepared;
   if ("identity" in request.target) {
@@ -1105,8 +1097,6 @@ function confirmsWrite<
     return false;
   const sourceTarget = request.target;
   if (!("sourceKey" in sourceTarget)) return false;
-  const adapter = config.translations;
-  if (adapter?.matches === undefined) return false;
   const currentSource = findSourceUnit(after, sourceTarget.sourceKey);
   if (currentSource === undefined) return false;
   const languageRead = after.translations.reads.find(
@@ -1121,14 +1111,10 @@ function confirmsWrite<
     relevantScopes.some(({ enumeration }) => enumeration !== "complete")
   )
     return false;
-  const indexes = new Set(
-    relevantScopes.map((scope) => languageRead.scopes.indexOf(scope)),
-  );
   const matching = after.translations.records.filter(
     (translation) =>
       translation.language === sourceTarget.language &&
-      indexes.has(translation.scopeIndex) &&
-      adapter.matches!(currentSource.unit, translation.translation),
+      translation.identity.key === currentSource.key,
   );
   return (
     matching.length === 1 &&
@@ -1145,7 +1131,6 @@ function canConfirmWriteFailure<
 >(
   prepared: PreparedWrite<TUnit, TTranslation, TBody, TUnavailable>,
   after: WriteSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
-  config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
 ): boolean {
   const { request } = prepared;
   if ("identity" in request.target) {
@@ -1163,9 +1148,7 @@ function canConfirmWriteFailure<
   const sourceTarget = request.target;
   if (!("sourceKey" in sourceTarget)) return false;
   const currentSource = findSourceUnit(after, sourceTarget.sourceKey);
-  const adapter = config.translations;
-  if (currentSource === undefined || adapter?.matches === undefined)
-    return false;
+  if (currentSource === undefined) return false;
   const languageRead = after.translations.reads.find(
     ({ language }) => language === sourceTarget.language,
   );
@@ -1178,14 +1161,10 @@ function canConfirmWriteFailure<
     relevantScopes.some(({ enumeration }) => enumeration !== "complete")
   )
     return false;
-  const scopeIndexes = new Set(
-    relevantScopes.map((scope) => languageRead.scopes.indexOf(scope)),
-  );
   const matching = after.translations.records.filter(
     (translation) =>
       translation.language === sourceTarget.language &&
-      scopeIndexes.has(translation.scopeIndex) &&
-      adapter.matches!(currentSource.unit, translation.translation),
+      translation.identity.key === currentSource.key,
   );
   return (
     matching.length !== 1 ||
@@ -1312,16 +1291,13 @@ function validateIdentity(value: unknown): TranslationIdentity {
     !isRecord(value) ||
     typeof value.language !== "string" ||
     value.language.trim().length === 0 ||
-    typeof value.namespace !== "string" ||
-    value.namespace.trim().length === 0 ||
     typeof value.key !== "string" ||
     value.key.trim().length === 0
   )
-    invalidWriteRequest("identity 必须包含非空 language、namespace 与 key。");
-  assertOnlyKeys(value, ["language", "namespace", "key"], "identity");
+    invalidWriteRequest("identity 必须包含非空 language 与 key。");
+  assertOnlyKeys(value, ["language", "key"], "identity");
   return {
     language: value.language,
-    namespace: value.namespace,
     key: value.key,
   };
 }

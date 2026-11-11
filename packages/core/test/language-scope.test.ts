@@ -11,7 +11,7 @@ import {
 } from "../src/index.ts";
 import { defineTestQualityCheck } from "./quality-check-fixture.ts";
 import {
-  fixtureTranslationIdentity,
+  fixtureTranslationKey,
   schemaFromExamples,
   sourceSchemaFromExamples,
 } from "./source-schema.ts";
@@ -45,9 +45,9 @@ function fixture(quality?: QualityConfiguration<Unit, Translation, string>) {
       languages: ["fr", "de", "ja"],
       schema: schemaFromExamples<Translation>({ key: "save", text: "" }),
       contentSchema: schemaFromExamples(""),
-      keyOf: fixtureTranslationIdentity,
+      keyOf: fixtureTranslationKey,
       contentOf: ({ text }) => text,
-      matches: (source, translation) => source.key === translation.key,
+
       read(language, sourceUnits) {
         assert.equal(this, config.translations);
         reads.push(language);

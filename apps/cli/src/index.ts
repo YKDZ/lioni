@@ -114,7 +114,6 @@ export type {
   TranslationAssociationStatus,
   TranslationChange,
   TranslationIdentity,
-  TranslationIdentityParts,
   TranslationRead,
   TranslationReadFact,
   TranslationReadScope,

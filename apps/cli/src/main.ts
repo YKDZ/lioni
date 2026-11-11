@@ -144,7 +144,6 @@ const factsSchema = z.object({
           range: z.unknown(),
           identity: z.strictObject({
             language: z.string(),
-            namespace: z.string(),
             key: z.string(),
           }),
           translation: z.unknown(),
@@ -158,7 +157,6 @@ const factsSchema = z.object({
           range: z.unknown(),
           identity: z.strictObject({
             language: z.string(),
-            namespace: z.string(),
             key: z.string(),
           }),
           translation: z.unknown(),
@@ -171,13 +169,7 @@ const factsSchema = z.object({
     z.object({
       sourceKey: z.string(),
       language: z.string(),
-      status: z.enum([
-        "matched",
-        "missing",
-        "unavailable",
-        "unknown",
-        "conflict",
-      ]),
+      status: z.enum(["matched", "missing", "unavailable", "unknown"]),
       coverageStatus: readStatusSchema,
       scopeIndexes: z.array(z.number()),
       translationIndexes: z.array(z.number()),
@@ -293,7 +285,7 @@ function updatePlanText(value: unknown): ReturnType<typeof text.lines> {
     ...plan.items.flatMap((item) => {
       const subject =
         item.sourceKey === undefined
-          ? `${item.target?.namespace ?? "目标"}:${item.target?.key ?? "多条"}（${item.language}）`
+          ? `${item.target?.key ?? "目标"}（${item.language}）`
           : `${item.sourceKey} → ${item.language}`;
       const actionName =
         item.action === "write" && item.changes.source?.status === "modified"
@@ -323,10 +315,6 @@ function updatePlanText(value: unknown): ReturnType<typeof text.lines> {
           `  译文 ${change.identity.key}（${comparisonStatusText(change.status)}）：${displayJson(previous)} → ${displayJson(current)}`,
         );
       }
-      if (item.targets !== undefined)
-        lines.push(
-          `  匹配目标：${item.targets.map(({ namespace, key }) => `${namespace}:${key}`).join("、")}`,
-        );
       if (item.after !== undefined)
         lines.push(`  待写正文：${displayJson(item.after.content)}`);
       return lines;
@@ -374,10 +362,9 @@ function unassignedChangeReason(
 
 function updateIdentityKey(identity: {
   readonly language: string;
-  readonly namespace: string;
   readonly key: string;
 }): string {
-  return JSON.stringify([identity.language, identity.namespace, identity.key]);
+  return JSON.stringify([identity.language, identity.key]);
 }
 
 function updateResultText(value: unknown): ReturnType<typeof text.lines> {
@@ -414,7 +401,7 @@ function updateResultText(value: unknown): ReturnType<typeof text.lines> {
         item === undefined
           ? `第 ${index + 1} 项`
           : item.sourceKey === undefined
-            ? `${item.target?.namespace ?? "目标"}:${item.target?.key ?? "多条"}（${item.language}）`
+            ? `${item.target?.key ?? "目标"}（${item.language}）`
             : `${item.sourceKey} → ${item.language}`;
       return `${updateActionNames[action] ?? "更新"} ${subject}：${statusNames[status] ?? "未完成"}${reason === undefined ? "" : `；${reason}`}`;
     }),

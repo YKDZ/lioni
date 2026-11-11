@@ -16,7 +16,7 @@ import {
   jsonValueSchema,
   schemaFromExamples,
   sourceSchemaFromExamples,
-  fixtureTranslationIdentity,
+  fixtureTranslationKey,
 } from "./source-schema.ts";
 
 void describe("quality checks", () => {
@@ -49,7 +49,7 @@ void describe("quality checks", () => {
         keyOf: () => "message:hello",
         translations: {
           languages: ["fr"],
-          keyOf: fixtureTranslationIdentity,
+          keyOf: fixtureTranslationKey,
           schema: schemaFromExamples(translation),
           contentSchema: jsonValueSchema,
           contentOf: ({ text }) => text,
@@ -68,7 +68,6 @@ void describe("quality checks", () => {
               },
             ],
           }),
-          matches: () => true,
         },
         quality: {
           buildCandidates: () => [candidate],
@@ -124,7 +123,7 @@ void describe("quality checks", () => {
 
   void it("runs selected checks against one facts snapshot and retains findings", async () => {
     const unit = { source: "Hello {name}" };
-    const translation = { id: "message:hello", text: "Bonjour" };
+    const translation = { id: "message:save", text: "Bonjour" };
     const facts = await readFacts(
       defineConfig({
         source: {
@@ -142,7 +141,7 @@ void describe("quality checks", () => {
         keyOf: () => "message:save",
         translations: {
           languages: ["fr"],
-          keyOf: fixtureTranslationIdentity,
+          keyOf: fixtureTranslationKey,
           schema: schemaFromExamples(translation),
           contentSchema: jsonValueSchema,
           read: (_language, sourceUnits) => ({
@@ -157,7 +156,7 @@ void describe("quality checks", () => {
               },
             ],
           }),
-          matches: () => true,
+
           contentOf: ({ text }) => ({ text }),
         },
       }),

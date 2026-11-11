@@ -91,8 +91,7 @@ async function run(
       schema: translationSchema,
       contentSchema: z.string(),
       contentOf: ({ text }) => text,
-      keyOf: ({ key }) => ({ namespace: "messages", key }),
-      matches: (unit, translation) => unit.key === translation.key,
+      keyOf: ({ key }) => key,
       read: () => ({
         scopes: [
           {

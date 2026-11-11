@@ -21,7 +21,7 @@ import { assertJsonValue } from "./standard-schema.ts";
 
 export { stableStringify } from "./stable-json.ts";
 
-const COMPARISON_BASELINE_FORMAT = "lioni.comparison-baseline/v1" as const;
+const COMPARISON_BASELINE_FORMAT = "lioni.comparison-baseline/v2" as const;
 
 export type ComparisonBaseline<
   TUnit extends TranslationUnitInput = TranslationUnitInput,
@@ -619,14 +619,13 @@ function assertUniqueTranslationIdentities(
   records: readonly {
     readonly identity: {
       readonly language: string;
-      readonly namespace: string;
       readonly key: string;
     };
   }[],
 ): void {
   const identities = new Set<string>();
   for (const { identity } of records) {
-    const serialized = JSON.stringify(identity);
+    const serialized = JSON.stringify([identity.language, identity.key]);
     if (identities.has(serialized))
       throw new TypeError(`比较基线中的译文身份重复：${serialized}。`);
     identities.add(serialized);
@@ -715,6 +714,7 @@ function validateSourceFacts(
     if (
       !isRecord(unit) ||
       typeof unit.key !== "string" ||
+      unit.key.trim().length === 0 ||
       (unit.bodyAvailability !== "available" &&
         unit.bodyAvailability !== "unavailable") ||
       !Number.isInteger(unit.scopeIndex) ||
@@ -802,14 +802,18 @@ function validateTranslationFacts(
       typeof record.language !== "string" ||
       !isRecord(record.identity) ||
       record.identity.language !== record.language ||
-      typeof record.identity.namespace !== "string" ||
+      Object.keys(record.identity).length !== 2 ||
       typeof record.identity.key !== "string" ||
+      record.identity.key.trim().length === 0 ||
       !Number.isInteger(record.scopeIndex) ||
       (record.bodyAvailability !== "available" &&
         record.bodyAvailability !== "unavailable")
     )
       invalidBaseline(`第 ${index + 1} 条实际译文无效。`);
-    const identityKey = JSON.stringify(record.identity);
+    const identityKey = JSON.stringify([
+      record.identity.language,
+      record.identity.key,
+    ]);
     if (identities.has(identityKey)) invalidBaseline("实际译文身份重复。");
     identities.add(identityKey);
     const read = readsByLanguage.get(record.language);

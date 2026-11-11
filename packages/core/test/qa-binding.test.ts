@@ -227,10 +227,8 @@ function readMixedSource(unrelatedSource = "Reference 7") {
 
 const mixedTranslations = {
   languages: ["fr"],
-  keyOf: (translation: MixedTranslation | MixedUnavailableTranslation) => ({
-    namespace: "messages",
-    key: translation.key,
-  }),
+  keyOf: (translation: MixedTranslation | MixedUnavailableTranslation) =>
+    translation.key,
   schema: mixedTranslationSchema,
   unavailableSchema: mixedUnavailableTranslationSchema,
   contentSchema: mixedBodySchema,
@@ -258,10 +256,6 @@ const mixedTranslations = {
       },
     ],
   }),
-  matches: (
-    unit: MixedUnit,
-    translation: MixedTranslation | MixedUnavailableTranslation,
-  ) => unit.key === translation.key,
 };
 
 function qualityConfig(

@@ -684,6 +684,7 @@ function validateSnapshot(
     if (
       !isRecord(unit) ||
       typeof unit.key !== "string" ||
+      unit.key.trim().length === 0 ||
       !isBodyAvailability(unit.bodyAvailability) ||
       !Number.isInteger(unit.scopeIndex) ||
       (unit.scopeIndex as number) < 0 ||
@@ -782,17 +783,16 @@ function readEvidence<
 }
 
 function translationIdentityKey(identity: TranslationIdentity): string {
-  return JSON.stringify([identity.language, identity.namespace, identity.key]);
+  return JSON.stringify([identity.language, identity.key]);
 }
 
 function isIdentity(value: unknown): value is TranslationIdentity {
   return (
     isRecord(value) &&
     typeof value.language === "string" &&
-    typeof value.namespace === "string" &&
-    value.namespace.length > 0 &&
+    Object.keys(value).length === 2 &&
     typeof value.key === "string" &&
-    value.key.length > 0
+    value.key.trim().length > 0
   );
 }
 

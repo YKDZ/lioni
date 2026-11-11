@@ -60,8 +60,7 @@ export default defineConfig({
     schema: z.looseObject({ id: z.string(), text: z.string() }),
     contentSchema: z.string(),
     contentOf: (translation) => translation.text,
-    keyOf: (translation) => ({ namespace: "messages", key: translation.id }),
-    matches: (unit, translation) => unit.id === translation.id,
+    keyOf: (translation) => translation.id,
     read(language, sourceUnits) {
       appendFileSync(new URL("./" + process.env.READ_LOG, import.meta.url), language + "\\n");
       return { scopes: [{

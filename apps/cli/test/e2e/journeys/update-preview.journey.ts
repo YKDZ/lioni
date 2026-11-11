@@ -46,9 +46,8 @@ export default defineConfig({
     languages: ["fr"],
     schema: z.looseObject({ targetId: z.string(), sourceId: z.string(), text: z.string() }),
     contentSchema: z.string(),
-    keyOf: (translation) => ({ namespace: "messages", key: translation.targetId }),
+    keyOf: (translation) => translation.sourceId,
     contentOf: (translation) => translation.text,
-    matches: (unit, translation) => unit.id === translation.sourceId,
     read: (_language, sourceUnits) => ({ scopes: [{
       range: "locales/fr.json",
       covers: sourceUnits.map(({ key }) => key),
@@ -393,7 +392,7 @@ const journey: CliJourney = {
     );
     assert.ok(
       detachedChanges?.stdout.includes(
-        '译文 target-welcome（移除）："Bienvenue" → 无',
+        '译文 welcome（移除）："Bienvenue" → 无',
       ),
     );
     assert.ok(detachedChanges?.stdout.includes("未形成更新决定"));

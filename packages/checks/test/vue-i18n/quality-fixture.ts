@@ -228,11 +228,7 @@ export function createQualityFixture(input: {
       schema: translationSchema,
       contentSchema: bodySchema,
       contentOf: (translation) => ({ text: translation.text }),
-      keyOf: (translation) => ({
-        namespace: "messages",
-        key: translation.key,
-      }),
-      matches: (unit, translation) => unit.key === translation.key,
+      keyOf: (translation) => translation.key,
       read: (language, sourceUnits) => {
         const policy = byLanguage.get(language);
         if (!policy) throw new Error(`缺少目标语言策略：${language}。`);

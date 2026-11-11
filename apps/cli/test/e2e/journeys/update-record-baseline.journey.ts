@@ -35,9 +35,8 @@ export default defineConfig({
     languages: ["fr", "ja"],
     schema: z.looseObject({ id: z.string(), text: z.string() }),
     contentSchema: z.string(),
-    keyOf: (translation) => ({ namespace: "messages", key: translation.id }),
+    keyOf: (translation) => translation.id,
     contentOf: (translation) => translation.text,
-    matches: (unit, translation) => unit.id === translation.id,
     read: (language, sourceUnits) => ({ scopes: [{
       range: language,
       covers: sourceUnits.map(({ key }) => key),

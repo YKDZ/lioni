@@ -56,14 +56,13 @@ void describe("译文候选验证", () => {
 });
 
 function identity(id: string): TranslationIdentity {
-  return { language: "fr", namespace: "messages", key: id };
+  return { language: "fr", key: id };
 }
 
 function configFor(options: {
   readonly sources?: readonly Unit[];
   readonly sourceBodyAvailability?: "available" | "unavailable";
   readonly translations: Translation[];
-  readonly matches?: (unit: Unit, translation: Translation) => boolean;
   readonly locateExistingTarget?: (identity: TranslationIdentity) => JsonValue;
   readonly locateNewTarget?: (unit: Unit, language: string) => JsonValue;
   readonly onWrite: (input: WriteInput) => void;
@@ -95,10 +94,7 @@ function configFor(options: {
     },
     translations: {
       languages: ["fr"],
-      keyOf: (translation) => ({
-        namespace: "messages",
-        key: translation.id,
-      }),
+      keyOf: (translation) => translation.id,
       schema: schemaFromExamples({ id: "example", text: "Exemple" }),
       contentSchema: jsonValueSchema,
       contentOf: ({ text }) => text,
@@ -115,7 +111,6 @@ function configFor(options: {
           },
         ],
       }),
-      ...(options.matches === undefined ? {} : { matches: options.matches }),
     },
     translationWriteback: {
       locateExistingTarget: ({ identity: targetIdentity }) => ({
@@ -401,7 +396,7 @@ void describe("translation write requests", () => {
     const config = configFor({
       sources: [source],
       translations: [target],
-      matches: (unit, translation) => unit.id === translation.id,
+
       onWrite: () => {
         writeCalls += 1;
       },
@@ -434,7 +429,7 @@ void describe("translation write requests", () => {
     const config = configFor({
       sources: [source],
       translations: records,
-      matches: (unit, translation) => unit.id === translation.id,
+
       onWrite: ({ request, sourceUnit }) => {
         assert.equal(request.operation, "write");
         assert.equal("sourceKey" in request.target, true);
@@ -462,6 +457,64 @@ void describe("translation write requests", () => {
     assert.equal(result.results[0]?.status, "written");
   });
 
+  void it("其他读取范围中存在同键译文时拒绝新建目标", async () => {
+    const source: Unit = { id: "existing", source: "Existing source" };
+    let writeCalls = 0;
+    const baseConfig = configFor({
+      sources: [source],
+      translations: [],
+      onWrite: () => {
+        writeCalls += 1;
+      },
+    });
+    const config = {
+      ...baseConfig,
+      translations: {
+        ...baseConfig.translations!,
+        read: () => ({
+          scopes: [
+            {
+              range: "fr.json",
+              covers: [source.id],
+              enumeration: "complete" as const,
+              records: [],
+            },
+            {
+              range: "fr-extra.json",
+              covers: [],
+              enumeration: "complete" as const,
+              records: [
+                {
+                  value: { id: source.id, text: "Traduction existante" },
+                  bodyAvailability: "available" as const,
+                },
+              ],
+            },
+          ],
+        }),
+      },
+    };
+    const request: TranslationWriteRequest<JsonValue, Unit> = {
+      operation: "write",
+      target: { sourceKey: source.id, language: "fr" },
+      content: "New translation",
+      expectedSource: {
+        presence: "present",
+        key: source.id,
+        range: "source.json",
+        unit: source,
+        content: source.source,
+      },
+      expectedTarget: { status: "missing" },
+    };
+
+    const result = await writeTranslationRequests([request], config);
+
+    assert.equal(result.results[0]?.status, "conflict");
+    assert.match(result.results[0]?.reason ?? "", /目标现在已存在/);
+    assert.equal(writeCalls, 0);
+  });
+
   void it("writes an external candidate when source identity is known but its body is unavailable", async () => {
     const source: Unit = { id: "new", source: "unavailable source body" };
     const records: Translation[] = [];
@@ -470,7 +523,7 @@ void describe("translation write requests", () => {
       sources: [source],
       sourceBodyAvailability: "unavailable",
       translations: records,
-      matches: (unit, translation) => unit.id === translation.id,
+
       locateNewTarget: (unit, language) => ({ id: unit.id, language }),
       onWrite: ({ request, sourceUnit }) => {
         writeCalls += 1;
@@ -638,7 +691,7 @@ void describe("translation write requests", () => {
     const config = configFor({
       sources: [{ id: "A", source: "Source A" }],
       translations: records,
-      matches: (unit, translation) => unit.id === translation.id,
+
       onWrite: () => {
         throw new Error("the batch writer should be used");
       },

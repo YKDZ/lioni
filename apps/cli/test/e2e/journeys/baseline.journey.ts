@@ -25,7 +25,7 @@ export default defineConfig({
     schema: z.looseObject({ id: z.string(), text: z.string() }),
     contentSchema: z.string(),
     read: () => ({ scopes: [{ range: "locales/fr.json", covers: [], enumeration: "complete", records: [] }] }),
-    keyOf: (translation) => ({ namespace: "messages", key: translation.id }),
+    keyOf: (translation) => translation.id,
     contentOf: (translation) => translation.text
   }
 });

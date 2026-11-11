@@ -141,15 +141,11 @@ const config = defineConfig<
   createPlaceholderContent: (source) => ({ message: source, state: "draft" }),
   translations: {
     languages: ["fr"],
-    keyOf: (translation) => ({
-      namespace: "fixture",
-      key: translation.id,
-    }),
+    keyOf: (translation) => translation.id,
     schema: translationSchema,
     contentSchema: bodySchema,
     contentOf: (translation) => translation.body,
     read: () => ({ scopes: [] }),
-    matches: (unit, translation) => unit.context.key === translation.id,
   },
   translationWriteback: writeback,
   updatePolicy: policy,

@@ -45,7 +45,6 @@ const translationSchema = z
   .object({
     id: z.string(),
     text: z.string(),
-    targetKey: z.string().optional(),
   })
   .readonly();
 const stringSchema = z.string();
@@ -498,57 +497,6 @@ void test("借入同一 memo 的后续运行仍使用新的事实与等价依赖
   }
 });
 
-void test("冲突关联中未知族与其他族的保存记录重排不改变依据", async () => {
-  const translations = [
-    { id: "saved", targetKey: "other", text: "保存" },
-    { id: "saved", targetKey: "unknown", text: "未知" },
-  ];
-  const checker = checkerFor({
-    explicitBasis: true,
-    referenceProjectionByKey: {
-      other: {
-        groups: [
-          {
-            ref: "other",
-            scope: "ui",
-            source: {
-              language: "en",
-              fragments: [{ ref: "source", text: "Save" }],
-            },
-            target: {
-              language: "zh",
-              fragments: [{ ref: "target", text: "保存" }],
-            },
-          },
-        ],
-      },
-      unknown: { complete: false, groups: [] },
-    },
-  });
-  const run = () =>
-    analyzeQuality(
-      configFor(
-        [
-          { id: "editing", source: "Hello" },
-          { id: "saved", source: "Save" },
-        ],
-        translations,
-        checker,
-      ),
-      {
-        candidates: [{ sourceKey: "editing", language: "zh", content: "你好" }],
-      },
-    );
-  const initial = await run();
-  translations.reverse();
-  const reordered = await run();
-  assert.equal(initial.status, "incomplete");
-  assert.equal(
-    reordered.checks[0]!.executions[0]!.inputFingerprint,
-    initial.checks[0]!.executions[0]!.inputFingerprint,
-  );
-});
-
 void test("全部候选不适用时不投影任何候选或保存参照", async () => {
   const checker = createMessageFamilyChecker<Unit, Translation, Unit, string>({
     hostVersion: "not-applicable-v1",
@@ -724,10 +672,7 @@ function configFor(
     keyOf: ({ id }) => id,
     translations: {
       languages: ["zh"],
-      keyOf: (translation) => ({
-        namespace: "messages",
-        key: translation.targetKey ?? translation.id,
-      }),
+      keyOf: (translation) => translation.id,
       schema: translationSchema,
       contentSchema: stringSchema,
       contentOf: ({ text }) => text,
@@ -744,7 +689,6 @@ function configFor(
           },
         ],
       }),
-      matches: (unit, translation) => unit.id === translation.id,
     },
     quality: {
       checks: [qualityChecker],
@@ -766,7 +710,6 @@ function reference(
     translationIndex,
     translationIdentity: {
       language: "zh",
-      namespace: "messages",
       key: `record-${translationIndex}`,
     },
     sourceKey,
@@ -1053,47 +996,6 @@ void test("完整资料没有同族参照时明确返回不适用", async () => 
   assert.ok(
     result.checks[0]?.issues.some(
       ({ code }) => code === "noComparableReference",
-    ),
-  );
-});
-
-void test("关联冲突时保留全部已知记录并标记不完整", async () => {
-  const config = configFor(
-    [
-      { id: "editing", source: "Error Code 404" },
-      { id: "other", source: "Error Code 504" },
-    ],
-    [
-      { id: "editing", targetKey: "editing.one", text: "错误码 404" },
-      { id: "editing", targetKey: "editing.two", text: "错误 404" },
-      { id: "other", text: "错误码 504" },
-    ],
-    checkerFor(),
-  );
-  const result = await analyzeQuality(config, {
-    candidates: [
-      { sourceKey: "editing", language: "zh", content: "错误码 404" },
-    ],
-  });
-
-  assert.equal(result.status, "incomplete");
-  assert.equal(result.diagnostics.length, 1);
-  assert.deepEqual(
-    result.diagnostics[0]?.evidence
-      .filter(({ role }) => role === "saved-reference")
-      .map(({ value }) =>
-        typeof value === "object" &&
-        value !== null &&
-        "translationIdentity" in value
-          ? (value.translationIdentity as { key: string }).key
-          : null,
-      )
-      .sort(),
-    ["editing.one", "editing.two", "other"],
-  );
-  assert.ok(
-    result.checks[0]?.issues.some(
-      ({ code }) => code === "candidateAssociationConflict",
     ),
   );
 });
@@ -1478,73 +1380,6 @@ void test("显式消息族依据复用无关编辑的缓存和例外，并跟随
     "basis-changed",
   );
   assert.equal(hits, 5);
-});
-
-void test("已知其他族的关联冲突局部化，相关冲突与未知源结构仍限制当前族", async () => {
-  const units: Unit[] = [
-    { id: "editing", source: "Error Code 404" },
-    { id: "saved", source: "Error Code 504" },
-    { id: "broken", source: "Save" },
-  ];
-  const translations: Translation[] = [
-    { id: "saved", text: "错误 504" },
-    { id: "broken", targetKey: "broken.one", text: "保存" },
-    { id: "broken", targetKey: "broken.two", text: "储存" },
-  ];
-  const numbers = asciiNumbers();
-  const analysis = createTextAnalysis({
-    recognizers: [
-      async (input) =>
-        input.text === "Unknown source"
-          ? {
-              tokens: [],
-              complete: false,
-              issues: [
-                { code: "sourceStructureUnknown", message: "未知源结构。" },
-              ],
-            }
-          : numbers(input),
-    ],
-  });
-  const run = () =>
-    analyzeQuality(
-      configFor(
-        units,
-        translations,
-        checkerFor({ analysis, explicitBasis: true }),
-      ),
-      {
-        candidates: [
-          { sourceKey: "editing", language: "zh", content: "错误码 404" },
-        ],
-      },
-    );
-  const unrelated = await run();
-  assert.equal(unrelated.status, "complete");
-  assert.equal(
-    unrelated.checks[0]?.issues.some(
-      ({ code }) => code === "translationAssociationConflict",
-    ),
-    false,
-  );
-  units[2] = { id: "broken", source: "Error Code 304" };
-  const related = await run();
-  assert.equal(related.status, "incomplete");
-  assert.equal(
-    related.checks[0]?.issues.some(
-      ({ code }) => code === "translationAssociationConflict",
-    ),
-    true,
-  );
-  units[2] = { id: "broken", source: "Unknown source" };
-  const unknown = await run();
-  assert.equal(unknown.status, "incomplete");
-  assert.equal(
-    unknown.checks[0]?.issues.some(
-      ({ code }) => code === "sourceStructureUnknown",
-    ),
-    true,
-  );
 });
 
 void test("同一保存记录的同类别重复组稳定选择完整证据，缓存与重新计算一致", async () => {

@@ -266,9 +266,8 @@ function createConfig(
       schema: translationSchema,
       contentSchema,
       contentOf: () => "unused",
-      keyOf: ({ id }) => ({ namespace: "artifact", key: id }),
+      keyOf: ({ id }) => id,
       read: () => ({ scopes: [] }),
-      matches: () => true,
     },
     quality: {
       checks,

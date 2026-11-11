@@ -106,11 +106,7 @@ function snapshotConfig(
       unavailableSchema: schemaFromExamples(unavailableTranslationExample),
       contentSchema: schemaFromExamples("example"),
       contentOf: ({ text }) => text,
-      keyOf: (translation, language) => ({
-        language,
-        namespace: translation.namespace,
-        key: translation.id,
-      }),
+      keyOf: (translation) => `${translation.namespace}:${translation.id}`,
       read: (language) => ({
         scopes: targetScopes
           .filter((scope) => scope.language === language)
@@ -172,8 +168,7 @@ function translationChange(
   const change = result.translationChanges.find(
     (candidate) =>
       candidate.identity.language === language &&
-      candidate.identity.namespace === namespace &&
-      candidate.identity.key === key,
+      candidate.identity.key === `${namespace}:${key}`,
   );
   assert.ok(
     change,
