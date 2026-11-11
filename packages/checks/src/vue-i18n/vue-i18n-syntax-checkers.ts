@@ -1,5 +1,6 @@
 import type {
   QualityCheckOutcome,
+  QualityCheckDefinition,
   QualityEvidence,
   QualityObject,
   TranslationUnitInput,
@@ -55,11 +56,24 @@ export type VueI18nTargetSyntaxCheckerOptions<
 
 /** 按候选对应的共同消息投影检查原文语法。 */
 export function createVueI18nSourceSyntaxChecker<
+  TUnit extends TranslationUnitInput = TranslationUnitInput,
+  TTranslation = unknown,
+  TBody = unknown,
+  TUnavailable = never,
+>(): QualityCheckDefinition<
+  TUnit,
+  TTranslation,
+  QualityObject,
+  TBody,
+  TUnavailable,
+  "vue-i18n/source-syntax"
+>;
+export function createVueI18nSourceSyntaxChecker<
   TUnit extends TranslationUnitInput,
   TTranslation,
   TBody,
   TUnavailable = never,
-  TId extends string = string,
+  const TId extends string = string,
 >(
   options: VueI18nSourceSyntaxCheckerOptions<
     TUnit,
@@ -67,23 +81,45 @@ export function createVueI18nSourceSyntaxChecker<
     TBody,
     TUnavailable,
     TId
-  > = { id: "vue-i18n/source-syntax" as TId },
+  >,
+): QualityCheckDefinition<
+  TUnit,
+  TTranslation,
+  QualityObject,
+  TBody,
+  TUnavailable,
+  TId
+>;
+export function createVueI18nSourceSyntaxChecker<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable = never,
+  TId extends string = string,
+>(
+  options?: VueI18nSourceSyntaxCheckerOptions<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable,
+    TId
+  >,
 ) {
-  assertVueI18nPreparer(options.prepare);
+  assertVueI18nPreparer(options?.prepare);
   return defineChecker.withTypes<TUnit, TTranslation, TBody, TUnavailable>()({
-    id: options.id,
+    id: options?.id ?? "vue-i18n/source-syntax",
     version: `checks.vue-i18n/source-syntax/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
     inputSchema: vueI18nMessageProjectionSchema,
     load: async ({ facts, memo, qualityData }) =>
-      options.loadLanguages
+      options?.loadLanguages
         ? readVueI18nLanguagePolicies(
-            await qualityData.read(options.loadLanguages, facts, memo),
+            await qualityData.read(options?.loadLanguages, facts, memo),
           )
         : null,
     prepare: async (input) => {
       if (input.loaded !== null && !input.loaded.has(input.candidate.language))
         return { status: "not-applicable" };
-      const prepared = await prepareVueI18nMessage(input, options.prepare);
+      const prepared = await prepareVueI18nMessage(input, options?.prepare);
       if (prepared.status !== "ready") return prepared;
       const projection = prepared.input;
       if (projection.target.status === "missing")
@@ -113,11 +149,24 @@ export function createVueI18nSourceSyntaxChecker<
 
 /** 按候选正文检查目标语法，允许原文正文不可用。 */
 export function createVueI18nTargetSyntaxChecker<
+  TUnit extends TranslationUnitInput = TranslationUnitInput,
+  TTranslation = unknown,
+  TBody = unknown,
+  TUnavailable = never,
+>(): QualityCheckDefinition<
+  TUnit,
+  TTranslation,
+  QualityObject,
+  TBody,
+  TUnavailable,
+  "vue-i18n/target-syntax"
+>;
+export function createVueI18nTargetSyntaxChecker<
   TUnit extends TranslationUnitInput,
   TTranslation,
   TBody,
   TUnavailable = never,
-  TId extends string = string,
+  const TId extends string = string,
 >(
   options: VueI18nTargetSyntaxCheckerOptions<
     TUnit,
@@ -125,23 +174,45 @@ export function createVueI18nTargetSyntaxChecker<
     TBody,
     TUnavailable,
     TId
-  > = { id: "vue-i18n/target-syntax" as TId },
+  >,
+): QualityCheckDefinition<
+  TUnit,
+  TTranslation,
+  QualityObject,
+  TBody,
+  TUnavailable,
+  TId
+>;
+export function createVueI18nTargetSyntaxChecker<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable = never,
+  TId extends string = string,
+>(
+  options?: VueI18nTargetSyntaxCheckerOptions<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable,
+    TId
+  >,
 ) {
-  assertVueI18nPreparer(options.prepare);
+  assertVueI18nPreparer(options?.prepare);
   return defineChecker.withTypes<TUnit, TTranslation, TBody, TUnavailable>()({
-    id: options.id,
+    id: options?.id ?? "vue-i18n/target-syntax",
     version: `checks.vue-i18n/target-syntax/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
     inputSchema: vueI18nMessageProjectionSchema,
     load: async ({ facts, memo, qualityData }) =>
-      options.loadLanguages
+      options?.loadLanguages
         ? readVueI18nLanguagePolicies(
-            await qualityData.read(options.loadLanguages, facts, memo),
+            await qualityData.read(options?.loadLanguages, facts, memo),
           )
         : null,
     prepare: async (input) => {
       if (input.loaded !== null && !input.loaded.has(input.candidate.language))
         return { status: "not-applicable" };
-      const prepared = await prepareVueI18nMessage(input, options.prepare);
+      const prepared = await prepareVueI18nMessage(input, options?.prepare);
       if (prepared.status !== "ready") return prepared;
       const projection = prepared.input;
       if (projection.target.status === "missing")

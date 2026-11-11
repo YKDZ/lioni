@@ -1,5 +1,6 @@
 import type {
   QualityCheckOutcome,
+  QualityCheckDefinition,
   QualityEvidence,
   QualityIssue,
   QualityObject,
@@ -53,11 +54,24 @@ export type VueI18nVariableCorrespondenceCheckerOptions<
 
 /** 严格比较原译各分支中的命名与位置变量身份及出现次数。 */
 export function createVueI18nVariableCorrespondenceChecker<
+  TUnit extends TranslationUnitInput = TranslationUnitInput,
+  TTranslation = unknown,
+  TBody = unknown,
+  TUnavailable = never,
+>(): QualityCheckDefinition<
+  TUnit,
+  TTranslation,
+  QualityObject,
+  TBody,
+  TUnavailable,
+  "vue-i18n/variable-correspondence"
+>;
+export function createVueI18nVariableCorrespondenceChecker<
   TUnit extends TranslationUnitInput,
   TTranslation,
   TBody,
   TUnavailable = never,
-  TId extends string = string,
+  const TId extends string = string,
 >(
   options: VueI18nVariableCorrespondenceCheckerOptions<
     TUnit,
@@ -65,23 +79,45 @@ export function createVueI18nVariableCorrespondenceChecker<
     TBody,
     TUnavailable,
     TId
-  > = { id: "vue-i18n/variable-correspondence" as TId },
+  >,
+): QualityCheckDefinition<
+  TUnit,
+  TTranslation,
+  QualityObject,
+  TBody,
+  TUnavailable,
+  TId
+>;
+export function createVueI18nVariableCorrespondenceChecker<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable = never,
+  TId extends string = string,
+>(
+  options?: VueI18nVariableCorrespondenceCheckerOptions<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable,
+    TId
+  >,
 ) {
-  assertVueI18nPreparer(options.prepare);
+  assertVueI18nPreparer(options?.prepare);
   return defineChecker.withTypes<TUnit, TTranslation, TBody, TUnavailable>()({
-    id: options.id,
+    id: options?.id ?? "vue-i18n/variable-correspondence",
     version: `checks.vue-i18n/variable-correspondence/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
     inputSchema: vueI18nMessageProjectionSchema,
     load: async ({ facts, memo, qualityData }) =>
-      options.loadLanguages
+      options?.loadLanguages
         ? readVueI18nLanguagePolicies(
-            await qualityData.read(options.loadLanguages, facts, memo),
+            await qualityData.read(options?.loadLanguages, facts, memo),
           )
         : null,
     prepare: async (input) => {
       if (input.loaded !== null && !input.loaded.has(input.candidate.language))
         return { status: "not-applicable" };
-      const prepared = await prepareVueI18nMessage(input, options.prepare);
+      const prepared = await prepareVueI18nMessage(input, options?.prepare);
       if (prepared.status !== "ready") return prepared;
       const projection = prepared.input;
       if (projection.target.status === "missing")

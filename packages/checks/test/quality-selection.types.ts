@@ -12,6 +12,9 @@ import {
   createNumberChecker,
   createTermChecker,
   createVueI18nChecks,
+  createVueI18nSourceSyntaxChecker,
+  createVueI18nTargetSyntaxChecker,
+  createVueI18nVariableCorrespondenceChecker,
   type VueI18nChecksOptions,
   type VueI18nMessageProjection,
 } from "../src/index.ts";
@@ -290,3 +293,95 @@ function vueConfigWithInvalidGroup(): FrameworkConfig<
   });
 }
 void vueConfigWithInvalidGroup;
+
+const defaultSourceId: "vue-i18n/source-syntax" =
+  createVueI18nSourceSyntaxChecker().id;
+const defaultTargetId: "vue-i18n/target-syntax" =
+  createVueI18nTargetSyntaxChecker().id;
+const defaultVariableId: "vue-i18n/variable-correspondence" =
+  createVueI18nVariableCorrespondenceChecker().id;
+const customSourceId: "custom-source" = createVueI18nSourceSyntaxChecker({
+  id: "custom-source",
+}).id;
+const customTargetId: "custom-target" = createVueI18nTargetSyntaxChecker({
+  id: "custom-target",
+}).id;
+const customVariableId: "custom-variable" =
+  createVueI18nVariableCorrespondenceChecker({ id: "custom-variable" }).id;
+const typedSourceId: "vue-i18n/source-syntax" =
+  createVueI18nSourceSyntaxChecker<Unit, Translation, Body>().id;
+const typedTargetId: "vue-i18n/target-syntax" =
+  createVueI18nTargetSyntaxChecker<Unit, Translation, Body>().id;
+const typedVariableId: "vue-i18n/variable-correspondence" =
+  createVueI18nVariableCorrespondenceChecker<Unit, Translation, Body>().id;
+const explicitTargetId: "target-foo" = createVueI18nTargetSyntaxChecker<
+  Unit,
+  Translation,
+  Body,
+  never,
+  "target-foo"
+>({ id: "target-foo" }).id;
+const explicitVariableId: "variable-foo" =
+  createVueI18nVariableCorrespondenceChecker<
+    Unit,
+    Translation,
+    Body,
+    never,
+    "variable-foo"
+  >({ id: "variable-foo" }).id;
+void [typedTargetId, typedVariableId, explicitTargetId, explicitVariableId];
+const explicitCustomId: "foo" = createVueI18nSourceSyntaxChecker<
+  Unit,
+  Translation,
+  Body,
+  never,
+  "foo"
+>({ id: "foo" }).id;
+void [
+  defaultSourceId,
+  defaultTargetId,
+  defaultVariableId,
+  customSourceId,
+  customTargetId,
+  customVariableId,
+  typedSourceId,
+  explicitCustomId,
+];
+
+// @ts-expect-error 自定义 ID 必须显式提供，不能把默认 ID 声称为 foo。
+createVueI18nSourceSyntaxChecker<Unit, Translation, Body, never, "foo">();
+// @ts-expect-error 目标语法自定义 ID 不能省略参数。
+createVueI18nTargetSyntaxChecker<Unit, Translation, Body, never, "foo">();
+// @ts-expect-error 变量检查自定义 ID 不能省略参数。
+createVueI18nVariableCorrespondenceChecker<
+  Unit,
+  Translation,
+  Body,
+  never,
+  "foo"
+>();
+// @ts-expect-error 显式选项必须提供 ID。
+createVueI18nSourceSyntaxChecker({});
+// @ts-expect-error 显式目标语法选项必须提供 ID。
+createVueI18nTargetSyntaxChecker({});
+// @ts-expect-error 显式变量检查选项必须提供 ID。
+createVueI18nVariableCorrespondenceChecker({});
+createVueI18nSourceSyntaxChecker<Unit, Translation, Body, never, "foo">({
+  // @ts-expect-error 显式 ID 必须与泛型中的身份一致。
+  id: "bar",
+});
+
+createVueI18nTargetSyntaxChecker<Unit, Translation, Body, never, "foo">({
+  // @ts-expect-error 目标语法的显式 ID 必须与泛型一致。
+  id: "bar",
+});
+createVueI18nVariableCorrespondenceChecker<
+  Unit,
+  Translation,
+  Body,
+  never,
+  "foo"
+>({
+  // @ts-expect-error 变量检查的显式 ID 必须与泛型一致。
+  id: "bar",
+});
