@@ -128,12 +128,102 @@ export function memoizedVueI18nProjection<
   TBody,
   TUnavailable,
 >(
-  input: QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
+  input:
+    | QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>
+    | VueI18nPrepareInput<TUnit, TTranslation, TBody, TUnavailable>,
   projector: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>,
 ): VueI18nMessageProjection | Promise<VueI18nMessageProjection> {
-  const { configuration: _configuration, ...projectionInput } = input;
+  const { configuration: _configuration, ...projectionInput } = {
+    configuration: undefined,
+    ...input,
+  };
   const memoized = input.memo.memo(projector, {
     key: projectionKey,
   });
   return memoized(projectionInput);
+}
+
+/** 准备适配保留原始源译单元，但不暴露检查专属加载资料。 */
+export type VueI18nPrepareInput<
+  TUnit extends TranslationUnitInput = TranslationUnitInput,
+  TTranslation = unknown,
+  TBody = unknown,
+  TUnavailable = never,
+> = Omit<
+  import("@lioni/core").CheckerPrepareInput<
+    TUnit,
+    TTranslation,
+    TBody,
+    TUnavailable,
+    unknown
+  >,
+  "loaded"
+>;
+
+export type VueI18nPreparer<
+  TUnit extends TranslationUnitInput = TranslationUnitInput,
+  TTranslation = unknown,
+  TBody = unknown,
+  TUnavailable = never,
+> = (
+  input: VueI18nPrepareInput<TUnit, TTranslation, TBody, TUnavailable>,
+) => import("@lioni/core").Awaitable<
+  import("@lioni/core").CheckerPreparation<VueI18nMessageProjection>
+>;
+
+/** 默认只提取字符串；各项检查自行判断所需一侧的正文可用性。 */
+export function prepareVueI18nMessage<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  input: VueI18nPrepareInput<TUnit, TTranslation, TBody, TUnavailable>,
+  adapter?: VueI18nPreparer<TUnit, TTranslation, TBody, TUnavailable>,
+): import("@lioni/core").Awaitable<
+  import("@lioni/core").CheckerPreparation<VueI18nMessageProjection>
+> {
+  if (adapter) {
+    const { loaded: _loaded, ...context } = input as typeof input & {
+      readonly loaded?: unknown;
+    };
+    return input.memo.memo(adapter, { key: projectionKey })(context);
+  }
+  const source = input.sourceUnit.unit.source;
+  return {
+    status: "ready",
+    input: {
+      key: input.candidate.sourceKey,
+      language: input.candidate.language,
+      source:
+        input.sourceUnit.bodyAvailability === "available" &&
+        typeof source === "string"
+          ? { status: "available", text: source }
+          : { status: "unavailable" },
+      target:
+        typeof input.candidate.content === "string"
+          ? { status: "available", text: input.candidate.content }
+          : { status: "unavailable" },
+      locations: {
+        source: {
+          language: null,
+          key: input.candidate.sourceKey,
+          range:
+            input.facts.source.read.scopes[input.sourceUnit.scopeIndex]
+              ?.range ?? null,
+        },
+        target: {
+          language: input.candidate.language,
+          key: input.candidate.sourceKey,
+          range: input.translation?.range ?? null,
+        },
+      },
+    },
+  };
+}
+
+/** 普通参数在装配时校验，检查项筛选不能推迟这些错误。 */
+export function assertVueI18nPreparer(adapter: unknown): void {
+  if (adapter !== undefined && typeof adapter !== "function")
+    throw new TypeError("Vue I18n 准备适配必须是函数。");
 }

@@ -8,13 +8,12 @@ import type { QuantityOptions, QuantityProfile } from "@lioni/text-analysis";
 
 import { compareProtectedLiterals } from "../../protected-literals.ts";
 import { compareQuantityBranches } from "../../quantities.ts";
-import { memoizedVueI18nMessage } from "../message-memo.ts";
+import type { VueI18nPreparer } from "../quality-projection.ts";
 import type {
   VueI18nDataReader,
   VueI18nCheckIdentity,
   VueI18nMessageProjection,
   VueI18nPolicyData,
-  VueI18nProjector,
   VueI18nQuantityPolicy,
 } from "../quality-types.ts";
 import {
@@ -25,7 +24,10 @@ import type {
   VueI18nMessage,
   VueI18nMessageBranch,
 } from "../vue-i18n-messages.ts";
-import { VUE_I18N_MESSAGE_COMPILER_VERSION } from "../vue-i18n-messages.ts";
+import {
+  parseVueI18nMessage,
+  VUE_I18N_MESSAGE_COMPILER_VERSION,
+} from "../vue-i18n-messages.ts";
 import {
   completeOutcome,
   createVueI18nMessageCheck,
@@ -43,8 +45,8 @@ export function createProtectedLiteralCheck<
   TUnavailable = never,
   TId extends string = string,
 >(options: {
-  readonly identity: VueI18nCheckIdentity<TId>;
-  readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
+  readonly identity: Pick<VueI18nCheckIdentity<TId>, "id">;
+  readonly prepare?: VueI18nPreparer<TUnit, TTranslation, TBody, TUnavailable>;
   readonly loadPolicies: VueI18nDataReader<
     TUnit,
     TTranslation,
@@ -53,16 +55,14 @@ export function createProtectedLiteralCheck<
     readonly VueI18nPolicyData[]
   >;
 }) {
-  const hostVersion = options.identity.hostVersion;
   const version = [
     "vue-i18n-suite/protected-literals/v2",
     VUE_I18N_PROTECTED_LITERAL_COMPARISON_VERSION,
-    ...(hostVersion ? [hostVersion] : []),
   ].join("+");
   return createVueI18nMessageCheck({
     id: options.identity.id,
     version,
-    project: options.project,
+    adapter: options.prepare,
     loadPolicies: options.loadPolicies,
     policyRequirements: ["protectedLiterals"],
     requiresSource: true,
@@ -75,8 +75,7 @@ export function createProtectedLiteralCheck<
       Object.hasOwn(policy.protectedLiterals, projection.key)
         ? policy.protectedLiterals[projection.key]!
         : [],
-    check: (input, _policy, literals) =>
-      evaluateProtectedLiterals(input.projected, literals),
+    check: (input, literals) => evaluateProtectedLiterals(input, literals),
   });
 }
 
@@ -87,8 +86,8 @@ export function createQuantityCheck<
   TUnavailable = never,
   TId extends string = string,
 >(options: {
-  readonly identity: VueI18nCheckIdentity<TId>;
-  readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
+  readonly identity: Pick<VueI18nCheckIdentity<TId>, "id">;
+  readonly prepare?: VueI18nPreparer<TUnit, TTranslation, TBody, TUnavailable>;
   readonly loadPolicies: VueI18nDataReader<
     TUnit,
     TTranslation,
@@ -97,17 +96,15 @@ export function createQuantityCheck<
     readonly VueI18nPolicyData[]
   >;
 }) {
-  const hostVersion = options.identity.hostVersion;
   const version = [
     "vue-i18n-suite/quantities/v2",
     `@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
     VUE_I18N_QUANTITY_COMPARISON_VERSION,
-    ...(hostVersion ? [hostVersion] : []),
   ].join("+");
   return createVueI18nMessageCheck({
     id: options.identity.id,
     version,
-    project: options.project,
+    adapter: options.prepare,
     loadPolicies: options.loadPolicies,
     policyRequirements: ["quantities"],
     requiresSource: true,
@@ -127,8 +124,7 @@ export function createQuantityCheck<
         },
       },
     }),
-    check: (input, _policy, prepared) =>
-      evaluateQuantities(input.projected, prepared, input.memo),
+    check: (input, prepared) => evaluateQuantities(input, prepared),
   });
 }
 
@@ -194,7 +190,6 @@ function evaluateQuantities(
       readonly target: QuantityOptions & { readonly profile: string | null };
     };
   },
-  memo: import("@lioni/memo").MemoScope,
 ): QualityCheckOutcome {
   if (
     projection.source.status !== "available" ||
@@ -231,8 +226,8 @@ function evaluateQuantities(
       ),
     ]);
 
-  const source = memoizedVueI18nMessage(projection.source.text, memo);
-  const target = memoizedVueI18nMessage(projection.target.text, memo);
+  const source = parseVueI18nMessage(projection.source.text);
+  const target = parseVueI18nMessage(projection.target.text);
   if (source.errors.length > 0 || target.errors.length > 0)
     return incompleteOutcome([
       issue(

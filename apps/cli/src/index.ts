@@ -316,3 +316,11 @@ export type {
   QualityProfileCandidateStatus,
   QualityProfileCache,
 } from "@lioni/core";
+
+export {
+  prepareVueI18nMessage,
+  createVueI18nSourceSyntaxChecker,
+  createVueI18nTargetSyntaxChecker,
+  createVueI18nVariableCorrespondenceChecker,
+} from "@lioni/checks";
+export type { VueI18nPrepareInput, VueI18nPreparer } from "@lioni/checks";

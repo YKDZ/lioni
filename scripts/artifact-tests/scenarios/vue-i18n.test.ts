@@ -11,6 +11,7 @@ testArtifactConsumer(
   },
   async ({ root, typecheck, runNode, runProcess }) => {
     await typecheck();
+    await runNode("basic-consumer.ts");
     await runNode("families-consumer.ts");
     await runNode("selection-consumer.ts");
     const sdk = await runNode("consumer.ts");
