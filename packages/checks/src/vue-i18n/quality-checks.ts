@@ -14,7 +14,8 @@ import {
   createVueI18nMessageFamilyCheck,
   createVueI18nTerminologyChecks,
 } from "./checks/terminology-families.ts";
-import { missingVueI18nData } from "./dependencies.ts";
+import { assertVueI18nCallback, missingVueI18nData } from "./dependencies.ts";
+import { assertVueI18nPreparer } from "./quality-projection.ts";
 import type { VueI18nChecksOptions } from "./quality-types.ts";
 import type {
   VueI18nLanguagePolicy,
@@ -33,6 +34,12 @@ export function createVueI18nChecks<
   TBody,
   TUnavailable = never,
 >(options: VueI18nChecksOptions<TUnit, TTranslation, TBody, TUnavailable>) {
+  assertVueI18nPreparer(options.prepare);
+  assertVueI18nCallback(options.loadLanguages, "loadLanguages");
+  assertVueI18nCallback(options.loadPolicies, "loadPolicies");
+  assertVueI18nCallback(options.loadTerms, "loadTerms");
+  if (typeof options.reference !== "function")
+    throw new TypeError("Vue I18n reference 必须是函数。");
   const loadLanguages =
     options.loadLanguages ??
     missingVueI18nData<readonly VueI18nLanguagePolicy[]>(

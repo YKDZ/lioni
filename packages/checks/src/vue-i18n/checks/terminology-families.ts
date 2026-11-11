@@ -22,7 +22,10 @@ import {
   readVueI18nLanguagePolicies,
 } from "../dependencies.ts";
 import { memoizedVueI18nMessage } from "../message-memo.ts";
-import { prepareVueI18nMessage } from "../quality-projection.ts";
+import {
+  assertVueI18nMessageProjection,
+  prepareVueI18nMessage,
+} from "../quality-projection.ts";
 import type {
   VueI18nCheckIdentity,
   VueI18nDataReader,
@@ -281,6 +284,7 @@ function familyInput(
   projection: VueI18nMessageProjection,
   policies: ReadonlyMap<string, VueI18nPolicy>,
 ): MessageFamilyInput {
+  assertVueI18nMessageProjection(projection);
   const location = projection.locations.target;
   const policy = policies.get(projection.language);
   if (policy === undefined)

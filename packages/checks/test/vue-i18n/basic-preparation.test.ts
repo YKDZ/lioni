@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createVueI18nTargetSyntaxChecker } from "@lioni/checks";
+import {
+  createVueI18nChecks,
+  createVueI18nSourceSyntaxChecker,
+  createVueI18nTargetSyntaxChecker,
+  createVueI18nVariableCorrespondenceChecker,
+} from "@lioni/checks";
 import { analyzeQuality, defineConfig } from "@lioni/core";
 import { z } from "zod";
 
@@ -148,4 +153,74 @@ void test("Vue 工厂在装配时拒绝无效准备适配", () => {
       }),
     /准备适配/u,
   );
+});
+
+void test("Vue 基础工厂立即拒绝无效语言读取器且不在装配时读取", () => {
+  for (const create of [
+    createVueI18nSourceSyntaxChecker,
+    createVueI18nTargetSyntaxChecker,
+    createVueI18nVariableCorrespondenceChecker,
+  ]) {
+    for (const value of [42, false, null])
+      assert.throws(
+        () => create({ id: "syntax", loadLanguages: value as never }),
+        /loadLanguages/u,
+      );
+    let reads = 0;
+    create({
+      id: "syntax",
+      loadLanguages: () => {
+        reads++;
+        return [];
+      },
+    });
+    assert.equal(reads, 0);
+  }
+});
+
+void test("完整 Vue 工厂立即验证全部回调且保留按需读取", () => {
+  for (const name of [
+    "prepare",
+    "loadLanguages",
+    "loadPolicies",
+    "loadTerms",
+    "reference",
+  ] as const) {
+    for (const value of [42, false, null])
+      assert.throws(
+        () =>
+          createVueI18nChecks({
+            reference: () => {
+              throw new Error("装配时不应读取参照");
+            },
+            [name]: value,
+          } as never),
+        TypeError,
+      );
+  }
+  let reads = 0;
+  const checks = createVueI18nChecks({
+    prepare: () => {
+      reads++;
+      return { status: "not-applicable" };
+    },
+    reference: () => {
+      reads++;
+      throw new Error("装配时不应读取参照");
+    },
+    loadLanguages: () => {
+      reads++;
+      return [];
+    },
+    loadPolicies: () => {
+      reads++;
+      return [];
+    },
+    loadTerms: () => {
+      reads++;
+      return { concepts: [] };
+    },
+  });
+  assert.equal(checks.length, 10);
+  assert.equal(reads, 0);
 });

@@ -3,6 +3,7 @@ import type {
   StandardSchemaV1,
   TranslationUnitInput,
 } from "@lioni/core";
+import { assertJsonValue, StandardSchemaContractError } from "@lioni/core";
 import { z } from "zod";
 
 const sourceMessageSchema = z.discriminatedUnion("status", [
@@ -145,6 +146,18 @@ export function prepareVueI18nMessage<
         context,
       );
       if (
+        prepared === null ||
+        typeof prepared !== "object" ||
+        Array.isArray(prepared)
+      )
+        throw new StandardSchemaContractError(
+          "Vue I18n 准备结果",
+          "schema-mismatch",
+          "Vue I18n prepare 返回了无效结果。",
+        );
+      if (prepared.status === "ready")
+        assertVueI18nMessageProjection(prepared.input);
+      if (
         prepared.status === "ready" &&
         (prepared.input.key !== input.candidate.sourceKey ||
           prepared.input.language !== input.candidate.language)
@@ -196,4 +209,24 @@ export function prepareVueI18nMessage<
 export function assertVueI18nPreparer(adapter: unknown): void {
   if (adapter !== undefined && typeof adapter !== "function")
     throw new TypeError("Vue I18n 准备适配必须是函数。");
+}
+
+/** 消费投影字段前验证宿主返回值，避免提前解引用掩盖契约错误。 */
+export function assertVueI18nMessageProjection(
+  value: unknown,
+): asserts value is VueI18nMessageProjection {
+  assertJsonValue(value, "Vue I18n 消息投影");
+  const result = projectionShape.safeParse(value);
+  if (!result.success)
+    throw new StandardSchemaContractError(
+      "Vue I18n 消息投影",
+      "schema-mismatch",
+      "Vue I18n 消息投影格式无效。",
+      result.error.issues.map((issue) => ({
+        message: issue.message,
+        path: issue.path.map((key) =>
+          typeof key === "symbol" ? String(key) : key,
+        ),
+      })),
+    );
 }

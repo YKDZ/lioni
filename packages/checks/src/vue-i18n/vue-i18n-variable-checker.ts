@@ -8,7 +8,10 @@ import type {
 } from "@lioni/core";
 import { defineChecker } from "@lioni/core";
 
-import { readVueI18nLanguagePolicies } from "./dependencies.ts";
+import {
+  assertVueI18nCallback,
+  readVueI18nLanguagePolicies,
+} from "./dependencies.ts";
 import {
   prepareVueI18nMessage,
   assertVueI18nPreparer,
@@ -104,6 +107,7 @@ export function createVueI18nVariableCorrespondenceChecker<
   >,
 ) {
   assertVueI18nPreparer(options?.prepare);
+  assertVueI18nCallback(options?.loadLanguages, "loadLanguages");
   return defineChecker.withTypes<TUnit, TTranslation, TBody, TUnavailable>()({
     id: options?.id ?? "vue-i18n/variable-correspondence",
     version: `checks.vue-i18n/variable-correspondence/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,

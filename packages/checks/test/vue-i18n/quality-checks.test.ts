@@ -1504,3 +1504,77 @@ void test("消息族只随实际采用的目标等价变化重新判断", async 
   assert.equal(related.exceptionApplicability[0]?.status, "basis-changed");
   assert.deepEqual(findings(related, checkIds.messageFamilyConsistency), []);
 });
+
+void test("Vue 准备适配先验证返回结构与投影，普通 TypeError 保留失败报告", async () => {
+  const policies = [policyFor({ sourceMessages: { label: "Hello" } })];
+  const selectedIds = [
+    checkIds.sourceSyntax,
+    checkIds.targetSyntax,
+    checkIds.variableCorrespondence,
+    checkIds.linkTargetExists,
+    checkIds.linkCycle,
+    checkIds.protectedLiterals,
+    checkIds.quantities,
+    checkIds.allowedTerminology,
+    checkIds.forbiddenTerminology,
+    checkIds.messageFamilyConsistency,
+  ];
+  for (const checkId of selectedIds) {
+    for (const invalid of [
+      null,
+      { status: "ready", input: { key: "label", language: "zh-CN" } },
+    ]) {
+      const fixture = createQualityFixture({
+        policies,
+        prepare: () => invalid as never,
+      });
+      await assert.rejects(
+        fixture.run([candidate("label", "你好")], [checkId]),
+        StandardSchemaContractError,
+      );
+    }
+    const fixture = createQualityFixture({
+      policies,
+      prepare: () => {
+        throw new TypeError("宿主消息提取失败");
+      },
+    });
+    const failed = await fixture.run([candidate("label", "你好")], [checkId]);
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.checks[0]?.issues[0]?.message, "宿主消息提取失败");
+  }
+});
+
+void test("Vue 消息族参照投影的非法返回中止运行，宿主普通 TypeError 只使检查失败", async () => {
+  const policies = [
+    policyFor({
+      sourceMessages: { editing: "Hello", saved: "Hello" },
+      targetMessages: { saved: "你好" },
+    }),
+  ];
+  for (const invalid of [null, { key: "saved", language: "zh-CN" }]) {
+    const fixture = createQualityFixture({
+      policies,
+      reference: () => invalid as never,
+    });
+    await assert.rejects(
+      fixture.run(
+        [candidate("editing", "你好")],
+        [checkIds.messageFamilyConsistency],
+      ),
+      StandardSchemaContractError,
+    );
+  }
+  const fixture = createQualityFixture({
+    policies,
+    reference: () => {
+      throw new TypeError("宿主参照提取失败");
+    },
+  });
+  const failed = await fixture.run(
+    [candidate("editing", "你好")],
+    [checkIds.messageFamilyConsistency],
+  );
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.checks[0]?.issues[0]?.message, "宿主参照提取失败");
+});
