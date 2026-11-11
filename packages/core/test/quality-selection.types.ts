@@ -66,9 +66,9 @@ const checker = defineChecker.withTypes<Unit, Translation, Body, Unavailable>()(
       const minimum: number = input.minimum;
       void candidateText;
       void minimum;
-      // @ts-expect-error The checker only receives its validated business input.
+      // @ts-expect-error 检查器只接收已验证的业务输入。
       void input.candidate;
-      // @ts-expect-error Candidate body retains the host declaration type.
+      // @ts-expect-error 候选正文保留宿主声明的类型。
       const invalidBody: string = input.candidateText;
       void invalidBody;
       return completeOutcome();
@@ -124,9 +124,9 @@ function verifySelectionTypes() {
   void analyzeQuality(config, { groups: ["daily"] });
   void analyzeQuality(config, { checkIds: ["custom/explicit"] });
 
-  // @ts-expect-error SDK consumers receive the exact configured checker IDs.
+  // @ts-expect-error SDK 消费者获得配置中的精确检查项 ID。
   void analyzeQuality(config, { checkIds: ["custom/explict"] });
-  // @ts-expect-error SDK consumers receive the configured group-name union.
+  // @ts-expect-error SDK 消费者获得配置中的分组名联合类型。
   void analyzeQuality(config, { groups: ["nightly"] });
 }
 void verifySelectionTypes;
@@ -157,7 +157,7 @@ defineConfig.withTypes<
   source: { schema: wideSourceSchema, read: () => ({ scopes: [] }) },
   keyOf: (unit) => unit.source,
   quality: {
-    // @ts-expect-error A checker that needs context cannot run on a host without it.
+    // @ts-expect-error 需要上下文的检查器不能在缺少该上下文的宿主中运行。
     checks: [narrowChecker],
   },
 });

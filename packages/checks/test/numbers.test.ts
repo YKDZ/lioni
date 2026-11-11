@@ -5,6 +5,7 @@ import {
   analyzeQuality,
   createQualityException,
   defineConfig,
+  QualityCheckerContractError,
   type BodyAvailability,
   type JsonValue,
   type SemanticEditCandidate,
@@ -634,4 +635,31 @@ void describe("数字检查的显式依据", () => {
       "basis-changed",
     );
   });
+});
+
+void it("数字准备适配的非法返回中止运行，适配器普通 TypeError 保留失败报告", async () => {
+  const config = configFor("Save 1", "保存 1");
+  await assert.rejects(
+    analyzeQuality({
+      ...config,
+      quality: {
+        checks: [createNumberChecker({ prepare: () => null as never })],
+      },
+    }),
+    QualityCheckerContractError,
+  );
+  const failed = await analyzeQuality({
+    ...config,
+    quality: {
+      checks: [
+        createNumberChecker({
+          prepare: () => {
+            throw new TypeError("宿主提取失败");
+          },
+        }),
+      ],
+    },
+  });
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.checks[0]?.issues[0]?.message, "宿主提取失败");
 });

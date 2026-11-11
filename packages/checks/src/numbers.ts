@@ -1,5 +1,6 @@
 import {
   defineChecker,
+  QualityCheckerContractError,
   type Awaitable,
   type CheckerPrepareInput,
   type QualityCheckDefinition,
@@ -101,6 +102,16 @@ function createNumberCheckerImplementation<
             ? defaultNumberPreparation(input)
             : sourceUnavailablePreparation()
           : await options.prepare(input);
+      if (
+        preparation === null ||
+        typeof preparation !== "object" ||
+        Array.isArray(preparation)
+      )
+        throw new QualityCheckerContractError(
+          "number-correspondence",
+          "prepare",
+          "的 prepare 返回了无效结果。",
+        );
       if (preparation.status !== "ready") return preparation;
       if (input.sourceUnit.bodyAvailability !== "available")
         return sourceUnavailablePreparation();

@@ -17,6 +17,12 @@ export type ResolvedVueI18nPolicies = {
   >;
 };
 
+/** 回调形状属于装配契约，读取资料仍留到 load 阶段。 */
+export function assertVueI18nCallback(value: unknown, name: string): void {
+  if (value !== undefined && typeof value !== "function")
+    throw new TypeError(`Vue I18n ${name} 必须是函数。`);
+}
+
 /** 将缺少必需读取器报告为宿主契约错误，且只在依赖它的检查项被选中时触发。 */
 export function missingVueI18nData<TValue>(description: string): () => TValue {
   return () => {

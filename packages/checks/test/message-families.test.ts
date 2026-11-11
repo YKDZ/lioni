@@ -16,12 +16,15 @@ import {
   analyzeQuality,
   createQualityException,
   defineConfig,
+  readFacts,
+  runQualityChecks,
   type CheckerPrepareInput,
   type SourceUnitFact,
   type QualityDataLoadInput,
   type QualityException,
   type QualityExceptionStore,
   StandardSchemaContractError,
+  QualityCheckerContractError,
   type QualityCheckResultCache,
 } from "@lioni/core";
 import { createMemoScope } from "@lioni/memo";
@@ -1500,4 +1503,93 @@ void test("已知其他族的目标缺口保持局部，归属未知的缺口限
     assert.equal(result.status, unknown ? "incomplete" : "complete");
     assert.equal(result.diagnostics.length, 1);
   }
+});
+
+void test("相同事实与检查器的重叠运行分别固定参照结果与失败", async () => {
+  const paused = Promise.withResolvers<void>();
+  const resume = Promise.withResolvers<void>();
+  let run = 0;
+  const projection: MessageFamilyInput = {
+    groups: [
+      {
+        ref: "message",
+        scope: "ui",
+        source: {
+          language: "en",
+          fragments: [{ ref: "source", text: "Save" }],
+        },
+        target: {
+          language: "zh",
+          fragments: [{ ref: "target", text: "保存" }],
+        },
+      },
+    ],
+  };
+  const checker = createMessageFamilyChecker<
+    Unit,
+    Translation,
+    string,
+    never,
+    number
+  >({
+    load: () => ++run,
+    prepare: async ({ loaded }) => {
+      if (loaded === 1) {
+        paused.resolve();
+        await resume.promise;
+      }
+      return { status: "ready", input: projection };
+    },
+    reference: (_reference, { loaded }) => {
+      if (loaded === 2) throw new Error("只有运行 B 的参照出错");
+      return projection;
+    },
+  });
+  const facts = await readFacts(
+    configFor(
+      [
+        { id: "editing", source: "Save" },
+        { id: "saved", source: "Save" },
+      ],
+      [{ id: "saved", text: "保存" }],
+      checker,
+    ),
+  );
+  const request = {
+    candidates: [{ sourceKey: "editing", language: "zh", content: "保存" }],
+  };
+  const first = runQualityChecks(facts, request, [checker]);
+  await paused.promise;
+  let second: Awaited<typeof first>;
+  try {
+    second = await runQualityChecks(facts, request, [checker]);
+  } finally {
+    resume.resolve();
+  }
+  assert.equal((await first).status, "complete");
+  assert.equal(second.status, "failed");
+  assert.equal(second.checks[0]?.issues[0]?.message, "只有运行 B 的参照出错");
+});
+
+void test("消息族准备适配的非法返回中止运行，适配器普通 TypeError 保留失败报告", async () => {
+  const run = (prepare: () => never) =>
+    analyzeQuality(
+      configFor(
+        [{ id: "editing", source: "Save" }],
+        [{ id: "editing", text: "保存" }],
+        createMessageFamilyChecker<Unit, Translation, string, never>({
+          prepare,
+          reference: () => ({ groups: [] }),
+        }),
+      ),
+    );
+  await assert.rejects(
+    run(() => null as never),
+    QualityCheckerContractError,
+  );
+  const failed = await run(() => {
+    throw new TypeError("宿主投影失败");
+  });
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.checks[0]?.issues[0]?.message, "宿主投影失败");
 });

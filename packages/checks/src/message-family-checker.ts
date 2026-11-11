@@ -17,6 +17,7 @@ import type {
 import {
   assertJsonValue,
   defineChecker,
+  QualityCheckerContractError,
   StandardSchemaContractError,
 } from "@lioni/core";
 import type { MemoScope } from "@lioni/memo";
@@ -446,15 +447,16 @@ function messageFamilyChecker<
     };
   }
 
-  const preparedRecords = new WeakMap<
+  type PreparedRecords = WeakMap<
     TranslationAssociationFact,
     Map<
       ActualTranslationFact<TTranslation, TBody, TUnavailable>,
       | Awaited<ReturnType<typeof projectSavedReference>>
       | { readonly error: unknown }
     >
-  >();
+  >;
   async function prepareSavedReference(
+    records: PreparedRecords,
     reference: MessageFamilyReferenceProjection<
       TUnit,
       TTranslation,
@@ -462,7 +464,7 @@ function messageFamilyChecker<
       TUnavailable
     >,
   ) {
-    const prepared = preparedRecords
+    const prepared = records
       .get(reference.association)
       ?.get(reference.translation);
     if (prepared === undefined)
@@ -485,6 +487,7 @@ function messageFamilyChecker<
     associations: readonly TranslationAssociationFact[],
     sourceByKey: ReadonlyMap<string, SourceUnitFact<TUnit>>,
     readEvidence: boolean,
+    records: PreparedRecords,
   ): Promise<ReferenceEvidence> {
     const facts = input.facts;
     const issues: MessageFamilyIssue[] = [];
@@ -582,7 +585,7 @@ function messageFamilyChecker<
           knownFamilies = false;
           continue;
         }
-        const prepared = await prepareSavedReference({
+        const prepared = await prepareSavedReference(records, {
           kind: "reference",
           sourceUnit,
           sourceKey,
@@ -663,6 +666,8 @@ function messageFamilyChecker<
     >,
     language: string,
   ) {
+    // 目录与准备结果属于本次 load，重叠运行不能按同一事实对象互相覆盖。
+    const preparedRecords: PreparedRecords = new WeakMap();
     const facts = input.facts;
     const sourceByKey = new Map(
       facts.source.units.map((unit) => [unit.key, unit]),
@@ -678,6 +683,7 @@ function messageFamilyChecker<
       [],
       sourceByKey,
       true,
+      preparedRecords,
     );
     const byFamily = new Map<string, Set<TranslationAssociationFact>>();
     const unknown = new Set<TranslationAssociationFact>();
@@ -807,6 +813,7 @@ function messageFamilyChecker<
         [...relevant],
         sourceByKey,
         false,
+        preparedRecords,
       );
       return {
         references: [...familyKeys]
@@ -843,6 +850,16 @@ function messageFamilyChecker<
         ...input,
         loaded: input.loaded.loaded,
       });
+      if (
+        preparation === null ||
+        typeof preparation !== "object" ||
+        Array.isArray(preparation)
+      )
+        throw new QualityCheckerContractError(
+          checkId,
+          "prepare",
+          "的 prepare 返回了无效结果。",
+        );
       if (preparation.status !== "ready") return preparation;
       const { sourceKey, language } = input.candidate;
       const projected = validateProjection(
