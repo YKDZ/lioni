@@ -5,6 +5,7 @@ import {
   defineChecker,
   defineConfig,
   readFacts,
+  type QualityCheckOutcome,
   type StandardSchemaV1,
 } from "@lioni/lioni";
 import { z } from "zod";
@@ -85,7 +86,7 @@ const checker = defineChecker.withTypes<Unit, Unit, string>()({
       },
     };
   },
-  check({ key, language, file, text, expected }) {
+  check({ key, language, file, text, expected }): QualityCheckOutcome {
     return {
       status: "complete",
       diagnostics:

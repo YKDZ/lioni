@@ -9,6 +9,7 @@ import {
   StandardSchemaContractError,
   writeTranslationRequests,
   type JsonValue,
+  type QualityCheckOutcome,
   type QualityExceptionStore,
   type TranslationWriteRequest,
 } from "../src/index.ts";
@@ -99,7 +100,7 @@ function diagnosedEditScenario() {
               language: candidate.language,
             },
           }),
-          check: ({ sourceKey, language }) => ({
+          check: ({ sourceKey, language }): QualityCheckOutcome => ({
             status: "complete",
             diagnostics: [
               {

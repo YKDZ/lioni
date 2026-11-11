@@ -214,7 +214,7 @@ void test("例外豁免匹配执行的全部诊断并保留证据", async () => 
       status: "ready",
       input: candidate.content,
     }),
-    check() {
+    check(): QualityCheckOutcome {
       return { ...complete, diagnostics: [sourceDiagnostic, targetDiagnostic] };
     },
   });
@@ -231,7 +231,7 @@ void test("例外豁免匹配执行的全部诊断并保留证据", async () => 
       status: "ready",
       input: candidate.content,
     }),
-    check() {
+    check(): QualityCheckOutcome {
       return {
         ...complete,
         diagnostics: [{ ...sourceDiagnostic, message: "独立检查仍需复核。" }],
