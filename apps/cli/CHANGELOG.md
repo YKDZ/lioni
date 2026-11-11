@@ -6,6 +6,8 @@
 - 比较基线与更新计划格式升级为 v2，旧格式不再读取；接入迁移后需重新记录比较基线并生成更新计划。
 - 运行环境要求升级为 Node.js `^26.13.0`，不再支持 Node.js 24。
 - 更新命令行契约、Vue-i18n 消息编译器和构建工具；编译器版本变化同步参与检查依据，旧检查结果缓存按新依据重新计算，QA 例外继续按既有规则判断适用性。
+- 自定义 QA 检查项统一使用 `defineChecker` 的 `load`、逐候选 `prepare` 和最终输入 `check`；移除 `defineQualityCheck`、`bindQualityCheck`、独立 `select`/`project`、配置 schema、`fingerprintInput` 和 `loadDependencies`。普通工厂参数在构造时校验，影响判断的值须进入最终输入；内置检查不再要求宿主维护 `hostVersion`。候选通过 `analyzeQuality` 的 `candidates` 选项或默认候选规则提供，不再由 `quality.buildCandidates` 生成。
+- QA 指纹与例外摘要采用 v2。旧检查结果缓存按新输入指纹重算；旧例外文件保留且不自动换算或重绑。需要保留的例外应先保留并移开旧文件，再依据新 QA 报告重新建立。
 
 ## 0.2.3
 

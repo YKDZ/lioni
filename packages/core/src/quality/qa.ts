@@ -16,11 +16,9 @@ import { isRecord } from "../object-guards.ts";
 import type { JsonValue, SemanticEditCandidate } from "../semantic-edits.ts";
 import { stableStringifyJson } from "../stable-json.ts";
 import {
-  assertJsonValue,
   freezeJsonValue,
   isStandardSchema,
   snapshotJsonValue,
-  snapshotJsonValuePreservingShared,
   StandardSchemaContractError,
   validateWithStandardSchema,
 } from "../standard-schema.ts";
@@ -188,10 +186,6 @@ export type QualityDataReader = {
 type QualityDataReaderScope = {
   readonly dispose: () => void;
   readonly reader: QualityDataReader;
-  readonly snapshot: <TValue>(
-    value: TValue,
-    valueDescription: string,
-  ) => TValue;
 };
 
 /** 动态接入未提供有效读取函数时直接报告的契约错误。 */
@@ -205,7 +199,6 @@ export class QualityDataReaderContractError extends TypeError {
 /** 创建仅覆盖当前 QA 运行的检查资料读取范围。 */
 export function createQualityDataReader(): QualityDataReaderScope {
   const memo = createMemoScope();
-  const sharedValues = new WeakSet<object>();
   const operations = new WeakMap<
     object,
     (...args: readonly unknown[]) => Promise<JsonValue>
@@ -222,7 +215,7 @@ export function createQualityDataReader(): QualityDataReaderScope {
         snapshotReader = async (...readerArgs: readonly unknown[]) => {
           const value = await reader(...(readerArgs as unknown as TArguments));
           const snapshot = snapshotJsonValue(value, "QA 检查资料");
-          freezeJsonValue(snapshot, sharedValues);
+          freezeJsonValue(snapshot);
           return snapshot;
         };
         operations.set(reader, snapshotReader);
@@ -232,24 +225,8 @@ export function createQualityDataReader(): QualityDataReaderScope {
   };
   return {
     reader: qualityData,
-    snapshot: <TValue>(value: TValue, valueDescription: string) =>
-      snapshotQualityDataPreservingShared(
-        value,
-        valueDescription,
-        sharedValues,
-      ),
     dispose: () => memo.dispose(),
   };
-}
-
-function snapshotQualityDataPreservingShared<TValue>(
-  value: TValue,
-  valueDescription: string,
-  sharedValues: WeakSet<object>,
-): TValue {
-  return snapshotJsonValuePreservingShared(value, valueDescription, (shared) =>
-    sharedValues.has(shared),
-  ) as TValue;
 }
 
 export type QualityDataLoadInput<
@@ -359,51 +336,7 @@ export class QualityCheckerContractError extends TypeError {
   }
 }
 
-export type QualityCheckInput<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TConfiguration = unknown,
-  TBody = unknown,
-  TUnavailable = never,
-> = Omit<QualityCheckRequest<TBody>, "candidates" | "exceptions"> & {
-  readonly facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>;
-  readonly candidate: SemanticEditCandidate<TBody>;
-  readonly sourceUnit: SourceUnitFact<TUnit> | null;
-  readonly configuration: TConfiguration;
-  readonly dependencies: unknown;
-  /** 仅在本次执行中借用；检查器不得关闭此范围。 */
-  readonly memo: MemoScope;
-};
-
-/** 可作为检查输入依据的 JSON 值；回调结果会由核心在交接前验证并摘要。 */
-export type QualityInputBasis = JsonValue;
-
 const qualityInputFingerprintFormat = "lioni.check-input/v2";
-
-export type QualityDefaultInput = {
-  readonly facts: unknown;
-  readonly candidate: unknown;
-  readonly sourceUnit: unknown;
-  readonly dependencies: unknown;
-  readonly relationships?: readonly unknown[];
-};
-
-/**
- * 构造框架默认输入依据。检查作者可以在自定义指纹回调中组合此值与宿主资料。
- */
-export function createDefaultQualityInputBasis(
-  input: QualityDefaultInput,
-): QualityInputBasis {
-  const basis = {
-    facts: input.facts,
-    candidate: input.candidate,
-    sourceUnit: input.sourceUnit,
-    dependencies: input.dependencies,
-    relationships: input.relationships ?? [],
-  };
-  return snapshotJsonValue(basis, "QA 默认输入指纹依据");
-}
-
 export type QualityInputFingerprintSummary = {
   readonly version: string;
   readonly inputFingerprint: string;
@@ -425,78 +358,6 @@ type QualityInputFingerprint = Pick<
   "inputFingerprint" | "fingerprintSummary"
 >;
 
-export type QualityCheckSelection<
-  TSubject,
-  TObject extends QualityObject = QualityObject,
-> =
-  | { readonly status: "not-applicable" }
-  | { readonly status: "incomplete"; readonly issue: QualityIssue<TObject> }
-  | { readonly status: "selected"; readonly subject: TSubject };
-
-export type QualityCheckProjection<
-  TInput,
-  TObject extends QualityObject = QualityObject,
-> =
-  | { readonly status: "ready"; readonly value: TInput }
-  | { readonly status: "incomplete"; readonly issue: QualityIssue<TObject> };
-
-export type QualityCheckProjectionInput<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TConfiguration,
-  TSubject,
-  TBody = unknown,
-  TUnavailable = never,
-> = QualityCheckInput<
-  TUnit,
-  TTranslation,
-  TConfiguration,
-  TBody,
-  TUnavailable
-> & {
-  readonly subject: TSubject;
-};
-
-export type QualityCheckRuleInput<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TConfiguration,
-  TSubject,
-  TProjected,
-  TBody = unknown,
-  TUnavailable = never,
-> = QualityCheckInput<
-  TUnit,
-  TTranslation,
-  TConfiguration,
-  TBody,
-  TUnavailable
-> & {
-  readonly subject: TSubject;
-  readonly projected: TProjected;
-};
-
-export type QualityCheckBindingStage = "selection" | "projection";
-
-export class QualityCheckBindingError extends TypeError {
-  readonly qualityCheckId: string;
-  readonly stage: QualityCheckBindingStage;
-
-  constructor(
-    qualityCheckId: string,
-    stage: QualityCheckBindingStage,
-    cause: unknown,
-  ) {
-    super(
-      `QA 检查器 ${qualityCheckId} 的${stage === "selection" ? "适用范围选择" : "输入投影"}失败。`,
-      { cause },
-    );
-    this.name = "QualityCheckBindingError";
-    this.qualityCheckId = qualityCheckId;
-    this.stage = stage;
-  }
-}
-
 export type StandardSchemaInput<
   TSchema extends StandardSchemaV1<unknown, unknown>,
 > = NonNullable<TSchema["~standard"]["types"]>["input"];
@@ -505,16 +366,6 @@ export type StandardSchemaOutput<
   TSchema extends StandardSchemaV1<unknown, unknown>,
 > = NonNullable<TSchema["~standard"]["types"]>["output"];
 
-type QualityCheckExecutionInput<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TBody = unknown,
-  TUnavailable = never,
-> = Omit<
-  QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
-  "configuration"
->;
-
 type PreparedQualityCheck<
   TUnit extends TranslationUnitInput,
   TTranslation,
@@ -522,39 +373,25 @@ type PreparedQualityCheck<
   TBody = unknown,
   TUnavailable = never,
 > = {
-  readonly configuration?: JsonValue;
   readonly version: string;
   readonly load?: (
     input: CheckerLoadInput<TUnit, TTranslation, TBody, TUnavailable>,
   ) => Awaitable<unknown>;
   readonly prepareInput: (
-    input: QualityCheckExecutionInput<TUnit, TTranslation, TBody, TUnavailable>,
-    context: QualityInputPreparationContext,
-    candidateContext: CheckerCandidateContext<
+    input: CheckerPrepareInput<
+      TUnit,
       TTranslation,
       TBody,
-      TUnavailable
+      TUnavailable,
+      unknown
     >,
+    context: QualityInputPreparationContext,
   ) => Awaitable<QualityCheckExecutionPreparation<TObject>>;
 };
 
-type CheckerCandidateContext<TTranslation, TBody, TUnavailable> = {
-  readonly candidates: readonly SemanticEditCandidate<TBody>[];
-  readonly association: TranslationAssociationFact | undefined;
-  readonly translation: ActualTranslationFact<
-    TTranslation,
-    TBody,
-    TUnavailable
-  > | null;
-};
-
 type QualityInputPreparationContext = {
-  readonly candidateIndex: number;
   readonly sourceKey: string;
   readonly language: string;
-  readonly configurationFingerprint?: string;
-  readonly validateDefaultInputComponents: () => void;
-  readonly getDefaultInputComponents: () => DefaultQualityInputFingerprintComponents;
   readonly startFingerprint: () => void;
   readonly endFingerprint: () => void;
 };
@@ -573,12 +410,6 @@ type QualityCheckExecutionPreparation<TObject extends QualityObject> =
       readonly execute: () => Awaitable<QualityCheckOutcome<TObject>>;
     };
 
-type DefaultQualityInputFingerprintComponents = {
-  readonly facts: string;
-  readonly dependencies: string;
-  readonly relationships: string;
-};
-
 const qualityCheckDefinitionBrand: unique symbol = Symbol(
   "qualityCheckDefinition",
 );
@@ -593,7 +424,13 @@ export type QualityCheckDefinition<
   TId extends string = string,
 > = {
   readonly [qualityCheckDefinitionBrand]: (
-    input: QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
+    input: CheckerPrepareInput<
+      TUnit,
+      TTranslation,
+      TBody,
+      TUnavailable,
+      unknown
+    >,
   ) => QualityCheckOutcome<TObject>;
   readonly id: TId;
   readonly version: string;
@@ -667,28 +504,16 @@ function defineCheckerFor<
     > = {
       version,
       ...(load === undefined ? {} : { load }),
-      async prepareInput(
-        { facts, candidate, sourceUnit, dependencies, memo, relationships },
-        context,
-        { candidates, association, translation },
-      ) {
-        if (sourceUnit === null || association === undefined)
-          throw new QualityCheckerContractError(
-            id,
-            "prepare",
-            "无法解析候选的源译关联。",
-          );
-        const preparation = await prepare({
-          candidate,
-          sourceUnit,
-          translation,
-          association,
-          facts,
-          candidates,
-          relationships: relationships ?? [],
-          loaded: dependencies as TLoaded,
-          memo,
-        });
+      async prepareInput(input, context) {
+        const preparation = await prepare(
+          input as CheckerPrepareInput<
+            TUnit,
+            TTranslation,
+            TBody,
+            TUnavailable,
+            TLoaded
+          >,
+        );
         if (!isCheckerPreparation(preparation))
           throw new QualityCheckerContractError(
             id,
@@ -698,21 +523,21 @@ function defineCheckerFor<
         if (preparation.status === "not-applicable")
           return {
             status: "not-applicable",
-            outcome: bindingOutcome<TObject>("not-applicable"),
+            outcome: checkerOutcome<TObject>("not-applicable"),
           };
         if (preparation.status === "incomplete")
           return {
             status: "incomplete",
-            outcome: bindingOutcome<TObject>("incomplete", preparation.issue),
+            outcome: checkerOutcome<TObject>("incomplete", preparation.issue),
           };
 
-        const input = await validateWithStandardSchema(
+        const finalInput = await validateWithStandardSchema(
           inputSchema,
           preparation.input,
           `QA 检查器 ${id} 的输入`,
           { snapshotInput: true },
         );
-        freezeJsonValue(input);
+        freezeJsonValue(finalInput);
         context.startFingerprint();
         try {
           return {
@@ -721,11 +546,13 @@ function defineCheckerFor<
               id,
               version,
               context,
-              fingerprintQualityInputBasis(input as JsonValue),
+              fingerprintQualityInputBasis(finalInput as JsonValue),
             ),
             execute: () =>
               check(
-                input as ReadonlyQualityValue<StandardSchemaOutput<TSchema>>,
+                finalInput as ReadonlyQualityValue<
+                  StandardSchemaOutput<TSchema>
+                >,
               ),
           };
         } finally {
@@ -763,423 +590,7 @@ function isCheckerPreparation(value: unknown): boolean {
   return value.status === "incomplete" && isQualityIssue(value.issue);
 }
 
-export type QualityCheckBinding<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TConfigurationSchema extends StandardSchemaV1<unknown, unknown>,
-  TInputSchema extends StandardSchemaV1<unknown, unknown>,
-  TSubject,
-  TObject extends QualityObject = QualityObject,
-  TBody = unknown,
-  TUnavailable = never,
-  TId extends string = string,
-> = {
-  readonly id: TId;
-  readonly version: string;
-  readonly configurationSchema: TConfigurationSchema;
-  readonly configuration: StandardSchemaInput<TConfigurationSchema>;
-  /** 只在本项已选且存在候选时加载；可经 qualityData.read 与其他消费者显式共享。 */
-  readonly loadDependencies?: (
-    input: QualityDataLoadInput<TUnit, TTranslation, TBody, TUnavailable>,
-  ) => Awaitable<unknown>;
-  /** 同步返回完整依据；核心在回调返回后立即验证、摘要，不保留依据副本。只读使用共享输入。 */
-  readonly fingerprintInput?: (
-    input: QualityCheckRuleInput<
-      TUnit,
-      TTranslation,
-      StandardSchemaOutput<TConfigurationSchema>,
-      TSubject,
-      StandardSchemaOutput<TInputSchema>,
-      TBody,
-      TUnavailable
-    >,
-  ) => QualityInputBasis;
-  readonly inputSchema: TInputSchema;
-  readonly select: (
-    input: QualityCheckInput<
-      TUnit,
-      TTranslation,
-      StandardSchemaOutput<TConfigurationSchema>,
-      TBody,
-      TUnavailable
-    >,
-  ) => Awaitable<QualityCheckSelection<TSubject, TObject>>;
-  readonly project: (
-    input: QualityCheckProjectionInput<
-      TUnit,
-      TTranslation,
-      StandardSchemaOutput<TConfigurationSchema>,
-      TSubject,
-      TBody,
-      TUnavailable
-    >,
-  ) => Awaitable<
-    QualityCheckProjection<StandardSchemaInput<TInputSchema>, TObject>
-  >;
-  readonly check: (
-    input: QualityCheckRuleInput<
-      TUnit,
-      TTranslation,
-      StandardSchemaOutput<TConfigurationSchema>,
-      TSubject,
-      StandardSchemaOutput<TInputSchema>,
-      TBody,
-      TUnavailable
-    >,
-  ) => Awaitable<QualityCheckOutcome<TObject>>;
-};
-
-/** 单次检查项声明的输入类型。 */
-type QualityCheckDefinitionInput<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TSchema extends StandardSchemaV1<unknown, unknown>,
-  TObject extends QualityObject,
-  TBody,
-  TUnavailable,
-  TId extends string,
-> = {
-  readonly id: TId;
-  readonly version: string;
-  readonly configurationSchema: TSchema;
-  readonly configuration: StandardSchemaInput<TSchema>;
-  /** 只在本项已选且存在候选时加载；可经 qualityData.read 与其他消费者显式共享。 */
-  readonly loadDependencies?: (
-    input: QualityDataLoadInput<TUnit, TTranslation, TBody, TUnavailable>,
-  ) => Awaitable<unknown>;
-  /** 同步返回完整依据；核心在回调返回后立即验证、摘要，不保留依据副本。只读使用共享输入。 */
-  readonly fingerprintInput?: (
-    input: QualityCheckInput<
-      TUnit,
-      TTranslation,
-      StandardSchemaOutput<TSchema>,
-      TBody,
-      TUnavailable
-    >,
-  ) => QualityInputBasis;
-  readonly check: (
-    input: QualityCheckInput<
-      TUnit,
-      TTranslation,
-      StandardSchemaOutput<TSchema>,
-      TBody,
-      TUnavailable
-    >,
-  ) => Awaitable<QualityCheckOutcome<TObject>>;
-};
-
-function defineQualityCheckImplementation<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TSchema extends StandardSchemaV1<unknown, unknown>,
-  TObject extends QualityObject = QualityObject,
-  TBody = unknown,
-  TUnavailable = never,
-  TId extends string = string,
->(
-  definition: QualityCheckDefinitionInput<
-    TUnit,
-    TTranslation,
-    TSchema,
-    TObject,
-    TBody,
-    TUnavailable,
-    TId
-  >,
-): QualityCheckDefinition<
-  TUnit,
-  TTranslation,
-  TObject,
-  TBody,
-  TUnavailable,
-  TId
-> {
-  const {
-    id,
-    version,
-    configuration,
-    configurationSchema,
-    loadDependencies,
-    fingerprintInput,
-    check,
-  } = definition;
-  assertQualityCheckIdentity(id, version);
-  assertQualityDataLoader(loadDependencies, id);
-  const qualityCheck = {
-    [qualityCheckDefinitionBrand]: true,
-    id,
-    version,
-  } as const;
-  qualityCheckPreparers.set(qualityCheck, async () => {
-    const configurationDescription = `QA 检查器 ${id} 的配置`;
-    const parsedConfiguration = await validateWithStandardSchema(
-      configurationSchema,
-      configuration,
-      configurationDescription,
-    );
-    assertJsonValue(parsedConfiguration, `QA 检查器 ${id} 的最终配置`);
-    return {
-      configuration: parsedConfiguration,
-      version,
-      ...(loadDependencies === undefined
-        ? {}
-        : {
-            load: ({
-              facts,
-              memo,
-              qualityData,
-            }: CheckerLoadInput<TUnit, TTranslation, TBody, TUnavailable>) =>
-              loadDependencies({ facts, memo, qualityData }),
-          }),
-      prepareInput: (
-        input: QualityCheckExecutionInput<
-          TUnit,
-          TTranslation,
-          TBody,
-          TUnavailable
-        >,
-        context: QualityInputPreparationContext,
-      ) => {
-        const checkInput = {
-          ...input,
-          configuration: parsedConfiguration,
-        };
-        const preparedFingerprint = prepareQualityInput(
-          id,
-          version,
-          fingerprintInput,
-          checkInput,
-          context,
-        );
-        return {
-          status: "ready",
-          ...preparedFingerprint,
-          execute: () => check(checkInput),
-        };
-      },
-    };
-  });
-  return qualityCheck as unknown as QualityCheckDefinition<
-    TUnit,
-    TTranslation,
-    TObject,
-    TBody,
-    TUnavailable,
-    TId
-  >;
-}
-
-/**
- * 声明质量检查项；正式运行会校验配置并调用检查函数，返回值只表达检查项身份。
- * version 应覆盖算法及宿主选择、投影和策略的语义变化。默认指纹包含完整事实、
- * 当前候选、原文、动态依赖及关联关系；fingerprintInput 替换业务依据，检查身份、
- * 版本和最终配置仍始终参与。闭包依赖须由作者显式纳入依据。若需要显式业务泛型，
- * 用 withTypes 先绑定业务类型，再由单次声明推断检查项 ID 字面量。传入普通 string ID
- * 时返回类型为 string，后续配置不能静态枚举该 ID，实际选择依赖运行时目录校验。
- */
-export const defineQualityCheck = Object.assign(
-  defineQualityCheckImplementation,
-  {
-    withTypes<
-      TUnit extends TranslationUnitInput,
-      TTranslation,
-      TSchema extends StandardSchemaV1<unknown, unknown>,
-      TObject extends QualityObject = QualityObject,
-      TBody = unknown,
-      TUnavailable = never,
-    >() {
-      return <const TId extends string>(
-        definition: QualityCheckDefinitionInput<
-          TUnit,
-          TTranslation,
-          TSchema,
-          TObject,
-          TBody,
-          TUnavailable,
-          TId
-        >,
-      ) =>
-        defineQualityCheckImplementation<
-          TUnit,
-          TTranslation,
-          TSchema,
-          TObject,
-          TBody,
-          TUnavailable,
-          TId
-        >(definition);
-    },
-  },
-);
-
-/**
- * 将选择、投影和检查绑定为共同检查器契约。
- * 配置与验证器仅供执行准备使用，返回对象不暴露具体 schema 或配置内部成员。
- */
-export function bindQualityCheck<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TConfigurationSchema extends StandardSchemaV1<unknown, unknown>,
-  TInputSchema extends StandardSchemaV1<unknown, unknown>,
-  TSubject,
-  TObject extends QualityObject = QualityObject,
-  TBody = unknown,
-  TUnavailable = never,
-  TId extends string = string,
->(
-  definition: QualityCheckBinding<
-    TUnit,
-    TTranslation,
-    TConfigurationSchema,
-    TInputSchema,
-    TSubject,
-    TObject,
-    TBody,
-    TUnavailable,
-    TId
-  >,
-): QualityCheckDefinition<
-  TUnit,
-  TTranslation,
-  TObject,
-  TBody,
-  TUnavailable,
-  TId
-> {
-  const {
-    id,
-    version,
-    configuration,
-    configurationSchema,
-    loadDependencies,
-    inputSchema,
-    fingerprintInput,
-    select,
-    project,
-    check,
-  } = definition;
-  assertQualityCheckIdentity(id, version);
-  assertQualityDataLoader(loadDependencies, id);
-  const qualityCheck = {
-    [qualityCheckDefinitionBrand]: true,
-    id,
-    version,
-  } as const;
-  qualityCheckPreparers.set(qualityCheck, async () => {
-    const configurationDescription = `QA 检查器 ${id} 的配置`;
-    const parsedConfiguration = await validateWithStandardSchema(
-      configurationSchema,
-      configuration,
-      configurationDescription,
-    );
-    assertJsonValue(parsedConfiguration, `QA 检查器 ${id} 的最终配置`);
-    return {
-      configuration: parsedConfiguration,
-      version,
-      ...(loadDependencies === undefined
-        ? {}
-        : {
-            load: ({
-              facts,
-              memo,
-              qualityData,
-            }: CheckerLoadInput<TUnit, TTranslation, TBody, TUnavailable>) =>
-              loadDependencies({ facts, memo, qualityData }),
-          }),
-      prepareInput: async (
-        input: QualityCheckExecutionInput<
-          TUnit,
-          TTranslation,
-          TBody,
-          TUnavailable
-        >,
-        context: QualityInputPreparationContext,
-      ) => {
-        const boundInput = { ...input, configuration: parsedConfiguration };
-        let selection: QualityCheckSelection<TSubject, TObject>;
-        try {
-          selection = await select(boundInput);
-        } catch (error) {
-          throw new QualityCheckBindingError(id, "selection", error);
-        }
-        if (!isQualityCheckSelection(selection))
-          throw new QualityCheckBindingError(
-            id,
-            "selection",
-            new TypeError("适用范围选择返回了无效结果。"),
-          );
-        if (selection.status === "not-applicable")
-          return {
-            status: "not-applicable",
-            outcome: bindingOutcome<TObject>("not-applicable"),
-          };
-        if (selection.status === "incomplete")
-          return {
-            status: "incomplete",
-            outcome: bindingOutcome<TObject>("incomplete", selection.issue),
-          };
-
-        const projectionInput = {
-          ...boundInput,
-          subject: selection.subject,
-        };
-        let projection: QualityCheckProjection<
-          StandardSchemaInput<TInputSchema>,
-          TObject
-        >;
-        try {
-          projection = await project(projectionInput);
-        } catch (error) {
-          throw new QualityCheckBindingError(id, "projection", error);
-        }
-        if (!isQualityCheckProjection(projection))
-          throw new QualityCheckBindingError(
-            id,
-            "projection",
-            new TypeError("检查输入投影返回了无效结果。"),
-          );
-        if (projection.status === "incomplete")
-          return {
-            status: "incomplete",
-            outcome: bindingOutcome<TObject>("incomplete", projection.issue),
-          };
-
-        const projectedInput = await validateWithStandardSchema(
-          inputSchema,
-          projection.value,
-          `QA 检查器 ${id} 的投影输入`,
-        );
-        const checkInput = {
-          ...boundInput,
-          subject: selection.subject,
-          projected: projectedInput,
-        };
-        const preparedFingerprint = prepareQualityInput(
-          id,
-          version,
-          fingerprintInput,
-          checkInput,
-          context,
-        );
-        return {
-          status: "ready",
-          ...preparedFingerprint,
-          execute: () => check(checkInput),
-        };
-      },
-    };
-  });
-  return qualityCheck as unknown as QualityCheckDefinition<
-    TUnit,
-    TTranslation,
-    TObject,
-    TBody,
-    TUnavailable,
-    TId
-  >;
-}
-
-function bindingOutcome<TObject extends QualityObject>(
+function checkerOutcome<TObject extends QualityObject>(
   status: "not-applicable" | "incomplete",
   issue?: QualityIssue<TObject>,
 ): QualityCheckOutcome<TObject> {
@@ -1197,19 +608,6 @@ function bindingOutcome<TObject extends QualityObject>(
   };
 }
 
-function isQualityCheckSelection(value: unknown): boolean {
-  if (!isRecord(value)) return false;
-  if (value.status === "not-applicable") return true;
-  if (value.status === "selected") return Object.hasOwn(value, "subject");
-  return value.status === "incomplete" && isQualityIssue(value.issue);
-}
-
-function isQualityCheckProjection(value: unknown): boolean {
-  if (!isRecord(value)) return false;
-  if (value.status === "ready") return Object.hasOwn(value, "value");
-  return value.status === "incomplete" && isQualityIssue(value.issue);
-}
-
 function assertQualityCheckIdentity(id: string, version: string): void {
   if (typeof id !== "string" || id.trim() === "")
     throw new TypeError("QA 检查项必须提供非空 id。");
@@ -1217,84 +615,19 @@ function assertQualityCheckIdentity(id: string, version: string): void {
     throw new TypeError(`QA 检查项 ${id} 必须提供非空 version。`);
 }
 
-function assertQualityDataLoader(loader: unknown, id: string): void {
-  if (loader !== undefined && typeof loader !== "function")
-    throw new TypeError(`QA 检查项 ${id} 的 loadDependencies 必须是函数。`);
-}
-
-function prepareQualityInput<TInput extends QualityDefaultInput>(
-  id: string,
-  version: string,
-  fingerprintInput: ((input: TInput) => unknown) | undefined,
-  input: TInput,
-  context: QualityInputPreparationContext,
-): {
-  readonly fingerprint: Required<QualityInputFingerprint>;
-  readonly cacheKey: string;
-} {
-  if (fingerprintInput === undefined) {
-    assertJsonValue(input.candidate, `QA 检查器 ${id} 的候选依据`);
-    assertJsonValue(input.sourceUnit, `QA 检查器 ${id} 的原文依据`);
-    context.validateDefaultInputComponents();
-    context.startFingerprint();
-    try {
-      const defaultComponents = context.getDefaultInputComponents();
-      const inputBasisFingerprint = fingerprintJsonObjectComponents([
-        ["candidate", fingerprintJsonValue(input.candidate as JsonValue)],
-        ["dependencies", defaultComponents.dependencies],
-        ["facts", defaultComponents.facts],
-        ["relationships", defaultComponents.relationships],
-        ["sourceUnit", fingerprintJsonValue(input.sourceUnit as JsonValue)],
-      ]);
-      return prepareFingerprint(
-        id,
-        version,
-        context,
-        inputBasisFingerprint,
-        context.candidateIndex,
-      );
-    } finally {
-      context.endFingerprint();
-    }
-  }
-
-  const basis = fingerprintInput(input);
-  assertJsonValue(basis, `QA 检查器 ${id} 的输入指纹依据`);
-  context.startFingerprint();
-  try {
-    return prepareFingerprint(
-      id,
-      version,
-      context,
-      fingerprintQualityInputBasis(basis),
-      context.candidateIndex,
-    );
-  } finally {
-    context.endFingerprint();
-  }
-}
-
 function prepareFingerprint(
   id: string,
   version: string,
   context: QualityInputPreparationContext,
   inputBasisFingerprint: string,
-  candidateIndex?: number,
 ): {
   readonly fingerprint: Required<QualityInputFingerprint>;
   readonly cacheKey: string;
 } {
-  const completeInputFingerprintBasis =
-    context.configurationFingerprint === undefined
-      ? inputBasisFingerprint
-      : fingerprintJsonObjectComponents([
-          ["configuration", context.configurationFingerprint],
-          ["inputFingerprint", inputBasisFingerprint],
-        ]);
   const fingerprint = qualityInputFingerprint(
     id,
     version,
-    completeInputFingerprintBasis,
+    inputBasisFingerprint,
   );
   return {
     fingerprint,
@@ -1303,7 +636,6 @@ function prepareFingerprint(
       context.sourceKey,
       context.language,
       fingerprint.inputFingerprint,
-      candidateIndex,
     ),
   };
 }
@@ -1426,8 +758,8 @@ export async function runQualityChecksWithQualityData<
         TBody,
         TUnavailable
       >;
-      readonly dependencies: unknown;
-      readonly dependencyFailure?: { readonly error: unknown };
+      readonly loaded: unknown;
+      readonly loadFailure?: { readonly error: unknown };
     }[] = [];
     const checkIds = new Set<string>();
     for (const definition of checks) {
@@ -1441,66 +773,39 @@ export async function runQualityChecksWithQualityData<
       const prepare = qualityCheckPreparers.get(definition);
       if (prepare === undefined)
         throw new TypeError(
-          `QA 检查项 ${definition.id} 必须由 defineChecker、defineQualityCheck 或 bindQualityCheck 创建。`,
+          `QA 检查项 ${definition.id} 必须由 defineChecker 创建。`,
         );
-      const endPreparation = options.profile?.checkStage(
-        definition.id,
-        "configurationPreparation",
-      );
-      let prepared: PreparedQualityCheck<
+      const prepared = (await prepare()) as PreparedQualityCheck<
         TUnit,
         TTranslation,
         QualityObject,
         TBody,
         TUnavailable
       >;
-      try {
-        prepared = (await prepare()) as PreparedQualityCheck<
-          TUnit,
-          TTranslation,
-          QualityObject,
-          TBody,
-          TUnavailable
-        >;
-      } finally {
-        endPreparation?.();
-      }
 
-      let dependencies: unknown =
-        prepared.configuration === undefined ? undefined : {};
-      let dependencyFailure: { readonly error: unknown } | undefined;
-      const load = prepared.load;
-      if (boundRequest.candidates.length > 0 && load !== undefined) {
-        const endDependencies = options.profile?.checkStage(
-          definition.id,
-          "load",
-        );
+      let loaded: unknown;
+      let loadFailure: { readonly error: unknown } | undefined;
+      if (boundRequest.candidates.length > 0 && prepared.load !== undefined) {
+        const endLoad = options.profile?.checkStage(definition.id, "load");
         try {
-          const loaded = await load({
+          loaded = await prepared.load({
             facts,
             ...boundRequest,
             memo,
             qualityData: qualityData.reader,
           });
-          dependencies =
-            prepared.configuration === undefined
-              ? loaded
-              : qualityData.snapshot(
-                  loaded,
-                  `QA 检查项 ${definition.id} 的检查资料`,
-                );
         } catch (error) {
           if (isQualityContractError(error)) throw error;
-          dependencyFailure = { error };
+          loadFailure = { error };
         } finally {
-          endDependencies?.();
+          endLoad?.();
         }
       }
       preparedChecks.push({
         id: definition.id,
         prepared,
-        dependencies,
-        ...(dependencyFailure === undefined ? {} : { dependencyFailure }),
+        loaded,
+        ...(loadFailure === undefined ? {} : { loadFailure }),
       });
     }
 
@@ -1520,22 +825,6 @@ export async function runQualityChecksWithQualityData<
       }
       languageAssociations.set(association.sourceKey, association);
     }
-    let commonInputComponents:
-      | Pick<
-          DefaultQualityInputFingerprintComponents,
-          "facts" | "relationships"
-        >
-      | undefined;
-    const getCommonInputComponents = () => {
-      if (commonInputComponents === undefined)
-        commonInputComponents = {
-          facts: fingerprintJsonValue(facts as JsonValue),
-          relationships: fingerprintJsonValue(
-            boundRequest.relationships as JsonValue,
-          ),
-        };
-      return commonInputComponents;
-    };
     const selectedLanguages = new Map<string, Set<string>>();
     for (const { sourceKey, language } of boundRequest.candidates) {
       const languages = selectedLanguages.get(sourceKey) ?? new Set<string>();
@@ -1543,45 +832,7 @@ export async function runQualityChecksWithQualityData<
       selectedLanguages.set(sourceKey, languages);
     }
     let nextExecutionId = 0;
-    for (const {
-      id,
-      prepared,
-      dependencies,
-      dependencyFailure,
-    } of preparedChecks) {
-      let defaultInputComponentsValidated = false;
-      let defaultInputComponents:
-        | DefaultQualityInputFingerprintComponents
-        | undefined;
-      const validateDefaultInputComponents = () => {
-        if (defaultInputComponentsValidated) return;
-        assertJsonValue(
-          { facts, dependencies, relationships: boundRequest.relationships },
-          "QA 默认输入指纹依据",
-        );
-        defaultInputComponentsValidated = true;
-      };
-      const getDefaultInputComponents =
-        (): DefaultQualityInputFingerprintComponents => {
-          if (defaultInputComponents === undefined)
-            defaultInputComponents = {
-              ...getCommonInputComponents(),
-              dependencies: fingerprintJsonValue(dependencies as JsonValue),
-            };
-          return defaultInputComponents;
-        };
-      let configurationFingerprint: string | undefined;
-      if (prepared.configuration !== undefined) {
-        const endConfiguration = options.profile?.checkStage(
-          id,
-          "configurationFingerprint",
-        );
-        const configuration = snapshotQualityData(prepared.configuration);
-        configurationFingerprint = fingerprintQualityInputBasis(
-          configuration as JsonValue,
-        );
-        endConfiguration?.();
-      }
+    for (const { id, prepared, loaded, loadFailure } of preparedChecks) {
       const diagnostics: QualityDiagnostic[] = [];
       const issues: QualityIssue[] = [];
       const executions: QualityCheckExecution[] = [];
@@ -1612,12 +863,18 @@ export async function runQualityChecksWithQualityData<
         let fingerprint: QualityInputFingerprint | undefined;
         let outcomeResolution: QualityCheckOutcomeResolution;
         try {
-          if (dependencyFailure !== undefined) throw dependencyFailure.error;
+          if (loadFailure !== undefined) throw loadFailure.error;
           const sourceUnit = sourceUnits.get(candidate.sourceKey) ?? null;
           const association = associations
             .get(candidate.language)
             ?.get(candidate.sourceKey);
-          const translationIndex = association?.translationIndexes[0];
+          if (sourceUnit === null || association === undefined)
+            throw new QualityCheckerContractError(
+              id,
+              "prepare",
+              "无法解析候选的源译关联。",
+            );
+          const translationIndex = association.translationIndexes[0];
           const translation =
             translationIndex === undefined
               ? null
@@ -1625,14 +882,8 @@ export async function runQualityChecksWithQualityData<
           const endPreparation = candidateProfile?.stage("prepareInput");
           let endFingerprintStage: (() => void) | undefined;
           const preparationContext: QualityInputPreparationContext = {
-            candidateIndex,
             sourceKey: candidate.sourceKey,
             language: candidate.language,
-            ...(configurationFingerprint === undefined
-              ? {}
-              : { configurationFingerprint }),
-            validateDefaultInputComponents,
-            getDefaultInputComponents,
             startFingerprint() {
               endPreparation?.();
               endFingerprintStage = candidateProfile?.stage("fingerprint");
@@ -1646,15 +897,17 @@ export async function runQualityChecksWithQualityData<
           try {
             preparation = await prepared.prepareInput(
               {
-                facts,
                 candidate,
                 sourceUnit,
-                memo,
-                dependencies,
+                translation,
+                association,
+                facts,
+                candidates: boundRequest.candidates,
                 relationships: boundRequest.relationships,
+                loaded,
+                memo,
               },
               preparationContext,
-              { candidates: boundRequest.candidates, association, translation },
             );
           } finally {
             endPreparation?.();
@@ -1773,7 +1026,6 @@ export async function runQualityChecksWithQualityData<
 function isQualityContractError(error: unknown): boolean {
   return (
     error instanceof StandardSchemaContractError ||
-    error instanceof QualityCheckBindingError ||
     error instanceof QualityDataReaderContractError ||
     error instanceof QualityCheckerContractError
   );
@@ -1848,11 +1100,9 @@ function qualityCheckCacheKey(
   sourceKey: string,
   language: string,
   inputFingerprint: string,
-  candidateIndex?: number,
 ): string {
   return fingerprintJsonValue({
     checkId,
-    ...(candidateIndex === undefined ? {} : { candidateIndex }),
     sourceKey,
     language,
     inputFingerprint,
