@@ -138,3 +138,14 @@ void test("结构化正文默认报告不完整，显式准备适配支持特殊
   );
   assert.equal(skipped.checks[0]?.status, "not-applicable");
 });
+
+void test("Vue 工厂在装配时拒绝无效准备适配", () => {
+  assert.throws(
+    () =>
+      createVueI18nTargetSyntaxChecker({
+        id: "syntax",
+        prepare: "invalid" as never,
+      }),
+    /准备适配/u,
+  );
+});

@@ -221,3 +221,9 @@ export function prepareVueI18nMessage<
     },
   };
 }
+
+/** 普通参数在装配时校验，检查项筛选不能推迟这些错误。 */
+export function assertVueI18nPreparer(adapter: unknown): void {
+  if (adapter !== undefined && typeof adapter !== "function")
+    throw new TypeError("Vue I18n 准备适配必须是函数。");
+}

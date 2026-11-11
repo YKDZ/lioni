@@ -9,6 +9,7 @@ import { defineChecker } from "@lioni/core";
 import { readVueI18nLanguagePolicies } from "./dependencies.ts";
 import {
   prepareVueI18nMessage,
+  assertVueI18nPreparer,
   type VueI18nPreparer,
   vueI18nMessageProjectionSchema,
 } from "./quality-projection.ts";
@@ -68,6 +69,7 @@ export function createVueI18nSourceSyntaxChecker<
     TId
   > = { id: "vue-i18n/source-syntax" as TId },
 ) {
+  assertVueI18nPreparer(options.prepare);
   return defineChecker.withTypes<TUnit, TTranslation, TBody, TUnavailable>()({
     id: options.id,
     version: `checks.vue-i18n/source-syntax/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
@@ -125,6 +127,7 @@ export function createVueI18nTargetSyntaxChecker<
     TId
   > = { id: "vue-i18n/target-syntax" as TId },
 ) {
+  assertVueI18nPreparer(options.prepare);
   return defineChecker.withTypes<TUnit, TTranslation, TBody, TUnavailable>()({
     id: options.id,
     version: `checks.vue-i18n/target-syntax/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,

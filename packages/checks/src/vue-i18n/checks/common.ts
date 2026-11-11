@@ -11,6 +11,7 @@ import { defineChecker } from "@lioni/core";
 import { readVueI18nPolicies } from "../dependencies.ts";
 import {
   prepareVueI18nMessage,
+  assertVueI18nPreparer,
   vueI18nMessageProjectionSchema,
   type VueI18nPreparer,
 } from "../quality-projection.ts";
@@ -61,6 +62,7 @@ export function createVueI18nMessageCheck<
     prepared: TPrepared,
   ) => QualityCheckOutcome;
 }) {
+  assertVueI18nPreparer(options.adapter);
   const inputSchema: import("@lioni/core").StandardSchemaV1<{
     readonly projection: VueI18nMessageProjection;
     readonly prepared: TPrepared;
