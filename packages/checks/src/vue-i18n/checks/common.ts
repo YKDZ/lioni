@@ -1,23 +1,19 @@
 import type {
-  QualityCheckDefinition,
-  QualityCheckInput,
   QualityCheckOutcome,
-  QualityCheckProjectionInput,
-  QualityCheckRuleInput,
-  QualityCheckSelection,
   QualityEvidence,
   QualityIssue,
   QualityLocation,
   QualityObject,
   TranslationUnitInput,
 } from "@lioni/core";
-import { assertJsonValue, bindQualityCheck } from "@lioni/core";
-import { z } from "zod";
+import { defineChecker } from "@lioni/core";
 
 import { readVueI18nPolicies } from "../dependencies.ts";
 import {
-  memoizedVueI18nProjection,
+  prepareVueI18nMessage,
+  assertVueI18nPreparer,
   vueI18nMessageProjectionSchema,
+  type VueI18nPreparer,
 } from "../quality-projection.ts";
 import type {
   VueI18nDataReader,
@@ -25,38 +21,22 @@ import type {
   VueI18nPolicy,
   VueI18nPolicyData,
   VueI18nPolicyRequirement,
-  VueI18nProjector,
 } from "../quality-types.ts";
 
-const configurationSchema = z.object({ version: z.literal(1) });
-type Configuration = z.output<typeof configurationSchema>;
-
-export type VueI18nMessageRuleInput<
+/** 策略和运行时工具仅在准备阶段使用；规则只接收消息及所需依据。 */
+export function createVueI18nMessageCheck<
   TUnit extends TranslationUnitInput,
   TTranslation,
   TBody,
-  TUnavailable,
-> = QualityCheckRuleInput<
-  TUnit,
-  TTranslation,
-  Configuration,
-  VueI18nMessageProjection,
-  VueI18nMessageProjection,
-  TBody,
-  TUnavailable
->;
-
-export type VueI18nMessageRuleOptions<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TBody,
-  TUnavailable,
-  TPrepared,
+  TUnavailable = never,
+  TPrepared = unknown,
   TId extends string = string,
-> = {
+>(options: {
   readonly id: TId;
   readonly version: string;
-  readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
+  readonly adapter?:
+    | VueI18nPreparer<TUnit, TTranslation, TBody, TUnavailable>
+    | undefined;
   readonly loadPolicies: VueI18nDataReader<
     TUnit,
     TTranslation,
@@ -78,86 +58,55 @@ export type VueI18nMessageRuleOptions<
     memo: import("@lioni/memo").MemoScope,
   ) => TPrepared;
   readonly check: (
-    input: VueI18nMessageRuleInput<TUnit, TTranslation, TBody, TUnavailable>,
-    policy: VueI18nPolicy,
+    projection: VueI18nMessageProjection,
     prepared: TPrepared,
   ) => QualityCheckOutcome;
-};
-
-/** 绑定共同消息投影、资源可用性和位置，具体规则只负责判断。 */
-export function createVueI18nMessageCheck<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TBody,
-  TUnavailable = never,
-  TPrepared = unknown,
-  TId extends string = string,
->(
-  options: VueI18nMessageRuleOptions<
-    TUnit,
-    TTranslation,
-    TBody,
-    TUnavailable,
-    TPrepared,
-    TId
-  >,
-): QualityCheckDefinition<
-  TUnit,
-  TTranslation,
-  QualityObject,
-  TBody,
-  TUnavailable,
-  TId
-> {
-  type Subject = {
+}) {
+  assertVueI18nPreparer(options.adapter);
+  const inputSchema: import("@lioni/core").StandardSchemaV1<{
     readonly projection: VueI18nMessageProjection;
-    readonly policy: VueI18nPolicy;
     readonly prepared: TPrepared;
+  }> = {
+    "~standard": {
+      version: 1,
+      vendor: "lioni-vue-i18n",
+      async validate(value) {
+        if (
+          !value ||
+          typeof value !== "object" ||
+          !("projection" in value) ||
+          !("prepared" in value)
+        )
+          return { issues: [{ message: "Vue I18n 检查输入缺少消息或依据。" }] };
+        const result = await vueI18nMessageProjectionSchema[
+          "~standard"
+        ].validate(value.projection);
+        return result.issues
+          ? { issues: result.issues }
+          : {
+              value: value as {
+                projection: VueI18nMessageProjection;
+                prepared: TPrepared;
+              },
+            };
+      },
+    },
   };
-  return bindQualityCheck<
-    TUnit,
-    TTranslation,
-    typeof configurationSchema,
-    typeof vueI18nMessageProjectionSchema,
-    Subject,
-    QualityObject,
-    TBody,
-    TUnavailable,
-    TId
-  >({
+  return defineChecker.withTypes<TUnit, TTranslation, TBody, TUnavailable>()({
     id: options.id,
     version: options.version,
-    configurationSchema,
-    configuration: { version: 1 },
-    inputSchema: vueI18nMessageProjectionSchema,
-    loadDependencies: ({ facts, memo, qualityData }) =>
-      qualityData.read(options.loadPolicies, facts, memo),
-    select: async (
-      input: QualityCheckInput<
-        TUnit,
-        TTranslation,
-        Configuration,
-        TBody,
-        TUnavailable
-      >,
-    ): Promise<QualityCheckSelection<Subject>> => {
-      const policy = readVueI18nPolicies(
-        input.dependencies,
+    inputSchema,
+    load: async ({ facts, memo, qualityData }) =>
+      readVueI18nPolicies(
+        await qualityData.read(options.loadPolicies, facts, memo),
         options.policyRequirements,
-      ).get(input.candidate.language);
-      if (policy === undefined) return { status: "not-applicable" };
-      const projection = await memoizedVueI18nProjection(
-        input,
-        options.project,
-      );
-      if (
-        projection.key !== input.candidate.sourceKey ||
-        projection.language !== input.candidate.language
-      )
-        return incompleteSelection(
-          "messageProjectionIdentityMismatch",
-          "消息投影的键或语言与本次候选不一致。",
-        );
+      ),
+    prepare: async (input) => {
+      const policy = input.loaded.get(input.candidate.language);
+      if (!policy) return { status: "not-applicable" };
+      const prepared = await prepareVueI18nMessage(input, options.adapter);
+      if (prepared.status !== "ready") return prepared;
+      const projection = prepared.input;
       if (options.requiresTarget) {
         if (projection.target.status === "missing")
           return { status: "not-applicable" };
@@ -170,7 +119,10 @@ export function createVueI18nMessageCheck<
       if (options.requiresSource) {
         if (projection.source.status === "absent")
           return { status: "not-applicable" };
-        if (projection.source.status === "unavailable")
+        if (
+          projection.source.status === "unavailable" ||
+          input.sourceUnit.bodyAvailability !== "available"
+        )
           return incompleteSelection(
             "sourceUnavailable",
             "原文正文不可用，检查未执行。",
@@ -182,41 +134,18 @@ export function createVueI18nMessageCheck<
           !projection.target.text.trim())
       )
         return { status: "not-applicable" };
-      if (options.applies !== undefined && !options.applies(projection, policy))
+      if (options.applies && !options.applies(projection, policy))
         return { status: "not-applicable" };
       return {
-        status: "selected",
-        subject: {
+        status: "ready",
+        input: {
           projection,
-          policy,
           prepared: options.prepare(projection, policy, input.memo),
         },
       };
     },
-    project: (
-      input: QualityCheckProjectionInput<
-        TUnit,
-        TTranslation,
-        Configuration,
-        Subject,
-        TBody,
-        TUnavailable
-      >,
-    ) => ({ status: "ready", value: input.subject.projection }),
-    fingerprintInput: ({ projected, subject }) => {
-      const basis = {
-        projection: projected,
-        dependencies: subject.prepared,
-      };
-      assertJsonValue(basis, "Vue I18n 检查依据");
-      return basis;
-    },
-    check: (input) =>
-      options.check(
-        { ...input, subject: input.subject.projection },
-        input.subject.policy,
-        input.subject.prepared,
-      ),
+    check: ({ projection, prepared }) =>
+      options.check(projection, prepared as TPrepared),
   });
 }
 

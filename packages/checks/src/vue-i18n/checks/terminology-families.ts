@@ -1,8 +1,5 @@
 import {
-  assertJsonValue,
   type QualityCheckDefinition,
-  type QualityCheckInput,
-  type QualityCheckSelection,
   type QualityDataLoadInput,
   type QualityObject,
   type TranslationUnitInput,
@@ -25,7 +22,7 @@ import {
   readVueI18nLanguagePolicies,
 } from "../dependencies.ts";
 import { memoizedVueI18nMessage } from "../message-memo.ts";
-import { memoizedVueI18nProjection } from "../quality-projection.ts";
+import { prepareVueI18nMessage } from "../quality-projection.ts";
 import type {
   VueI18nCheckIdentity,
   VueI18nDataReader,
@@ -33,23 +30,11 @@ import type {
   VueI18nMessageProjection,
   VueI18nPolicy,
   VueI18nPolicyData,
-  VueI18nProjector,
+  VueI18nPreparer,
   VueI18nReferenceProjector,
 } from "../quality-types.ts";
 import { createVueI18nScopeResolver } from "../scope.ts";
-import {
-  parseVueI18nMessage,
-  VUE_I18N_MESSAGE_COMPILER_VERSION,
-} from "../vue-i18n-messages.ts";
-
-type TermSubject = {
-  readonly key: string;
-  readonly language: string;
-  readonly source: string;
-  readonly target: string;
-  readonly policy: VueI18nLanguagePolicy;
-  readonly projection: VueI18nMessageProjection;
-};
+import { parseVueI18nMessage } from "../vue-i18n-messages.ts";
 
 export function createVueI18nTerminologyChecks<
   TUnit extends TranslationUnitInput,
@@ -59,7 +44,7 @@ export function createVueI18nTerminologyChecks<
   TAllowedId extends string = string,
   TForbiddenId extends string = string,
 >(options: {
-  readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
+  readonly prepare?: VueI18nPreparer<TUnit, TTranslation, TBody, TUnavailable>;
   readonly analysis: TextAnalysis;
   readonly loadLanguages: VueI18nDataReader<
     TUnit,
@@ -91,78 +76,55 @@ export function createVueI18nTerminologyChecks<
     {
       rule: requireAllowedTranslation(),
       identity: options.identities.allowedTerminology,
-      name: "allowed-terminology",
     },
     {
       rule: rejectForbiddenTranslation(),
       identity: options.identities.forbiddenTerminology,
-      name: "forbidden-terminology",
     },
   ] as const;
   // 两条术语规则共用同一编译任务，按本次依赖缓存一份结果。
   const compile = (data: TermbaseData) =>
     compileTerms(createTermbase(data), { analysis: options.analysis });
-  const loadDependencies = async ({
+  const loadLanguages = async ({
     facts,
     memo,
     qualityData,
   }: QualityDataLoadInput<TUnit, TTranslation, TBody, TUnavailable>) => {
-    const [languages, terms] = await Promise.all([
-      qualityData.read(options.loadLanguages, facts, memo),
-      qualityData.read(options.loadTerms, facts, memo),
-    ]);
-    return { languages, terms };
+    return readVueI18nLanguagePolicies(
+      await qualityData.read(options.loadLanguages, facts, memo),
+    );
+  };
+  const loadTerms = async ({
+    facts,
+    memo,
+    qualityData,
+  }: QualityDataLoadInput<TUnit, TTranslation, TBody, TUnavailable>) => {
+    const data = await qualityData.read(options.loadTerms, facts, memo);
+    return memo.memo(compile)(data);
   };
 
-  return rules.map(({ rule, identity, name }) =>
+  return rules.map(({ rule, identity }) =>
     createTermChecker.withTypes<
       TUnit,
       TTranslation,
-      TermSubject,
+      VueI18nMessageProjection,
       TBody,
       TUnavailable
     >()({
       id: identity.id,
-      hostVersion: terminologyVersion(name, identity),
-      loadDependencies,
-      terms: (input) => {
-        const dependencies = input.dependencies as {
-          readonly terms: TermbaseData;
-        };
-        return input.memo.memo(compile)(dependencies.terms);
-      },
+      terms: loadTerms,
+      load: loadLanguages,
       rule,
-      // 投影已表达实际文本与语言；位置参与结果缓存，其他消息资源不构成本项依据。
-      fingerprintInput: ({ candidate, projected, subject }) => {
-        const basis = {
-          sourceKey: candidate.sourceKey,
-          language: candidate.language,
-          projected,
-          locations: subject.projection.locations,
-        };
-        assertJsonValue(basis, "术语检查依据");
-        return basis;
-      },
-      select: async (
-        input: QualityCheckInput<
-          TUnit,
-          TTranslation,
-          unknown,
-          TBody,
-          TUnavailable
-        >,
-      ): Promise<QualityCheckSelection<TermSubject>> => {
-        const dependencies = input.dependencies as {
-          readonly languages: readonly VueI18nLanguagePolicy[];
-        };
-        const policy = readVueI18nLanguagePolicies(dependencies.languages).get(
-          input.candidate.language,
-        );
+      prepare: async (input) => {
+        const policy = input.loaded.context.get(input.candidate.language);
         if (policy === undefined) return { status: "not-applicable" };
-        const projection = await memoizedVueI18nProjection(
-          input,
-          options.project,
+        const { loaded: _loaded, ...messageInput } = input;
+        const prepared = await prepareVueI18nMessage(
+          messageInput,
+          options.prepare,
         );
+        if (prepared.status !== "ready") return prepared;
+        const projection = prepared.input;
         if (projection.target.status === "missing")
           return { status: "not-applicable" };
         if (projection.target.status === "unavailable")
@@ -172,53 +134,40 @@ export function createVueI18nTerminologyChecks<
           );
         if (projection.source.status === "absent")
           return { status: "not-applicable" };
-        if (projection.source.status === "unavailable")
+        if (
+          projection.source.status === "unavailable" ||
+          input.sourceUnit.bodyAvailability !== "available"
+        )
           return incompleteSelection(
             "sourceUnavailable",
             "原文正文不可用，术语检查未执行。",
           );
         if (!projection.target.text.trim()) return { status: "not-applicable" };
         return {
-          status: "selected",
-          subject: {
-            key: projection.key,
-            language: projection.language,
-            source: projection.source.text,
-            target: projection.target.text,
-            policy,
-            projection,
+          status: "ready",
+          subject: projection,
+          comparison: {
+            groups: [
+              {
+                ref: projection.key,
+                source: {
+                  language: policy.sourceLanguage,
+                  fragments: [
+                    { ref: projection.key, text: projection.source.text },
+                  ],
+                },
+                target: {
+                  language: policy.targetLanguage,
+                  fragments: [
+                    { ref: projection.key, text: projection.target.text },
+                  ],
+                },
+              },
+            ],
           },
         };
       },
-      project: (input) => ({
-        status: "ready",
-        value: {
-          groups: [
-            {
-              ref: input.subject.key,
-              source: {
-                language: input.subject.policy.sourceLanguage,
-                fragments: [
-                  {
-                    ref: input.subject.key,
-                    text: input.subject.source,
-                  },
-                ],
-              },
-              target: {
-                language: input.subject.policy.targetLanguage,
-                fragments: [
-                  {
-                    ref: input.subject.key,
-                    text: input.subject.target,
-                  },
-                ],
-              },
-            },
-          ],
-        },
-      }),
-      location: ({ side, subject }) => subject.projection.locations[side],
+      location: ({ side, subject }) => subject.locations[side],
     }),
   );
 }
@@ -230,7 +179,7 @@ export function createVueI18nMessageFamilyCheck<
   TUnavailable = never,
   TId extends string = string,
 >(options: {
-  readonly project: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>;
+  readonly prepare?: VueI18nPreparer<TUnit, TTranslation, TBody, TUnavailable>;
   readonly loadPolicies: VueI18nDataReader<
     TUnit,
     TTranslation,
@@ -287,10 +236,9 @@ export function createVueI18nMessageFamilyCheck<
         .policies.get(input.candidate.language);
       if (policy === undefined || input.sourceUnit === null)
         return { status: "not-applicable" };
-      const projection = await memoizedVueI18nProjection(
-        { ...input, configuration: undefined, dependencies: input.loaded },
-        options.project,
-      );
+      const prepared = await prepareVueI18nMessage(input, options.prepare);
+      if (prepared.status !== "ready") return prepared;
+      const projection = prepared.input;
       const unavailable = sourceAvailability(projection);
       if (unavailable !== undefined) return unavailable;
       const targetUnavailable = targetAvailability(projection);
@@ -333,11 +281,13 @@ function familyInput(
   projection: VueI18nMessageProjection,
   policies: ReadonlyMap<string, VueI18nPolicy>,
 ): MessageFamilyInput {
+  const location = projection.locations.target;
   const policy = policies.get(projection.language);
   if (policy === undefined)
     return {
       complete: false,
       groups: [],
+      location,
       issues: [
         {
           code: "missing-language-policy",
@@ -350,6 +300,7 @@ function familyInput(
     return {
       complete: false,
       groups: [],
+      location,
       issues: [
         {
           code: "sourceBodyUnavailable",
@@ -363,6 +314,7 @@ function familyInput(
     return {
       complete: false,
       groups: [],
+      location,
       issues: [
         {
           code: "sourceMessageSyntaxInvalid",
@@ -394,6 +346,7 @@ function familyInput(
 
   const scope = createVueI18nScopeResolver(policy)(projection.key);
   return {
+    location,
     groups: [
       {
         ref: projection.key,
@@ -417,17 +370,6 @@ function familyInput(
       },
     ],
   };
-}
-
-function terminologyVersion(
-  name: string,
-  identity: VueI18nCheckIdentity,
-): string {
-  return [
-    `vue-i18n-suite/${name}/v1`,
-    `@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
-    identity.hostVersion,
-  ].join("+");
 }
 
 function incompleteSelection(code: string, message: string) {

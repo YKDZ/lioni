@@ -754,7 +754,7 @@ function messageFamilyChecker<
             group: signed.group,
             sourceSignatures: signed.sourceSignatures,
             targetSignatures: signed.targetSignatures,
-            translationLocation: {
+            translationLocation: prepared.projected.location ?? {
               language,
               range: translation.range,
               key: sourceKey,
@@ -822,7 +822,7 @@ function messageFamilyChecker<
 
   return defineChecker.withTypes<TUnit, TTranslation, TBody, TUnavailable>()({
     id: checkId,
-    version: "checks.message-family-consistency/v4",
+    version: "checks.message-family-consistency/v5",
     inputSchema: checkInputSchema,
     load: async (input) => {
       const loaded = (await options.load?.(input)) as TLoaded;
@@ -897,12 +897,9 @@ function messageFamilyChecker<
                 }),
           })),
           savedReferences: references.references,
-          location: translationLocation(
-            input.facts,
-            sourceKey,
-            language,
-            excluded,
-          ),
+          location:
+            projected.location ??
+            translationLocation(input.facts, sourceKey, language, excluded),
           sourceAvailability: input.sourceUnit.bodyAvailability,
           associationIncomplete:
             excluded === undefined &&

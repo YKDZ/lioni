@@ -184,7 +184,12 @@ export type {
   ProtectedLiteralIssue,
   QuantityBranch,
   QuantityBranchIssue,
+  TermCheckerGroupLocations,
+  TermCheckerInput,
+  TermCheckerLoaded,
+  TermCheckerLocationInput,
   TermCheckerOptions,
+  TermCheckerPreparation,
 } from "@lioni/checks";
 export { createVueI18nChecks } from "@lioni/checks";
 export type {
@@ -195,7 +200,6 @@ export type {
   VueI18nPolicy,
   VueI18nPolicyData,
   VueI18nPolicyRequirement,
-  VueI18nProjector,
   VueI18nQuantityPolicy,
   VueI18nReferenceProjector,
   VueI18nScopeRule,
@@ -219,6 +223,7 @@ export {
   TermbaseYamlError,
 } from "@lioni/terminology";
 export type {
+  CompiledTerms,
   DiscoverTermsOptions,
   TermCandidate,
   TermCandidateGenerationInput,
@@ -316,3 +321,11 @@ export type {
   QualityProfileCandidateStatus,
   QualityProfileCache,
 } from "@lioni/core";
+
+export {
+  prepareVueI18nMessage,
+  createVueI18nSourceSyntaxChecker,
+  createVueI18nTargetSyntaxChecker,
+  createVueI18nVariableCorrespondenceChecker,
+} from "@lioni/checks";
+export type { VueI18nPrepareInput, VueI18nPreparer } from "@lioni/checks";

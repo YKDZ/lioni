@@ -5,7 +5,14 @@ export type {
   NumberTextInput,
 } from "./numbers.ts";
 export { createTermChecker } from "./terms.ts";
-export type { TermCheckerOptions } from "./terms.ts";
+export type {
+  TermCheckerGroupLocations,
+  TermCheckerInput,
+  TermCheckerLoaded,
+  TermCheckerLocationInput,
+  TermCheckerOptions,
+  TermCheckerPreparation,
+} from "./terms.ts";
 export {
   compareMessageFamily,
   indexMessageFamilies,
@@ -41,11 +48,19 @@ export type {
   VueI18nPolicy,
   VueI18nPolicyData,
   VueI18nPolicyRequirement,
-  VueI18nProjectionInput,
-  VueI18nProjector,
   VueI18nReferenceProjector,
   VueI18nScopeRule,
   VueI18nQuantityPolicy,
   VueI18nSourceMessage,
   VueI18nTargetMessage,
 } from "./vue-i18n/quality-types.ts";
+export { prepareVueI18nMessage } from "./vue-i18n/quality-projection.ts";
+export type {
+  VueI18nPrepareInput,
+  VueI18nPreparer,
+} from "./vue-i18n/quality-projection.ts";
+export {
+  createVueI18nSourceSyntaxChecker,
+  createVueI18nTargetSyntaxChecker,
+} from "./vue-i18n/vue-i18n-syntax-checkers.ts";
+export { createVueI18nVariableCorrespondenceChecker } from "./vue-i18n/vue-i18n-variable-checker.ts";

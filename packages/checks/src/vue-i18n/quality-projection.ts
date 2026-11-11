@@ -1,5 +1,5 @@
 import type {
-  QualityCheckInput,
+  CheckerPrepareInput,
   StandardSchemaV1,
   TranslationUnitInput,
 } from "@lioni/core";
@@ -92,48 +92,108 @@ export const vueI18nMessageProjectionSchema: StandardSchemaV1<
 export type VueI18nSourceMessage = VueI18nMessageProjection["source"];
 export type VueI18nTargetMessage = VueI18nMessageProjection["target"];
 
-/** 共用投影只依赖 QA 事实、候选及关系，不读取检查专属配置。 */
-export type VueI18nProjectionInput<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TBody,
-  TUnavailable = never,
-> = Omit<
-  QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
-  "configuration" | "dependencies"
->;
-
-export type VueI18nProjector<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TBody,
-  TUnavailable = never,
-> = (
-  input: VueI18nProjectionInput<TUnit, TTranslation, TBody, TUnavailable>,
-) => VueI18nMessageProjection;
-
 const projectionKey = <
   TUnit extends TranslationUnitInput,
   TTranslation,
   TBody,
   TUnavailable,
 >(
-  input: VueI18nProjectionInput<TUnit, TTranslation, TBody, TUnavailable>,
+  input: VueI18nPrepareInput<TUnit, TTranslation, TBody, TUnavailable>,
 ) => [input.facts, input.candidate, input.sourceUnit, input.relationships];
 
-/** 为一组检查建立共用投影入口，排除不同检查各自的 configuration。 */
-export function memoizedVueI18nProjection<
+/** 准备适配保留原始源译单元，但不暴露检查专属加载资料。 */
+export type VueI18nPrepareInput<
+  TUnit extends TranslationUnitInput = TranslationUnitInput,
+  TTranslation = unknown,
+  TBody = unknown,
+  TUnavailable = never,
+> = Omit<
+  CheckerPrepareInput<TUnit, TTranslation, TBody, TUnavailable, unknown>,
+  "loaded"
+>;
+
+export type VueI18nPreparer<
+  TUnit extends TranslationUnitInput = TranslationUnitInput,
+  TTranslation = unknown,
+  TBody = unknown,
+  TUnavailable = never,
+> = (
+  input: VueI18nPrepareInput<TUnit, TTranslation, TBody, TUnavailable>,
+) => import("@lioni/core").Awaitable<
+  import("@lioni/core").CheckerPreparation<VueI18nMessageProjection>
+>;
+
+/** 默认只提取字符串；各项检查自行判断所需一侧的正文可用性。 */
+export function prepareVueI18nMessage<
   TUnit extends TranslationUnitInput,
   TTranslation,
   TBody,
   TUnavailable,
 >(
-  input: QualityCheckInput<TUnit, TTranslation, unknown, TBody, TUnavailable>,
-  projector: VueI18nProjector<TUnit, TTranslation, TBody, TUnavailable>,
-): VueI18nMessageProjection | Promise<VueI18nMessageProjection> {
-  const { configuration: _configuration, ...projectionInput } = input;
-  const memoized = input.memo.memo(projector, {
-    key: projectionKey,
-  });
-  return memoized(projectionInput);
+  input: VueI18nPrepareInput<TUnit, TTranslation, TBody, TUnavailable>,
+  adapter?: VueI18nPreparer<TUnit, TTranslation, TBody, TUnavailable>,
+): import("@lioni/core").Awaitable<
+  import("@lioni/core").CheckerPreparation<VueI18nMessageProjection>
+> {
+  if (adapter) {
+    // Omit 仅影响静态类型；运行时仍需移除通用检查器交接的加载资料。
+    const { loaded: _loaded, ...context } = input as typeof input & {
+      readonly loaded?: unknown;
+    };
+    return (async () => {
+      const prepared = await input.memo.memo(adapter, { key: projectionKey })(
+        context,
+      );
+      if (
+        prepared.status === "ready" &&
+        (prepared.input.key !== input.candidate.sourceKey ||
+          prepared.input.language !== input.candidate.language)
+      )
+        return {
+          status: "incomplete" as const,
+          issue: {
+            code: "messageProjectionIdentityMismatch",
+            message: "消息准备结果的键或语言与本次候选不一致。",
+          },
+        };
+      return prepared;
+    })();
+  }
+  const source = input.sourceUnit.unit.source;
+  return {
+    status: "ready",
+    input: {
+      key: input.candidate.sourceKey,
+      language: input.candidate.language,
+      source:
+        input.sourceUnit.bodyAvailability === "available" &&
+        typeof source === "string"
+          ? { status: "available", text: source }
+          : { status: "unavailable" },
+      target:
+        typeof input.candidate.content === "string"
+          ? { status: "available", text: input.candidate.content }
+          : { status: "unavailable" },
+      locations: {
+        source: {
+          language: null,
+          key: input.candidate.sourceKey,
+          range:
+            input.facts.source.read.scopes[input.sourceUnit.scopeIndex]
+              ?.range ?? null,
+        },
+        target: {
+          language: input.candidate.language,
+          key: input.candidate.sourceKey,
+          range: input.translation?.range ?? null,
+        },
+      },
+    },
+  };
+}
+
+/** 普通参数在装配时校验，检查项筛选不能推迟这些错误。 */
+export function assertVueI18nPreparer(adapter: unknown): void {
+  if (adapter !== undefined && typeof adapter !== "function")
+    throw new TypeError("Vue I18n 准备适配必须是函数。");
 }

@@ -3,7 +3,6 @@ import test from "node:test";
 
 import {
   createQualityException,
-  QualityCheckBindingError,
   StandardSchemaContractError,
   type QualityException,
   type QualityCheckResultCache,
@@ -235,10 +234,9 @@ void test("动态策略拒绝特殊字典键下的非法资源、字面值和数
     await assert.rejects(
       fixture.run([candidate("a", "等待 2 分钟")]),
       (error: unknown) => {
-        assert.ok(error instanceof QualityCheckBindingError);
-        assert.ok(error.cause instanceof StandardSchemaContractError);
-        assert.equal(error.cause.kind, "schema-mismatch");
-        const actualPath = error.cause.issues?.[0]?.path
+        assert.ok(error instanceof StandardSchemaContractError);
+        assert.equal(error.kind, "schema-mismatch");
+        const actualPath = error.issues?.[0]?.path
           ?.map((part) => {
             if (typeof part === "string" || typeof part === "number")
               return String(part);
@@ -269,8 +267,8 @@ void test("共享投影仍拒绝带有投影字段的数组", async () => {
     fixture.run([candidate("label", "你好")]),
     (error: unknown) => {
       assert.ok(error instanceof StandardSchemaContractError);
-      assert.equal(error.kind, "schema-mismatch");
-      assert.match(error.valueDescription, /投影/u);
+      assert.equal(error.kind, "invalid-json");
+
       return true;
     },
   );
@@ -367,10 +365,20 @@ void test("非法语法使变量比较未完成，缺译、不可用和真实空
     }).run([candidate("orphan", "bad } target")]),
     /原文键.*不存在于本次已读取的原文/,
   );
-  const unavailableSource = await createQualityFixture({
+  const unavailableSourceFixture = createQualityFixture({
     policies: [policy],
     unavailableSourceKeys: ["label"],
-  }).run([candidate("label", "你好")]);
+    alterProjection: (projection) => ({
+      ...projection,
+      source: { status: "available", text: "Hello {name}" },
+    }),
+  });
+  const unavailableSource = await unavailableSourceFixture.run([
+    candidate("label", "你好"),
+  ]);
+  const unavailableSourceWithMissingTarget = await unavailableSourceFixture.run(
+    [candidate("label", "无关占位", "zh-CN", "missing")],
+  );
 
   assert.equal(
     check(invalid, checkIds.variableCorrespondence)?.status,
@@ -406,7 +414,23 @@ void test("非法语法使变量比较未完成，缺译、不可用和真实空
     check(unavailableSource, checkIds.sourceSyntax)?.status,
     "incomplete",
   );
+  assert.equal(
+    check(unavailableSource, checkIds.variableCorrespondence)?.status,
+    "incomplete",
+  );
+  assert.equal(
+    check(unavailableSource, checkIds.allowedTerminology)?.status,
+    "incomplete",
+  );
+  assert.equal(
+    check(unavailableSource, checkIds.messageFamilyConsistency)?.status,
+    "incomplete",
+  );
   assert.deepEqual(findings(unavailableSource, checkIds.targetSyntax), []);
+  assert.equal(
+    check(unavailableSourceWithMissingTarget, checkIds.sourceSyntax)?.status,
+    "not-applicable",
+  );
 });
 
 void test("目标独有关联仍检查，缺失目标可见，当前候选覆盖保存正文参与循环判断", async () => {
@@ -744,11 +768,163 @@ void test("同次运行中的各检查共享一次候选消息投影", async () 
   });
   const result = await createQualityFixture({
     policies: [policy],
-    onProject: () => projections++,
+    onPrepare: () => projections++,
   }).run([candidate("label", "你好 {name}")]);
 
   assert.ok(result.checks.length > 1);
   assert.equal(projections, 1);
+});
+
+void test("组合基础、术语与消息族共用准备适配并保留候选位置", async () => {
+  let preparations = 0;
+  let candidateRange = { file: "prepared-target.json", revision: 4 };
+  let savedRange = { file: "saved-target.json", revision: 2 };
+  let exceptions: QualityException[] = [];
+  const policy = policyFor({
+    sourceMessages: { current: "Open", peer: "Open" },
+    targetMessages: { current: "旧译", peer: "启用" },
+    scopes: [{ scope: "controls", keys: ["current", "peer"] }],
+  });
+  const fixture = createQualityFixture({
+    policies: [policy],
+    reference: (reference) => {
+      assert.ok(reference.translation.content);
+      return {
+        key: reference.sourceKey,
+        language: reference.language,
+        source: {
+          status: "available",
+          text: reference.sourceUnit.unit.source.text,
+        },
+        target: {
+          status: "available",
+          text: reference.translation.content.text,
+        },
+        locations: {
+          source: {
+            language: null,
+            key: reference.sourceKey,
+            range: "saved-source.json",
+          },
+          target: {
+            language: reference.language,
+            key: reference.sourceKey,
+            range: savedRange,
+            hostMetadata: { fromReference: true },
+          },
+        },
+      };
+    },
+    prepare: (input) => {
+      preparations++;
+      assert.equal(Object.hasOwn(input, "loaded"), false);
+      const { candidate, sourceUnit } = input;
+      assert.ok(sourceUnit);
+      return {
+        status: "ready",
+        input: {
+          key: candidate.sourceKey,
+          language: candidate.language,
+          source: {
+            status: "available",
+            text: sourceUnit.unit.source.text,
+          },
+          target: { status: "available", text: candidate.content.text },
+          locations: {
+            source: {
+              language: null,
+              key: candidate.sourceKey,
+              range: "prepared-source.json",
+            },
+            target: {
+              language: candidate.language,
+              key: candidate.sourceKey,
+              range: candidateRange,
+              hostMetadata: { adapter: "vue" },
+            },
+          },
+        },
+      };
+    },
+    exceptionStore: {
+      load: async () => exceptions,
+      upsert: async (exception) => {
+        exceptions = [...exceptions, exception];
+      },
+    },
+  });
+  const selectedChecks = [
+    checkIds.sourceSyntax,
+    checkIds.targetSyntax,
+    checkIds.variableCorrespondence,
+    checkIds.allowedTerminology,
+    checkIds.forbiddenTerminology,
+    checkIds.messageFamilyConsistency,
+  ];
+  const result = await fixture.run(
+    [candidate("current", "激活")],
+    selectedChecks,
+  );
+
+  assert.equal(preparations, 1);
+  const familyFinding = findings(result, checkIds.messageFamilyConsistency)[0];
+  assert.deepEqual(familyFinding?.location.range, {
+    file: "prepared-target.json",
+    revision: 4,
+  });
+  assert.deepEqual(familyFinding?.location.hostMetadata, { adapter: "vue" });
+  const savedReference = familyFinding?.evidence.find(
+    ({ role }) => role === "saved-reference",
+  );
+  assert.deepEqual(savedReference?.location.range, {
+    file: "saved-target.json",
+    revision: 2,
+  });
+  assert.deepEqual(savedReference?.location.hostMetadata, {
+    fromReference: true,
+  });
+
+  const execution = check(result, checkIds.messageFamilyConsistency)
+    ?.executions[0];
+  assert.ok(execution);
+  exceptions = [
+    createQualityException({
+      id: "family-location",
+      reason: "接受当前消息族发现",
+      execution,
+    }),
+  ];
+  candidateRange = { file: "prepared-target.json", revision: 5 };
+  const movedCandidate = await fixture.run(
+    [candidate("current", "激活")],
+    [checkIds.messageFamilyConsistency],
+  );
+  assert.equal(
+    movedCandidate.exceptionApplicability[0]?.status,
+    "basis-changed",
+  );
+  assert.deepEqual(
+    findings(movedCandidate, checkIds.messageFamilyConsistency)[0]?.location
+      .range,
+    candidateRange,
+  );
+
+  candidateRange = { file: "prepared-target.json", revision: 4 };
+  savedRange = { file: "saved-target.json", revision: 3 };
+  const movedReference = await fixture.run(
+    [candidate("current", "激活")],
+    [checkIds.messageFamilyConsistency],
+  );
+  assert.equal(
+    movedReference.exceptionApplicability[0]?.status,
+    "basis-changed",
+  );
+  assert.deepEqual(
+    movedReference.diagnostics[0]?.evidence.find(
+      ({ role }) => role === "saved-reference",
+    )?.location.range,
+    savedRange,
+  );
 });
 
 void test("每次质量运行读取一次 Vue 动态规则并使用最新术语资料", async () => {
@@ -879,7 +1055,7 @@ void test("所选 Vue 术语资料不是 JSON 时保持契约错误", async () =
   );
 });
 
-void test("所选 Vue 术语资料不符合术语 schema 时以绑定错误中止", async () => {
+void test("所选 Vue 术语资料不符合术语 schema 时以契约错误中止", async () => {
   const policy = policyFor({ sourceMessages: { label: "Hello" } });
   const fixture = createQualityFixture({
     policies: [policy],
@@ -889,7 +1065,8 @@ void test("所选 Vue 术语资料不符合术语 schema 时以绑定错误中�
   await assert.rejects(
     fixture.run([candidate("label", "你好")], [checkIds.allowedTerminology]),
     (error: unknown) => {
-      assert.ok(error instanceof QualityCheckBindingError);
+      assert.ok(error instanceof StandardSchemaContractError);
+      assert.equal(error.kind, "schema-mismatch");
       assert.ok(error.cause instanceof TermContractError);
       return true;
     },
