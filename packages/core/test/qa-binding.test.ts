@@ -581,14 +581,7 @@ void describe("quality check bindings", () => {
       execution.inputFingerprint,
     );
     assert.match(execution.inputFingerprint ?? "", /^sha256:[a-f0-9]{64}$/u);
-    assert.equal(
-      execution.fingerprintSummary?.version,
-      "lioni.check-input/v1:algorithm-v1",
-    );
-    assert.match(
-      execution.fingerprintSummary?.configurationFingerprint ?? "",
-      /^sha256:[a-f0-9]{64}$/u,
-    );
+    assert.equal(execution.fingerprintSummary?.version, "algorithm-v1");
     assert.match(
       execution.fingerprintSummary?.inputFingerprint ?? "",
       /^sha256:[a-f0-9]{64}$/u,

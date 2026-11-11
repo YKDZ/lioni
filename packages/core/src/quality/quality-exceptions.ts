@@ -1,10 +1,9 @@
 import { isPlainRecord } from "../object-guards.ts";
 
-const QUALITY_EXCEPTION_FORMAT = "lioni.qa-exceptions/v1" as const;
+const QUALITY_EXCEPTION_FORMAT = "lioni.qa-exceptions/v2" as const;
 
 export type QualityExceptionFingerprintSummary = {
   readonly version: string;
-  readonly configurationFingerprint: string;
   readonly inputFingerprint: string;
 };
 
@@ -72,7 +71,6 @@ export type QualityExceptionStore = {
 
 export type QualityExceptionChangeReason =
   | "business-input"
-  | "configuration"
   | "check-implementation";
 
 export type QualityExceptionNotVerifiedReason =
@@ -119,8 +117,6 @@ export function createQualityException(
     inputFingerprint: execution.inputFingerprint,
     fingerprintSummary: {
       version: execution.fingerprintSummary.version,
-      configurationFingerprint:
-        execution.fingerprintSummary.configurationFingerprint,
       inputFingerprint: execution.fingerprintSummary.inputFingerprint,
     },
   };
@@ -209,14 +205,10 @@ export function validateQualityException(
     throw invalid("例外依据摘要必须是对象。");
   assertExactKeys(
     value.fingerprintSummary,
-    ["version", "configurationFingerprint", "inputFingerprint"],
+    ["version", "inputFingerprint"],
     "例外依据摘要",
   );
   assertNonEmptyString(value.fingerprintSummary.version, "检查实现版本");
-  assertNonEmptyString(
-    value.fingerprintSummary.configurationFingerprint,
-    "最终配置指纹",
-  );
   assertNonEmptyString(
     value.fingerprintSummary.inputFingerprint,
     "业务输入指纹",
@@ -230,9 +222,13 @@ export function validateQualityExceptionFile(
   if (!isPlainRecord(value)) throw invalid("例外文件顶层必须是对象。");
   if (value.format !== QUALITY_EXCEPTION_FORMAT) {
     const actual = typeof value.format === "string" ? value.format : "未标识";
+    const migrationInstructions =
+      actual === "lioni.qa-exceptions/v1"
+        ? "请先保留并移开旧文件，再运行 QA，并依据新报告重新建立需要保留的例外。"
+        : "请使用当前版本的 QA 例外文件格式。";
     throw new QualityExceptionFormatError(
       "unsupported",
-      `不支持 QA 例外文件格式：${actual}。`,
+      `不支持 QA 例外文件格式：${actual}。${migrationInstructions}`,
     );
   }
   assertExactKeys(value, ["format", "exceptions"], "例外文件");
@@ -316,11 +312,6 @@ export function evaluateQualityExceptionApplicability(
         exception.fingerprintSummary.inputFingerprint
       )
         reasons.push("business-input");
-      if (
-        execution.fingerprintSummary.configurationFingerprint !==
-        exception.fingerprintSummary.configurationFingerprint
-      )
-        reasons.push("configuration");
       if (
         execution.fingerprintSummary.version !==
         exception.fingerprintSummary.version

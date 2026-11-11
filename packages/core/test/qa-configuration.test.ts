@@ -273,7 +273,7 @@ void describe("quality checker configuration contracts", () => {
     );
   });
 
-  void it("runs transformed sync and async configurations and records their outputs", async () => {
+  void it("uses transformed sync and async configurations without reporting them", async () => {
     const { checks, observed } = createChecks();
     const config = qualityConfig(checks);
     const result = await analyzeQuality(config, {
@@ -285,28 +285,15 @@ void describe("quality checker configuration contracts", () => {
 
     assert.equal(result.status, "complete");
     assert.deepEqual(
-      result.checks.map(({ checkId, configuration }) => ({
-        checkId,
-        configuration,
-      })),
-      [
-        {
-          checkId: "minimum-length",
-          configuration: { threshold: 3 },
-        },
-        {
-          checkId: "short-candidate-policy",
-          configuration: { includeShortCandidates: false },
-        },
-      ],
+      result.checks.map(({ checkId }) => checkId),
+      ["minimum-length", "short-candidate-policy"],
     );
-    assert.deepEqual(
-      observed.get("minimum-length"),
-      result.checks[0]?.configuration,
-    );
-    assert.deepEqual(
-      observed.get("short-candidate-policy"),
-      result.checks[1]?.configuration,
+    assert.deepEqual(observed.get("minimum-length"), { threshold: 3 });
+    assert.deepEqual(observed.get("short-candidate-policy"), {
+      includeShortCandidates: false,
+    });
+    assert.ok(
+      result.checks.every((check) => !Object.hasOwn(check, "configuration")),
     );
     assert.deepEqual(
       result.diagnostics.map(({ checkId, message }) => [checkId, message]),
@@ -363,7 +350,7 @@ void describe("quality checker configuration contracts", () => {
     });
 
     assert.equal(result.status, "complete");
-    assert.deepEqual(result.checks[0]?.configuration, { mode: "default" });
+    assert.equal(Object.hasOwn(result.checks[0] ?? {}, "configuration"), false);
   });
 
   void it("rejects a non-JSON final configuration after schema conversion", async () => {

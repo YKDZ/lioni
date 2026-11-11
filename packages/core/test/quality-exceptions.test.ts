@@ -22,7 +22,6 @@ const execution = {
   inputFingerprint: "sha256:complete-input",
   fingerprintSummary: {
     version: "2",
-    configurationFingerprint: "sha256:configuration",
     inputFingerprint: "sha256:business-input",
   },
 };
@@ -44,7 +43,6 @@ void describe("QA 例外", () => {
       inputFingerprint: "sha256:complete-input",
       fingerprintSummary: {
         version: "2",
-        configurationFingerprint: "sha256:configuration",
         inputFingerprint: "sha256:business-input",
       },
     });
@@ -231,7 +229,7 @@ void describe("QA 例外", () => {
     );
   });
 
-  void it("拒绝不支持的格式和重复身份，并允许相同绑定有不同身份", () => {
+  void it("只接受新格式并拒绝重复身份", () => {
     const exception = createQualityException({
       id: "save-copy-meaning-fr",
       reason: "保留原意。",
@@ -240,14 +238,14 @@ void describe("QA 例外", () => {
     assert.throws(
       () =>
         validateQualityExceptionFile({
-          format: "lioni.qa-exceptions/v0",
+          format: "lioni.qa-exceptions/v1",
           exceptions: [],
         }),
       QualityExceptionFormatError,
     );
     assert.doesNotThrow(() =>
       validateQualityExceptionFile({
-        format: "lioni.qa-exceptions/v1",
+        format: "lioni.qa-exceptions/v2",
         exceptions: [exception, { ...exception, id: "second-approval" }],
       }),
     );
@@ -332,7 +330,7 @@ void describe("QA 例外", () => {
     );
   });
 
-  void it("区分三类依据变化，并在旧依据恢复后重新适用", () => {
+  void it("区分检查输入和实现版本变化，并在旧依据恢复后重新适用", () => {
     const exception = createQualityException({
       id: "save-copy-meaning-fr",
       reason: "保留原意。",
@@ -349,10 +347,10 @@ void describe("QA 例外", () => {
       },
       {
         ...execution,
-        inputFingerprint: "sha256:changed-config",
+        inputFingerprint: "sha256:changed-parameters",
         fingerprintSummary: {
           ...execution.fingerprintSummary,
-          configurationFingerprint: "sha256:changed-config",
+          inputFingerprint: "sha256:changed-parameters",
         },
       },
       {
@@ -371,7 +369,7 @@ void describe("QA 例外", () => {
           evaluateQualityExceptionApplicability([exception], [changed])[0]
             ?.reasons,
       ),
-      [["business-input"], ["configuration"], ["check-implementation"]],
+      [["business-input"], ["business-input"], ["check-implementation"]],
     );
     assert.equal(
       evaluateQualityExceptionApplicability([exception], [execution])[0]
