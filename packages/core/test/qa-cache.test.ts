@@ -447,7 +447,7 @@ void describe("QA 结果缓存", () => {
     assert.equal(checkCount, 4);
   });
 
-  void it("同键同语言的重复候选仍按候选身份分别缓存", async () => {
+  void it("拒绝重复候选身份", async () => {
     let checkCount = 0;
     const cache = createMemoryCache();
     const config = createTestConfig(
@@ -458,18 +458,12 @@ void describe("QA 结果缓存", () => {
     );
     const candidates = [candidate, candidate];
 
-    const first = await analyzeQuality(config, { candidates });
-    const second = await analyzeQuality(config, { candidates });
+    await assert.rejects(
+      analyzeQuality(config, { candidates }),
+      /候选身份.*重复/,
+    );
 
-    assert.equal(checkCount, 2);
-    assert.deepEqual(
-      second.checks[0]?.executions.map(({ candidateIndex }) => candidateIndex),
-      [0, 1],
-    );
-    assert.deepEqual(
-      second.diagnostics.map(({ executionId }) => executionId),
-      first.diagnostics.map(({ executionId }) => executionId),
-    );
+    assert.equal(checkCount, 0);
   });
 
   void it("缓存读写失败时继续执行检查", async () => {
@@ -660,7 +654,6 @@ function createTestConfig(
     },
     quality: {
       checks: [...(options.precedingChecks ?? []), check],
-      buildCandidates: () => [candidate],
       ...(options.cache === undefined ? {} : { resultCache: options.cache }),
       ...(options.exceptionStore === undefined
         ? {}

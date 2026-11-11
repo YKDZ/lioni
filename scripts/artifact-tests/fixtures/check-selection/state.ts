@@ -1,7 +1,6 @@
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-export type CandidateMode = "default" | "empty" | "throw";
 export type TermsLoaderMode =
   | "none"
   | "failure"
@@ -9,8 +8,6 @@ export type TermsLoaderMode =
   | "reader-contract-error";
 
 let sharedRevision = "v1";
-let candidateMode: CandidateMode = "default";
-let builderReadsShared = true;
 let sharedReadFails = false;
 let termsLoaderMode: TermsLoaderMode = "none";
 
@@ -37,22 +34,6 @@ export function readEvents(): string[] {
 
 export function setSharedRevision(value: string): void {
   sharedRevision = value;
-}
-
-export function setCandidateMode(value: CandidateMode): void {
-  candidateMode = value;
-}
-
-export function getCandidateMode(): CandidateMode {
-  return candidateMode;
-}
-
-export function setBuilderReadsShared(value: boolean): void {
-  builderReadsShared = value;
-}
-
-export function shouldBuilderReadShared(): boolean {
-  return builderReadsShared;
 }
 
 export function setSharedReadFails(value: boolean): void {

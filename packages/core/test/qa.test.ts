@@ -19,15 +19,50 @@ import {
   fixtureTranslationKey,
 } from "./source-schema.ts";
 
+async function factsForCandidates(keys: readonly string[]) {
+  const units = keys.map((source) => ({ source }));
+  const config = defineConfig({
+    source: {
+      schema: sourceSchemaFromExamples(units[0] ?? { source: "unused" }),
+      read: () => ({
+        scopes: [
+          {
+            range: "messages.json",
+            enumeration: "complete" as const,
+            records: units.map((value) => ({
+              value,
+              bodyAvailability: "available" as const,
+            })),
+          },
+        ],
+      }),
+    },
+    keyOf: ({ source }) => source,
+    translations: {
+      languages: ["fr"],
+      keyOf: fixtureTranslationKey,
+      schema: schemaFromExamples({ id: "unused", text: "" }),
+      contentSchema: jsonValueSchema,
+      contentOf: ({ text }) => text,
+      read: (_language, sourceUnits) => ({
+        scopes: [
+          {
+            range: "fr.json",
+            covers: sourceUnits.map(({ key }) => key),
+            enumeration: "complete" as const,
+            records: [],
+          },
+        ],
+      }),
+    },
+  });
+  return await readFacts(config);
+}
+
 void describe("quality checks", () => {
   void it("rejects non-JSON dependencies before reporting a QA check failure", async () => {
     const unit = { source: "Hello" };
     const translation = { id: "message:hello", text: "Bonjour" };
-    const candidate = {
-      sourceKey: "message:hello",
-      language: "fr",
-      content: "Bonjour",
-    };
     let observedDependencies: unknown;
 
     function configFor(dependencies: unknown) {
@@ -70,7 +105,6 @@ void describe("quality checks", () => {
           }),
         },
         quality: {
-          buildCandidates: () => [candidate],
           checks: [
             defineTestQualityCheck({
               id: "dependency-observer",
@@ -331,7 +365,7 @@ void describe("quality checks", () => {
       }),
     ]);
     const notApplicable = await runQualityChecks(
-      facts,
+      await factsForCandidates(["unused"]),
       {
         ...request,
         candidates: [
@@ -399,12 +433,7 @@ void describe("quality checks", () => {
   });
 
   void it("calls each configured checker once for each candidate", async () => {
-    const facts = await readFacts(
-      defineConfig({
-        source: { schema: emptySourceSchema, read: () => ({ scopes: [] }) },
-        keyOf: () => "unused",
-      }),
-    );
+    const facts = await factsForCandidates(["A", "B"]);
     const observed: string[] = [];
     const result = await runQualityChecks(
       facts,
@@ -448,12 +477,7 @@ void describe("quality checks", () => {
   });
 
   void it("marks a thrown checker failed without losing the run binding", async () => {
-    const facts = await readFacts(
-      defineConfig({
-        source: { schema: emptySourceSchema, read: () => ({ scopes: [] }) },
-        keyOf: () => "unused",
-      }),
-    );
+    const facts = await factsForCandidates(["external"]);
     const dependencies = { sourceRevision: "revision-2" };
     const result = await runQualityChecks(
       facts,
@@ -481,26 +505,7 @@ void describe("quality checks", () => {
   });
 
   void it("按完整绑定豁免对应执行的全部诊断并保留证据", async () => {
-    const facts = await readFacts(
-      defineConfig({
-        source: {
-          schema: sourceSchemaFromExamples({ source: "A" }),
-          read: () => ({
-            scopes: [
-              {
-                range: "src/messages.ts",
-                enumeration: "complete",
-                records: [
-                  { value: { source: "A" }, bodyAvailability: "available" },
-                  { value: { source: "B" }, bodyAvailability: "available" },
-                ],
-              },
-            ],
-          }),
-        },
-        keyOf: (unit) => unit.source,
-      }),
-    );
+    const facts = await factsForCandidates(["A", "B"]);
     const makeFinding = (key: string) => ({
       severity: "error" as const,
       object: { kind: "translation-unit", key, language: "fr" },
@@ -630,15 +635,7 @@ void describe("quality checks", () => {
   });
 
   void it("无诊断的 not-applicable 执行仍按可靠依据报告例外适用", async () => {
-    const facts = await readFacts(
-      defineConfig({
-        source: {
-          schema: sourceSchemaFromExamples({ source: "A" }),
-          read: () => ({ scopes: [] }),
-        },
-        keyOf: (unit) => unit.source,
-      }),
-    );
+    const facts = await factsForCandidates(["A"]);
     const request: QualityCheckRequest = {
       candidates: [{ sourceKey: "A", language: "fr", content: "value:A" }],
     };

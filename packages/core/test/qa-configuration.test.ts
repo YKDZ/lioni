@@ -146,6 +146,10 @@ function qualityConfig(
                 value: { id: "save", source: "Save" },
                 bodyAvailability: "available" as const,
               },
+              {
+                value: { id: "other", source: "Other" },
+                bodyAvailability: "available" as const,
+              },
             ],
           },
         ],
@@ -275,7 +279,7 @@ void describe("quality checker configuration contracts", () => {
     const result = await analyzeQuality(config, {
       candidates: [
         { sourceKey: "save", language: "fr", content: "A" },
-        { sourceKey: "save", language: "fr", content: "Sauver" },
+        { sourceKey: "other", language: "fr", content: "Sauver" },
       ],
     });
 

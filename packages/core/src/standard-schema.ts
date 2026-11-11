@@ -229,6 +229,24 @@ export function snapshotJsonValuePreservingShared(
   ) as JsonValue;
 }
 
+/** 冻结已验证的 JSON 数据，并可登记供本次运行共享的对象。 */
+export function freezeJsonValue<TValue>(
+  value: TValue,
+  sharedValues?: WeakSet<object>,
+): TValue {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value))
+    return value;
+  Object.freeze(value);
+  sharedValues?.add(value);
+  if (Array.isArray(value)) {
+    for (const item of value) freezeJsonValue(item, sharedValues);
+  } else {
+    for (const item of Object.values(value))
+      freezeJsonValue(item, sharedValues);
+  }
+  return value;
+}
+
 function copyJsonValue(
   value: unknown,
   valueDescription: string,

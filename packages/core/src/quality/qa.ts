@@ -17,6 +17,7 @@ import type { JsonValue, SemanticEditCandidate } from "../semantic-edits.ts";
 import { stableStringifyJson } from "../stable-json.ts";
 import {
   assertJsonValue,
+  freezeJsonValue,
   isStandardSchema,
   snapshotJsonValue,
   snapshotJsonValuePreservingShared,
@@ -27,6 +28,7 @@ import type {
   PreservingStandardSchema,
   StandardSchemaV1,
 } from "../standard-schema.ts";
+import { validateQualityCandidateScope } from "./candidate-contract.ts";
 import type {
   QualityProfileSession,
   QualityProfileCandidateSession,
@@ -215,7 +217,7 @@ export function createQualityDataReader(): QualityDataReaderScope {
         snapshotReader = async (...readerArgs: readonly unknown[]) => {
           const value = await reader(...(readerArgs as unknown as TArguments));
           const snapshot = snapshotJsonValue(value, "QA 检查资料");
-          freezeQualityData(snapshot, sharedValues);
+          freezeJsonValue(snapshot, sharedValues);
           return snapshot;
         };
         operations.set(reader, snapshotReader);
@@ -233,22 +235,6 @@ export function createQualityDataReader(): QualityDataReaderScope {
       ),
     dispose: () => memo.dispose(),
   };
-}
-
-function freezeQualityData(
-  value: unknown,
-  sharedValues?: WeakSet<object>,
-): void {
-  if (typeof value !== "object" || value === null || Object.isFrozen(value))
-    return;
-  Object.freeze(value);
-  sharedValues?.add(value);
-  if (Array.isArray(value)) {
-    for (const item of value) freezeQualityData(item, sharedValues);
-  } else {
-    for (const item of Object.values(value))
-      freezeQualityData(item, sharedValues);
-  }
 }
 
 function snapshotQualityDataPreservingShared<TValue>(
@@ -721,7 +707,7 @@ function defineCheckerFor<
           `QA 检查器 ${id} 的输入`,
           { snapshotInput: true },
         );
-        freezeQualityData(input);
+        freezeJsonValue(input);
         context.startFingerprint();
         try {
           return {
@@ -1383,6 +1369,7 @@ export async function runQualityChecks<
   >[],
   options: QualityExecutionOptions = {},
 ): Promise<QualityRunResult<QualityObject, TBody>> {
+  validateQualityCandidateScope(facts, request.candidates);
   const qualityData = createQualityDataReader();
   try {
     return await runQualityChecksWithQualityData(
