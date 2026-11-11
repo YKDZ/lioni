@@ -121,14 +121,20 @@ export type {
   UpsertQualityExceptionFromReportInput,
 } from "./quality/quality-exceptions.ts";
 export {
+  QualityCheckerContractError,
   QualityCheckBindingError,
   QualityDataReaderContractError,
   createDefaultQualityInputBasis,
+  defineChecker,
   defineQualityCheck,
   bindQualityCheck,
   runQualityChecks,
 } from "./quality/qa.ts";
 export type {
+  CheckerDefinition,
+  CheckerLoadInput,
+  CheckerPreparation,
+  CheckerPrepareInput,
   QualityCheckStatus,
   QualityObject,
   QualityLocation,

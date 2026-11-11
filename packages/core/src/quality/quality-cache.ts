@@ -26,9 +26,31 @@ export type QualityCheckResultCache<
 export function isCacheableQualityCheckOutcome(
   value: unknown,
 ): value is CacheableQualityCheckOutcome {
+  if (!isQualityCheckOutcome(value) || !isReusableQualityCheckOutcome(value))
+    return false;
+  try {
+    assertJsonValue(value, "QA 原始检查结果");
+  } catch {
+    return false;
+  }
+  return true;
+}
+
+export function isReusableQualityCheckOutcome(
+  value: QualityCheckOutcome,
+): value is CacheableQualityCheckOutcome {
+  return value.status === "complete" || value.status === "not-applicable";
+}
+
+export function isQualityCheckOutcome(
+  value: unknown,
+): value is QualityCheckOutcome {
   if (
     !isRecord(value) ||
-    (value.status !== "complete" && value.status !== "not-applicable") ||
+    (value.status !== "complete" &&
+      value.status !== "not-applicable" &&
+      value.status !== "incomplete" &&
+      value.status !== "failed") ||
     !Array.isArray(value.diagnostics) ||
     !value.diagnostics.every(isQualityFinding) ||
     !Array.isArray(value.issues) ||
@@ -49,11 +71,6 @@ export function isCacheableQualityCheckOutcome(
       return false;
   }
 
-  try {
-    assertJsonValue(value, "QA 原始检查结果");
-  } catch {
-    return false;
-  }
   return true;
 }
 
@@ -71,7 +88,7 @@ function isQualityFinding(value: unknown): boolean {
   );
 }
 
-function isQualityIssue(value: unknown): boolean {
+export function isQualityIssue(value: unknown): boolean {
   return (
     isRecord(value) &&
     typeof value.code === "string" &&

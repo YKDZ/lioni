@@ -101,6 +101,8 @@ export class StandardSchemaContractError extends TypeError {
 export type StandardSchemaValidationOptions = {
   readonly requireJson?: boolean;
   readonly preserveValue?: boolean;
+  /** 保值校验成功后，返回未交给 schema 的输入快照。 */
+  readonly snapshotInput?: boolean;
 };
 
 export async function validateWithStandardSchema<TInput, TOutput>(
@@ -109,7 +111,8 @@ export async function validateWithStandardSchema<TInput, TOutput>(
   valueDescription: string,
   options: StandardSchemaValidationOptions = {},
 ): Promise<TOutput> {
-  const preserveValue = options.preserveValue === true;
+  const preserveValue =
+    options.preserveValue === true || options.snapshotInput === true;
   const requireJson = options.requireJson === true || preserveValue;
   // 只有保值契约需要保存验证前的副本；单纯 JSON 校验不复制输入。
   const before = preserveValue
@@ -188,7 +191,7 @@ export async function validateWithStandardSchema<TInput, TOutput>(
       `${valueDescription}的 Standard Schema 验证结果改动了领域值。`,
     );
 
-  return output as TOutput;
+  return (options.snapshotInput === true ? before : output) as TOutput;
 }
 
 /** 只验证 JSON 合法性，不创建数据副本。 */
@@ -396,7 +399,7 @@ function matchesJsonSnapshot(
   valueDescription: string,
 ): boolean {
   try {
-    copyJsonValue(value, valueDescription);
+    assertJsonValue(value, valueDescription);
   } catch {
     return false;
   }
