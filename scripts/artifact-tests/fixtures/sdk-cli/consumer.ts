@@ -159,12 +159,13 @@ const invalidDependencyData = () => {
   return value;
 };
 const configForInvalidData = createConfig();
+const configuredQuality = configForInvalidData.quality ?? { checks: [] };
 const invalidDataConfig = {
   ...configForInvalidData,
   quality: {
-    ...configForInvalidData.quality,
+    ...configuredQuality,
     checks: [
-      ...configForInvalidData.quality.checks,
+      ...(configuredQuality.checks ?? []),
       defineChecker({
         id: "artifact/invalid-quality-data",
         version: "1",

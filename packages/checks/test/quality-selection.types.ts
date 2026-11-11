@@ -209,6 +209,38 @@ const staticVueConfig: FrameworkConfig<
 > = vueConfig;
 void staticVueConfig;
 
+const mismatchedNumberChecker = createNumberChecker.withTypes<
+  VueUnit,
+  { readonly id: number },
+  VueBody,
+  never
+>()();
+function configWithMismatchedNumberChecker() {
+  return defineConfig.withTypes<
+    VueUnit,
+    typeof sourceSchema,
+    typeof translationSchema,
+    never,
+    typeof translationBodySchema
+  >()({
+    source: { schema: sourceSchema, read: () => ({ scopes: [] }) },
+    keyOf: (unit) => unit.context.key,
+    translations: {
+      languages: ["fr"],
+      keyOf: (translation) => translation.id,
+      schema: translationSchema,
+      contentSchema: translationBodySchema,
+      contentOf: (translation) => translation.body,
+      read: () => ({ scopes: [] }),
+    },
+    quality: {
+      // @ts-expect-error 检查器不得改变宿主配置声明的译文类型。
+      checks: [mismatchedNumberChecker],
+    },
+  });
+}
+void configWithMismatchedNumberChecker;
+
 function verifyVueSelectionTypes() {
   void analyzeQuality(vueConfig, { groups: ["syntax"] });
   void analyzeQuality(vueConfig, {
