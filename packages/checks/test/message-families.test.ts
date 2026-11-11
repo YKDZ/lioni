@@ -652,7 +652,6 @@ function configFor(
     },
     quality: {
       checks: [qualityChecker],
-      buildCandidates: () => [],
       ...(exceptionStore === undefined ? {} : { exceptionStore }),
       ...(resultCache === undefined ? {} : { resultCache }),
     },

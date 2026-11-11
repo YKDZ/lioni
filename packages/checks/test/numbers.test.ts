@@ -348,9 +348,17 @@ void describe("阿拉伯数字对应检查", () => {
     }
   });
 
-  void it("原文缺失、正文不可用和非文本内容如实报告未完成", async () => {
+  void it("缺少原文时拒绝候选身份，正文不可用和非文本内容报告未完成", async () => {
+    await assert.rejects(
+      analyzeQuality(configFor(undefined, "12"), {
+        candidates: [
+          { sourceKey: "hash:message", language: "fr", content: "12" },
+        ],
+      }),
+      /原文键.*不存在于本次已读取的原文/,
+    );
+
     for (const [config, candidate] of [
-      [configFor(undefined, "12"), "12"],
       [configFor("12", "12", "unavailable"), "12"],
       [configFor(null, "12"), "12"],
       [configFor("12", null), null],

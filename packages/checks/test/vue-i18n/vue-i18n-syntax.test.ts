@@ -44,9 +44,9 @@ void test("原文与候选语法分别报告，并使用宿主提供的位置", 
   assert.deepEqual(target?.location.span, { start: 6, end: 6 });
 });
 
-void test("目标独有消息照常解析，显式空候选是有效正文", async () => {
+void test("空原文消息照常解析，显式空候选是有效正文", async () => {
   const policy = policyFor({
-    sourceMessages: {},
+    sourceMessages: { orphan: "" },
     targetMessages: { orphan: "bad } target" },
     targetLanguage: "fr",
   });
@@ -57,7 +57,7 @@ void test("目标独有消息照常解析，显式空候选是有效正文", asy
   assert.equal(
     invalid.checks.find((item) => item.checkId === checkIds.sourceSyntax)
       ?.status,
-    "not-applicable",
+    "complete",
   );
   assert.equal(invalid.diagnostics.length, 1);
   assert.equal(invalid.diagnostics[0]?.checkId, checkIds.targetSyntax);
