@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, it } from "node:test";
 
 import {
@@ -19,6 +22,7 @@ import {
   type StandardSchemaV1,
   type UpdatePlanItem,
 } from "../src/index.ts";
+import { createFileUpdatePlanStore } from "../src/node/index.ts";
 import {
   jsonValueSchema,
   schemaFromExamples,
@@ -794,5 +798,116 @@ void describe("业务更新计划与预览", () => {
 
     assert.equal(item?.action, "delete");
     assert.equal(item?.changes.translations[0]?.status, "unchanged");
+  });
+
+  void it("兼容读回升级前 v2 更新计划并从 v2 基线准确识别后续变化", async () => {
+    const store = await storedSnapshot(
+      [{ id: "welcome", source: "Welcome" }],
+      [{ targetId: "target-welcome", sourceId: "welcome", text: "Bienvenue" }],
+    );
+    const v2Baseline = {
+      ...store.baseline!,
+      snapshot: {
+        ...store.baseline!.snapshot,
+        translations: {
+          ...store.baseline!.snapshot.translations,
+          records: store.baseline!.snapshot.translations.records.map(
+            ({ record, ...rest }) => ({ ...rest, translation: record }),
+          ),
+        },
+      },
+    } as unknown as ComparisonBaseline<Unit, Translation, string>;
+    store.baseline = v2Baseline;
+
+    const changedConfig = makeConfig(
+      [{ id: "welcome", source: "Welcome back" }],
+      [{ targetId: "target-welcome", sourceId: "welcome", text: "Bienvenue" }],
+    );
+    const plan = await previewUpdate(changedConfig, store);
+    assert.equal(plan.items[0]?.action, "write");
+
+    const toLegacyRecord = (value: unknown) => {
+      if (typeof value !== "object" || value === null || !("record" in value))
+        return value;
+      const { record, ...rest } = value as { record: unknown };
+      return { ...rest, translation: record };
+    };
+    const toLegacySnapshot = (snapshot: typeof plan.current) => ({
+      ...snapshot,
+      translations: {
+        ...snapshot.translations,
+        records: snapshot.translations.records.map(toLegacyRecord),
+      },
+    });
+    const toLegacyChange = (
+      change: (typeof plan.comparisons.translationChanges)[number],
+    ) => ({
+      ...change,
+      ...(change.previous === undefined
+        ? {}
+        : { previous: toLegacyRecord(change.previous) }),
+      ...(change.current === undefined
+        ? {}
+        : { current: toLegacyRecord(change.current) }),
+    });
+    const v2Plan = {
+      ...plan,
+      previous:
+        plan.previous === undefined
+          ? undefined
+          : toLegacySnapshot(plan.previous),
+      current: toLegacySnapshot(plan.current),
+      comparisons: {
+        ...plan.comparisons,
+        translationChanges:
+          plan.comparisons.translationChanges.map(toLegacyChange),
+      },
+      items: plan.items.map((entry) => ({
+        ...entry,
+        changes: {
+          ...entry.changes,
+          translations: entry.changes.translations.map(toLegacyChange),
+        },
+      })),
+    };
+
+    const directory = await mkdtemp(path.join(os.tmpdir(), "lioni-v2-plan-"));
+    try {
+      const planFile = path.join(directory, "legacy-v2-plan.json");
+      await writeFile(planFile, `${JSON.stringify(v2Plan, null, 2)}\n`, "utf8");
+      const loaded = await createFileUpdatePlanStore(planFile).load();
+      assert.ok(loaded);
+      assert.doesNotThrow(() => validateUpdatePlan(loaded));
+      assert.deepStrictEqual(loaded.current.translations.records[0]?.record, {
+        targetId: "target-welcome",
+        sourceId: "welcome",
+        text: "Bienvenue",
+      });
+      assert.equal(
+        Object.hasOwn(
+          loaded.current.translations.records[0] as Record<string, unknown>,
+          "translation",
+        ),
+        false,
+      );
+      assert.deepStrictEqual(
+        loaded.comparisons.translationChanges[0]?.current?.record,
+        {
+          targetId: "target-welcome",
+          sourceId: "welcome",
+          text: "Bienvenue",
+        },
+      );
+      assert.deepStrictEqual(
+        loaded.items[0]?.changes.translations[0]?.previous?.record,
+        {
+          targetId: "target-welcome",
+          sourceId: "welcome",
+          text: "Bienvenue",
+        },
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });

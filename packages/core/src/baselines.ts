@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
+import { normalizeLegacyComparisonSnapshot } from "./comparison.ts";
 import type {
   Translation,
   ComparisonSnapshot,
@@ -119,9 +120,13 @@ export function replaceComparisonBaseline<
   >;
   readonly selection?: ComparisonBaselineSelection;
 }): ComparisonBaseline<TUnit, TTranslation, TBody, TUnavailable> {
-  const previous = options.previous;
-  const current = options.current;
-  if (previous !== undefined) validateComparisonBaseline(previous as unknown);
+  if (options.previous !== undefined)
+    validateComparisonBaseline(options.previous as unknown);
+  const previous =
+    options.previous === undefined
+      ? undefined
+      : normalizeLegacyComparisonBaseline(options.previous);
+  const current = normalizeLegacyComparisonSnapshot(options.current);
   validateSnapshot(current as unknown);
 
   const sourceRanges =
@@ -237,7 +242,11 @@ export async function recordComparisonBaselineFromSnapshot<
   RecordComparisonBaselineResult<TUnit, TTranslation, TBody, TUnavailable>
 > {
   assertCompleteSnapshot(current);
-  const previous = await store.load();
+  const loaded = await store.load();
+  const previous =
+    loaded === undefined
+      ? undefined
+      : normalizeLegacyComparisonBaseline(loaded);
   const baseline = replaceComparisonBaseline({
     ...(previous === undefined ? {} : { previous }),
     current,
@@ -251,7 +260,7 @@ export async function recordComparisonBaselineFromSnapshot<
   return { outcome: "saved", baseline };
 }
 
-/** 验证比较基线数据；旧处理基线不会转换为新格式。 */
+/** 验证比较基线数据；兼容读取升级前保存的 v2 快照字段，旧处理基线不会转换为新格式。 */
 export function validateComparisonBaseline(
   value: unknown,
 ): asserts value is ComparisonBaseline {
@@ -270,7 +279,24 @@ export function validateComparisonBaseline(
     );
   }
   assertJsonValue(value, "比较基线");
-  validateSnapshot(value.snapshot);
+  const normalized = normalizeLegacyComparisonBaseline(value);
+  validateSnapshot(normalized.snapshot);
+}
+
+function normalizeLegacyComparisonBaseline<T>(value: T): T {
+  if (!isRecord(value) || !Object.hasOwn(value, "snapshot")) return value;
+  const snapshot = normalizeLegacyComparisonSnapshot(value.snapshot);
+  if (snapshot === value.snapshot) return value;
+  const descriptor = Object.getOwnPropertyDescriptor(value, "snapshot");
+  if (
+    Object.isExtensible(value) &&
+    descriptor?.configurable === true &&
+    descriptor.writable === true
+  ) {
+    (value as Record<string, unknown>).snapshot = snapshot;
+    return value;
+  }
+  return { ...value, snapshot };
 }
 
 type ScopeEntry<TScope> = {
