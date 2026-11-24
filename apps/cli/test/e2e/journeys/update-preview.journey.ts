@@ -248,13 +248,7 @@ const journey: CliJourney = {
       },
       {
         name: "render preview decisions as text",
-        args: [
-          "update",
-          "lioni.config.ts",
-          "--dry-run",
-          "--output-format",
-          "text",
-        ],
+        args: ["update", "lioni.config.ts", "--dry-run", "--output", "text"],
       },
       {
         name: "execute the planned write through the host adapter",
@@ -266,7 +260,7 @@ const journey: CliJourney = {
           "update",
           "removed/lioni.config.ts",
           "--dry-run",
-          "--output-format",
+          "--output",
           "text",
         ],
       },
@@ -276,22 +270,17 @@ const journey: CliJourney = {
           "update",
           "empty/lioni.config.ts",
           "--dry-run",
-          "--output-format",
+          "--output",
           "text",
         ],
       },
       {
         name: "render retained execution results as text",
-        args: ["update", "lioni.config.ts", "--output-format", "text"],
+        args: ["update", "lioni.config.ts", "--output", "text"],
       },
       {
         name: "render an unconfirmed write as text",
-        args: [
-          "update",
-          "unconfirmed/lioni.config.ts",
-          "--output-format",
-          "text",
-        ],
+        args: ["update", "unconfirmed/lioni.config.ts", "--output", "text"],
       },
       {
         name: "keep machine status in structured execution results",
@@ -303,7 +292,7 @@ const journey: CliJourney = {
           "update",
           "modified/lioni.config.ts",
           "--dry-run",
-          "--output-format",
+          "--output",
           "text",
         ],
       },
@@ -317,12 +306,7 @@ const journey: CliJourney = {
       },
       {
         name: "以文本形式显示部分成功和批次异常",
-        args: [
-          "update",
-          "batch-text/lioni.config.ts",
-          "--output-format",
-          "text",
-        ],
+        args: ["update", "batch-text/lioni.config.ts", "--output", "text"],
       },
     ];
   },

@@ -133,7 +133,7 @@ export default defineConfig({
           "lioni.config.ts",
           "--language",
           "fr",
-          "--output-format",
+          "--output",
           "structured",
         ],
         env: { READ_LOG: "qa.log" },

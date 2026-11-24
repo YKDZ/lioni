@@ -66,7 +66,7 @@ export default defineConfig({
     return [
       {
         name: "QA 默认执行全部检查项",
-        args: ["qa", "lioni.config.ts", "--output-format", "structured"],
+        args: ["qa", "lioni.config.ts", "--output", "structured"],
       },
       {
         name: "QA 通过检查项 ID 选择子集",
@@ -75,7 +75,7 @@ export default defineConfig({
           "lioni.config.ts",
           "--check",
           "second",
-          "--output-format",
+          "--output",
           "structured",
         ],
       },
@@ -88,7 +88,7 @@ export default defineConfig({
           "first",
           "--check",
           "second",
-          "--output-format",
+          "--output",
           "structured",
         ],
       },
@@ -99,7 +99,7 @@ export default defineConfig({
           "lioni.config.ts",
           "--group",
           "daily",
-          "--output-format",
+          "--output",
           "structured",
         ],
       },
@@ -153,7 +153,10 @@ export default defineConfig({
       selectedIds: ["second"],
     });
 
-    for (const partial of [selected, repeatedChecks, selectedGroup])
+    assert.deepEqual(repeatedChecks.progress, [
+      { language: "fr", completed: 1, total: 1, percentage: 100 },
+    ]);
+    for (const partial of [selected, selectedGroup])
       assert.equal(Object.hasOwn(partial, "progress"), false);
 
     const conflictingSelection = results[4];
