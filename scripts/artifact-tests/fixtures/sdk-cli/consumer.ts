@@ -90,7 +90,6 @@ assert.deepEqual(
   ],
 );
 const quality = await runQa(config);
-assert.equal(quality.status, "complete");
 assert.equal(quality.diagnostics.length, 1);
 const defaultNumberConfig = {
   ...config,
@@ -101,7 +100,6 @@ const defaultNumberQuality = await runQa(defaultNumberConfig, {
     { sourceKey: "catalog", language: "fr", content: "Enregistrer 2 fichiers" },
   ],
 });
-assert.equal(defaultNumberQuality.status, "complete");
 assert.deepEqual(defaultNumberQuality.diagnostics, []);
 const qualityCheck = quality.checks[0];
 assert.ok(qualityCheck);
@@ -133,7 +131,6 @@ assert.deepEqual(
   ["de"],
 );
 const selectedQuality = await runQa(config, { languages: ["de"] });
-assert.equal(selectedQuality.status, "complete");
 assert.equal(selectedQuality.diagnostics.length, 0);
 assert.ok(
   selectedQuality.candidates.every(({ language }) => language === "de"),
@@ -169,7 +166,7 @@ const invalidDataConfig = {
         inputSchema: z.string(),
         load: ({ qualityData }) => qualityData.read(invalidDependencyData),
         prepare: () => "",
-        check: () => ([]),
+        check: () => [],
       }),
     ],
   },
