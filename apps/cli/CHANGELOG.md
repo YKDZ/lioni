@@ -1,5 +1,19 @@
 # 更新日志
 
+## 0.4.0
+
+### 翻译进度与检查豁免
+
+- 全量 QA 按目标语言报告翻译进度。每个原文键计一项，仍有未豁免诊断的项计为未完成。局部检查和草稿送检只报告本次检查结果。
+- 新增 `createMissingTranslationChecker` 和 `createSameTextChecker`。项目可分别检查缺译和原文预填，也可以为应保留原样的同文建立检查豁免。
+- 检查豁免取代 QA 例外。全量 QA 报告范围内的失效豁免，由宿主清理。旧例外文件需由宿主自行处理，并从新版报告重新建立仍有需要的豁免。
+
+### 升级 SDK 与 CLI
+
+- 将 `analyzeQuality` 改为 `runQa`。检查对象由原文键和目标语言确定，即使缺译也会进入检查。自定义检查器需处理空的 `candidate` 和 `translation`。`prepare` 返回完整检查输入，`check` 返回诊断数组。无法完成判断时抛错。
+- SDK 统一使用 `SourceUnit`、`Translation` 和 `TranslationCandidate`。`translation.record` 为宿主记录，`translation.content` 和 `candidate.content` 分别提供已保存正文和候选正文。已有 v2 比较基线与更新计划仍可读取。
+- CLI 升级至 `@ykdz/cli-contract` 0.7.0。`lioni qa` 默认输出文本，`--severity` 和 `--max-per-check` 只影响诊断明细。自动化脚本可用 `--output structured` 获取 v3 结构化报告，通过 `lioni --schema` 查询契约。
+
 ## 0.3.0
 
 ### 检查器与候选契约
