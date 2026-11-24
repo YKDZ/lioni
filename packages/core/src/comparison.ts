@@ -119,9 +119,13 @@ export function validateComparisonInput<
   if (!isRecord(value) || !Object.hasOwn(value, "previous"))
     invalidInput("比较输入必须提供 previous 与 current。");
 
-  validateSnapshot(value.current, "current");
-  if (value.previous !== undefined)
-    validateSnapshot(value.previous, "previous");
+  const current = normalizeLegacyComparisonSnapshot(value.current);
+  const previous =
+    value.previous === undefined
+      ? undefined
+      : normalizeLegacyComparisonSnapshot(value.previous);
+  validateSnapshot(current, "current");
+  if (previous !== undefined) validateSnapshot(previous, "previous");
 }
 
 export function validateComparisonResult<
@@ -167,7 +171,7 @@ export function defaultCompare<
 ): ComparisonResult<TUnit, TTranslation, TBody, TUnavailable> {
   validateComparisonInput<TUnit, TTranslation, TBody, TUnavailable>(input);
   return createDefaultComparison<TUnit, TTranslation, TBody, TUnavailable>(
-    input,
+    normalizeLegacyCompareInput(input),
   );
 }
 
@@ -184,15 +188,35 @@ export async function compareSnapshots<
   if (compare !== undefined && typeof compare !== "function")
     invalidInput("compare 必须是比较函数。");
 
+  const normalizedInput = normalizeLegacyCompareInput(input);
   const compared =
     compare === undefined || compare === defaultCompare
-      ? createDefaultComparison<TUnit, TTranslation, TBody, TUnavailable>(input)
-      : await compare(input);
+      ? createDefaultComparison<TUnit, TTranslation, TBody, TUnavailable>(
+          normalizedInput,
+        )
+      : await compare(normalizedInput);
   validateComparisonResult<TUnit, TTranslation, TBody, TUnavailable>(
-    input,
+    normalizedInput,
     compared,
   );
   return compared;
+}
+
+function normalizeLegacyCompareInput<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  input: CompareInput<TUnit, TTranslation, TBody, TUnavailable>,
+): CompareInput<TUnit, TTranslation, TBody, TUnavailable> {
+  const current = normalizeLegacyComparisonSnapshot(input.current);
+  const previous =
+    input.previous === undefined
+      ? undefined
+      : normalizeLegacyComparisonSnapshot(input.previous);
+  if (current === input.current && previous === input.previous) return input;
+  return { previous, current };
 }
 
 function createDefaultComparison<
@@ -747,9 +771,72 @@ function hasCompleteTranslationScope(
 
 function sourceRange<TUnit extends TranslationUnitInput>(
   source: SourceSnapshot<TUnit>,
-  fact: SourceUnit<TUnit>,
+  sourceUnit: SourceUnit<TUnit>,
 ): unknown {
-  return source.read.scopes[fact.scopeIndex]?.range;
+  return source.read.scopes[sourceUnit.scopeIndex]?.range;
+}
+
+/**
+ * 将升级前 v2 基线或更新计划中的旧译文字段 `translation` 无损归一化为 `record`。
+ * 可写对象原地迁移，冻结对象返回浅拷贝以兼容只读历史输入。
+ */
+export function normalizeLegacyTranslationRecord<T>(value: T): T {
+  if (!isRecord(value)) return value;
+  if (Object.hasOwn(value, "record") || !Object.hasOwn(value, "translation"))
+    return value;
+  const descriptor = Object.getOwnPropertyDescriptor(value, "translation");
+  if (Object.isExtensible(value) && descriptor?.configurable === true) {
+    const mutable = value as Record<string, unknown>;
+    mutable.record = mutable.translation;
+    delete mutable.translation;
+    return value;
+  }
+  const { translation: record, ...rest } = value;
+  return { ...rest, record } as T;
+}
+
+/**
+ * 归一化比较快照中的译文记录数组，兼容读取升级前保存的 v2 快照。
+ */
+export function normalizeLegacyComparisonSnapshot<T>(value: T): T {
+  if (!isRecord(value) || !isRecord(value.translations)) return value;
+  const rawRecords = value.translations.records;
+  if (!Array.isArray(rawRecords)) return value;
+  let changed = false;
+  const records = rawRecords.map((item) => {
+    const normalized = normalizeLegacyTranslationRecord(item);
+    if (normalized !== item) changed = true;
+    return normalized;
+  });
+  if (!changed) return value;
+  const mutable = value as Record<string, unknown>;
+  const translations = value.translations as Record<string, unknown>;
+  const translationsDescriptor = Object.getOwnPropertyDescriptor(
+    value,
+    "translations",
+  );
+  const recordsDescriptor = Object.getOwnPropertyDescriptor(
+    translations,
+    "records",
+  );
+  if (
+    Object.isExtensible(translations) &&
+    recordsDescriptor?.configurable === true &&
+    recordsDescriptor.writable === true
+  ) {
+    translations.records = records;
+    return value;
+  }
+  const nextTranslations = { ...translations, records };
+  if (
+    Object.isExtensible(value) &&
+    translationsDescriptor?.configurable === true &&
+    translationsDescriptor.writable === true
+  ) {
+    mutable.translations = nextTranslations;
+    return value;
+  }
+  return { ...value, translations: nextTranslations };
 }
 
 function readEvidence<

@@ -3,8 +3,11 @@ import {
   validateUpdatePlan,
   type FrameworkConfig,
   type QualityCheckRequest,
-  type TranslationCandidate,
+  type SourceUnit,
   type StandardSchemaV1,
+  type Translation as CoreTranslation,
+  type TranslationAssociation,
+  type TranslationCandidate,
   type TranslationUnitInput,
   type TranslationWriteRequest,
   type TranslationWritebackAdapter,
@@ -180,3 +183,25 @@ const translationUnitConstraint: TranslationUnitInput = {
   context: { key: "toolbar.save" },
 };
 void translationUnitConstraint;
+
+declare const sourceUnitExample: SourceUnit<Unit>;
+const unitRecord: Unit = sourceUnitExample.unit;
+void unitRecord;
+
+declare const translationExample: CoreTranslation<Translation, Body>;
+if (translationExample.bodyAvailability === "available") {
+  const hostRecord: Translation = translationExample.record;
+  const targetContent: Body = translationExample.content;
+  // @ts-expect-error 宿主原始记录与已提取目标正文不能混用。
+  const wrongContent: Body = translationExample.record;
+  // @ts-expect-error 已提取目标正文与宿主原始记录不能混用。
+  const wrongRecord: Translation = translationExample.content;
+  void hostRecord;
+  void targetContent;
+  void wrongContent;
+  void wrongRecord;
+}
+
+declare const associationExample: TranslationAssociation;
+const associationLanguage: string = associationExample.language;
+void associationLanguage;

@@ -78,8 +78,8 @@ void describe("动态 Node 配置契约", () => {
       );
 
       const loaded = await loadConfig(configPath);
-      const directFacts = await readSourceSnapshot(loaded);
-      assert.equal(directFacts.units[0]?.unit.source, "Save");
+      const directSnapshot = await readSourceSnapshot(loaded);
+      assert.equal(directSnapshot.units[0]?.unit.source, "Save");
       const snapshot = await readSourceSnapshot(loaded);
       const observed = {
         key: snapshot.units[0]?.key,
@@ -94,11 +94,11 @@ void describe("动态 Node 配置契约", () => {
       const customSuppressions = await custom.quality?.suppressionStore?.load();
       assert.deepEqual(customSuppressions, [customSuppression]);
       const plain = await loadConfig(unboundPath);
-      const plainFacts = await readSourceSnapshot(plain);
-      assert.equal(plainFacts.units.length, 0);
+      const plainSnapshot = await readSourceSnapshot(plain);
+      assert.equal(plainSnapshot.units.length, 0);
       const deferred = await loadConfig(deferredPath);
-      const deferredFacts = await readSourceSnapshot(deferred);
-      assert.equal(deferredFacts.units.length, 0);
+      const deferredSnapshot = await readSourceSnapshot(deferred);
+      assert.equal(deferredSnapshot.units.length, 0);
       await assert.rejects(
         readComparisonSnapshot(deferred),
         StandardSchemaContractError,

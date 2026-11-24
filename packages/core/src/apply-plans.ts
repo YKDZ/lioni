@@ -18,6 +18,7 @@ import {
 import { isRecord } from "./object-guards.ts";
 import {
   assertUpdatePlanLanguages,
+  normalizeLegacyUpdatePlan,
   previewUpdate,
   validateUpdatePlan,
 } from "./plans.ts";
@@ -125,12 +126,9 @@ export async function applyUpdatePlan<
     options,
   );
   validateUpdatePlan(plan);
-  const validatedPlan = plan as unknown as UpdatePlan<
-    TUnit,
-    TTranslation,
-    TBody,
-    TUnavailable
-  >;
+  const validatedPlan = normalizeLegacyUpdatePlan(
+    plan,
+  ) as unknown as UpdatePlan<TUnit, TTranslation, TBody, TUnavailable>;
   if (options.languages !== undefined)
     assertUpdatePlanLanguages(validatedPlan, languages);
   const requests = [] as UpdatePlanItem<
