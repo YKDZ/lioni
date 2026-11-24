@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 
 import {
   createMissingTranslationChecker,
@@ -8,6 +9,7 @@ import {
   defineConfig,
   formatQualityReport,
   runQa,
+  upsertQaSuppressionFromReport,
   type JsonValue,
   type QualityFinding,
   type QualityReportFormatOptions,
@@ -19,11 +21,18 @@ const mode = process.argv[2];
 const configFile =
   mode === "zero"
     ? "no-checks.config.ts"
-    : mode === "run"
+    : mode === "run" ||
+        mode === "expect-run-error" ||
+        mode === "expect-upsert-error"
       ? (process.argv[3] ?? "lioni.config.ts")
       : "lioni.config.ts";
 const config = await loadConfig(configFile);
 if (mode === "draft") {
+  const emptySelection = await runQa(config, { candidates: [] });
+  assert.equal(emptySelection.progress, undefined);
+  assert.deepEqual(emptySelection.candidates, []);
+  assert.deepEqual(emptySelection.diagnostics, []);
+
   const report = await runQa(config, {
     candidates: [{ sourceKey: "button", language: "fr", content: "Ouvrir" }],
   });
@@ -207,8 +216,50 @@ if (mode === "draft") {
           readonly languages?: readonly string[];
           readonly checkIds?: readonly string[];
           readonly groups?: readonly string[];
+          readonly candidates?: readonly {
+            readonly sourceKey: string;
+            readonly language: string;
+            readonly content: string;
+          }[];
+          readonly includeCleanExecutions?: boolean;
         });
   process.stdout.write(JSON.stringify(await runQa(config, options as never)));
+} else if (mode === "expect-run-error") {
+  let caught: unknown;
+  try {
+    await runQa(config);
+  } catch (error) {
+    caught = error;
+  }
+  assert.ok(caught instanceof Error, "预期 runQa 抛出错误。");
+  process.stdout.write(caught.message);
+} else if (mode === "expect-upsert-error") {
+  const reportFile = process.argv[4]!;
+  const checkId = process.argv[5]!;
+  const executionId = Number(process.argv[6]!);
+  const id = process.argv[7]!;
+  const reason = process.argv[8]!;
+  const report = JSON.parse(await readFile(reportFile, "utf8")) as unknown;
+  const store = config.quality?.suppressionStore;
+  assert.ok(store);
+  let caught: unknown;
+  try {
+    await upsertQaSuppressionFromReport({
+      report,
+      checkId,
+      executionId,
+      id,
+      reason,
+      store,
+    });
+  } catch (error) {
+    caught = error;
+  }
+  assert.ok(
+    caught instanceof Error,
+    "预期 upsertQaSuppressionFromReport 抛出错误。",
+  );
+  process.stdout.write(caught.message);
 } else if (mode === "severity") {
   // 同一项有两条诊断仍只扣一项，提示和警告都影响进度。
   const report = await runQa({

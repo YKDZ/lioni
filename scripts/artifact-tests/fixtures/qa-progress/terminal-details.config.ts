@@ -1,3 +1,5 @@
+import { appendFileSync, existsSync } from "node:fs";
+
 import { defineChecker, defineConfig, type QualityFinding } from "@lioni/lioni";
 import * as z from "zod";
 
@@ -99,6 +101,19 @@ const extraInfoCheck = defineChecker.withTypes<
 
 export default defineConfig({
   ...baseConfig,
+  source: {
+    ...baseConfig.source,
+    async read() {
+      if (existsSync(new URL("./.track-reads", import.meta.url))) {
+        appendFileSync(
+          new URL("./.qa-reads.log", import.meta.url),
+          "source:read\n",
+          "utf8",
+        );
+      }
+      return await baseConfig.source.read();
+    },
+  },
   quality: {
     checks: [detailsCheck, extraInfoCheck],
   },

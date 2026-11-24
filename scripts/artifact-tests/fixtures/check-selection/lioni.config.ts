@@ -131,10 +131,10 @@ function createChecker<const TId extends "syntax" | "terms" | "unlisted">(
       assertQualityData(loaded);
       const dependency = memo.memo(compileQualityData)(loaded);
       return {
-          candidateSourceKey: association.sourceKey,
-          candidateLanguage: association.language,
-          dependency,
-        };
+        candidateSourceKey: association.sourceKey,
+        candidateLanguage: association.language,
+        dependency,
+      };
     },
     check(input): readonly QualityFinding[] {
       const dependency = input.dependency;

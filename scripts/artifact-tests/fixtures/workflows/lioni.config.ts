@@ -143,8 +143,7 @@ export default defineConfig({
     locateExistingTarget: ({ translation }) => ({
       status: "located",
       locator:
-        translation.record.writePath ??
-        targetPath(translation.record.id),
+        translation.record.writePath ?? targetPath(translation.record.id),
     }),
     locateNewTarget: () => ({
       status: "notWritable",

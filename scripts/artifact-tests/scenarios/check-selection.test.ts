@@ -167,6 +167,10 @@ testArtifactConsumer(
     }
 
     const { noProvidedCandidates, explicitCandidates } = sdk.candidates;
+    assert.ok(noProvidedCandidates.result);
+    assert.equal(noProvidedCandidates.result.progress, undefined);
+    assert.deepEqual(noProvidedCandidates.result.candidates, []);
+    assert.deepEqual(noProvidedCandidates.result.diagnostics, []);
     assert.ok(!noProvidedCandidates.events.includes("candidate:build"));
     assert.ok(
       !noProvidedCandidates.events.some((event) => event.startsWith("loader:")),
@@ -293,6 +297,42 @@ testArtifactConsumer(
       const invalid = await cli(...invalidArgs);
       assert.notEqual(invalid.status, 0);
       assert.deepEqual(await eventsIn(root), []);
+    }
+
+    // S11：读取范围不完整、prepare 抛错、check 抛错时，CLI 非零退出、指出范围/检查项/键/语言且不交付部分报告。
+    for (const [configFile, pattern] of [
+      ["incomplete-read.config.ts", /fr.*partial-fr\.json/u],
+      ["prepare-failure.config.ts", /prepare-boom.*save.*fr.*准备阶段缺材料/u],
+      ["check-failure.config.ts", /check-boom.*save.*fr.*执行阶段崩溃/u],
+    ] as const) {
+      const textFail = await runProcess(executable, ["qa", configFile]);
+      assert.equal(textFail.status, 1);
+      assert.match(textFail.stdout + textFail.stderr, pattern);
+      assert.doesNotMatch(textFail.stdout + textFail.stderr, /翻译进度/u);
+
+      const structuredFail = await runProcess(executable, [
+        "qa",
+        configFile,
+        "--output",
+        "structured",
+      ]);
+      assert.equal(structuredFail.status, 1);
+      const envelope = JSON.parse(
+        structuredFail.stdout || structuredFail.stderr,
+      ) as {
+        readonly kind: string;
+        readonly variant?: string;
+        readonly data?: {
+          readonly message?: string;
+          readonly diagnostics?: unknown;
+          readonly progress?: unknown;
+        };
+      };
+      assert.equal(envelope.kind, "failure");
+      assert.equal(envelope.variant, "checkFailed");
+      assert.equal(envelope.data?.diagnostics, undefined);
+      assert.equal(envelope.data?.progress, undefined);
+      assert.match(envelope.data?.message ?? "", pattern);
     }
   },
 );
