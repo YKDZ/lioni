@@ -48,7 +48,11 @@ const passingReport: QualityRunResult = {
       },
     ],
   },
-  checkScope: { configuredCount: 1, selectedIds: ["messages"] },
+  checkScope: {
+    configuredCount: 1,
+    selectedIds: ["messages"],
+    evaluatedCount: 1,
+  },
   relationships: [],
   suppressions: [],
   diagnostics: [],
@@ -201,7 +205,10 @@ void describe("质量报告", () => {
 
     assert.match(text, /质量结论：未通过/u);
     assert.match(text, /语言范围：读取 fr；所选候选语言 fr/u);
-    assert.match(text, /检查项范围：配置 1 项，本次全量 1 项（messages）/u);
+    assert.match(
+      text,
+      /检查项范围：配置 1 项，本次全量 1 项（messages）；运行了 1 项检查/u,
+    );
     assert.match(text, /送检范围：1 项，其中 1 项提供了译文/u);
     assert.match(text, /有效问题：错误 1，警告 0，提示 0/u);
     assert.match(text, /locales\/fr\.json.*welcome\.title.*缺少必要内容/u);
@@ -214,18 +221,27 @@ void describe("质量报告", () => {
     const noCandidates = formatQualityReport(
       changedReport({
         candidates: [],
+        checkScope: {
+          configuredCount: 1,
+          selectedIds: ["messages"],
+          evaluatedCount: 0,
+        },
         readCoverage: { ...passingReport.readCoverage, associations: [] },
       }),
     );
     const noChecks = formatQualityReport(
       changedReport({
-        checkScope: { configuredCount: 0, selectedIds: [] },
+        checkScope: { configuredCount: 0, selectedIds: [], evaluatedCount: 0 },
         checks: [],
       }),
     );
     assert.match(noCandidates, /送检范围：0 项，其中 0 项提供了译文/u);
+    assert.match(noCandidates, /运行了 0 项检查/u);
     assert.match(noCandidates, /语言范围：读取 fr；所选候选语言 无/u);
-    assert.match(noChecks, /检查项范围：配置 0 项，本次无检查项/u);
+    assert.match(
+      noChecks,
+      /检查项范围：配置 0 项，本次无检查项；运行了 0 项检查/u,
+    );
     assert.equal(isQualityReportPassing(changedReport({ checks: [] })), false);
   });
 

@@ -14,15 +14,24 @@ import { loadConfig } from "@lioni/lioni/node";
 import * as z from "zod";
 
 const mode = process.argv[2];
-const config = await loadConfig(
-  mode === "zero" ? "no-checks.config.ts" : "lioni.config.ts",
-);
+const configFile =
+  mode === "zero"
+    ? "no-checks.config.ts"
+    : mode === "run"
+      ? (process.argv[3] ?? "lioni.config.ts")
+      : "lioni.config.ts";
+const config = await loadConfig(configFile);
 if (mode === "draft") {
   const report = await runQa(config, {
     candidates: [{ sourceKey: "button", language: "fr", content: "Ouvrir" }],
   });
   assert.equal(report.progress, undefined);
   assert.equal(report.diagnostics.length, 0);
+
+  const selectedCandidates = await runQa(config, {
+    selectCandidates: (all) => all.slice(0, 1),
+  });
+  assert.equal(selectedCandidates.progress, undefined);
 
   // 可读空字符串满足缺译存在性要求；同文草稿则转为同文诊断。
   const emptyDraft = await runQa(config, {
@@ -182,11 +191,22 @@ if (mode === "draft") {
 } else if (mode === "zero") {
   const report = await runQa(config);
   assert.equal(report.checkScope.configuredCount, 0);
+  assert.equal(report.checkScope.evaluatedCount, 0);
   assert.deepEqual(report.progress, [
     { language: "fr", completed: 10, total: 10, percentage: 100 },
   ]);
   assert.equal(decideQualityReport(report).status, "no-checks");
   process.stdout.write(JSON.stringify(report));
+} else if (mode === "run") {
+  const options =
+    process.argv[4] === undefined
+      ? {}
+      : (JSON.parse(process.argv[4]) as {
+          readonly languages?: readonly string[];
+          readonly checkIds?: readonly string[];
+          readonly groups?: readonly string[];
+        });
+  process.stdout.write(JSON.stringify(await runQa(config, options as never)));
 } else if (mode === "severity") {
   // 同一项有两条诊断仍只扣一项，提示和警告都影响进度。
   const report = await runQa({

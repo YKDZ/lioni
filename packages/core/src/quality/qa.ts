@@ -534,6 +534,8 @@ export type QualityCheckResult<TObject extends QualityObject = QualityObject> =
 export type QualityCheckScope = {
   readonly configuredCount: number;
   readonly selectedIds: readonly string[];
+  /** 至少评估过一个检查对象的不同检查项数量（含缓存命中与无诊断返回）。 */
+  readonly evaluatedCount: number;
 };
 
 export type QualityReadCoverage = {
@@ -933,6 +935,8 @@ export async function runQualityChecksWithQualityData<
       checkScope: {
         configuredCount: checks.length,
         selectedIds: checks.map(({ id }) => id),
+        evaluatedCount: results.filter((check) => check.coverage.evaluated > 0)
+          .length,
       },
       suppressions,
       readCoverage: snapshotQualityData({

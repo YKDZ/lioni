@@ -76,6 +76,7 @@ testArtifactConsumer(
     assert.deepEqual(sdk.full.result?.checkScope, {
       configuredCount: 3,
       selectedIds: ["syntax", "terms", "unlisted"],
+      evaluatedCount: 3,
     });
     assert.equal(eventCount(sdk.full, "shared:read"), 1);
     assert.equal(eventCount(sdk.full, "compile:shared:v1"), 1);
@@ -268,6 +269,7 @@ testArtifactConsumer(
     assert.deepEqual(groupedResult.checkScope, {
       configuredCount: 3,
       selectedIds: ["syntax", "terms"],
+      evaluatedCount: 2,
     });
     assert.ok(
       !groupedResult.checks.some(({ checkId }) => checkId === "unlisted"),

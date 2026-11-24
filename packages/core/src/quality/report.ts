@@ -67,7 +67,7 @@ export function formatQualityReport(report: QualityReport): string {
   );
   const candidateLanguages = report.candidates.map(({ language }) => language);
   const decision = decideQualityReport(report);
-  const { configuredCount, selectedIds } = report.checkScope;
+  const { configuredCount, selectedIds, evaluatedCount } = report.checkScope;
   const checkScope =
     configuredCount === 0
       ? "配置 0 项，本次无检查项"
@@ -75,7 +75,7 @@ export function formatQualityReport(report: QualityReport): string {
   const lines = [
     `质量结论：${decision.passed ? "通过" : "未通过"}`,
     `语言范围：${readLanguages.length === 0 ? "无译文语言" : `读取 ${readLanguages.join("、")}`}；所选候选语言 ${candidateLanguages.length === 0 ? "无" : [...new Set(candidateLanguages)].join("、")}`,
-    `检查项范围：${checkScope}`,
+    `检查项范围：${checkScope}；运行了 ${evaluatedCount} 项检查`,
     `送检范围：${report.readCoverage.associations.filter((a) => a.subjectSelected).length} 项，其中 ${report.candidates.length} 项提供了译文`,
     ...(report.progress ?? []).map(
       ({ language, completed, total, percentage }) =>

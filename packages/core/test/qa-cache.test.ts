@@ -151,6 +151,7 @@ void describe("QA 结果缓存", () => {
       );
       const warm = await runQa(independentConfig);
       assert.deepEqual(warm.diagnostics, first.diagnostics);
+      assert.equal(warm.checkScope.evaluatedCount, 1);
       assert.equal(checkCount, 1);
 
       const [entryName] = await readdir(cacheDirectory);

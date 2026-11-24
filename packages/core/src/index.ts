@@ -1024,6 +1024,7 @@ export async function runQa<
         checkScope: {
           configuredCount: configuredChecks.length,
           selectedIds: selectedChecks.map(({ id }) => id),
+          evaluatedCount: result.checkScope.evaluatedCount,
         },
       };
       // 只有未筛选对象且覆盖全部已配置规则的已保存资源运行才代表全量范围，其余为草稿或局部调试。
