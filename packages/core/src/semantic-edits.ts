@@ -250,11 +250,7 @@ type WriteSnapshot<
   readonly source?: SourceSnapshot<TUnit>;
   readonly translations: {
     readonly reads: readonly TranslationReadCoverage[];
-    readonly records: readonly Translation<
-      TTranslation,
-      TBody,
-      TUnavailable
-    >[];
+    readonly records: readonly Translation<TTranslation, TBody, TUnavailable>[];
   };
 };
 
@@ -811,9 +807,7 @@ async function prepareWrite<
       currentTranslation = findTranslationByIdentity(
         current,
         request.target.identity,
-      ) as
-        | AvailableTranslation<TTranslation, TBody, TUnavailable>
-        | undefined;
+      ) as AvailableTranslation<TTranslation, TBody, TUnavailable> | undefined;
       if (currentTranslation === undefined) {
         if (
           isTranslationReadComplete(current, request.target.identity.language)

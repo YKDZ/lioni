@@ -105,6 +105,33 @@ void test("按分组并集去重并保持配置顺序执行，未归组项不运
   assert.deepEqual(executed, ["unlisted", "terms", "syntax"]);
   assert.deepEqual(loaded, ["unlisted", "terms", "syntax"]);
   assert.match(formatQualityReport(fullRun), /本次全量 3 项/u);
+  assert.deepEqual(fullRun.progress, [
+    { language: "zh-CN", completed: 1, total: 1, percentage: 100 },
+  ]);
+
+  assert.equal(result.progress, undefined);
+
+  const explicitAll = await runQa(config, {
+    checkIds: ["syntax", "terms", "unlisted"],
+  });
+  assert.deepEqual(explicitAll.progress, fullRun.progress);
+  assert.match(formatQualityReport(explicitAll), /本次全量 3 项/u);
+
+  const groupedAll = await runQa(
+    {
+      ...config,
+      quality: {
+        ...config.quality,
+        groups: {
+          ...config.quality?.groups,
+          rest: ["unlisted"],
+        },
+      },
+    },
+    { groups: ["quick", "rest"] },
+  );
+  assert.deepEqual(groupedAll.progress, fullRun.progress);
+  assert.match(formatQualityReport(groupedAll), /本次全量 3 项/u);
 });
 
 void test("目录和选择错误在读取豁免及项目事实前被拒绝", async () => {

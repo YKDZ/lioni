@@ -2,32 +2,16 @@ import type { QualityObject, QualityRunResult } from "./qa.ts";
 
 type QualityReport = QualityRunResult<QualityObject, unknown>;
 
-export type QualityExecutionStatus =
-  | "complete"
-  | "incomplete"
-  | "failed"
-  | "not-run";
-
 export type QualityReportDecisionStatus =
   | "passed"
   | "failed"
-  | "incomplete"
   | "no-candidates"
-  | "no-checks"
-  | "not-run";
+  | "no-checks";
 
 export type QualityReportDecision = {
   readonly status: QualityReportDecisionStatus;
   readonly passed: boolean;
-  readonly executionStatus: QualityExecutionStatus;
   readonly activeErrorCount: number;
-};
-
-const executionStatusText: Readonly<Record<QualityExecutionStatus, string>> = {
-  complete: "完整",
-  incomplete: "未完成",
-  failed: "失败",
-  "not-run": "未执行",
 };
 
 const severityText = {
@@ -44,11 +28,10 @@ export function isQualityReportPassing(report: QualityReport): boolean {
   return decideQualityReport(report).passed;
 }
 
-/** 返回可供脚本按执行状态和未通过原因分支处理的结论。 */
+/** 返回可供脚本按报告结果分支处理的结论。 */
 export function decideQualityReport(
   report: QualityReport,
 ): QualityReportDecision {
-  const currentExecutionStatus = executionStatus(report);
   const activeErrorCount = report.diagnostics.filter(
     (diagnostic) =>
       diagnostic.severity === "error" &&
@@ -56,23 +39,19 @@ export function decideQualityReport(
   ).length;
   let status: QualityReportDecisionStatus;
 
-  if (currentExecutionStatus === "failed") status = "failed";
-  else if (currentExecutionStatus === "incomplete") status = "incomplete";
-  else if (
+  if (
     !report.readCoverage.associations.some((a) => a.subjectSelected) &&
     report.progress === undefined
   )
     status = "no-candidates";
   else if (report.checks.length === 0 && !isEmptyProjectRun(report))
     status = "no-checks";
-  else if (currentExecutionStatus === "not-run") status = "not-run";
   else if (activeErrorCount > 0) status = "failed";
   else status = "passed";
 
   return {
     status,
     passed: status === "passed",
-    executionStatus: currentExecutionStatus,
     activeErrorCount,
   };
 }
@@ -87,7 +66,6 @@ export function formatQualityReport(report: QualityReport): string {
     ({ language }) => language,
   );
   const candidateLanguages = report.candidates.map(({ language }) => language);
-  const reasons = unfinishedReasons(report);
   const decision = decideQualityReport(report);
   const { configuredCount, selectedIds } = report.checkScope;
   const checkScope =
@@ -96,7 +74,6 @@ export function formatQualityReport(report: QualityReport): string {
       : `配置 ${configuredCount} 项，本次${selectedIds.length === configuredCount ? "全量" : "子集"} ${selectedIds.length} 项（${selectedIds.join("、")}）`;
   const lines = [
     `质量结论：${decision.passed ? "通过" : "未通过"}`,
-    `执行状态：${executionStatusText[decision.executionStatus]}`,
     `语言范围：${readLanguages.length === 0 ? "无译文语言" : `读取 ${readLanguages.join("、")}`}；所选候选语言 ${candidateLanguages.length === 0 ? "无" : [...new Set(candidateLanguages)].join("、")}`,
     `检查项范围：${checkScope}`,
     `送检范围：${report.readCoverage.associations.filter((a) => a.subjectSelected).length} 项，其中 ${report.candidates.length} 项提供了译文`,
@@ -114,9 +91,6 @@ export function formatQualityReport(report: QualityReport): string {
     lines.push(...report.diagnostics.map(formatDiagnostic));
   }
 
-  if (reasons.length === 0) lines.push("未完成原因：无");
-  else lines.push("未完成原因：", ...reasons.map((reason) => `- ${reason}`));
-
   return lines.join("\n");
 }
 
@@ -127,28 +101,6 @@ function formatPercentage(percentage: number, complete: boolean): number {
 
 function isEmptyProjectRun(report: QualityReport): boolean {
   return report.progress?.every(({ total }) => total === 0) === true;
-}
-
-function executionStatus(report: QualityReport): QualityExecutionStatus {
-  const readStatuses = [
-    report.readCoverage.source,
-    ...report.readCoverage.translations,
-  ];
-  if (
-    report.status === "failed" ||
-    readStatuses.some((read) => read.status === "failed")
-  )
-    return "failed";
-  if (
-    readStatuses.some((read) => read.status !== "complete") ||
-    report.readCoverage.associations.some(
-      (a) => a.subjectSelected && a.coverageStatus !== "complete",
-    )
-  )
-    return "incomplete";
-  if (report.status === "not-run" && isEmptyProjectRun(report))
-    return "complete";
-  return report.status;
 }
 
 function countSeverity(
@@ -180,69 +132,4 @@ function displayRange(range: unknown): string {
   if (typeof range === "string") return range;
   if (range === null || range === undefined) return "位置未知";
   return JSON.stringify(range) ?? "位置未知";
-}
-
-function unfinishedReasons(report: QualityReport): string[] {
-  const reasons = new Set<string>();
-  addReadReasons(reasons, "原文", report.readCoverage.source);
-  for (const read of report.readCoverage.translations)
-    addReadReasons(reasons, `译文 ${read.language}`, read);
-
-  for (const association of report.readCoverage.associations) {
-    if (
-      association.subjectSelected &&
-      association.coverageStatus !== "complete"
-    )
-      reasons.add(
-        `译文 ${association.language} 的 ${association.sourceKey} 未完整读取`,
-      );
-  }
-  for (const check of report.checks) {
-    for (const execution of check.executions) {
-      if (execution.status === "failed")
-        reasons.add(
-          `检查项 ${check.checkId}（${execution.language}，${execution.sourceKey}）：${execution.error ?? "检查失败"}`,
-        );
-    }
-  }
-  if (
-    report.progress === undefined &&
-    !report.readCoverage.associations.some((a) => a.subjectSelected)
-  )
-    reasons.add("本次没有检查对象");
-  if (report.checkScope.configuredCount === 0 && !isEmptyProjectRun(report))
-    reasons.add("没有配置检查项");
-  return [...reasons];
-}
-
-function addReadReasons(
-  reasons: Set<string>,
-  label: string,
-  read:
-    | QualityRunResult["readCoverage"]["source"]
-    | QualityRunResult["readCoverage"]["translations"][number],
-): void {
-  const partialScopes = read.scopes.filter(
-    ({ enumeration }) => enumeration !== "complete",
-  );
-  if (read.status === "complete" && partialScopes.length === 0) return;
-
-  const status =
-    read.status === "complete"
-      ? "部分枚举"
-      : read.status === "notRead"
-        ? "未读取"
-        : read.status === "incomplete"
-          ? "不完整"
-          : "失败";
-  const details = [
-    ...(read.error === undefined ? [] : [read.error]),
-    ...partialScopes.flatMap(({ range, error }) => [
-      ...(range === undefined ? [] : [displayRange(range)]),
-      ...(error === undefined ? [] : [error]),
-    ]),
-  ];
-  reasons.add(
-    `${label}读取${status}${details.length === 0 ? "" : `：${details.join("；")}`}`,
-  );
 }

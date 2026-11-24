@@ -117,8 +117,8 @@ function makeConfig(
                   options.onQualityData?.();
                   return {};
                 },
-                prepare: () => (null),
-                check: () => ([]),
+                prepare: () => null,
+                check: () => [],
               }),
             ],
           },

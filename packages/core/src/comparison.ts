@@ -59,12 +59,8 @@ export type TranslationChange<
 > = {
   readonly identity: TranslationIdentity;
   readonly status: ComparisonStatus;
-  readonly previous:
-    | Translation<TTranslation, TBody, TUnavailable>
-    | undefined;
-  readonly current:
-    | Translation<TTranslation, TBody, TUnavailable>
-    | undefined;
+  readonly previous: Translation<TTranslation, TBody, TUnavailable> | undefined;
+  readonly current: Translation<TTranslation, TBody, TUnavailable> | undefined;
 };
 
 export type SnapshotReadEvidence = {
@@ -264,10 +260,7 @@ function createTranslationChanges<
 ): TranslationChange<TTranslation, TBody, TUnavailable>[] {
   const previous =
     input.previous === undefined
-      ? new Map<
-          string,
-          Translation<TTranslation, TBody, TUnavailable>
-        >()
+      ? new Map<string, Translation<TTranslation, TBody, TUnavailable>>()
       : translationRecordMap(input.previous);
   const current = translationRecordMap(input.current);
   const identityKeys = [
@@ -361,9 +354,7 @@ function compareTranslationStatus<
     | ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>
     | undefined,
   currentSnapshot: ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
-  previous:
-    | Translation<TTranslation, TBody, TUnavailable>
-    | undefined,
+  previous: Translation<TTranslation, TBody, TUnavailable> | undefined,
   current: Translation<TTranslation, TBody, TUnavailable> | undefined,
 ): ComparisonStatus {
   const evidenceStatus = translationEvidenceStatus(
@@ -390,9 +381,7 @@ function translationEvidenceStatus<
     | ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>
     | undefined,
   currentSnapshot: ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
-  previous:
-    | Translation<TTranslation, TBody, TUnavailable>
-    | undefined,
+  previous: Translation<TTranslation, TBody, TUnavailable> | undefined,
   current: Translation<TTranslation, TBody, TUnavailable> | undefined,
 ): ComparisonStatus | "comparable" {
   if (previous === undefined && current !== undefined) {
@@ -481,10 +470,7 @@ function validateTranslationChanges<
 ): void {
   const previous =
     input.previous === undefined
-      ? new Map<
-          string,
-          Translation<TTranslation, TBody, TUnavailable>
-        >()
+      ? new Map<string, Translation<TTranslation, TBody, TUnavailable>>()
       : translationRecordMap(input.previous);
   const current = translationRecordMap(input.current);
   const expectedKeys = new Set([...previous.keys(), ...current.keys()]);
@@ -591,9 +577,7 @@ function validateTranslationStatus<
     | ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>
     | undefined,
   currentSnapshot: ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
-  previous:
-    | Translation<TTranslation, TBody, TUnavailable>
-    | undefined,
+  previous: Translation<TTranslation, TBody, TUnavailable> | undefined,
   current: Translation<TTranslation, TBody, TUnavailable> | undefined,
   status: unknown,
   description: string,

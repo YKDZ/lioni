@@ -1,4 +1,3 @@
-import { readStatus } from "./read-coverage.ts";
 import type {
   Translation,
   SourceUnit,
@@ -10,6 +9,7 @@ import type {
   TranslationUnitInput,
 } from "./index.ts";
 import { isRecord } from "./object-guards.ts";
+import { readStatus } from "./read-coverage.ts";
 import {
   assertJsonValue,
   isStandardSchema,
@@ -19,11 +19,7 @@ import {
 
 export type TranslationSnapshot<TTranslation, TBody, TUnavailable> = {
   readonly reads: readonly TranslationReadCoverage[];
-  readonly records: readonly Translation<
-    TTranslation,
-    TBody,
-    TUnavailable
-  >[];
+  readonly records: readonly Translation<TTranslation, TBody, TUnavailable>[];
 };
 
 export class TranslationIdentityContractError extends TypeError {
@@ -242,7 +238,6 @@ function invalidTranslationRead(message: string): never {
     message,
   );
 }
-
 
 function readTranslationIdentity(
   value: unknown,

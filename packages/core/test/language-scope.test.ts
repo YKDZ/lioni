@@ -79,7 +79,9 @@ function fixture(quality?: QualityConfiguration<Unit, Translation, string>) {
 void describe("本次执行的语言范围", () => {
   void it("仅读取选中语言，去重后按配置顺序执行，并保留 adapter 的 this", async () => {
     const { config, reads } = fixture();
-    const snapshot = await readProjectSnapshot(config, { languages: ["ja", "fr", "ja"] });
+    const snapshot = await readProjectSnapshot(config, {
+      languages: ["ja", "fr", "ja"],
+    });
     assert.deepStrictEqual(reads, ["source", "fr", "ja"]);
     assert.deepStrictEqual(
       snapshot.translations.reads.map(({ language }) => language),

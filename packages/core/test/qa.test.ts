@@ -93,15 +93,61 @@ void test("区分未配置检查、空候选与无诊断结果，并拒绝重复
   const evaluated = await runQa(configFor([checker]), {
     candidates,
   });
+  const evaluatedWithDebug = await runQa(configFor([checker]), {
+    candidates,
+    includeCleanExecutions: true,
+  });
 
   assert.deepEqual(noChecks.checks, []);
   assert.equal(noChecks.checkScope.configuredCount, 0);
   assert.equal(noCandidates.checks[0]?.executions.length, 0);
-  assert.equal(checkCalls, 1);
-  assert.equal(evaluated.checks[0]?.status, "complete");
+  assert.equal(checkCalls, 2);
+  assert.deepEqual(evaluated.checks[0]?.coverage, {
+    selected: 1,
+    evaluated: 1,
+  });
+  assert.deepEqual(evaluated.checks[0]?.executions, []);
+  assert.equal(evaluatedWithDebug.checks[0]?.executions.length, 1);
+  assert.ok(evaluatedWithDebug.checks[0]?.executions[0]?.inputFingerprint);
   await assert.rejects(runQa(configFor([checker, checker])), {
     message: "QA 检查项 id scope-check 重复。",
   });
+});
+
+void test("默认裁剪零诊断执行但仍校验全量失效豁免", async () => {
+  const cleanChecker = defineChecker.withTypes<
+    Unit,
+    Translation,
+    string,
+    never
+  >()({
+    id: "clean-rule",
+    version: "clean-rule-v1",
+    inputSchema: schemaFromExamples(""),
+    prepare: ({ candidate }) => candidate?.content ?? "",
+    check: () => [],
+  });
+  const baseline = await runQa(configFor([cleanChecker]), {
+    includeCleanExecutions: true,
+  });
+  const cleanExecution = baseline.checks[0]?.executions[0];
+  assert.ok(cleanExecution);
+  const staleCleanSuppression = createQaSuppression({
+    id: "stale-clean",
+    reason: "已在默认报告中裁剪零诊断执行。",
+    execution: cleanExecution,
+  });
+  const store: QaSuppressionStore = {
+    async load() {
+      return [staleCleanSuppression];
+    },
+    async upsert() {},
+  };
+
+  await assert.rejects(
+    runQa(configFor([cleanChecker], store)),
+    /stale-clean（clean-rule，hello，fr）：当前依据下没有可豁免的诊断/,
+  );
 });
 
 void test("豁免匹配执行的全部诊断并保留证据", async () => {

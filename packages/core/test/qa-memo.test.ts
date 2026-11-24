@@ -85,7 +85,7 @@ void test("声明不执行计算，同次 QA 共享范围，运行结束关闭�
   });
   assert.equal(calls, 0);
   const first = await runQa(config);
-  assert.equal(first.status, "complete");
+  assert.deepEqual(first.checks[0]?.coverage, { selected: 1, evaluated: 1 });
   assert.equal(calls, 1);
   assert.equal(observed[0], observed[1]);
   assert.throws(() => observed[0]!.memo(operation), MemoScopeClosedError);
@@ -254,9 +254,9 @@ void test("相同最终输入保持指纹，动态资料进入输入后会改变
   ];
   const config = { ...base, quality: { checks } };
 
-  const first = await runQa(config);
+  const first = await runQa(config, { includeCleanExecutions: true });
   revision += 1;
-  const second = await runQa(config);
+  const second = await runQa(config, { includeCleanExecutions: true });
 
   assert.equal(
     first.checks[0]?.executions[0]?.inputFingerprint,
@@ -268,7 +268,7 @@ void test("相同最终输入保持指纹，动态资料进入输入后会改变
   );
 });
 
-void test("共享资料失败只读取一次并隔离到相关检查，独立检查仍执行", async () => {
+void test("共享资料失败只读取一次并立即拒绝调用", async () => {
   const base = configFor(() => {});
   const sharedFailure = new TypeError("共享策略不可用");
   let reads = 0;
@@ -321,25 +321,23 @@ void test("共享资料失败只读取一次并隔离到相关检查，独立检
   };
   const profiler = createQualityProfiler();
 
-  const result = await runQa(config, { profiler });
+  await assert.rejects(
+    runQa(config, { profiler }),
+    (error: unknown) =>
+      error instanceof Error &&
+      error.message.includes("first") &&
+      error.message.includes(sharedFailure.message) &&
+      error.cause === sharedFailure,
+  );
 
   assert.equal(reads, 1);
-  assert.equal(independentRuns, 1);
-  assert.equal(result.status, "failed");
-  assert.deepEqual(
-    result.checks.map(({ checkId, status }) => [checkId, status]),
-    [
-      ["first", "failed"],
-      ["second", "failed"],
-      ["ordinary-type-error", "failed"],
-      ["independent", "complete"],
-    ],
-  );
-  assert.equal(result.checks[0]?.executions[0]?.error, sharedFailure.message);
+  assert.equal(independentRuns, 0);
   const profile = profiler.report();
-  for (const check of profile.checks.slice(0, 3)) {
-    assert.equal(check.timings.find(({ stage }) => stage === "load")?.calls, 1);
-  }
+  assert.equal(profile.status, "interrupted");
+  assert.equal(
+    profile.checks[0]?.timings.find(({ stage }) => stage === "load")?.calls,
+    1,
+  );
 });
 
 void test("无效读取函数作为读取器契约错误中止 QA", async () => {
@@ -472,7 +470,7 @@ void test("直接配置检查器并按运行读取资料，筛选不裁剪事实
 
   assert.equal(dependencyReads, 0);
   const first = await runQa(config);
-  assert.equal(first.status, "complete");
+  assert.deepEqual(first.checks[0]?.coverage, { selected: 2, evaluated: 2 });
   assert.equal(dependencyReads, 1);
   assert.deepEqual(first.candidates, [
     { sourceKey: "save", language: "zh-CN", content: "保存" },
@@ -503,8 +501,8 @@ void test("直接配置检查器并按运行读取资料，筛选不裁剪事实
   });
   assert.equal(dependencyReads, 2);
   assert.deepEqual(third.candidates, []);
-  assert.equal(third.status, "not-run");
-  assert.equal(third.checks[0]?.status, "not-run");
+  assert.deepEqual(third.checks[0]?.coverage, { selected: 0, evaluated: 0 });
+  assert.deepEqual(third.checks[0]?.executions, []);
   assert.deepEqual(observed, ["保存", "取消", "取消候选 B"]);
   assert.equal(observedContexts.length, 3);
   for (const context of observedContexts)
@@ -565,7 +563,7 @@ void test("显式候选沿用正式 QA 共享范围并在返回后关闭自有�
 
   const result = await runQa(config, { candidates: [candidate] });
 
-  assert.equal(result.status, "complete");
+  assert.deepEqual(result.checks[0]?.coverage, { selected: 1, evaluated: 1 });
   assert.equal(calls, 1);
   assert.equal(observed[0], observed[1]);
   assert.throws(() => observed[0]!.memo(operation), MemoScopeClosedError);
@@ -583,7 +581,14 @@ void test("检查失败和绑定异常均释放自有范围，借用范围仍归
     });
     if (reason instanceof QualityCheckerContractError)
       await assert.rejects(runQa(config), (error) => error === reason);
-    else assert.equal((await runQa(config)).status, "failed");
+    else
+      await assert.rejects(
+        runQa(config),
+        (error: unknown) =>
+          error instanceof Error &&
+          error.message.includes("first") &&
+          error.cause === reason,
+      );
     assert.ok(observed);
     assert.throws(() => observed!.memo(() => 1), MemoScopeClosedError);
   }

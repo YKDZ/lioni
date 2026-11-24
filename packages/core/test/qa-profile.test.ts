@@ -158,20 +158,34 @@ void test("完整运行只输出结构化证据，缓存命中仍记录准备且
   assert.equal(calls, 2);
 });
 
-void test("普通规则失败完成采集，契约异常保留未完成候选和原异常", async () => {
+void test("普通规则失败与契约异常均中断采集，普通异常携带定位并保留候选失败状态", async () => {
   const ordinary = new Error("规则失败");
   const profiler = createQualityProfiler();
-  const failed = await runQa(
-    configFor(() => {
-      throw ordinary;
-    }),
-    { profiler },
+  await assert.rejects(
+    runQa(
+      configFor(() => {
+        throw ordinary;
+      }),
+      { profiler },
+    ),
+    (error: unknown) =>
+      error instanceof Error &&
+      error.message.includes("first") &&
+      error.message.includes("save") &&
+      error.message.includes("zh-CN") &&
+      error.cause === ordinary,
   );
-  assert.equal(failed.status, "failed");
-  assert.equal(profiler.report().status, "completed");
+  assert.equal(profiler.report().status, "interrupted");
   assert.equal(
     profiler.report().checks[0]?.slowestCandidates[0]?.status,
     "failed",
+  );
+  assert.equal(
+    profiler
+      .report()
+      .stages.filter((stage) => stage.stage === "cleanup")
+      .reduce((sum, stage) => sum + stage.calls, 0),
+    1,
   );
   const reason = new QualityCheckerContractError(
     "first",
@@ -227,7 +241,11 @@ void test("每项检查以候选总成本保留慢项并只保存定位证据", 
     JSON.stringify(evidence).includes("正文不应进入性能证据"),
     false,
   );
-  assert.ok(evidence.stages.some((stage) => stage.stage === "cleanup"));
+  const cleanupStages = evidence.stages.filter(
+    (stage) => stage.stage === "cleanup",
+  );
+  assert.equal(cleanupStages.length, 1);
+  assert.equal(cleanupStages[0]?.calls, 1);
   assert.ok(
     evidence.totalMs >=
       evidence.checks.reduce((sum, check) => sum + check.durationMs, 0),
@@ -286,25 +304,19 @@ void test("空选择不伪造缓存查询和候选执行，借用 memo 仍归宿
 
 void test("仅汇总模式仍保留完整、失败及中断状态计数", async () => {
   let index = 0;
-  const statuses = ["complete", "failed"] as const;
-  const reason = new QualityCheckerContractError(
-    "mixed",
-    "check",
-    "返回了无效结果。",
-  );
+  const ordinaryModes = ["complete", "failed"] as const;
   const keys = Array.from(
-    { length: statuses.length + 1 },
+    { length: 3 },
     (_, candidateIndex) => `save-${candidateIndex}`,
   );
   const base = configFor(() => {}, keys);
-  const check = defineChecker({
-    id: "mixed",
+  const ordinaryCheck = defineChecker({
+    id: "mixed-ordinary",
     version: "mixed-v1",
     inputSchema: schemaFromExamples(null),
     prepare: () => null,
     check() {
-      const status = statuses[index++];
-      if (status === undefined) throw reason;
+      const status = ordinaryModes[index++];
       if (status === "failed") throw new Error("当前检查失败。");
       return [];
     },
@@ -312,7 +324,7 @@ void test("仅汇总模式仍保留完整、失败及中断状态计数", async 
   const profiler = createQualityProfiler({ slowestCandidates: 0 });
   await assert.rejects(
     runQa(
-      { ...base, quality: { checks: [check] } },
+      { ...base, quality: { checks: [ordinaryCheck] } },
       {
         profiler,
         candidates: keys.map((sourceKey) => ({
@@ -322,16 +334,54 @@ void test("仅汇总模式仍保留完整、失败及中断状态计数", async 
         })),
       },
     ),
-    (error) => error === reason,
+    /mixed-ordinary.*save-1.*zh-CN.*当前检查失败/,
   );
-  const evidence = profiler.report().checks[0]!;
-  assert.equal(evidence.candidateCount, 3);
-  assert.deepEqual(evidence.outcomes, {
+  const ordinaryEvidence = profiler.report().checks[0]!;
+  assert.equal(ordinaryEvidence.candidateCount, 2);
+  assert.deepEqual(ordinaryEvidence.outcomes, {
     complete: 1,
     failed: 1,
+  });
+  assert.deepEqual(ordinaryEvidence.slowestCandidates, []);
+
+  index = 0;
+  const reason = new QualityCheckerContractError(
+    "mixed-contract",
+    "check",
+    "返回了无效结果。",
+  );
+  const contractCheck = defineChecker({
+    id: "mixed-contract",
+    version: "mixed-v1",
+    inputSchema: schemaFromExamples(null),
+    prepare: () => null,
+    check() {
+      if (index++ === 1) throw reason;
+      return [];
+    },
+  });
+  const contractProfiler = createQualityProfiler({ slowestCandidates: 0 });
+  await assert.rejects(
+    runQa(
+      { ...base, quality: { checks: [contractCheck] } },
+      {
+        profiler: contractProfiler,
+        candidates: keys.map((sourceKey) => ({
+          sourceKey,
+          language: "zh-CN",
+          content: "保存",
+        })),
+      },
+    ),
+    (error) => error === reason,
+  );
+  const contractEvidence = contractProfiler.report().checks[0]!;
+  assert.equal(contractEvidence.candidateCount, 2);
+  assert.deepEqual(contractEvidence.outcomes, {
+    complete: 1,
     interrupted: 1,
   });
-  assert.deepEqual(evidence.slowestCandidates, []);
+  assert.deepEqual(contractEvidence.slowestCandidates, []);
 });
 
 void test("运行中拒绝读取与并发复用，无检查项的运行仍正常结束", async () => {

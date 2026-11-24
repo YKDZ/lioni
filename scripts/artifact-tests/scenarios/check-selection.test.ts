@@ -19,6 +19,12 @@ type SdkEvidence = {
   readonly duplicateIds: CapturedRun;
   readonly groupUnion: CapturedRun;
   readonly termsOnly: CapturedRun;
+  readonly withCleanExecutions: CapturedRun;
+  readonly explicitAllChecks: CapturedRun;
+  readonly groupedAllChecks: CapturedRun;
+  readonly incompleteTranslationRead: CapturedRun;
+  readonly prepareFailure: CapturedRun;
+  readonly checkFailure: CapturedRun;
   readonly invalidSelections: Readonly<Record<string, CapturedRun>>;
   readonly candidates: {
     readonly noProvidedCandidates: CapturedRun;
@@ -121,6 +127,38 @@ testArtifactConsumer(
     );
 
     assert.deepEqual(checkIds(sdk.termsOnly), ["terms"]);
+    assert.deepEqual(
+      sdk.full.result?.checks.find(({ checkId }) => checkId === "terms")
+        ?.executions,
+      [],
+    );
+    assert.equal(
+      sdk.withCleanExecutions.result?.checks.find(
+        ({ checkId }) => checkId === "terms",
+      )?.executions.length,
+      1,
+    );
+    assert.deepEqual(sdk.explicitAllChecks.result?.progress, [
+      { language: "fr", completed: 1, total: 1, percentage: 100 },
+    ]);
+    assert.deepEqual(sdk.groupedAllChecks.result?.progress, [
+      { language: "fr", completed: 1, total: 1, percentage: 100 },
+    ]);
+    assert.equal(sdk.incompleteTranslationRead.result, undefined);
+    assert.match(
+      sdk.incompleteTranslationRead.error ?? "",
+      /fr.*partial-fr\.json/u,
+    );
+    assert.equal(sdk.prepareFailure.result, undefined);
+    assert.match(
+      sdk.prepareFailure.error ?? "",
+      /prepare-boom.*save.*fr.*准备阶段缺材料/u,
+    );
+    assert.equal(sdk.checkFailure.result, undefined);
+    assert.match(
+      sdk.checkFailure.error ?? "",
+      /check-boom.*save.*fr.*执行阶段崩溃/u,
+    );
 
     for (const invalid of Object.values(sdk.invalidSelections)) {
       assert.ok(invalid.error);
@@ -154,49 +192,26 @@ testArtifactConsumer(
     );
     assert.equal(eventCount(sdk.changedDependency, "compile:shared:v2"), 1);
 
-    assert.ok(sdk.isolatedLoaderFailure.result);
-    assert.deepEqual(
-      sdk.isolatedLoaderFailure.result.checks.map(({ checkId, status }) => ({
-        checkId,
-        status,
-      })),
-      [
-        { checkId: "syntax", status: "complete" },
-        { checkId: "terms", status: "failed" },
-        { checkId: "unlisted", status: "complete" },
-      ],
+    assert.equal(sdk.isolatedLoaderFailure.result, undefined);
+    assert.match(
+      sdk.isolatedLoaderFailure.error ?? "",
+      /terms.*术语检查资料读取失败/u,
     );
     assert.ok(
-      sdk.isolatedLoaderFailure.events.includes("rule:syntax:normalized-v3"),
-    );
-    assert.ok(
-      sdk.isolatedLoaderFailure.events.includes("rule:unlisted:normalized-v3"),
-    );
-
-    assert.ok(sdk.sharedLoaderFailure.result);
-    assert.equal(eventCount(sdk.sharedLoaderFailure, "shared:read"), 1);
-    assert.deepEqual(
-      sdk.sharedLoaderFailure.result.checks.map(({ checkId, status }) => ({
-        checkId,
-        status,
-      })),
-      [
-        { checkId: "syntax", status: "failed" },
-        { checkId: "terms", status: "failed" },
-        { checkId: "unlisted", status: "complete" },
-      ],
-    );
-    assert.ok(
-      sdk.sharedLoaderFailure.events.includes("rule:unlisted:normalized-v4"),
-    );
-    assert.ok(
-      !sdk.sharedLoaderFailure.events.some((event) =>
-        event.startsWith("rule:syntax:"),
+      !sdk.isolatedLoaderFailure.events.some((event) =>
+        event.startsWith("rule:"),
       ),
     );
+
+    assert.equal(sdk.sharedLoaderFailure.result, undefined);
+    assert.equal(eventCount(sdk.sharedLoaderFailure, "shared:read"), 1);
+    assert.match(
+      sdk.sharedLoaderFailure.error ?? "",
+      /syntax.*共享检查资料读取失败/u,
+    );
     assert.ok(
       !sdk.sharedLoaderFailure.events.some((event) =>
-        event.startsWith("rule:terms:"),
+        event.startsWith("rule:"),
       ),
     );
 

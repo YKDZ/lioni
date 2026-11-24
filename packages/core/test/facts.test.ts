@@ -1197,7 +1197,10 @@ void describe("framework snapshot", () => {
       keyOf: () => "outer",
     });
 
-    await assert.rejects(readProjectSnapshot(outer), StandardSchemaContractError);
+    await assert.rejects(
+      readProjectSnapshot(outer),
+      StandardSchemaContractError,
+    );
   });
 
   void it("propagates schema contract errors through a nested translation reader", async () => {
@@ -1261,7 +1264,10 @@ void describe("framework snapshot", () => {
       },
     });
 
-    await assert.rejects(readProjectSnapshot(outer), StandardSchemaContractError);
+    await assert.rejects(
+      readProjectSnapshot(outer),
+      StandardSchemaContractError,
+    );
   });
 
   void it("keeps ordinary adapter TypeErrors as failed reads", async () => {

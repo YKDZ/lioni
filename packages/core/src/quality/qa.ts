@@ -46,8 +46,6 @@ import {
   type QualityCheckResultCache,
 } from "./quality-cache.ts";
 
-export type QualityCheckStatus = "not-run" | "failed" | "complete";
-
 export type QualityObject = {
   readonly kind: string;
   readonly key: string;
@@ -109,7 +107,6 @@ export type QualityFinding<TObject extends QualityObject = QualityObject> =
 export type QualityCoverage = {
   readonly selected: number;
   readonly evaluated: number;
-  readonly failed: number;
 };
 
 /** JsonValue 联合本身已递归只读；普通可赋值对象仍须逐层变为只读。 */
@@ -148,7 +145,7 @@ export class QualityDataReaderContractError extends TypeError {
 }
 
 /** 创建仅覆盖当前 QA 运行的检查资料读取范围。 */
-function createQualityDataReader(): QualityDataReaderScope {
+export function createQualityDataReader(): QualityDataReaderScope {
   const memo = createMemoScope();
   const operations = new WeakMap<
     object,
@@ -285,8 +282,6 @@ export type QualityCheckExecution = {
   readonly checkId: string;
   readonly sourceKey: string;
   readonly language: string;
-  readonly status: "complete" | "failed";
-  readonly error?: string;
   readonly inputFingerprint?: string;
   readonly fingerprintSummary?: QualityInputFingerprintSummary;
 };
@@ -531,7 +526,6 @@ export type QualityCheckResult<TObject extends QualityObject = QualityObject> =
   {
     readonly checkId: string;
     readonly version: string;
-    readonly status: QualityCheckStatus;
     readonly diagnostics: readonly QualityDiagnostic<TObject>[];
     readonly coverage: QualityCoverage;
     readonly executions: readonly QualityCheckExecution[];
@@ -568,7 +562,6 @@ export type QualityRunResult<
   readonly relationships: readonly QualityRelationship[];
   readonly suppressions: readonly QaSuppression[];
   readonly progress?: readonly TranslationProgress[];
-  readonly status: QualityCheckStatus;
   readonly diagnostics: readonly QualityDiagnostic<TObject>[];
   readonly checks: readonly QualityCheckResult<TObject>[];
 };
@@ -580,7 +573,77 @@ export type QualityExecutionOptions = {
   readonly memo?: MemoScope;
   /** 只复用已完成检查的原始结果；豁免仍按本次运行重新处理。 */
   readonly qualityCheckResultCache?: QualityCheckResultCache;
+  /** 按需包含零诊断执行归属与指纹；默认仅保留产生了实际原始诊断的执行记录。 */
+  readonly includeCleanExecutions?: boolean;
 };
+
+/** 从各检查项结果中裁剪零诊断执行记录，仅保留实际产生了原始诊断的执行归属与指纹。 */
+export function pruneCleanExecutions<TObject extends QualityObject>(
+  checks: readonly QualityCheckResult<TObject>[],
+): QualityCheckResult<TObject>[] {
+  return checks.map((check) => {
+    if (check.executions.length === 0) return check;
+    const diagnosed = new Set(
+      check.diagnostics.map(({ executionId }) => executionId),
+    );
+    const executions = check.executions.filter(({ executionId }) =>
+      diagnosed.has(executionId),
+    );
+    return executions.length === check.executions.length
+      ? check
+      : { ...check, executions };
+  });
+}
+
+/** 校验本次快照的读取范围是否满足运行模式（草稿允许未覆盖新增键，非草稿须完整读取）。 */
+export function assertReadableSnapshot<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  snapshot: ProjectSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
+  options: { readonly draft: boolean },
+): void {
+  assertReadCoverageSatisfied("原文", snapshot.source.read, options.draft);
+  for (const read of snapshot.translations.reads)
+    assertReadCoverageSatisfied(
+      `译文 ${read.language}`,
+      read,
+      options.draft,
+      read.language,
+    );
+}
+
+/** 校验所选源译关联在非草稿模式下已完整覆盖。 */
+export function assertSelectedAssociationsComplete<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  snapshot: ProjectSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
+  associations: readonly TranslationAssociation[],
+): void {
+  const readsByLanguage = new Map(
+    snapshot.translations.reads.map((read) => [read.language, read]),
+  );
+  for (const association of associations) {
+    if (association.coverageStatus === "complete") continue;
+    const read = readsByLanguage.get(association.language);
+    const ranges = association.scopeIndexes
+      .map((index) => read?.scopes[index]?.range)
+      .filter((range) => range !== undefined)
+      .map(displayReadRange);
+    const rangeDetail =
+      ranges.length > 0
+        ? `，范围：${ranges.join("、")}`
+        : "，未覆盖任何读取范围";
+    throw new Error(
+      `译文读取不完整（原文键：${association.sourceKey}，语言：${association.language}${rangeDetail}）`,
+    );
+  }
+}
 
 export async function runQualityChecks<
   TUnit extends TranslationUnitInput,
@@ -602,6 +665,46 @@ export async function runQualityChecks<
   const qualityData = createQualityDataReader();
   const memo = options.memo ?? createMemoScope();
   try {
+    return await runQualityChecksWithQualityData(
+      snapshot,
+      request,
+      checks,
+      { ...options, memo },
+      qualityData,
+    );
+  } finally {
+    const endCleanup = options.profile?.stage("cleanup");
+    try {
+      qualityData.dispose();
+      if (options.memo === undefined) memo.dispose();
+    } finally {
+      endCleanup?.();
+    }
+  }
+}
+
+export async function runQualityChecksWithQualityData<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  snapshot: ProjectSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
+  request: QualityCheckRequest<TBody>,
+  checks: readonly QualityCheckDefinition<
+    TUnit,
+    TTranslation,
+    QualityObject,
+    TBody,
+    TUnavailable
+  >[],
+  options: QualityExecutionOptions,
+  qualityData: QualityDataReaderScope,
+): Promise<QualityRunResult<QualityObject, TBody>> {
+  const memo = options.memo ?? createMemoScope();
+  try {
+    const isDraft = request.candidates !== undefined;
+    assertReadableSnapshot(snapshot, { draft: isDraft });
     if (request.candidates !== undefined)
       validateQualityCandidateScope(snapshot, request.candidates);
     const identityKey = (key: {
@@ -626,6 +729,8 @@ export async function runQualityChecks<
               throw new TypeError("送检候选缺少对应的源译关联。");
             return association;
           });
+    if (!isDraft)
+      assertSelectedAssociationsComplete(snapshot, selectedAssociations);
     const candidates = snapshotQualityData(
       request.candidates ?? savedTranslationCandidates(snapshot),
     );
@@ -665,7 +770,6 @@ export async function runQualityChecks<
         TUnavailable
       >;
       readonly loaded: unknown;
-      readonly loadFailure?: { readonly error: unknown };
     }[] = [];
     const checkIds = new Set<string>();
     for (const definition of checks) {
@@ -691,7 +795,6 @@ export async function runQualityChecks<
         );
 
       let loaded: unknown;
-      let loadFailure: { readonly error: unknown } | undefined;
       if (subjects.length > 0 && prepared.load !== undefined) {
         const endLoad = options.profile?.checkStage(definition.id, "load");
         try {
@@ -704,7 +807,7 @@ export async function runQualityChecks<
           });
         } catch (error) {
           if (isQualityContractError(error)) throw error;
-          loadFailure = { error };
+          throw formatCheckerFailure(definition.id, "load", error);
         } finally {
           endLoad?.();
         }
@@ -713,13 +816,12 @@ export async function runQualityChecks<
         id: definition.id,
         prepared,
         loaded,
-        ...(loadFailure === undefined ? {} : { loadFailure }),
       });
     }
 
     const results: QualityCheckResult[] = [];
     let nextExecutionId = 0;
-    for (const { id, prepared, loaded, loadFailure } of preparedChecks) {
+    for (const { id, prepared, loaded } of preparedChecks) {
       const diagnostics: QualityDiagnostic[] = [];
       const executions: QualityCheckExecution[] = [];
       for (const [
@@ -738,11 +840,10 @@ export async function runQualityChecks<
         );
         const executionId = nextExecutionId;
         nextExecutionId += 1;
-        let fingerprint: QualityInputFingerprint | undefined;
-        let errorMessage: string | undefined;
-        let findings: readonly QualityFinding[] = [];
+        let stage: "prepare" | "check" = "prepare";
+        let fingerprint: Required<QualityInputFingerprint>;
+        let findings: readonly QualityFinding[];
         try {
-          if (loadFailure !== undefined) throw loadFailure.error;
           const endPreparation = candidateProfile?.stage("prepareInput");
           let endFingerprintStage: (() => void) | undefined;
           const preparationContext: QualityInputPreparationContext = {
@@ -775,6 +876,7 @@ export async function runQualityChecks<
             preparationContext.endFingerprint();
           }
           fingerprint = preparation.fingerprint;
+          stage = "check";
           findings = await resolveQualityFindings(
             id,
             preparation,
@@ -783,18 +885,16 @@ export async function runQualityChecks<
           );
         } catch (error) {
           if (isQualityContractError(error)) throw error;
-          errorMessage = error instanceof Error ? error.message : String(error);
+          candidateProfile?.finish("failed");
+          throw formatCheckerFailure(id, stage, error, { sourceKey, language });
         }
         const endResults = candidateProfile?.stage("results");
-        const status = errorMessage === undefined ? "complete" : "failed";
         const execution: QualityCheckExecution = {
           executionId,
           ...(candidateIndex === undefined ? {} : { candidateIndex }),
           checkId: id,
           sourceKey,
           language,
-          status,
-          ...(errorMessage === undefined ? {} : { error: errorMessage }),
           ...fingerprint,
         };
         executions.push(execution);
@@ -807,26 +907,25 @@ export async function runQualityChecks<
           })),
         );
         endResults?.();
-        candidateProfile?.finish(status);
+        candidateProfile?.finish("complete");
       }
 
-      const failed = executions.filter(
-        (execution) => execution.status === "failed",
-      ).length;
       results.push({
         checkId: id,
         version: prepared.version,
-        status: aggregateStatus(executions.map(({ status }) => status)),
         diagnostics,
         coverage: {
           selected: executions.length,
-          evaluated: executions.length - failed,
-          failed,
+          evaluated: executions.length,
         },
         executions,
       });
     }
 
+    const reportedChecks =
+      options.includeCleanExecutions === true
+        ? results
+        : pruneCleanExecutions(results);
     return {
       version: snapshot.version,
       candidates,
@@ -844,20 +943,80 @@ export async function runQualityChecks<
           subjectSelected: selected.has(identityKey(association)),
         })),
       }),
-      status: aggregateStatus(results.map(({ status }) => status)),
-      diagnostics: results.flatMap(({ diagnostics }) => diagnostics),
-      checks: results,
+      diagnostics: reportedChecks.flatMap(({ diagnostics }) => diagnostics),
+      checks: reportedChecks,
     };
   } finally {
     options.profile?.endChecks();
-    const endCleanup = options.profile?.stage("cleanup");
-    try {
-      qualityData.dispose();
-      if (options.memo === undefined) memo.dispose();
-    } finally {
-      endCleanup?.();
-    }
   }
+}
+
+function assertReadCoverageSatisfied(
+  label: string,
+  read: SourceReadCoverage | TranslationReadCoverage,
+  draft: boolean,
+  language?: string,
+): void {
+  const violated = draft
+    ? read.status === "failed"
+    : read.status !== "complete";
+  const badScopes = read.scopes.filter(({ enumeration }) =>
+    draft ? enumeration === "failed" : enumeration !== "complete",
+  );
+  if (!violated && badScopes.length === 0) return;
+
+  const statusText =
+    read.status === "complete"
+      ? "部分枚举"
+      : read.status === "notRead"
+        ? "未读取"
+        : read.status === "incomplete"
+          ? "不完整"
+          : "失败";
+  const scopeRanges = badScopes
+    .map(({ range }) => displayReadRange(range))
+    .filter((range) => range.length > 0);
+  const scopeErrors = badScopes.flatMap(({ error }) =>
+    error === undefined ? [] : [error],
+  );
+  const parts = [
+    ...(language === undefined ? [] : [`语言：${language}`]),
+    ...(scopeRanges.length > 0
+      ? [`范围：${scopeRanges.join("、")}`]
+      : read.scopes.length === 0
+        ? ["范围：未读取任何范围"]
+        : []),
+    ...(read.error === undefined ? [] : [`原因：${read.error}`]),
+    ...(scopeErrors.length > 0 ? [`详情：${scopeErrors.join("；")}`] : []),
+  ];
+  throw new Error(
+    `${label}读取${statusText}${parts.length === 0 ? "" : `（${parts.join("，")}）`}`,
+  );
+}
+
+function displayReadRange(range: unknown): string {
+  if (typeof range === "string") return range;
+  if (range === null || range === undefined) return "位置未知";
+  return JSON.stringify(range) ?? "位置未知";
+}
+
+function formatCheckerFailure(
+  checkId: string,
+  stage: "load" | "prepare" | "check",
+  error: unknown,
+  subject?: { readonly sourceKey: string; readonly language: string },
+): Error {
+  const reason = error instanceof Error ? error.message : String(error);
+  const stageText =
+    stage === "load" ? "加载" : stage === "prepare" ? "准备" : "执行";
+  const locationText =
+    subject === undefined
+      ? ""
+      : `（原文键：${subject.sourceKey}，语言：${subject.language}）`;
+  return new Error(
+    `QA 检查项 ${checkId} ${stageText}失败${locationText}：${reason}`,
+    { cause: error },
+  );
 }
 
 function isQualityContractError(error: unknown): boolean {
@@ -1046,16 +1205,4 @@ function handlingFor(
         suppressionId: suppression.id,
         reason: suppression.reason,
       };
-}
-
-function aggregateStatus(
-  statuses: readonly QualityCheckStatus[],
-): QualityCheckStatus {
-  if (
-    statuses[0] === undefined ||
-    statuses.every((status) => status === "not-run")
-  )
-    return "not-run";
-  if (statuses.includes("failed")) return "failed";
-  return "complete";
 }
