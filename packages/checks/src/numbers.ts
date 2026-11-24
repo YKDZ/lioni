@@ -88,7 +88,7 @@ function createNumberCheckerImplementation<
 
   return defineChecker.withTypes<TUnit, TTranslation, TBody, TUnavailable>()({
     id: "number-correspondence",
-    version: "checks.number-correspondence/v4",
+    version: "checks.number-correspondence/v3",
     inputSchema: numberTextInputSchema.nullable(),
     async prepare(input) {
       if (input.candidate === null) {

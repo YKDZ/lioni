@@ -62,7 +62,7 @@ void test("默认 Vue 语法检查使用字符串候选及现存资源位置", a
   assert.deepEqual(report.diagnostics[0]?.location.span, { start: 4, end: 4 });
 });
 
-void test("结构化正文默认报告不完整，显式准备适配支持特殊范围与三态", async () => {
+void test("结构化正文默认抛错拒绝，显式准备适配支持特殊范围与空返回", async () => {
   const create = (
     prepare?: import("@lioni/checks").VueI18nPreparer<
       { key: string; source: { text: string } },
@@ -114,8 +114,10 @@ void test("结构化正文默认报告不完整，显式准备适配支持特殊
     language: "fr",
     content: { text: "bad }" },
   };
-  const missing = await runQa(create(), { candidates: [candidate] });
-  assert.equal(missing.checks[0]?.status, "failed");
+  await assert.rejects(
+    runQa(create(), { candidates: [candidate] }),
+    /syntax.*a.*fr/u,
+  );
   const ready = await runQa(
     create(({ candidate, sourceUnit, translation }) =>
       candidate === null
@@ -142,7 +144,8 @@ void test("结构化正文默认报告不完整，显式准备适配支持特殊
     create(() => null),
     { candidates: [candidate] },
   );
-  assert.equal(skipped.checks[0]?.status, "complete");
+  assert.deepEqual(skipped.diagnostics, []);
+  assert.deepEqual(skipped.checks[0]?.coverage, { selected: 1, evaluated: 1 });
 });
 
 void test("Vue 工厂在装配时拒绝无效准备适配", () => {

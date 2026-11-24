@@ -112,7 +112,7 @@ export function createVueI18nSourceSyntaxChecker<
   assertVueI18nCallback(options?.loadLanguages, "loadLanguages");
   return defineChecker.withTypes<TUnit, TTranslation, TBody, TUnavailable>()({
     id: options?.id ?? "vue-i18n/source-syntax",
-    version: `checks.vue-i18n/source-syntax/v3+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
+    version: `checks.vue-i18n/source-syntax/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
     inputSchema: vueI18nMessageProjectionSchema,
     load: async ({ snapshot, memo, qualityData }) =>
       options?.loadLanguages
@@ -200,7 +200,7 @@ export function createVueI18nTargetSyntaxChecker<
   assertVueI18nCallback(options?.loadLanguages, "loadLanguages");
   return defineChecker.withTypes<TUnit, TTranslation, TBody, TUnavailable>()({
     id: options?.id ?? "vue-i18n/target-syntax",
-    version: `checks.vue-i18n/target-syntax/v3+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
+    version: `checks.vue-i18n/target-syntax/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
     inputSchema: vueI18nMessageProjectionSchema,
     load: async ({ snapshot, memo, qualityData }) =>
       options?.loadLanguages

@@ -21,9 +21,10 @@ void test("原文与候选语法分别报告，并使用宿主提供的位置", 
     sourceRange: "source.json",
     targetRange: "fr.json",
   });
-  const result = await createQualityFixture({ policies: [policy] }).run([
-    candidate("message", "wrong } target"),
-  ]);
+  const result = await createQualityFixture({ policies: [policy] }).run(
+    [candidate("message", "wrong } target")],
+    [checkIds.sourceSyntax, checkIds.targetSyntax],
+  );
   const source = result.diagnostics.find(
     (diagnostic) => diagnostic.checkId === checkIds.sourceSyntax,
   );
@@ -51,17 +52,26 @@ void test("空原文消息照常解析，显式空候选是有效正文", async 
     targetLanguage: "fr",
   });
   const fixture = createQualityFixture({ policies: [policy] });
-  const invalid = await fixture.run([candidate("orphan", "bad } target")]);
-  const empty = await fixture.run([candidate("orphan", "")]);
+  const invalid = await fixture.run(
+    [candidate("orphan", "bad } target")],
+    [checkIds.sourceSyntax, checkIds.targetSyntax],
+  );
+  const empty = await fixture.run(
+    [candidate("orphan", "")],
+    [
+      checkIds.sourceSyntax,
+      checkIds.targetSyntax,
+      checkIds.variableCorrespondence,
+    ],
+  );
 
   assert.equal(
     invalid.checks.find((item) => item.checkId === checkIds.sourceSyntax)
-      ?.status,
-    "complete",
+      ?.coverage.evaluated,
+    1,
   );
   assert.equal(invalid.diagnostics.length, 1);
   assert.equal(invalid.diagnostics[0]?.checkId, checkIds.targetSyntax);
-  assert.equal(empty.status, "complete");
   assert.deepEqual(empty.diagnostics, []);
 });
 
@@ -83,17 +93,22 @@ void test("变量比较忽略重排但保留身份、重复数和分支形状", 
   });
   const fixture = createQualityFixture({ policies: [policy] });
 
-  const reordered = await fixture.run([
-    candidate("reordered", "{n} {'literal'} {0} {name} {name}"),
-  ]);
-  const mismatch = await fixture.run([
-    candidate("mismatch", "{name} {0} {count} {extra}"),
-  ]);
-  const folded = await fixture.run([candidate("folded", "{count} things")]);
-  const dynamic = await fixture.run([
-    candidate("dynamic", "@:linked {route} {name}"),
-  ]);
-  const malformed = await fixture.run([candidate("reordered", "{name} } {0}")]);
+  const reordered = await fixture.run(
+    [candidate("reordered", "{n} {'literal'} {0} {name} {name}")],
+    [checkIds.variableCorrespondence],
+  );
+  const mismatch = await fixture.run(
+    [candidate("mismatch", "{name} {0} {count} {extra}")],
+    [checkIds.variableCorrespondence],
+  );
+  const folded = await fixture.run(
+    [candidate("folded", "{count} things")],
+    [checkIds.variableCorrespondence],
+  );
+  const dynamic = await fixture.run(
+    [candidate("dynamic", "@:linked {route} {name}")],
+    [checkIds.variableCorrespondence],
+  );
 
   assert.deepEqual(
     reordered.diagnostics.filter(
@@ -119,10 +134,11 @@ void test("变量比较忽略重排但保留身份、重复数和分支形状", 
     ),
     [],
   );
-  assert.equal(
-    malformed.checks.find(
-      (item) => item.checkId === checkIds.variableCorrespondence,
-    )?.status,
-    "failed",
+  await assert.rejects(
+    fixture.run(
+      [candidate("reordered", "{name} } {0}")],
+      [checkIds.variableCorrespondence],
+    ),
+    /vue-i18n\/variable-correspondence.*reordered.*fr/u,
   );
 });

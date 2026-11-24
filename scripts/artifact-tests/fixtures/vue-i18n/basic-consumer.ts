@@ -108,8 +108,10 @@ import { z } from "zod";
     language: "fr",
     content: { text: "bad }" },
   };
-  const missing = await runQa(create(), { candidates: [candidate] });
-  assert.equal(missing.checks[0]?.status, "failed");
+  await assert.rejects(
+    runQa(create(), { candidates: [candidate] }),
+    /syntax.*a.*fr/u,
+  );
   const ready = await runQa(
     create(({ candidate, sourceUnit, translation }) =>
       candidate === null
@@ -136,5 +138,6 @@ import { z } from "zod";
     create(() => null),
     { candidates: [candidate] },
   );
-  assert.equal(skipped.checks[0]?.status, "complete");
+  assert.deepEqual(skipped.diagnostics, []);
+  assert.deepEqual(skipped.checks[0]?.coverage, { selected: 1, evaluated: 1 });
 }

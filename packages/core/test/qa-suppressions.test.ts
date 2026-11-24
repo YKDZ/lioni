@@ -458,4 +458,92 @@ void describe("QA 豁免", () => {
       assertQaSuppressionBindings({ ...input, selectedLanguages: ["de"] }),
     );
   });
+
+  void it("检查项、语言和原文键均存在但准备返回空或缺少指纹时仍认定豁免失效", () => {
+    const valid = createQaSuppression({
+      id: "missing-execution-or-fingerprint",
+      reason: "缺译经人工确认。",
+      execution,
+    });
+    const baseInput = {
+      configuredCheckIds: [execution.checkId],
+      configuredLanguages: [execution.language],
+      completeSourceKeys: new Set([execution.sourceKey]),
+    };
+
+    assert.throws(
+      () =>
+        assertQaSuppressionBindings({
+          ...baseInput,
+          savedChecks: [{ executions: [], diagnostics: [] }],
+          suppressions: [valid],
+        }),
+      /missing-execution-or-fingerprint（copy\/meaning，save，fr）：(检查输入指纹已改变|当前依据下没有可豁免的诊断)/u,
+    );
+
+    assert.throws(
+      () =>
+        assertQaSuppressionBindings({
+          ...baseInput,
+          savedChecks: [
+            {
+              executions: [
+                {
+                  executionId: execution.executionId,
+                  checkId: execution.checkId,
+                  sourceKey: execution.sourceKey,
+                  language: execution.language,
+                },
+              ],
+              diagnostics: [],
+            },
+          ],
+          suppressions: [valid],
+        }),
+      /missing-execution-or-fingerprint（copy\/meaning，save，fr）：检查输入指纹已改变/u,
+    );
+  });
+
+  void it("按检查项归属判定零诊断执行，不被其他检查项同号执行污染", () => {
+    const ruleAExecution = { ...execution, executionId: 0, checkId: "rule-a" };
+    const ruleBExecution = { ...execution, executionId: 0, checkId: "rule-b" };
+    const ruleASuppression = createQaSuppression({
+      id: "rule-a-valid",
+      reason: "规则 A 确实命中并豁免。",
+      execution: ruleAExecution,
+    });
+    const ruleBSuppression = createQaSuppression({
+      id: "rule-b-clean",
+      reason: "规则 B 原先命中，现已无诊断。",
+      execution: ruleBExecution,
+    });
+
+    assert.throws(
+      () =>
+        assertQaSuppressionBindings({
+          configuredCheckIds: ["rule-a", "rule-b"],
+          configuredLanguages: [execution.language],
+          completeSourceKeys: new Set([execution.sourceKey]),
+          savedChecks: [
+            {
+              executions: [ruleAExecution],
+              diagnostics: [{ executionId: 0 }],
+            },
+            {
+              executions: [ruleBExecution],
+              diagnostics: [],
+            },
+          ],
+          suppressions: [ruleASuppression, ruleBSuppression],
+        }),
+      (error: Error) => {
+        assert.match(
+          error.message,
+          /rule-b-clean（rule-b，save，fr）：当前依据下没有可豁免的诊断/u,
+        );
+        assert.doesNotMatch(error.message, /rule-a-valid/u);
+        return true;
+      },
+    );
+  });
 });

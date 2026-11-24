@@ -335,23 +335,38 @@ export function assertQaSuppressionBindings(input: {
   readonly selectedLanguages?: readonly string[];
   readonly savedChecks: readonly {
     readonly executions: readonly QaSuppressionExecution[];
-    readonly diagnostics: readonly { readonly executionId: number }[];
+    readonly diagnostics: readonly {
+      readonly checkId?: string;
+      readonly executionId: number;
+    }[];
   }[];
 }): void {
   if (input.suppressions.length === 0) return;
-  const executions = new Map<string, QaSuppressionExecution>();
-  const diagnosed = new Set<number>();
+  const executions = new Map<
+    string,
+    { readonly checkIndex: number; readonly execution: QaSuppressionExecution }
+  >();
+  const diagnosedByCheckId = new Set<string>();
+  const diagnosedByCheckIndex = new Set<string>();
   const identity = ({
     checkId,
     sourceKey,
     language,
   }: QaSuppressionExecution | QaSuppression) =>
     JSON.stringify([checkId, sourceKey, language]);
-  for (const check of input.savedChecks) {
+  for (const [checkIndex, check] of input.savedChecks.entries()) {
     for (const execution of check.executions)
-      executions.set(identity(execution), execution);
-    for (const diagnostic of check.diagnostics)
-      diagnosed.add(diagnostic.executionId);
+      executions.set(identity(execution), { checkIndex, execution });
+    for (const diagnostic of check.diagnostics) {
+      if (diagnostic.checkId !== undefined)
+        diagnosedByCheckId.add(
+          JSON.stringify([diagnostic.checkId, diagnostic.executionId]),
+        );
+      else
+        diagnosedByCheckIndex.add(
+          JSON.stringify([checkIndex, diagnostic.executionId]),
+        );
+    }
   }
 
   const errors: string[] = [];
@@ -360,14 +375,15 @@ export function assertQaSuppressionBindings(input: {
     if (input.selectedLanguages && !input.selectedLanguages.includes(language))
       continue;
     const reasons: string[] = [];
-    if (!input.configuredCheckIds.includes(checkId))
-      reasons.push("检查项已不存在");
-    if (!input.configuredLanguages.includes(language))
-      reasons.push("目标语言已不存在");
-    if (!input.completeSourceKeys.has(sourceKey))
-      reasons.push("原文键已不存在");
-    const execution = executions.get(identity(suppression));
-    if (execution?.inputFingerprint !== undefined) {
+    const checkExists = input.configuredCheckIds.includes(checkId);
+    const languageExists = input.configuredLanguages.includes(language);
+    const sourceKeyExists = input.completeSourceKeys.has(sourceKey);
+    if (!checkExists) reasons.push("检查项已不存在");
+    if (!languageExists) reasons.push("目标语言已不存在");
+    if (!sourceKeyExists) reasons.push("原文键已不存在");
+    const entry = executions.get(identity(suppression));
+    if (entry?.execution.inputFingerprint !== undefined) {
+      const { checkIndex, execution } = entry;
       if (execution.inputFingerprint !== suppression.inputFingerprint) {
         const recorded = suppression.fingerprintSummary;
         const current = execution.fingerprintSummary;
@@ -381,10 +397,23 @@ export function assertQaSuppressionBindings(input: {
           if (!versionChanged && !inputChanged) reasons.push("检查指纹已改变");
         }
       } else if (
-        execution.executionId !== undefined &&
-        !diagnosed.has(execution.executionId)
+        execution.executionId === undefined ||
+        !(
+          diagnosedByCheckId.has(
+            JSON.stringify([execution.checkId, execution.executionId]),
+          ) ||
+          diagnosedByCheckIndex.has(
+            JSON.stringify([checkIndex, execution.executionId]),
+          )
+        )
       )
         reasons.push("当前依据下没有可豁免的诊断");
+    } else if (checkExists && languageExists && sourceKeyExists) {
+      reasons.push(
+        entry === undefined
+          ? "当前依据下没有可豁免的诊断"
+          : "检查输入指纹已改变",
+      );
     }
     if (reasons.length > 0)
       errors.push(

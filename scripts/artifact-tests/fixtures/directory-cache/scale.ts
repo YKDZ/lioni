@@ -50,11 +50,15 @@ const operationRepeats = 100;
 const measuredBlocks = 5;
 const scales = [0, 100, 1000, 5000] as const;
 const outcome: CacheValue = [];
-const updatedOutcome: CacheValue = [{
-  severity: "warning", object: { kind: "translation-unit", key: "sample" },
-  location: { language: "fr", range: "sample.json" },
-  message: "样本需要检查。", evidence: [],
-}];
+const updatedOutcome: CacheValue = [
+  {
+    severity: "warning",
+    object: { kind: "translation-unit", key: "sample" },
+    location: { language: "fr", range: "sample.json" },
+    message: "样本需要检查。",
+    evidence: [],
+  },
+];
 
 async function fileSnapshot(
   directory: string,

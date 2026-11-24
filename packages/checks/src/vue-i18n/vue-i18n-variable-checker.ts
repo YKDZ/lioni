@@ -109,7 +109,7 @@ export function createVueI18nVariableCorrespondenceChecker<
   assertVueI18nCallback(options?.loadLanguages, "loadLanguages");
   return defineChecker.withTypes<TUnit, TTranslation, TBody, TUnavailable>()({
     id: options?.id ?? "vue-i18n/variable-correspondence",
-    version: `checks.vue-i18n/variable-correspondence/v3+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
+    version: `checks.vue-i18n/variable-correspondence/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
     inputSchema: vueI18nMessageProjectionSchema,
     load: async ({ snapshot, memo, qualityData }) =>
       options?.loadLanguages

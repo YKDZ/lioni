@@ -225,6 +225,8 @@ void test("消息族正式入口验证展示上限并保留投影证据", async 
     enumerable: true,
     value: { retained: true },
   });
+  const checker = checkerFor({ candidateProjection: projection });
+  assert.equal(checker.version, "checks.message-family-consistency/v6");
   const result = await runQa(
     configFor(
       [
@@ -232,11 +234,10 @@ void test("消息族正式入口验证展示上限并保留投影证据", async 
         { id: "saved", source: "Save" },
       ],
       [{ id: "saved", text: "储存" }],
-      checkerFor({ candidateProjection: projection }),
+      checker,
     ),
     { candidates: [{ sourceKey: "editing", language: "zh", content: "保存" }] },
   );
-  assert.equal(result.status, "complete");
   const evidence = result.diagnostics[0]?.evidence.find(
     ({ role }) => role === "candidate",
   )?.value;
@@ -320,7 +321,6 @@ void test("同次 QA 的固定消息族策略只准备每份保存参照一次",
       })),
     },
   );
-  assert.equal(result.status, "complete");
   assert.deepEqual(result.diagnostics, []);
   assert.ok(
     projected.count <= units.length,
@@ -338,7 +338,10 @@ void test("排除旧物理记录后的族依据不随候选顺序和旧自身正
   const first = { sourceKey: "message-0", language: "zh", content: "你好" };
   const other = { sourceKey: "message-1", language: "zh", content: "你好" };
   const run = (candidates: (typeof first)[]) =>
-    runQa(configFor(units, translations, checker), { candidates });
+    runQa(configFor(units, translations, checker), {
+      candidates,
+      includeCleanExecutions: true,
+    });
   const initial = await run([first]);
   const fingerprint = initial.checks[0]!.executions[0]!.inputFingerprint;
   assert.ok(fingerprint);
@@ -385,7 +388,7 @@ void test("非法旧参照不阻止自身替换，但作为其他候选参照时
   );
   const self = { sourceKey: "editing", language: "zh", content: "你好" };
   const result = await runQa(config, { candidates: [self] });
-  assert.equal(result.status, "complete");
+  assert.deepEqual(result.diagnostics, []);
   await assert.rejects(
     runQa(config, {
       candidates: [self, { ...self, sourceKey: "other" }],
@@ -489,7 +492,7 @@ void test("候选不适用时仍共享准备一次保存参照", async () => {
     ),
     { candidates: [{ sourceKey: "saved", language: "zh", content: "你好" }] },
   );
-  assert.equal(result.status, "complete");
+  assert.deepEqual(result.diagnostics, []);
 });
 
 void test("旧消息族版本豁免在重新执行时失配，未运行时保持未验证", async () => {
@@ -596,7 +599,6 @@ void test("唯一旧译文正文不可用时仍能完整检查替换候选", asy
   const result = await runQa(config, {
     candidates: [{ sourceKey: "editing", language: "zh", content: "你好" }],
   });
-  assert.equal(result.status, "complete");
   assert.deepEqual(result.diagnostics, []);
 });
 
@@ -744,7 +746,6 @@ void test("排除当前替代记录并保留其他内容相同的事实", async 
     ],
   });
 
-  assert.equal(result.status, "complete");
   assert.equal(result.diagnostics.length, 1);
   assert.equal(result.diagnostics[0]?.severity, "warning");
   assert.equal(result.diagnostics[0]?.checkId, "message-family-consistency");
@@ -872,7 +873,6 @@ void test("待写回候选不会成为彼此的参照", async () => {
     ],
   });
 
-  assert.equal(result.status, "complete");
   assert.equal(result.diagnostics.length, 1);
   assert.equal(result.diagnostics[0]?.object.key, "pending");
   assert.equal(projected.count, 1);
@@ -939,7 +939,6 @@ void test("完整资料没有同族参照时返回空诊断", async () => {
     candidates: [{ sourceKey: "new", language: "zh", content: "错误码 404" }],
   });
 
-  assert.equal(result.status, "complete");
   assert.equal(result.diagnostics.length, 0);
 });
 
@@ -954,7 +953,8 @@ void test("候选为空时不投影已保存参照", async () => {
 
   const result = await runQa(config, { candidates: [] });
 
-  assert.equal(result.status, "not-run");
+  assert.deepEqual(result.diagnostics, []);
+  assert.deepEqual(result.checks[0]?.coverage, { selected: 0, evaluated: 0 });
   assert.equal(projections.count, 0);
 });
 
@@ -981,7 +981,7 @@ void test("非法 UTF-16 保护范围作为投影契约错误拒绝", async () =
   }
 });
 
-void test("投影不完整时保留已知警告", async () => {
+void test("投影不完整时抛错拒绝调用", async () => {
   const units = [
     { id: "editing", source: "Error Code 404" },
     { id: "different", source: "Error Code 504" },
@@ -1000,14 +1000,13 @@ void test("投影不完整时保留已知警告", async () => {
     translations,
     checkerFor({ partialCandidate: true }),
   );
-  const result = await runQa(config, { candidates: [candidate] });
-
-  assert.equal(result.status, "failed");
-  assert.deepEqual(result.diagnostics, []);
-  assert.ok(result.checks[0]?.executions[0]?.error);
+  await assert.rejects(
+    runQa(config, { candidates: [candidate] }),
+    /message-family-consistency.*editing.*zh/u,
+  );
 });
 
-void test("无法完整分析候选目标结构时返回错误", async () => {
+void test("无法完整分析候选目标结构时抛错拒绝调用", async () => {
   const numbers = asciiNumbers();
   const analysis = createTextAnalysis({
     recognizers: [
@@ -1042,15 +1041,14 @@ void test("无法完整分析候选目标结构时返回错误", async () => {
     ],
     checkerFor({ analysis }),
   );
-  const result = await runQa(config, {
-    candidates: [
-      { sourceKey: "editing", language: "zh", content: "错误码 405" },
-    ],
-  });
-
-  assert.equal(result.status, "failed");
-  assert.deepEqual(result.diagnostics, []);
-  assert.ok(result.checks[0]?.executions[0]?.error);
+  await assert.rejects(
+    runQa(config, {
+      candidates: [
+        { sourceKey: "editing", language: "zh", content: "错误码 405" },
+      ],
+    }),
+    /message-family-consistency.*editing.*zh/u,
+  );
 });
 
 void test("豁免保留警告处理状态，无关消息不改变消息族依据", async () => {
@@ -1154,7 +1152,6 @@ void test("固定等价策略的上下文不暴露当前候选", async () => {
       ],
     },
   );
-  assert.equal(result.status, "complete");
   assert.deepEqual(result.diagnostics, []);
   assert.ok(calls > 0);
 });
@@ -1430,6 +1427,7 @@ void test("显式候选语言决定参照目录，加载的运行时资料只供
       translations: { ...base.translations!, languages: ["zh", "ja"] },
     }),
     {
+      includeCleanExecutions: true,
       candidates: [
         { sourceKey: "message", language: "ja", content: "こんにちは" },
       ],
@@ -1437,11 +1435,10 @@ void test("显式候选语言决定参照目录，加载的运行时资料只供
   );
   assert.equal(loads, 1);
   assert.deepEqual(projectedLanguages, ["ja"]);
-  assert.equal(result.status, "complete");
   assert.ok(result.checks[0]!.executions[0]!.inputFingerprint);
 });
 
-void test("已知其他族的目标缺口保持局部，归属未知的缺口限制当前族", async () => {
+void test("已知其他族的目标缺口保持局部，归属未知的缺口拒绝当前族", async () => {
   for (const unknown of [false, true]) {
     const config = configFor(
       [
@@ -1473,11 +1470,21 @@ void test("已知其他族的目标缺口保持局部，归属未知的缺口限
         },
       }),
     );
-    const result = await runQa(config, {
-      candidates: [{ sourceKey: "editing", language: "zh", content: "您好" }],
-    });
-    assert.equal(result.status, unknown ? "failed" : "complete");
-    assert.equal(result.diagnostics.length, unknown ? 0 : 1);
+    if (unknown) {
+      await assert.rejects(
+        runQa(config, {
+          candidates: [
+            { sourceKey: "editing", language: "zh", content: "您好" },
+          ],
+        }),
+        /message-family-consistency.*editing.*zh/u,
+      );
+    } else {
+      const result = await runQa(config, {
+        candidates: [{ sourceKey: "editing", language: "zh", content: "您好" }],
+      });
+      assert.equal(result.diagnostics.length, 1);
+    }
   }
 });
 
@@ -1536,18 +1543,18 @@ void test("相同事实与检查器的重叠运行分别固定参照结果与失
   };
   const first = runQualityChecks(snapshot, request, [checker]);
   await paused.promise;
-  let second: Awaited<typeof first>;
   try {
-    second = await runQualityChecks(snapshot, request, [checker]);
+    await assert.rejects(
+      runQualityChecks(snapshot, request, [checker]),
+      /只有运行 B 的参照出错/u,
+    );
   } finally {
     resume.resolve();
   }
-  assert.equal((await first).status, "complete");
-  assert.equal(second.status, "failed");
-  assert.equal(second.checks[0]?.executions[0]?.error, "只有运行 B 的参照出错");
+  assert.deepEqual((await first).diagnostics, []);
 });
 
-void test("消息族准备适配的非法返回中止运行，适配器普通 TypeError 保留失败报告", async () => {
+void test("消息族准备适配的非法返回与适配器普通 TypeError 均抛错中止运行", async () => {
   const run = (prepare: () => never) =>
     runQa(
       configFor(
@@ -1563,9 +1570,10 @@ void test("消息族准备适配的非法返回中止运行，适配器普通 Ty
     run(() => undefined as never),
     QualityCheckerContractError,
   );
-  const failed = await run(() => {
-    throw new TypeError("宿主投影失败");
-  });
-  assert.equal(failed.status, "failed");
-  assert.equal(failed.checks[0]?.executions[0]?.error, "宿主投影失败");
+  await assert.rejects(
+    run(() => {
+      throw new TypeError("宿主投影失败");
+    }),
+    /message-family-consistency.*editing.*zh.*宿主投影失败/u,
+  );
 });

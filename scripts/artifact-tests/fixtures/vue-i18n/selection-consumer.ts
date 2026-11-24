@@ -34,7 +34,11 @@ const syntaxOnly = await runQa(createConfig("你好 {name}", { terms }), {
   checkIds: ["vue-i18n/target-syntax"],
 });
 assert.deepEqual(syntaxOnly.checkScope.selectedIds, ["vue-i18n/target-syntax"]);
-assert.equal(syntaxOnly.checks[0]?.executions.length, 1);
+assert.deepEqual(syntaxOnly.checks[0]?.coverage, {
+  selected: 1,
+  evaluated: 1,
+});
+assert.deepEqual(syntaxOnly.diagnostics, []);
 assert.deepEqual(getDataReadCounts(), {
   languages: 1,
   policies: 0,

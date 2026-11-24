@@ -107,7 +107,7 @@ export type TermCheckerOptions<
   ) => QualityLocation;
 };
 
-const termCheckerVersion = "checks.terminology-rule/v4";
+const termCheckerVersion = "checks.terminology-rule/v3";
 
 /** 一次绑定一条规则；加载资料和分析在 prepare 中交接给纯判断。 */
 function createTermCheckerImplementation<

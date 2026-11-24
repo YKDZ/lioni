@@ -355,7 +355,7 @@ void test("术语检查只投影宿主选定的 JSON 字段，并复用同次 QA
   const accepted = await runQa(scenario.config, {
     candidates: [scenario.candidate()],
   });
-  assert.equal(accepted.status, "complete");
+  assert.equal(accepted.checks[0]?.version, "checks.terminology-rule/v3");
   assert.deepEqual(accepted.diagnostics, []);
   assert.equal(scenario.segmentationCalls(), 1);
 
@@ -414,7 +414,7 @@ void test("两项术语规则复用同次 QA 术语识别", async () => {
     candidates: [scenario.candidate()],
   });
 
-  assert.equal(result.status, "complete");
+  assert.deepEqual(result.diagnostics, []);
   assert.equal(scenario.segmentationCalls(), 1);
   assert.equal(scenario.termBoundaryCalls(), 1);
 });
@@ -547,9 +547,12 @@ void test("log/record 允许命中可满足要求，禁用归属仍保持局部�
     language: "zh",
     content: { visible: "日志与记录", hidden: "作业区" },
   };
-  const checked = await runQa(scenario.config, {
-    candidates: [candidate],
-  });
+  await assert.rejects(
+    runQa(scenario.config, {
+      candidates: [candidate],
+    }),
+    /terminology\/.*workspace.*zh/u,
+  );
   const independent = await evaluateTerms(scenario.terms, {
     groups: [
       {
@@ -566,11 +569,8 @@ void test("log/record 允许命中可满足要求，禁用归属仍保持局部�
     ],
   });
 
-  assert.equal(checked.status, "failed");
   assert.equal(independent.status, "incomplete");
-  assert.deepEqual(checked.diagnostics, []);
   assert.deepEqual(independent.problems, []);
-  assert.ok(checked.checks.every((check) => check.executions[0]?.error));
   assert.deepEqual(
     independent.issues.map((issue) => [
       issue.conceptId,
@@ -584,22 +584,21 @@ void test("log/record 允许命中可满足要求，禁用归属仍保持局部�
   );
 });
 
-void test("术语规则无法完整判断时返回执行错误", async () => {
+void test("术语规则无法完整判断时抛错拒绝调用", async () => {
   const scenario = createScenario();
   scenario.setTargetComplete(false);
-  const result = await runQa(scenario.config, {
-    candidates: [
-      {
-        sourceKey: "workspace",
-        language: "zh",
-        content: { visible: "作业区", hidden: "工作区" },
-      },
-    ],
-  });
-
-  assert.equal(result.status, "failed");
-  assert.deepEqual(result.diagnostics, []);
-  assert.ok(result.checks.some((check) => check.status === "failed"));
+  await assert.rejects(
+    runQa(scenario.config, {
+      candidates: [
+        {
+          sourceKey: "workspace",
+          language: "zh",
+          content: { visible: "作业区", hidden: "工作区" },
+        },
+      ],
+    }),
+    /terminology\/.*workspace.*zh/u,
+  );
 });
 
 void test("术语投影不符合 Standard Schema 时保持正式契约错误", async () => {
