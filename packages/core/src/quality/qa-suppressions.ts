@@ -116,7 +116,13 @@ export async function upsertQaSuppressionFromReport(
   validateQaSuppressions(reportValue.suppressions);
   if (!Array.isArray(reportValue.checks))
     throw invalid("QA 报告缺少 checks 执行列表。");
+  if (
+    reportValue.diagnostics !== undefined &&
+    !Array.isArray(reportValue.diagnostics)
+  )
+    throw invalid("QA 报告中的 diagnostics 列表无效。");
 
+  let selectedCheck: Record<string, unknown> | undefined;
   let selectedExecution: Record<string, unknown> | undefined;
   for (const check of reportValue.checks) {
     if (
@@ -125,6 +131,8 @@ export async function upsertQaSuppressionFromReport(
       !Array.isArray(check.executions)
     )
       throw invalid("QA 报告中的检查执行结构无效。");
+    if (check.diagnostics !== undefined && !Array.isArray(check.diagnostics))
+      throw invalid("QA 报告中的检查诊断结构无效。");
     if (check.checkId !== checkId) continue;
     for (const execution of check.executions) {
       if (!isPlainRecord(execution))
@@ -134,11 +142,18 @@ export async function upsertQaSuppressionFromReport(
         throw invalid("候选执行的检查身份与报告分组不一致。");
       if (selectedExecution !== undefined)
         throw invalid("QA 报告中存在重复的检查与执行身份。");
+      selectedCheck = check;
       selectedExecution = execution;
     }
   }
-  if (selectedExecution === undefined)
+  if (selectedExecution === undefined || selectedCheck === undefined)
     throw invalid(`QA 报告中没有检查 ${checkId} 的执行 ${executionId}。`);
+  assertExecutionHasDiagnostic(
+    reportValue.diagnostics,
+    selectedCheck.diagnostics,
+    checkId,
+    executionId,
+  );
 
   const suppression = createQaSuppression({
     id,
@@ -147,6 +162,62 @@ export async function upsertQaSuppressionFromReport(
   });
   await store.upsert(suppression);
   return suppression;
+}
+
+function assertExecutionHasDiagnostic(
+  reportDiagnostics: unknown,
+  checkDiagnostics: unknown,
+  checkId: string,
+  executionId: number,
+): void {
+  const hasReportDiagnostics = Array.isArray(reportDiagnostics);
+  const hasCheckDiagnostics = Array.isArray(checkDiagnostics);
+  if (!hasReportDiagnostics && !hasCheckDiagnostics)
+    throw invalid(
+      `QA 报告缺少检查 ${checkId} 的诊断明细，不能确认执行 ${executionId} 产生了实际诊断。`,
+    );
+
+  if (
+    hasReportDiagnostics &&
+    !hasMatchedDiagnostic(reportDiagnostics, checkId, executionId, true)
+  )
+    throw invalid(
+      `检查 ${checkId} 的执行 ${executionId} 没有实际诊断，不能建立豁免。`,
+    );
+
+  if (
+    hasCheckDiagnostics &&
+    !hasMatchedDiagnostic(checkDiagnostics, checkId, executionId, false)
+  )
+    throw invalid(
+      `检查 ${checkId} 的执行 ${executionId} 没有实际诊断，不能建立豁免。`,
+    );
+}
+
+function hasMatchedDiagnostic(
+  diagnostics: readonly unknown[],
+  checkId: string,
+  executionId: number,
+  requireCheckId: boolean,
+): boolean {
+  let matched = false;
+  for (const diagnostic of diagnostics) {
+    if (!isPlainRecord(diagnostic)) throw invalid("QA 报告中的诊断结构无效。");
+    if (
+      diagnostic.checkId !== undefined &&
+      diagnostic.checkId !== checkId &&
+      !requireCheckId
+    )
+      throw invalid("候选诊断的检查身份与报告分组不一致。");
+    if (
+      (requireCheckId
+        ? diagnostic.checkId === checkId
+        : diagnostic.checkId === undefined || diagnostic.checkId === checkId) &&
+      diagnostic.executionId === executionId
+    )
+      matched = true;
+  }
+  return matched;
 }
 
 function unwrapQualityReport(value: unknown): Record<string, unknown> {
@@ -217,12 +288,29 @@ export function validateQaSuppressions(
 ): asserts value is readonly QaSuppression[] {
   if (!Array.isArray(value)) throw invalid("豁免列表必须是数组。");
   const ids = new Set<string>();
+  const bindings = new Map<string, string>();
   for (const suppression of value) {
     validateQaSuppression(suppression);
     if (ids.has(suppression.id))
       throw invalid(`豁免身份重复：${suppression.id}。`);
     ids.add(suppression.id);
+    const binding = qaSuppressionBindingKey(suppression);
+    const existingId = bindings.get(binding);
+    if (existingId !== undefined)
+      throw invalid(
+        `检查豁免绑定冲突：${existingId} 与 ${suppression.id} 指向同一检查绑定（${suppression.checkId}，${suppression.sourceKey}，${suppression.language}）。`,
+      );
+    bindings.set(binding, suppression.id);
   }
+}
+
+function qaSuppressionBindingKey(suppression: QaSuppression): string {
+  return JSON.stringify([
+    suppression.checkId,
+    suppression.sourceKey,
+    suppression.language,
+    suppression.inputFingerprint,
+  ]);
 }
 
 /** 判断执行记录是否与豁免绑定的检查依据完全一致。 */
