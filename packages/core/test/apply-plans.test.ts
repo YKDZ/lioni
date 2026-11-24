@@ -977,4 +977,92 @@ void describe("apply update plan", () => {
       { id: "A", text: "Source A" },
     ]);
   });
+
+  void it("执行升级前 v2 更新计划并在写入前置条件变化时报告冲突", async () => {
+    const scenario = createScenario({
+      sources: [sampleSource("A"), sampleSource("B")],
+      translations: [sampleTranslation("A"), sampleTranslation("B")],
+    });
+    await recordComparisonBaseline(scenario.config, scenario.baselineStore);
+    scenario.state.sources = [{ id: "A", source: "Updated source A" }];
+    const plan = await previewUpdate(scenario.config, scenario.baselineStore);
+
+    const toLegacyRecord = (value: unknown) => {
+      if (typeof value !== "object" || value === null || !("record" in value))
+        return value;
+      const { record, ...rest } = value as { record: unknown };
+      return { ...rest, translation: record };
+    };
+    const toLegacySnapshot = (snapshot: typeof plan.current) => ({
+      ...snapshot,
+      translations: {
+        ...snapshot.translations,
+        records: snapshot.translations.records.map(toLegacyRecord),
+      },
+    });
+    const toLegacyChange = (
+      change: (typeof plan.comparisons.translationChanges)[number],
+    ) => ({
+      ...change,
+      ...(change.previous === undefined
+        ? {}
+        : { previous: toLegacyRecord(change.previous) }),
+      ...(change.current === undefined
+        ? {}
+        : { current: toLegacyRecord(change.current) }),
+    });
+    const legacyPlan = JSON.parse(
+      JSON.stringify({
+        ...plan,
+        previous:
+          plan.previous === undefined
+            ? undefined
+            : toLegacySnapshot(plan.previous),
+        current: toLegacySnapshot(plan.current),
+        comparisons: {
+          ...plan.comparisons,
+          translationChanges:
+            plan.comparisons.translationChanges.map(toLegacyChange),
+        },
+        items: plan.items.map((entry) => ({
+          ...entry,
+          changes: {
+            ...entry.changes,
+            translations: entry.changes.translations.map(toLegacyChange),
+          },
+        })),
+      }),
+    ) as unknown;
+
+    // 外部修改目标记录后，旧 v2 计划的 expectedTarget 前置条件应报告冲突。
+    scenario.state.translations[1]!.sourceId = "changed";
+    const conflicted = await applyUpdatePlan(
+      structuredClone(legacyPlan),
+      scenario.config,
+    );
+    assert.equal(conflicted.status, "failed");
+    assert.deepEqual(
+      conflicted.results.map(({ action, status }) => [action, status]),
+      [
+        ["write", "written"],
+        ["delete", "conflict"],
+      ],
+    );
+
+    // 恢复目标记录与原文后，旧 v2 计划可执行原定 write / delete 操作。
+    scenario.state.translations[1]!.sourceId = "B";
+    scenario.state.translations[0]!.text = "Text A";
+    const applied = await applyUpdatePlan(legacyPlan, scenario.config);
+    assert.equal(applied.status, "completed");
+    assert.deepEqual(
+      applied.results.map(({ action, status }) => [action, status]),
+      [
+        ["write", "written"],
+        ["delete", "written"],
+      ],
+    );
+    assert.deepEqual(scenario.state.translations, [
+      { id: "A", text: "Updated source A", sourceId: "A" },
+    ]);
+  });
 });

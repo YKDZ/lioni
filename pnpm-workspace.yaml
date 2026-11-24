@@ -8,6 +8,8 @@ syncInjectedDepsAfterScripts:
   - build
 minimumReleaseAge: 1440
 minimumReleaseAgeStrict: true
+minimumReleaseAgeExclude:
+  - "@ykdz/cli-contract@0.7.0"
 allowBuilds:
   esbuild: true
 overrides: {}
@@ -17,7 +19,7 @@ packages:
 catalog:
   "@changesets/cli": 3.0.3
   "@types/node": ^26.6.6
-  "@ykdz/cli-contract": 0.4.0
+  "@ykdz/cli-contract": 0.7.0
   oxfmt: ^0.75.0
   oxlint: ^1.90.0
   oxlint-tsgolint: ^7.0.2005

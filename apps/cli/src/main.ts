@@ -13,6 +13,7 @@ import {
   update,
   type FrameworkConfig,
   type LanguageSelectionOptions,
+  type QualityObject,
   type QualityRunResult,
   type TranslationUnitInput,
   type UpdatePlan,
@@ -26,10 +27,11 @@ import {
   defineCli,
   executeCli,
   helpCapability,
-  outputCapability,
   parseCliInvocation,
+  schemaCapability,
   text,
   versionCapability,
+  type TextPresenterContext,
   type WriteCliOutput,
 } from "@ykdz/cli-contract";
 import { isNodeBrokenPipe } from "@ykdz/cli-contract/node";
@@ -92,22 +94,39 @@ const readStatusSchema = z.enum([
   "notRead",
 ]);
 
+const sourceReadCoverageSchema = z.object({
+  status: readStatusSchema,
+  scopes: z.array(
+    z.object({
+      range: z.unknown(),
+      enumeration: enumerationSchema,
+      recordCount: z.number(),
+      error: z.optional(z.string()),
+    }),
+  ),
+  error: z.optional(z.string()),
+});
+
+const translationReadCoverageSchema = z.object({
+  language: z.string(),
+  status: readStatusSchema,
+  scopes: z.array(
+    z.object({
+      range: z.unknown(),
+      covers: z.array(z.string()),
+      enumeration: enumerationSchema,
+      translationIndexes: z.array(z.number()),
+      error: z.optional(z.string()),
+    }),
+  ),
+  error: z.optional(z.string()),
+});
+
 const projectSnapshotSchema = z.object({
   version: z.string(),
   source: z.object({
     version: z.string(),
-    read: z.object({
-      status: readStatusSchema,
-      scopes: z.array(
-        z.object({
-          range: z.unknown(),
-          enumeration: enumerationSchema,
-          recordCount: z.number(),
-          error: z.optional(z.string()),
-        }),
-      ),
-      error: z.optional(z.string()),
-    }),
+    read: sourceReadCoverageSchema,
     totalUnitCount: z.nullable(z.number()),
     units: z.array(
       z.object({
@@ -119,22 +138,7 @@ const projectSnapshotSchema = z.object({
     ),
   }),
   translations: z.object({
-    reads: z.array(
-      z.object({
-        language: z.string(),
-        status: readStatusSchema,
-        scopes: z.array(
-          z.object({
-            range: z.unknown(),
-            covers: z.array(z.string()),
-            enumeration: enumerationSchema,
-            translationIndexes: z.array(z.number()),
-            error: z.optional(z.string()),
-          }),
-        ),
-        error: z.optional(z.string()),
-      }),
-    ),
+    reads: z.array(translationReadCoverageSchema),
     records: z.array(
       z.discriminatedUnion("bodyAvailability", [
         z.strictObject({
@@ -177,6 +181,137 @@ const projectSnapshotSchema = z.object({
   ),
 });
 
+// 允许检查器附带扩展定位或对象字段，避免契约校验剥离宿主/检查器自定义字段。
+const qualityObjectSchema = z.looseObject({
+  kind: z.string(),
+  key: z.string(),
+  language: z.optional(z.string()),
+});
+
+const qualityLocationSchema = z.looseObject({
+  language: z.nullable(z.string()),
+  range: z.unknown(),
+  key: z.optional(z.string()),
+});
+
+const qualityEvidenceSchema = z.object({
+  role: z.string(),
+  object: qualityObjectSchema,
+  location: qualityLocationSchema,
+  value: z.unknown(),
+});
+
+const qualityDiagnosticHandlingSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("active") }),
+  z.object({
+    status: z.literal("suppressed"),
+    suppressionId: z.string(),
+    reason: z.string(),
+  }),
+]);
+
+const qualityDiagnosticSchema = z.object({
+  checkId: z.string(),
+  executionId: z.number(),
+  severity: z.enum(["error", "warning", "info"]),
+  object: qualityObjectSchema,
+  location: qualityLocationSchema,
+  message: z.string(),
+  evidence: z.array(qualityEvidenceSchema),
+  handling: qualityDiagnosticHandlingSchema,
+});
+
+const qualityFingerprintSummarySchema = z.object({
+  version: z.string(),
+  inputFingerprint: z.string(),
+});
+
+const qualityCheckExecutionSchema = z.object({
+  executionId: z.number(),
+  candidateIndex: z.optional(z.number()),
+  checkId: z.string(),
+  sourceKey: z.string(),
+  language: z.string(),
+  inputFingerprint: z.optional(z.string()),
+  fingerprintSummary: z.optional(qualityFingerprintSummarySchema),
+});
+
+const qualityCheckResultSchema = z.object({
+  checkId: z.string(),
+  version: z.string(),
+  diagnostics: z.array(qualityDiagnosticSchema),
+  coverage: z.object({
+    selected: z.number(),
+    evaluated: z.number(),
+  }),
+  executions: z.array(qualityCheckExecutionSchema),
+});
+
+const qualityRunResultSchema = z.object({
+  version: z.string(),
+  candidates: z.array(
+    z.object({
+      sourceKey: z.string(),
+      language: z.string(),
+      content: z.unknown(),
+    }),
+  ),
+  readCoverage: z.object({
+    source: sourceReadCoverageSchema,
+    translations: z.array(translationReadCoverageSchema),
+    associations: z.array(
+      z.object({
+        sourceKey: z.string(),
+        language: z.string(),
+        status: z.enum(["matched", "missing", "unavailable", "unknown"]),
+        coverageStatus: readStatusSchema,
+        scopeIndexes: z.array(z.number()),
+        translationIndexes: z.array(z.number()),
+        subjectSelected: z.boolean(),
+      }),
+    ),
+  }),
+  checkScope: z.object({
+    configuredCount: z.number(),
+    selectedIds: z.array(z.string()),
+  }),
+  relationships: z.array(
+    z.looseObject({
+      kind: z.string(),
+      key: z.string(),
+      members: z.array(
+        z.object({
+          key: z.string(),
+          language: z.string(),
+        }),
+      ),
+    }),
+  ),
+  suppressions: z.array(
+    z.object({
+      id: z.string(),
+      reason: z.string(),
+      checkId: z.string(),
+      sourceKey: z.string(),
+      language: z.string(),
+      inputFingerprint: z.string(),
+      fingerprintSummary: qualityFingerprintSummarySchema,
+    }),
+  ),
+  progress: z.optional(
+    z.array(
+      z.object({
+        language: z.string(),
+        completed: z.number(),
+        total: z.number(),
+        percentage: z.optional(z.number()),
+      }),
+    ),
+  ),
+  diagnostics: z.array(qualityDiagnosticSchema),
+  checks: z.array(qualityCheckResultSchema),
+});
+
 const baselineRecordSchema = z.object({
   outcome: z.enum(["saved", "unchanged"]),
   path: z.string(),
@@ -189,7 +324,7 @@ const updatePlanSchema = z.record(z.string(), z.unknown());
 const updateResultSchema = z.object({
   plan: z.record(z.string(), z.unknown()),
   status: z.enum(["completed", "failed"]),
-  results: z.array(z.record(z.string(), z.unknown())),
+  results: z.array(z.record(z.string(), z.unknown())).readonly(),
   baseline: z.optional(
     z.object({
       outcome: z.enum(["saved", "unchanged", "notAdvanced", "failed"]),
@@ -224,8 +359,14 @@ function rangeText(range: unknown): string {
   return JSON.stringify(range) ?? "null";
 }
 
-function qualityText(value: unknown): ReturnType<typeof text.lines> {
-  const lines = formatQualityReport(value as QualityRunResult).split("\n");
+function presentQualityText(
+  report: z.output<typeof qualityRunResultSchema>,
+  { input: _input }: TextPresenterContext<z.output<typeof qaConfigSchema>>,
+): ReturnType<typeof text.lines> {
+  // 显式包装 formatQualityReport，避免 0.7.0 传入第二个上下文参数时污染格式化选项。
+  const lines = formatQualityReport(
+    report as QualityRunResult<QualityObject, unknown>,
+  ).split("\n");
   return text.lines([lines[0] ?? "", ...lines.slice(1)]);
 }
 
@@ -456,6 +597,7 @@ function createCliContract(identity: CliCommandIdentity) {
         commands: "命令",
         arguments: "参数",
         options: "选项",
+        schema: "契约",
       },
       wording: {
         commandPlaceholder: "命令",
@@ -469,7 +611,9 @@ function createCliContract(identity: CliCommandIdentity) {
       value: text.line(`${identity.commandName} ${identity.version}`),
       shortAlias: "-V",
     }),
-    output: outputCapability({ defaultFormat: "structured", text: true }),
+    schema: schemaCapability({
+      description: text.line("输出当前命令或子树的机器可读契约"),
+    }),
     usageFailureExitCode: 2,
     commands: {
       cli: {
@@ -486,61 +630,85 @@ function createCliContract(identity: CliCommandIdentity) {
           config: { kind: "positional", description: "宿主配置文件路径" },
         },
         input: z.object({ config: z.string() }),
-        success: {
-          kind: "data",
-          variants: {
-            recorded: {
-              description: "比较基线记录结果",
-              exitCode: 0,
-              schema: baselineRecordSchema,
-              text: (result) =>
-                text.lines([
-                  result.outcome === "saved"
-                    ? `比较基线已保存：${result.path}`
-                    : `比较基线没有变化：${result.path}`,
-                  `原文范围 ${result.sourceScopeCount} 个、原文单元 ${result.sourceUnitCount} 个；译文范围 ${result.translationScopeCount} 个、实际译文 ${result.translationRecordCount} 条。`,
-                ]),
+        outputs: ({ atomic }) => {
+          const baselineExecution = atomic({
+            success: {
+              kind: "data",
+              variants: {
+                recorded: {
+                  description: "比较基线记录结果",
+                  exitCode: 0,
+                  schema: baselineRecordSchema,
+                },
+              },
             },
-          },
-        },
-        failures: {
-          recordFailed: {
-            description: "记录比较基线失败",
-            exitCode: 1,
-            schema: z.object({ path: z.string(), message: z.string() }),
-            text: ({ path: baselinePath, message }) =>
-              text.line(
-                `记录比较基线失败（未保存 ${baselinePath}）：${message}`,
-              ),
-          },
-        },
-        async handler({ input, outcome }) {
-          const configPath = path.resolve(process.cwd(), input.config);
-          const baselinePath = path.join(
-            path.dirname(configPath),
-            "lioni.baseline.json",
-          );
-          try {
-            const config = await loadConfig(configPath);
-            const result = await recordBaselineForConfig(config, baselinePath);
-            const snapshot = result.baseline.snapshot;
-            return outcome.data.recorded({
-              outcome: result.outcome,
-              path: baselinePath,
-              sourceScopeCount: snapshot.source.read.scopes.length,
-              sourceUnitCount: snapshot.source.units.length,
-              translationScopeCount: snapshot.translations.reads.reduce(
-                (count, read) => count + read.scopes.length,
-                0,
-              ),
-              translationRecordCount: snapshot.translations.records.length,
-            });
-          } catch (error) {
-            return outcome.failure.recordFailed({
-              path: baselinePath,
-              message: error instanceof Error ? error.message : String(error),
-            });
-          }
+            failures: {
+              recordFailed: {
+                description: "记录比较基线失败",
+                exitCode: 1,
+                schema: z.object({ path: z.string(), message: z.string() }),
+              },
+            },
+            async handler({ input, outcome }) {
+              const configPath = path.resolve(process.cwd(), input.config);
+              const baselinePath = path.join(
+                path.dirname(configPath),
+                "lioni.baseline.json",
+              );
+              try {
+                const config = await loadConfig(configPath);
+                const result = await recordBaselineForConfig(
+                  config,
+                  baselinePath,
+                );
+                const snapshot = result.baseline.snapshot;
+                return outcome.data.recorded({
+                  outcome: result.outcome,
+                  path: baselinePath,
+                  sourceScopeCount: snapshot.source.read.scopes.length,
+                  sourceUnitCount: snapshot.source.units.length,
+                  translationScopeCount: snapshot.translations.reads.reduce(
+                    (count, read) => count + read.scopes.length,
+                    0,
+                  ),
+                  translationRecordCount: snapshot.translations.records.length,
+                });
+              } catch (error) {
+                return outcome.failure.recordFailed({
+                  path: baselinePath,
+                  message:
+                    error instanceof Error ? error.message : String(error),
+                });
+              }
+            },
+          });
+
+          return {
+            default: "structured",
+            modes: {
+              structured: baselineExecution.structured({
+                description: "输出结构化比较基线记录结果",
+              }),
+              text: baselineExecution.text({
+                description: "输出终端可读的比较基线记录结果",
+                success: {
+                  recorded: (result) =>
+                    text.lines([
+                      result.outcome === "saved"
+                        ? `比较基线已保存：${result.path}`
+                        : `比较基线没有变化：${result.path}`,
+                      `原文范围 ${result.sourceScopeCount} 个、原文单元 ${result.sourceUnitCount} 个；译文范围 ${result.translationScopeCount} 个、实际译文 ${result.translationRecordCount} 条。`,
+                    ]),
+                },
+                failures: {
+                  recordFailed: ({ path: baselinePath, message }) =>
+                    text.line(
+                      `记录比较基线失败（未保存 ${baselinePath}）：${message}`,
+                    ),
+                },
+              }),
+            },
+          };
         },
       }),
       ...define.command("update")({
@@ -568,67 +736,89 @@ function createCliContract(identity: CliCommandIdentity) {
           recordBaseline: z.optional(z.boolean()),
           dryRun: z.optional(z.boolean()),
         }),
-        success: {
-          kind: "data",
-          variants: {
-            previewed: {
-              description: "更新预览",
-              exitCode: 0,
-              schema: updatePlanSchema,
-              text: updatePlanText,
+        outputs: ({ atomic }) => {
+          const updateExecution = atomic({
+            success: {
+              kind: "data",
+              variants: {
+                previewed: {
+                  description: "更新预览",
+                  exitCode: 0,
+                  schema: updatePlanSchema,
+                },
+                applied: {
+                  description: "更新执行结果",
+                  exitCode: 0,
+                  schema: updateResultSchema,
+                },
+              },
             },
-            applied: {
-              description: "更新执行结果",
-              exitCode: 0,
-              schema: updateResultSchema,
-              text: updateResultText,
+            failures: {
+              previewFailed: {
+                description: "更新预览失败",
+                exitCode: 1,
+                schema: z.object({ message: z.string() }),
+              },
+              applyFailed: {
+                description: "更新未完整执行",
+                exitCode: 1,
+                schema: updateResultSchema,
+              },
             },
-          },
-        },
-        failures: {
-          previewFailed: {
-            description: "更新预览失败",
-            exitCode: 1,
-            schema: z.object({ message: z.string() }),
-            text: ({ message }) => text.line(`更新预览失败：${message}`),
-          },
-          applyFailed: {
-            description: "更新未完整执行",
-            exitCode: 1,
-            schema: updateResultSchema,
-            text: updateResultText,
-          },
-        },
-        async handler({ input, outcome }) {
-          const configPath = path.resolve(process.cwd(), input.config);
-          const baselinePath = path.join(
-            path.dirname(configPath),
-            "lioni.baseline.json",
-          );
-          try {
-            const config = await loadConfig(configPath);
-            if (input.dryRun === true) {
-              const plan = await previewUpdateForConfig(
-                config,
-                baselinePath,
-                languageSelection(input),
+            async handler({ input, outcome }) {
+              const configPath = path.resolve(process.cwd(), input.config);
+              const baselinePath = path.join(
+                path.dirname(configPath),
+                "lioni.baseline.json",
               );
-              return outcome.data.previewed(plan);
-            }
-            const result = await updateForConfig(
-              config,
-              baselinePath,
-              updateSelection(input),
-            );
-            const cliResult = cliUpdateResult(result);
-            return result.status === "completed"
-              ? outcome.data.applied(cliResult)
-              : outcome.failure.applyFailed(cliResult);
-          } catch (error) {
-            return outcome.failure.previewFailed({
-              message: error instanceof Error ? error.message : String(error),
-            });
-          }
+              try {
+                const config = await loadConfig(configPath);
+                if (input.dryRun === true) {
+                  const plan = await previewUpdateForConfig(
+                    config,
+                    baselinePath,
+                    languageSelection(input),
+                  );
+                  return outcome.data.previewed(plan);
+                }
+                const result = await updateForConfig(
+                  config,
+                  baselinePath,
+                  updateSelection(input),
+                );
+                const cliResult = cliUpdateResult(result);
+                return result.status === "completed"
+                  ? outcome.data.applied(cliResult)
+                  : outcome.failure.applyFailed(cliResult);
+              } catch (error) {
+                return outcome.failure.previewFailed({
+                  message:
+                    error instanceof Error ? error.message : String(error),
+                });
+              }
+            },
+          });
+
+          return {
+            default: "structured",
+            modes: {
+              structured: updateExecution.structured({
+                description: "输出结构化更新预览或执行结果",
+              }),
+              text: updateExecution.text({
+                description: "输出终端可读的更新预览或执行结果",
+                success: {
+                  previewed: updatePlanText,
+                  applied: updateResultText,
+                },
+                failures: {
+                  previewFailed: ({ message }) =>
+                    text.line(`更新预览失败：${message}`),
+                  applyFailed: updateResultText,
+                },
+              }),
+            },
+          };
         },
       }),
       ...define.command("inspect")({
@@ -641,101 +831,126 @@ function createCliContract(identity: CliCommandIdentity) {
           languages: languageOption,
         },
         input: scopedConfigSchema,
-        success: {
-          kind: "data",
-          variants: {
-            read: {
-              description: "源译事实",
-              exitCode: 0,
-              schema: projectSnapshotSchema,
-              text: (snapshot) =>
-                text.lines([
-                  `源译事实（已知 ${snapshot.source.units.length} 个原文）`,
-                  `事实版本：${snapshot.version}`,
-                  `原文读取：${readStatusText(snapshot.source.read.status)}；总数：${snapshot.source.totalUnitCount ?? "未知"}`,
-                  ...snapshot.source.read.scopes.map(
-                    ({ range, enumeration, recordCount, error }) =>
-                      `原文范围 ${rangeText(range)}：${enumerationText(enumeration)}，发现 ${recordCount} 条${error === undefined ? "" : `；${error}`}`,
-                  ),
-                  ...snapshot.source.units.flatMap(
-                    ({ key, unit, bodyAvailability }) => [
-                      `- ${key}（正文${bodyAvailability === "available" ? "可用" : "不可用"}）`,
-                      `  ${JSON.stringify(unit) ?? "null"}`,
-                    ],
-                  ),
-                  ...(snapshot.translations.reads.length === 0
-                    ? ["目标语言：未配置"]
-                    : snapshot.translations.reads.flatMap(
-                        ({ language, status, scopes, error }) => [
-                          `目标语言 ${language} 读取：${readStatusText(status)}${error === undefined ? "" : `；${error}`}`,
-                          ...scopes.map(
-                            ({
-                              range,
-                              covers,
-                              enumeration,
-                              translationIndexes,
-                              error: scopeError,
-                            }) =>
-                              `  范围 ${rangeText(range)}：${enumerationText(enumeration)}；覆盖 ${covers.join(", ") || "无"}；译文 ${translationIndexes.join(", ") || "无"}${scopeError === undefined ? "" : `；${scopeError}`}`,
-                          ),
-                        ],
-                      )),
-                  ...snapshot.translations.records.map(
-                    ({ index, language, record, bodyAvailability }) =>
-                      `译文 #${index}（${language}，正文${bodyAvailability === "available" ? "可用" : "不可用"}）：${JSON.stringify(record) ?? "null"}`,
-                  ),
-                  ...snapshot.associations.map(
-                    ({
-                      sourceKey,
-                      language,
-                      status,
-                      coverageStatus,
-                      scopeIndexes,
-                      translationIndexes,
-                    }) =>
-                      `关联 ${sourceKey} → ${language}：${status}（覆盖${readStatusText(coverageStatus)}，范围 ${scopeIndexes.join(", ") || "无"}，译文 ${translationIndexes.join(", ") || "无"}）`,
-                  ),
-                ]),
+        outputs: ({ atomic }) => {
+          const inspectExecution = atomic({
+            success: {
+              kind: "data",
+              variants: {
+                read: {
+                  description: "源译事实",
+                  exitCode: 0,
+                  schema: projectSnapshotSchema,
+                },
+              },
             },
-          },
-        },
-        failures: {
-          duplicateIdentity: {
-            description: "原文身份重复",
-            exitCode: 1,
-            schema: z.object({
-              key: z.string(),
-              firstIndex: z.number(),
-              duplicateIndex: z.number(),
-            }),
-            text: ({ key, firstIndex, duplicateIndex }) =>
-              text.line(
-                `原文身份重复：${key}（第 ${firstIndex + 1} 与第 ${duplicateIndex + 1} 个单元）。`,
-              ),
-          },
-          readFailed: {
-            description: "读取原文事实失败",
-            exitCode: 1,
-            schema: z.object({ message: z.string() }),
-            text: ({ message }) => text.line(`读取原文事实失败：${message}`),
-          },
-        },
-        async handler({ input, outcome }) {
-          try {
-            const config = await loadConfig(input.config);
-            const snapshot = await readProjectSnapshot(config, languageSelection(input));
-            return outcome.data.read(projectSnapshotSchema.parse(snapshot));
-          } catch (error) {
-            if (error instanceof DuplicateTranslationUnitKeyError)
-              return outcome.failure.duplicateIdentity({
-                key: error.key,
-                firstIndex: error.firstIndex,
-                duplicateIndex: error.duplicateIndex,
-              });
-            return outcome.failure.readFailed({
-              message: error instanceof Error ? error.message : String(error),
-            });
-          }
+            failures: {
+              duplicateIdentity: {
+                description: "原文身份重复",
+                exitCode: 1,
+                schema: z.object({
+                  key: z.string(),
+                  firstIndex: z.number(),
+                  duplicateIndex: z.number(),
+                }),
+              },
+              readFailed: {
+                description: "读取原文事实失败",
+                exitCode: 1,
+                schema: z.object({ message: z.string() }),
+              },
+            },
+            async handler({ input, outcome }) {
+              try {
+                const config = await loadConfig(input.config);
+                const snapshot = await readProjectSnapshot(
+                  config,
+                  languageSelection(input),
+                );
+                return outcome.data.read(projectSnapshotSchema.parse(snapshot));
+              } catch (error) {
+                if (error instanceof DuplicateTranslationUnitKeyError)
+                  return outcome.failure.duplicateIdentity({
+                    key: error.key,
+                    firstIndex: error.firstIndex,
+                    duplicateIndex: error.duplicateIndex,
+                  });
+                return outcome.failure.readFailed({
+                  message:
+                    error instanceof Error ? error.message : String(error),
+                });
+              }
+            },
+          });
+
+          return {
+            default: "structured",
+            modes: {
+              structured: inspectExecution.structured({
+                description: "输出结构化源译事实快照",
+              }),
+              text: inspectExecution.text({
+                description: "输出终端可读的源译事实快照",
+                success: {
+                  read: (snapshot) =>
+                    text.lines([
+                      `源译事实（已知 ${snapshot.source.units.length} 个原文）`,
+                      `事实版本：${snapshot.version}`,
+                      `原文读取：${readStatusText(snapshot.source.read.status)}；总数：${snapshot.source.totalUnitCount ?? "未知"}`,
+                      ...snapshot.source.read.scopes.map(
+                        ({ range, enumeration, recordCount, error }) =>
+                          `原文范围 ${rangeText(range)}：${enumerationText(enumeration)}，发现 ${recordCount} 条${error === undefined ? "" : `；${error}`}`,
+                      ),
+                      ...snapshot.source.units.flatMap(
+                        ({ key, unit, bodyAvailability }) => [
+                          `- ${key}（正文${bodyAvailability === "available" ? "可用" : "不可用"}）`,
+                          `  ${JSON.stringify(unit) ?? "null"}`,
+                        ],
+                      ),
+                      ...(snapshot.translations.reads.length === 0
+                        ? ["目标语言：未配置"]
+                        : snapshot.translations.reads.flatMap(
+                            ({ language, status, scopes, error }) => [
+                              `目标语言 ${language} 读取：${readStatusText(status)}${error === undefined ? "" : `；${error}`}`,
+                              ...scopes.map(
+                                ({
+                                  range,
+                                  covers,
+                                  enumeration,
+                                  translationIndexes,
+                                  error: scopeError,
+                                }) =>
+                                  `  范围 ${rangeText(range)}：${enumerationText(enumeration)}；覆盖 ${covers.join(", ") || "无"}；译文 ${translationIndexes.join(", ") || "无"}${scopeError === undefined ? "" : `；${scopeError}`}`,
+                              ),
+                            ],
+                          )),
+                      ...snapshot.translations.records.map(
+                        ({ index, language, record, bodyAvailability }) =>
+                          `译文 #${index}（${language}，正文${bodyAvailability === "available" ? "可用" : "不可用"}）：${JSON.stringify(record) ?? "null"}`,
+                      ),
+                      ...snapshot.associations.map(
+                        ({
+                          sourceKey,
+                          language,
+                          status,
+                          coverageStatus,
+                          scopeIndexes,
+                          translationIndexes,
+                        }) =>
+                          `关联 ${sourceKey} → ${language}：${status}（覆盖${readStatusText(coverageStatus)}，范围 ${scopeIndexes.join(", ") || "无"}，译文 ${translationIndexes.join(", ") || "无"}）`,
+                      ),
+                    ]),
+                },
+                failures: {
+                  duplicateIdentity: ({ key, firstIndex, duplicateIndex }) =>
+                    text.line(
+                      `原文身份重复：${key}（第 ${firstIndex + 1} 与第 ${duplicateIndex + 1} 个单元）。`,
+                    ),
+                  readFailed: ({ message }) =>
+                    text.line(`读取原文事实失败：${message}`),
+                },
+              }),
+            },
+          };
         },
       }),
       suppressions: {
@@ -784,68 +999,97 @@ function createCliContract(identity: CliCommandIdentity) {
           id: z.string(),
           reason: z.string(),
         }),
-        success: {
-          kind: "data",
-          variants: {
-            upserted: {
-              description: "豁免已写入配置选定的存储",
-              exitCode: 0,
-              schema: z.object({
-                id: z.string(),
-                checkId: z.string(),
-                sourceKey: z.string(),
-                language: z.string(),
-                executionId: z.number(),
-              }),
-              text: ({ id, checkId, sourceKey, language, executionId }) =>
-                text.line(
-                  `豁免 ${id} 已更新：${checkId} ${sourceKey} → ${language}（执行 ${executionId}）。`,
-                ),
+        outputs: ({ atomic }) => {
+          const suppressionsExecution = atomic({
+            success: {
+              kind: "data",
+              variants: {
+                upserted: {
+                  description: "豁免已写入配置选定的存储",
+                  exitCode: 0,
+                  schema: z.object({
+                    id: z.string(),
+                    checkId: z.string(),
+                    sourceKey: z.string(),
+                    language: z.string(),
+                    executionId: z.number(),
+                  }),
+                },
+              },
             },
-          },
-        },
-        failures: {
-          upsertFailed: {
-            description: "从 QA 报告创建或更新豁免失败",
-            exitCode: 1,
-            schema: z.object({ path: z.string(), message: z.string() }),
-            text: ({ path: reportPath, message }) =>
-              text.line(`根据报告 ${reportPath} 更新 QA 豁免失败：${message}`),
-          },
-        },
-        async handler({ input, outcome }) {
-          const reportPath = path.resolve(process.cwd(), input.report);
-          try {
-            const report = JSON.parse(
-              await readFile(reportPath, "utf8"),
-            ) as unknown;
-            const configPath = path.resolve(process.cwd(), input.config);
-            const config = await loadConfig(configPath);
-            const executionId = Number(input.executionId);
-            const store = config.quality?.suppressionStore;
-            if (store === undefined)
-              throw new TypeError("配置未提供 QA 豁免存储。");
-            const suppression = await upsertQaSuppressionFromReport({
-              report,
-              checkId: input.checkId,
-              executionId,
-              id: input.id,
-              reason: input.reason,
-              store,
-            });
-            return outcome.data.upserted({
-              id: suppression.id,
-              checkId: suppression.checkId,
-              sourceKey: suppression.sourceKey,
-              language: suppression.language,
-              executionId,
-            });
-          } catch (error) {
-            return outcome.failure.upsertFailed({
-              path: reportPath,
-              message: error instanceof Error ? error.message : String(error),
-            });
-          }
+            failures: {
+              upsertFailed: {
+                description: "从 QA 报告创建或更新豁免失败",
+                exitCode: 1,
+                schema: z.object({ path: z.string(), message: z.string() }),
+              },
+            },
+            async handler({ input, outcome }) {
+              const reportPath = path.resolve(process.cwd(), input.report);
+              try {
+                const report = JSON.parse(
+                  await readFile(reportPath, "utf8"),
+                ) as unknown;
+                const configPath = path.resolve(process.cwd(), input.config);
+                const config = await loadConfig(configPath);
+                const executionId = Number(input.executionId);
+                const store = config.quality?.suppressionStore;
+                if (store === undefined)
+                  throw new TypeError("配置未提供 QA 豁免存储。");
+                const suppression = await upsertQaSuppressionFromReport({
+                  report,
+                  checkId: input.checkId,
+                  executionId,
+                  id: input.id,
+                  reason: input.reason,
+                  store,
+                });
+                return outcome.data.upserted({
+                  id: suppression.id,
+                  checkId: suppression.checkId,
+                  sourceKey: suppression.sourceKey,
+                  language: suppression.language,
+                  executionId,
+                });
+              } catch (error) {
+                return outcome.failure.upsertFailed({
+                  path: reportPath,
+                  message:
+                    error instanceof Error ? error.message : String(error),
+                });
+              }
+            },
+          });
+
+          return {
+            default: "structured",
+            modes: {
+              structured: suppressionsExecution.structured({
+                description: "输出结构化豁免更新结果",
+              }),
+              text: suppressionsExecution.text({
+                description: "输出终端可读的豁免更新结果",
+                success: {
+                  upserted: ({
+                    id,
+                    checkId,
+                    sourceKey,
+                    language,
+                    executionId,
+                  }) =>
+                    text.line(
+                      `豁免 ${id} 已更新：${checkId} ${sourceKey} → ${language}（执行 ${executionId}）。`,
+                    ),
+                },
+                failures: {
+                  upsertFailed: ({ path: reportPath, message }) =>
+                    text.line(
+                      `根据报告 ${reportPath} 更新 QA 豁免失败：${message}`,
+                    ),
+                },
+              }),
+            },
+          };
         },
       }),
       ...define.command("qa")({
@@ -853,7 +1097,7 @@ function createCliContract(identity: CliCommandIdentity) {
         parent: "cli",
         name: "qa",
         description:
-          "默认输出简洁中文质量报告；使用 --output-format structured 查看完整结构化结果。",
+          "默认输出简洁中文质量报告；使用 --output structured 查看完整结构化结果。",
         fields: {
           config: { kind: "positional", description: "宿主配置文件路径" },
           languages: languageOption,
@@ -870,49 +1114,72 @@ function createCliContract(identity: CliCommandIdentity) {
             ],
           },
         ],
-        success: {
-          kind: "data",
-          variants: {
-            checked: {
-              description: "质量检查结果",
-              exitCode: 0,
-              schema: z.record(z.string(), z.unknown()),
-              text: qualityText,
+        outputs: ({ atomic }) => {
+          // 文本与结构化模式共用同一个 atomic 执行声明，保证每次调用只执行一次 runQa 并共用门禁。
+          const qaExecution = atomic({
+            success: {
+              kind: "data",
+              variants: {
+                checked: {
+                  description: "质量检查通过",
+                  exitCode: 0,
+                  schema: qualityRunResultSchema,
+                },
+                notPassed: {
+                  description: "质量检查未通过",
+                  exitCode: 1,
+                  schema: qualityRunResultSchema,
+                },
+              },
             },
-            notPassed: {
-              description: "质量检查未通过",
-              exitCode: 1,
-              schema: z.record(z.string(), z.unknown()),
-              text: qualityText,
+            failures: {
+              checkFailed: {
+                description: "读取事实或执行质量检查失败",
+                exitCode: 1,
+                schema: z.object({ message: z.string() }),
+              },
             },
-          },
-        },
-        failures: {
-          checkFailed: {
-            description: "读取事实或执行质量检查失败",
-            exitCode: 1,
-            schema: z.object({ message: z.string() }),
-            text: ({ message }) => {
-              const [first, ...details] = message.split(/\r?\n/u);
-              return text.lines([`质量检查失败：${first}`, ...details]);
+            async handler({ input, outcome }) {
+              try {
+                const config = await loadConfig(input.config);
+                const result = await runQa(config, {
+                  ...languageSelection(input),
+                  ...qualityCheckSelection(input),
+                });
+                const validated = qualityRunResultSchema.parse(result);
+                return decideQualityReport(result).passed
+                  ? outcome.data.checked(validated)
+                  : outcome.data.notPassed(validated);
+              } catch (error) {
+                return outcome.failure.checkFailed({
+                  message:
+                    error instanceof Error ? error.message : String(error),
+                });
+              }
             },
-          },
-        },
-        async handler({ input, outcome }) {
-          try {
-            const config = await loadConfig(input.config);
-            const result = await runQa(config, {
-              ...languageSelection(input),
-              ...qualityCheckSelection(input),
-            });
-            return decideQualityReport(result).passed
-              ? outcome.data.checked(result)
-              : outcome.data.notPassed(result);
-          } catch (error) {
-            return outcome.failure.checkFailed({
-              message: error instanceof Error ? error.message : String(error),
-            });
-          }
+          });
+
+          return {
+            default: "text",
+            modes: {
+              text: qaExecution.text({
+                description: "输出终端可读的中文质量报告",
+                success: {
+                  checked: presentQualityText,
+                  notPassed: presentQualityText,
+                },
+                failures: {
+                  checkFailed: ({ message }) => {
+                    const [first, ...details] = message.split(/\r?\n/u);
+                    return text.lines([`质量检查失败：${first}`, ...details]);
+                  },
+                },
+              }),
+              structured: qaExecution.structured({
+                description: "输出完整结构化 QA 报告",
+              }),
+            },
+          };
         },
       }),
     },
@@ -991,10 +1258,7 @@ export async function runCli(runtime: CliRuntime): Promise<number> {
   try {
     const contract = createCliContract(runtime.identity);
     const result = await executeCli(contract, {
-      invocation: parseCliInvocation(
-        contract,
-        defaultQualityOutput(runtime.argv.slice(2)),
-      ),
+      invocation: parseCliInvocation(contract, runtime.argv.slice(2)),
       dependencies: undefined,
       write: runtime.write,
     });
@@ -1016,14 +1280,4 @@ export async function runCli(runtime: CliRuntime): Promise<number> {
     }
     return 70;
   }
-}
-
-function defaultQualityOutput(args: readonly string[]): readonly string[] {
-  if (
-    args[0] !== "qa" ||
-    args.includes("--output-format") ||
-    args.some((argument) => argument.startsWith("--output-format="))
-  )
-    return args;
-  return [...args, "--output-format", "text"];
 }

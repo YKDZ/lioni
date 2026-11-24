@@ -121,7 +121,7 @@ void describe("framework snapshot", () => {
         keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
       }),
     );
-    const asyncFacts = await readSourceSnapshot(
+    const asyncSnapshot = await readSourceSnapshot(
       defineConfig({
         source: {
           schema: asyncManualSourceSchema,
@@ -136,7 +136,7 @@ void describe("framework snapshot", () => {
       units,
     );
     assert.deepStrictEqual(
-      asyncFacts.units.map(({ unit }) => unit),
+      asyncSnapshot.units.map(({ unit }) => unit),
       units,
     );
   });
@@ -405,7 +405,7 @@ void describe("framework snapshot", () => {
     }
   });
 
-  void it("changes the fact version when non-identity source context changes", async () => {
+  void it("changes the snapshot version when non-identity source context changes", async () => {
     const makeConfig = (screenshot: string) =>
       defineConfig({
         source: {

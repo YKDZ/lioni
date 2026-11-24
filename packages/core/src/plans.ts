@@ -4,6 +4,8 @@ import { isDeepStrictEqual } from "node:util";
 import { validateComparisonBaseline } from "./baselines.ts";
 import {
   compareSnapshots,
+  normalizeLegacyComparisonSnapshot,
+  normalizeLegacyTranslationRecord,
   validateComparisonInput,
   validateComparisonResult,
   type SourceChange,
@@ -718,15 +720,19 @@ export async function previewUpdate<
 
   const baseline = await store?.load();
   if (baseline !== undefined) validateComparisonBaseline(baseline);
+  const previousSnapshot =
+    baseline === undefined
+      ? undefined
+      : normalizeLegacyComparisonSnapshot(baseline.snapshot);
   const current = await readProjectSnapshot(config, options);
   // 比较器和策略也只接收本次范围；未选语言的历史不能成为本次决定依据。
   const previous =
-    baseline === undefined
+    previousSnapshot === undefined
       ? undefined
       : options.languages === undefined
-        ? baseline.snapshot
+        ? previousSnapshot
         : selectSnapshotLanguages<TUnit, TTranslation, TBody, TUnavailable>(
-            baseline.snapshot,
+            previousSnapshot,
             languages,
           );
   const comparisons = await compareSnapshots<
@@ -847,7 +853,7 @@ export function assertUpdatePlanLanguages<
   }
 }
 
-/** 验证保存后的 JSON 计划；不会重新比较、关联或调用策略。 */
+/** 验证保存后的 JSON 计划；兼容读取升级前 v2 译文字段，不会重新比较、关联或调用策略。 */
 export function validateUpdatePlan(
   value: unknown,
 ): asserts value is UpdatePlanData {
@@ -861,11 +867,15 @@ export function validateUpdatePlan(
   )
     invalidPlan("格式无效或包含不完整的业务决定。");
 
+  const normalized = normalizeLegacyUpdatePlan(value) as Record<
+    string,
+    unknown
+  >;
   const comparisonInput = {
-    previous: value.previous as
+    previous: normalized.previous as
       | ComparisonSnapshot<TranslationUnitInput, unknown, JsonValue, unknown>
       | undefined,
-    current: value.current as ComparisonSnapshot<
+    current: normalized.current as ComparisonSnapshot<
       TranslationUnitInput,
       unknown,
       JsonValue,
@@ -877,11 +887,106 @@ export function validateUpdatePlan(
   );
   validateComparisonResult<TranslationUnitInput, unknown, JsonValue, unknown>(
     comparisonInput,
-    value.comparisons,
+    normalized.comparisons,
   );
-  const associations = value.associations as UpdatePlanAssociations;
+  const associations = normalized.associations as UpdatePlanAssociations;
   assertAssociationKeys(associations.previous, comparisonInput.previous);
   assertAssociationKeys(associations.current, comparisonInput.current);
+}
+
+/**
+ * 将升级前 v2 更新计划中的旧译文字段 `translation` 无损归一化为 `record`。
+ * 覆盖快照记录、顶层比较变化以及逐项决定内的译文变化。
+ */
+export function normalizeLegacyUpdatePlan<T>(value: T): T {
+  if (!isRecord(value)) return value;
+  const previous = Object.hasOwn(value, "previous")
+    ? normalizeLegacyComparisonSnapshot(value.previous)
+    : value.previous;
+  const current = normalizeLegacyComparisonSnapshot(value.current);
+  const comparisons = normalizeLegacyPlanComparisons(value.comparisons);
+  const items = mapNormalizedArray(value.items, normalizeLegacyPlanItem);
+
+  let next = value;
+  if (Object.hasOwn(value, "previous"))
+    next = updateRecordProperty(next, "previous", previous);
+  next = updateRecordProperty(next, "current", current);
+  next = updateRecordProperty(next, "comparisons", comparisons);
+  next = updateRecordProperty(next, "items", items);
+  return next;
+}
+
+function normalizeLegacyPlanComparisons(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  const translationChanges = mapNormalizedArray(
+    value.translationChanges,
+    normalizeLegacyTranslationChange,
+  );
+  return updateRecordProperty(value, "translationChanges", translationChanges);
+}
+
+function normalizeLegacyPlanItem(value: unknown): unknown {
+  if (!isRecord(value) || !isRecord(value.changes)) return value;
+  const translations = mapNormalizedArray(
+    value.changes.translations,
+    normalizeLegacyTranslationChange,
+  );
+  const nextChanges = updateRecordProperty(
+    value.changes,
+    "translations",
+    translations,
+  );
+  return updateRecordProperty(value, "changes", nextChanges);
+}
+
+function normalizeLegacyTranslationChange(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  let next: Record<string, unknown> = value;
+  if (Object.hasOwn(value, "previous"))
+    next = updateRecordProperty(
+      next,
+      "previous",
+      normalizeLegacyTranslationRecord(value.previous),
+    );
+  if (Object.hasOwn(value, "current"))
+    next = updateRecordProperty(
+      next,
+      "current",
+      normalizeLegacyTranslationRecord(value.current),
+    );
+  return next;
+}
+
+function mapNormalizedArray(
+  value: unknown,
+  normalizeItem: (item: unknown) => unknown,
+): unknown {
+  if (!Array.isArray(value)) return value;
+  let changed = false;
+  const mapped = value.map((item) => {
+    const normalized = normalizeItem(item);
+    if (normalized !== item) changed = true;
+    return normalized;
+  });
+  return changed ? mapped : value;
+}
+
+function updateRecordProperty<T extends Record<string, unknown>>(
+  target: T,
+  key: string,
+  nextValue: unknown,
+): T {
+  if (target[key] === nextValue) return target;
+  const descriptor = Object.getOwnPropertyDescriptor(target, key);
+  if (
+    Object.isExtensible(target) &&
+    descriptor?.configurable === true &&
+    descriptor.writable === true
+  ) {
+    (target as Record<string, unknown>)[key] = nextValue;
+    return target;
+  }
+  return { ...target, [key]: nextValue };
 }
 
 /** 保存计划中的关联必须仍指向同一消息键，不接受自定义交叉配对。 */

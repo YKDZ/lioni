@@ -118,11 +118,13 @@ export default defineConfig({
           object: {
             kind: "translation-unit",
             key: input.sourceKey,
-            language: input.language
+            language: input.language,
+            code: "HOST_REVIEW",
           },
           location: {
             language: input.language,
-            range: "src/messages.ts:18"
+            range: "src/messages.ts:18",
+            span: { line: 18 },
           },
           message: "候选需要人工复核。",
           evidence: []
@@ -154,7 +156,7 @@ export default {
       },
       {
         name: "以文本格式查看源译资源",
-        args: ["inspect", "lioni.config.ts", "--output-format", "text"],
+        args: ["inspect", "lioni.config.ts", "--output", "text"],
       },
       {
         name: "查看资源时报告原文身份重复",
@@ -162,7 +164,7 @@ export default {
       },
       {
         name: "执行宿主配置的检查器",
-        args: ["qa", "qa.config.ts", "--output-format", "structured"],
+        args: ["qa", "qa.config.ts", "--output", "structured"],
       },
       {
         name: "显示送检范围和默认文本报告",
@@ -244,7 +246,7 @@ export default {
         }[];
       };
     };
-    assert.equal(result.schemaVersion, "2");
+    assert.equal(result.schemaVersion, "3");
     assert.match(result.data.version, /^sha256:[a-f0-9]{64}$/u);
     assert.equal(result.data.source.read.status, "complete");
     assert.equal(result.data.source.totalUnitCount, 1);
@@ -334,7 +336,7 @@ export default {
     assert.equal(duplicate?.exitCode, 1);
     assert.equal(duplicate?.stdout, "");
     assert.partialDeepStrictEqual(JSON.parse(duplicate?.stderr ?? ""), {
-      schemaVersion: "2",
+      schemaVersion: "3",
       kind: "failure",
       variant: "duplicateIdentity",
       data: { key: "src/messages.ts:18" },
@@ -343,11 +345,12 @@ export default {
     assert.equal(qa?.stderr, "");
     const qaResult = JSON.parse(qa?.stdout ?? "") as {
       data: {
-        status: string;
         diagnostics: readonly {
           checkId: string;
           executionId: number;
           message: string;
+          object: { code?: string };
+          location: { span?: { line: number } };
         }[];
         candidates: readonly {
           sourceKey: string;
@@ -365,7 +368,6 @@ export default {
         checks: readonly {
           checkId: string;
           version: string;
-          status: string;
           diagnostics: readonly {
             checkId: string;
             executionId: number;
@@ -377,7 +379,6 @@ export default {
             checkId: string;
             sourceKey: string;
             language: string;
-            status: string;
             inputFingerprint?: string;
             fingerprintSummary?: {
               version: string;
@@ -387,7 +388,6 @@ export default {
         }[];
       };
     };
-    assert.equal(qaResult.data.status, "complete");
     assert.deepEqual(qaResult.data.candidates, [
       {
         sourceKey: "src/messages.ts:18",
@@ -415,27 +415,20 @@ export default {
       ["inputFingerprint", "version"],
     );
     assert.doesNotMatch(qa?.stdout ?? "", /isEnabled|enabledBySource/u);
-    assert.equal(check?.status, "complete");
     assert.equal(qaResult.data.diagnostics.length, 1);
     assert.equal(qaResult.data.diagnostics[0]?.checkId, "host-rule");
     assert.equal(qaResult.data.diagnostics[0]?.executionId, 0);
+    assert.equal(qaResult.data.diagnostics[0]?.object.code, "HOST_REVIEW");
+    assert.deepEqual(qaResult.data.diagnostics[0]?.location.span, { line: 18 });
     assert.deepEqual(check?.diagnostics, qaResult.data.diagnostics);
     assert.deepEqual(
       check?.executions.map(
-        ({
+        ({ executionId, candidateIndex, checkId, sourceKey, language }) => ({
           executionId,
           candidateIndex,
           checkId,
           sourceKey,
           language,
-          status,
-        }) => ({
-          executionId,
-          candidateIndex,
-          checkId,
-          sourceKey,
-          language,
-          status,
         }),
       ),
       [
@@ -445,7 +438,6 @@ export default {
           checkId: "host-rule",
           sourceKey: "src/messages.ts:18",
           language: "fr",
-          status: "complete",
         },
       ],
     );
@@ -464,7 +456,6 @@ export default {
     );
     assert.equal(qaText?.stderr, "");
     assert.match(qaText?.stdout ?? "", /质量结论：通过/u);
-    assert.match(qaText?.stdout ?? "", /执行状态：完整/u);
     assert.match(qaText?.stdout ?? "", /语言范围：读取 fr；所选候选语言 fr/u);
     assert.match(
       qaText?.stdout ?? "",
@@ -481,7 +472,7 @@ export default {
     );
     assert.ok(qaText?.stdout.includes("翻译进度 fr：0/1（0%）"));
     assert.equal(noChecks?.exitCode, 1);
-    assert.match(noChecks?.stdout ?? "", /没有配置检查项/u);
+    assert.match(noChecks?.stdout ?? "", /质量结论：未通过/u);
     assert.match(noChecks?.stdout ?? "", /语言范围：读取 fr；所选候选语言 fr/u);
     assert.match(
       noChecks?.stdout ?? "",
@@ -502,7 +493,7 @@ export default {
     assert.equal(results[8]?.exitCode, 2);
     assert.equal(results[8]?.stdout, "");
     assert.partialDeepStrictEqual(JSON.parse(results[8]?.stderr ?? ""), {
-      schemaVersion: "2",
+      schemaVersion: "3",
       kind: "usageFailure",
       issues: [{ code: "missingRequiredField", field: "config" }],
     });

@@ -10,6 +10,7 @@ import {
   readComparisonSnapshot,
   recordComparisonBaseline,
   replaceComparisonBaseline,
+  validateComparisonBaseline,
   type JsonValue,
 } from "../src/index.ts";
 import { createFileComparisonBaselineStore } from "../src/node/index.ts";
@@ -430,6 +431,95 @@ void describe("comparison baselines", () => {
       await assert.rejects(
         createFileComparisonBaselineStore(pathName).load(),
         ComparisonBaselineFormatError,
+      );
+    });
+  });
+
+  void it("loads pre-upgrade v2 baselines with translation field and keeps unchanged state", async () => {
+    await withDirectory(async (directory) => {
+      const config = makeConfig({
+        sourceScopes: [sourceScope("messages", { id: "save", source: "Save" })],
+        translationScopes: [
+          translationScope(
+            "catalogue.fr",
+            {
+              id: "save",
+              namespace: "ui",
+              text: "Enregistrer",
+            },
+            {
+              id: "legacy",
+              namespace: "legacy",
+              reason: "text is encrypted",
+            },
+          ),
+        ],
+      });
+      const current = await readComparisonSnapshot(config);
+      const v2Baseline = {
+        format: "lioni.comparison-baseline/v2",
+        snapshot: {
+          version: "sha256:legacy-v2-baseline",
+          source: current.source,
+          translations: {
+            reads: current.translations.reads,
+            records: current.translations.records.map(
+              ({ record, ...rest }) => ({
+                ...rest,
+                translation: record,
+              }),
+            ),
+          },
+        },
+      };
+      const pathName = path.join(directory, "legacy-v2-baseline.json");
+      const raw = `${JSON.stringify(v2Baseline, null, 2)}\n`;
+      await writeFile(pathName, raw, "utf8");
+      const store = createTestStore(pathName);
+
+      const loaded = await store.load();
+      assert.ok(loaded);
+      assert.deepStrictEqual(
+        loaded.snapshot.translations.records.map(({ record }) => record),
+        [
+          { id: "save", namespace: "ui", text: "Enregistrer" },
+          { id: "legacy", namespace: "legacy", reason: "text is encrypted" },
+        ],
+      );
+      assert.equal(
+        Object.hasOwn(loaded.snapshot.translations.records[0]!, "translation"),
+        false,
+      );
+
+      const unchanged = await recordComparisonBaseline(config, store);
+      assert.equal(unchanged.outcome, "unchanged");
+      assert.equal(await readFile(pathName, "utf8"), raw);
+
+      const frozenLegacy = Object.freeze({
+        ...v2Baseline,
+        snapshot: Object.freeze({
+          ...v2Baseline.snapshot,
+          translations: Object.freeze({
+            ...v2Baseline.snapshot.translations,
+            records: Object.freeze(
+              v2Baseline.snapshot.translations.records.map((entry) =>
+                Object.freeze({ ...entry }),
+              ),
+            ),
+          }),
+        }),
+      });
+      assert.doesNotThrow(() => validateComparisonBaseline(frozenLegacy));
+      const replaced = replaceComparisonBaseline({
+        previous: frozenLegacy as never,
+        current,
+      });
+      assert.deepStrictEqual(
+        replaced.snapshot.translations.records.map(({ record }) => record),
+        [
+          { id: "save", namespace: "ui", text: "Enregistrer" },
+          { id: "legacy", namespace: "legacy", reason: "text is encrypted" },
+        ],
       );
     });
   });

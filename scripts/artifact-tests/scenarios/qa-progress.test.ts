@@ -29,7 +29,7 @@ testArtifactConsumer(
       const sdk = JSON.parse(
         (await runNode("consumer.ts")).stdout,
       ) as QualityRunResult;
-      const argv = ["qa", "lioni.config.ts", "--output-format", "structured"];
+      const argv = ["qa", "lioni.config.ts", "--output", "structured"];
       const result = await runProcess(cli, argv);
       assert.equal(result.status, completed === total ? 0 : 1, result.stderr);
       const report = (JSON.parse(result.stdout) as { data: QualityRunResult })
@@ -68,7 +68,11 @@ testArtifactConsumer(
     assert.deepEqual(
       filled.diagnostics
         .map(({ checkId, object }) => [checkId, object.key])
-        .sort(),
+        .sort(([aCheck, aKey], [bCheck, bKey]) =>
+          aCheck === bCheck
+            ? (aKey ?? "").localeCompare(bKey ?? "")
+            : (aCheck ?? "").localeCompare(bCheck ?? ""),
+        ),
       [
         ["same-text", "brand"],
         ["same-text", "button"],
@@ -108,7 +112,7 @@ testArtifactConsumer(
       "lioni.config.ts",
       "--check",
       "same-text",
-      "--output-format",
+      "--output",
       "structured",
     ]);
     assert.equal(
@@ -134,7 +138,12 @@ testArtifactConsumer(
     );
     await writeFile(resource("fr.json"), "{}");
     const zero = await runNode("consumer.ts", ["zero"]);
-    const zeroCli = await runProcess(cli, ["qa", "no-checks.config.ts", "--output-format", "structured"]);
+    const zeroCli = await runProcess(cli, [
+      "qa",
+      "no-checks.config.ts",
+      "--output",
+      "structured",
+    ]);
     assert.equal(zeroCli.status, 1);
     const zeroReport = JSON.parse(zeroCli.stdout);
     assert.equal(zeroReport.variant, "notPassed");
