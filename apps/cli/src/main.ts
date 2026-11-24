@@ -60,6 +60,25 @@ const groupOption = {
   longOption: "--group",
   description: "本次要执行的项目分组；可重复指定",
 } as const;
+const severityOption = {
+  kind: "repeatableOption",
+  longOption: "--severity",
+  description: "仅展示指定严重度的终端问题明细；可重复指定取并集，默认展开全部",
+} as const;
+const maxPerCheckOption = {
+  kind: "valueOption",
+  longOption: "--max-per-check",
+  description: "每项检查在终端最多展示的匹配明细条数；仅显式指定时折叠",
+} as const;
+
+const positiveIntegerOptionSchema = z.codec(
+  z.string().regex(/^[1-9]\d*$/u),
+  z.number().int().positive(),
+  {
+    decode: (value) => Number(value),
+    encode: (value) => String(value),
+  },
+);
 
 const languagesSchema = z.optional(z.array(z.string()));
 const scopedConfigSchema = z.object({
@@ -69,6 +88,8 @@ const scopedConfigSchema = z.object({
 const qaConfigSchema = scopedConfigSchema.extend({
   checks: z.optional(z.array(z.string())),
   groups: z.optional(z.array(z.string())),
+  severity: z.optional(z.array(z.enum(["error", "warning", "info"]))),
+  maxPerCheck: z.optional(positiveIntegerOptionSchema),
 });
 
 function languageSelection(input: {
@@ -362,11 +383,17 @@ function rangeText(range: unknown): string {
 
 function presentQualityText(
   report: z.output<typeof qualityRunResultSchema>,
-  { input: _input }: TextPresenterContext<z.output<typeof qaConfigSchema>>,
+  { input }: TextPresenterContext<z.output<typeof qaConfigSchema>>,
 ): ReturnType<typeof text.lines> {
-  // 显式包装 formatQualityReport，避免 0.7.0 传入第二个上下文参数时污染格式化选项。
+  // 显式包装并仅透传展示选项，确保终端筛选折叠与业务报告及结构化结果隔离。
   const lines = formatQualityReport(
     report as QualityRunResult<QualityObject, unknown>,
+    {
+      ...(input.severity === undefined ? {} : { severities: input.severity }),
+      ...(input.maxPerCheck === undefined
+        ? {}
+        : { maxPerCheck: input.maxPerCheck }),
+    },
   ).split("\n");
   return text.lines([lines[0] ?? "", ...lines.slice(1)]);
 }
@@ -1104,6 +1131,8 @@ function createCliContract(identity: CliCommandIdentity) {
           languages: languageOption,
           checks: checkOption,
           groups: groupOption,
+          severity: severityOption,
+          maxPerCheck: maxPerCheckOption,
         },
         input: qaConfigSchema,
         usageConstraints: [

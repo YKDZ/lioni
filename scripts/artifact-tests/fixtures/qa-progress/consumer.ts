@@ -6,9 +6,11 @@ import {
   decideQualityReport,
   defineChecker,
   defineConfig,
+  formatQualityReport,
   runQa,
   type JsonValue,
   type QualityFinding,
+  type QualityReportFormatOptions,
 } from "@lioni/lioni";
 import { loadConfig } from "@lioni/lioni/node";
 import * as z from "zod";
@@ -240,6 +242,14 @@ if (mode === "draft") {
   });
   assert.equal(report.diagnostics.length, 3);
   assert.equal(report.progress?.[0]?.completed, 1);
+  const formatOptions: QualityReportFormatOptions = {
+    severities: ["warning"],
+    maxPerCheck: 1,
+  };
+  assert.match(
+    formatQualityReport(report, formatOptions),
+    /有效问题：错误 0，警告 1，提示 2；已豁免 0/u,
+  );
 } else {
   process.stdout.write(JSON.stringify(await runQa(config)));
 }

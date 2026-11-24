@@ -420,5 +420,164 @@ testArtifactConsumer(
     assert.equal(emptyText.status, 0);
     assert.match(emptyText.stdout, /^翻译进度 fr：0\/0$/mu);
     assert.match(emptyText.stdout, /运行了 0 项检查/u);
+
+    // 6. 终端明细筛选与按检查项折叠：汇总、进度、退出码、结构化输出与豁免均依据完整结果。
+    await writeFile(resource("source.json"), JSON.stringify(source));
+    await writeFile(
+      resource("fr.json"),
+      JSON.stringify({ greeting: "Bonjour", button: "Ouvrir", brand: "Lioni" }),
+    );
+    await writeFile(
+      resource("lioni.suppressions.yaml"),
+      "format: lioni.qa-suppressions/v1\nsuppressions: []\n",
+    );
+
+    const detailsSdk = JSON.parse(
+      (await runNode("consumer.ts", ["run", "terminal-details.config.ts"]))
+        .stdout,
+    ) as QualityRunResult;
+    const detailsDefaultText = await runProcess(cli, [
+      "qa",
+      "terminal-details.config.ts",
+    ]);
+    assert.equal(detailsDefaultText.status, 1);
+    assert.match(
+      detailsDefaultText.stdout,
+      /有效问题：错误 2，警告 2，提示 2；已豁免 0/u,
+    );
+    assert.match(detailsDefaultText.stdout, /翻译进度 fr：0\/3（0%）/u);
+    for (const expectedLine of [
+      "警告一",
+      "错误一",
+      "警告二",
+      "错误二",
+      "提示一",
+      "附加术语提示",
+    ]) {
+      assert.ok(detailsDefaultText.stdout.includes(expectedLine));
+    }
+    assert.doesNotMatch(detailsDefaultText.stdout, /被省略/u);
+
+    const detailsWarningOnly = await runProcess(cli, [
+      "qa",
+      "terminal-details.config.ts",
+      "--severity",
+      "warning",
+    ]);
+    assert.equal(detailsWarningOnly.status, 1);
+    assert.match(
+      detailsWarningOnly.stdout,
+      /有效问题：错误 2，警告 2，提示 2；已豁免 0/u,
+    );
+    assert.match(detailsWarningOnly.stdout, /翻译进度 fr：0\/3（0%）/u);
+    assert.ok(detailsWarningOnly.stdout.includes("警告一"));
+    assert.ok(detailsWarningOnly.stdout.includes("警告二"));
+    assert.doesNotMatch(
+      detailsWarningOnly.stdout,
+      /错误一|错误二|提示一|附加术语提示|被省略/u,
+    );
+
+    const detailsUnion = await runProcess(cli, [
+      "qa",
+      "terminal-details.config.ts",
+      "--severity",
+      "warning",
+      "--severity",
+      "error",
+    ]);
+    assert.equal(detailsUnion.status, 1);
+    for (const expectedLine of ["警告一", "错误一", "警告二", "错误二"]) {
+      assert.ok(detailsUnion.stdout.includes(expectedLine));
+    }
+    assert.doesNotMatch(detailsUnion.stdout, /提示一|附加术语提示|被省略/u);
+
+    const detailsFolded = await runProcess(cli, [
+      "qa",
+      "terminal-details.config.ts",
+      "--severity",
+      "warning",
+      "--severity",
+      "error",
+      "--max-per-check",
+      "1",
+    ]);
+    assert.equal(detailsFolded.status, 1);
+    assert.match(
+      detailsFolded.stdout,
+      /有效问题：错误 2，警告 2，提示 2；已豁免 0/u,
+    );
+    assert.match(detailsFolded.stdout, /翻译进度 fr：0\/3（0%）/u);
+    assert.ok(detailsFolded.stdout.includes("警告一"));
+    assert.doesNotMatch(
+      detailsFolded.stdout,
+      /错误一|警告二|错误二|提示一|附加术语提示/u,
+    );
+    assert.match(
+      detailsFolded.stdout,
+      /details-check：另有 3 条匹配明细因上限（1）被省略/u,
+    );
+    assert.doesNotMatch(detailsFolded.stdout, /extra-info.*被省略/u);
+
+    const detailsStructuredFiltered = await runProcess(cli, [
+      "qa",
+      "terminal-details.config.ts",
+      "--severity",
+      "warning",
+      "--max-per-check",
+      "1",
+      "--output",
+      "structured",
+    ]);
+    assert.equal(detailsStructuredFiltered.status, 1);
+    const detailsEnvelope = JSON.parse(detailsStructuredFiltered.stdout) as {
+      readonly schemaVersion: string;
+      readonly variant: string;
+      readonly data: QualityRunResult;
+    };
+    assert.equal(detailsEnvelope.schemaVersion, "3");
+    assert.equal(detailsEnvelope.variant, "notPassed");
+    assert.deepEqual(detailsEnvelope.data, detailsSdk);
+
+    // 仍可用结构化报告中在文本里被隐藏的错误诊断建立豁免。
+    const hiddenError = detailsEnvelope.data.diagnostics.find(
+      ({ checkId, severity, object }) =>
+        checkId === "details-check" &&
+        severity === "error" &&
+        object.key === "greeting",
+    );
+    assert.ok(hiddenError);
+    await writeFile(
+      resource("terminal-details-report.json"),
+      detailsStructuredFiltered.stdout,
+    );
+    await runCommand(cli, [
+      "suppressions",
+      "upsert",
+      "terminal-details.config.ts",
+      "terminal-details-report.json",
+      "--check-id",
+      hiddenError.checkId,
+      "--execution-id",
+      String(hiddenError.executionId),
+      "--id",
+      "suppress-greeting-details",
+      "--reason",
+      "确认允许当前问候语结构。",
+    ]);
+    const afterSuppressionWarningOnly = await runProcess(cli, [
+      "qa",
+      "terminal-details.config.ts",
+      "--severity",
+      "warning",
+    ]);
+    assert.equal(afterSuppressionWarningOnly.status, 1);
+    assert.match(
+      afterSuppressionWarningOnly.stdout,
+      /有效问题：错误 1，警告 1，提示 2；已豁免 2/u,
+    );
+    assert.match(
+      afterSuppressionWarningOnly.stdout,
+      /翻译进度 fr：1\/3（33\.33%）/u,
+    );
   },
 );

@@ -6,6 +6,7 @@ import {
   decideQualityReport,
   formatQualityReport,
   isQualityReportPassing,
+  type QualityReportFormatOptions,
 } from "../src/quality/report.ts";
 
 const passingReport: QualityRunResult = {
@@ -261,5 +262,81 @@ void describe("质量报告", () => {
     );
     assert.ok(text.includes("翻译进度 fr：2/3（66.67%）"));
     assert.ok(text.includes("翻译进度 de：99999/100000（99.99%）"));
+  });
+
+  void it("支持按严重度筛选与按检查项折叠明细且保持汇总和进度不变", () => {
+    const diagnostic = (
+      checkId: string,
+      key: string,
+      severity: "error" | "warning" | "info",
+      message: string,
+    ) => ({
+      checkId,
+      executionId: 0,
+      severity,
+      object: { kind: "translation-unit", key, language: "fr" },
+      location: { language: "fr", range: "locales/fr.json", key },
+      message,
+      evidence: [],
+      handling: { status: "active" as const },
+    });
+
+    const report = changedReport({
+      progress: [{ language: "fr", completed: 1, total: 4, percentage: 25 }],
+      diagnostics: [
+        diagnostic("tone", "k1", "warning", "警告一"),
+        diagnostic("tone", "k2", "warning", "警告二"),
+        diagnostic("tone", "k3", "error", "错误一"),
+        diagnostic("tone", "k4", "info", "提示一"),
+        diagnostic("style", "k5", "info", "样式提示"),
+      ],
+    });
+
+    const defaultText = formatQualityReport(report);
+    assert.ok(defaultText.includes("警告一"));
+    assert.ok(defaultText.includes("警告二"));
+    assert.ok(defaultText.includes("错误一"));
+    assert.ok(defaultText.includes("提示一"));
+    assert.ok(defaultText.includes("样式提示"));
+    assert.doesNotMatch(defaultText, /被省略/u);
+
+    const warningOnlyOptions: QualityReportFormatOptions = {
+      severities: ["warning"],
+    };
+    const warningOnlyText = formatQualityReport(report, warningOnlyOptions);
+    assert.ok(warningOnlyText.includes("质量结论：未通过"));
+    assert.ok(warningOnlyText.includes("翻译进度 fr：1/4（25%）"));
+    assert.ok(
+      warningOnlyText.includes("有效问题：错误 1，警告 2，提示 2；已豁免 0"),
+    );
+    assert.ok(warningOnlyText.includes("警告一"));
+    assert.ok(warningOnlyText.includes("警告二"));
+    assert.doesNotMatch(warningOnlyText, /错误一|提示一|样式提示|被省略/u);
+
+    const unionFoldedText = formatQualityReport(report, {
+      severities: ["warning", "error", "warning"],
+      maxPerCheck: 1,
+    });
+    assert.ok(unionFoldedText.includes("警告一"));
+    assert.doesNotMatch(unionFoldedText, /警告二|错误一|提示一|样式提示/u);
+    assert.match(unionFoldedText, /tone.*2 条匹配明细因上限（1）被省略/u);
+    assert.doesNotMatch(unionFoldedText, /style.*被省略/u);
+
+    const noneMatchedText = formatQualityReport(report, {
+      severities: [],
+    });
+    assert.ok(
+      noneMatchedText.includes("有效问题：错误 1，警告 2，提示 2；已豁免 0"),
+    );
+    assert.match(noneMatchedText, /问题：按所选严重度无匹配明细/u);
+
+    assert.throws(
+      () => formatQualityReport(report, { maxPerCheck: 0 }),
+      RangeError,
+    );
+    assert.throws(
+      () => formatQualityReport(report, { maxPerCheck: 1.5 }),
+      RangeError,
+    );
   });
 });

@@ -241,6 +241,8 @@ testArtifactConsumer(
         "languages",
         "checks",
         "groups",
+        "severity",
+        "maxPerCheck",
       ]);
       const inputSchemaProperties = (
         qaInput.input as {
@@ -254,7 +256,17 @@ testArtifactConsumer(
         "languages",
         "checks",
         "groups",
+        "severity",
+        "maxPerCheck",
       ]);
+      assert.partialDeepStrictEqual(inputSchemaProperties.severity, {
+        type: "array",
+        items: { type: "string", enum: ["error", "warning", "info"] },
+      });
+      assert.partialDeepStrictEqual(inputSchemaProperties.maxPerCheck, {
+        type: "string",
+        pattern: "^[1-9]\\d*$",
+      });
 
       const qaWire = await runSchemaQuery(["qa", "--schema=wire:structured"]);
       assert.equal(qaWire.kind, "wire");
@@ -392,6 +404,45 @@ testArtifactConsumer(
     );
     const quality = reportEnvelope.data;
     assert.equal(quality.diagnostics.length, 1);
+
+    // 筛选参数隐藏全部错误明细时，汇总、退出码 1 与 --output structured 报告均保持完整一致。
+    const hiddenErrorsText = await runProcess(executable, [
+      "qa",
+      "lioni.config.ts",
+      "--severity",
+      "warning",
+      "--max-per-check",
+      "1",
+    ]);
+    assert.equal(hiddenErrorsText.status, 1);
+    assert.match(hiddenErrorsText.stdout, /有效问题：错误 1，警告 0，提示 0/u);
+    assert.match(hiddenErrorsText.stdout, /问题：按所选严重度无匹配明细/u);
+
+    const filteredStructured = await runProcess(executable, [
+      "qa",
+      "lioni.config.ts",
+      "--severity",
+      "warning",
+      "--max-per-check",
+      "1",
+      "--output",
+      "structured",
+    ]);
+    assert.equal(filteredStructured.status, 1);
+    const filteredEnvelope = JSON.parse(filteredStructured.stdout) as {
+      schemaVersion: string;
+      outputMode: string;
+      kind: string;
+      variant: string;
+      data: QualityRunResult;
+    };
+    assertMatchesJsonSchema(
+      filteredEnvelope,
+      wireNotPassedSchema,
+      wireNotPassedSchema,
+    );
+    assert.deepEqual(filteredEnvelope.data, quality);
+
     const qualityCheck = quality.checks[0];
     assert.ok(qualityCheck);
     const execution = qualityCheck.executions[0];
