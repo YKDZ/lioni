@@ -63,11 +63,11 @@ void test("检查组保留独立身份与既有规则版本，并从投影位置
       valid.checks.map((item) => [item.checkId, item.version]),
     ),
     {
-      [checkIds.sourceSyntax]: `checks.vue-i18n/source-syntax/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
+      [checkIds.sourceSyntax]: `checks.vue-i18n/source-syntax/v3+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
       [checkIds.targetSyntax]: `checks.vue-i18n/target-syntax/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
       [checkIds.variableCorrespondence]: `checks.vue-i18n/variable-correspondence/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
       [checkIds.linkTargetExists]: `vue-i18n-suite/link-target-exists/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
-      [checkIds.linkCycle]: `vue-i18n-suite/link-cycle/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
+      [checkIds.linkCycle]: `vue-i18n-suite/link-cycle/v3+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
       [checkIds.protectedLiterals]: `vue-i18n-suite/protected-literals/v2+${VUE_I18N_PROTECTED_LITERAL_COMPARISON_VERSION}`,
       [checkIds.quantities]: `vue-i18n-suite/quantities/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}+${VUE_I18N_QUANTITY_COMPARISON_VERSION}`,
       [checkIds.allowedTerminology]: "checks.terminology-rule/v3",
@@ -491,6 +491,55 @@ void test("目标独有关联仍检查，缺失目标可见，当前候选覆盖
 
   assert.equal(findings(missing, checkIds.linkTargetExists).length, 1);
   assert.equal(findings(cycle, checkIds.linkCycle).length, 1);
+});
+
+void test("缺译时 source-syntax v3 仍检查原文语法并计入进度，link-cycle v3 在全量保存资源中检出循环", async () => {
+  const fixture = createQualityFixture({
+    policies: [
+      policyFor({
+        sourceMessages: {
+          broken: "bad } source",
+          ok: "Hello",
+          loopA: "Root A",
+          loopB: "Root B",
+        },
+        targetMessages: {
+          ok: "你好",
+          loopA: "@:loopB",
+          loopB: "@:loopA",
+        },
+      }),
+    ],
+  });
+
+  const syntaxOnly = await fixture.run(undefined, [
+    checkIds.sourceSyntax,
+    checkIds.targetSyntax,
+  ]);
+  assert.equal(
+    check(syntaxOnly, checkIds.sourceSyntax)?.version,
+    `checks.vue-i18n/source-syntax/v3+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
+  );
+  assert.equal(
+    check(syntaxOnly, checkIds.targetSyntax)?.version,
+    `checks.vue-i18n/target-syntax/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
+  );
+  assert.deepEqual(
+    findings(syntaxOnly, checkIds.sourceSyntax).map((item) => item.object),
+    [{ kind: "source-unit", key: "broken" }],
+  );
+  assert.deepEqual(findings(syntaxOnly, checkIds.targetSyntax), []);
+  assert.equal(check(syntaxOnly, checkIds.sourceSyntax)?.coverage.evaluated, 4);
+
+  const cycleOnly = await fixture.run(undefined, [checkIds.linkCycle]);
+  assert.equal(
+    check(cycleOnly, checkIds.linkCycle)?.version,
+    `vue-i18n-suite/link-cycle/v3+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
+  );
+  assert.deepEqual(
+    findings(cycleOnly, checkIds.linkCycle).map((item) => item.object.key),
+    ["loopA", "loopB"],
+  );
 });
 
 void test("术语与受保护字面值接受声明形式并拒绝不允许的译法", async () => {

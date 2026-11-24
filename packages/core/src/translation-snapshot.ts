@@ -108,7 +108,7 @@ export async function readTranslationSnapshot<
       for (const record of scope.records) {
         const index = translations.records.length;
         translationIndexes.push(index);
-        const fact = {
+        const recordBase = {
           index,
           language,
           scopeIndex,
@@ -137,7 +137,7 @@ export async function readTranslationSnapshot<
             { preserveValue: true, requireJson: true },
           );
           translations.records.push({
-            ...fact,
+            ...recordBase,
             record: translation,
             identity,
             content,
@@ -167,7 +167,7 @@ export async function readTranslationSnapshot<
             index,
           );
           translations.records.push({
-            ...fact,
+            ...recordBase,
             record: translation,
             identity,
             bodyAvailability: "unavailable",

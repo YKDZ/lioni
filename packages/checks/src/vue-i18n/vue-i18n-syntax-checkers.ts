@@ -57,7 +57,7 @@ export type VueI18nTargetSyntaxCheckerOptions<
   TId
 >;
 
-/** 按候选对应的共同消息投影检查原文语法。 */
+/** 按检查对象对应的共同消息投影检查原文语法（无译文候选时同样受检）。 */
 export function createVueI18nSourceSyntaxChecker<
   TUnit extends TranslationUnitInput = TranslationUnitInput,
   TTranslation = unknown,
@@ -112,7 +112,7 @@ export function createVueI18nSourceSyntaxChecker<
   assertVueI18nCallback(options?.loadLanguages, "loadLanguages");
   return defineChecker.withTypes<TUnit, TTranslation, TBody, TUnavailable>()({
     id: options?.id ?? "vue-i18n/source-syntax",
-    version: `checks.vue-i18n/source-syntax/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
+    version: `checks.vue-i18n/source-syntax/v3+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
     inputSchema: vueI18nMessageProjectionSchema,
     load: async ({ snapshot, memo, qualityData }) =>
       options?.loadLanguages

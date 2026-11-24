@@ -134,7 +134,7 @@ assert.deepEqual(
   ["inputFingerprint", "version"],
 );
 
-// S12：公开类型区分 SourceUnit / Translation（record vs content）/ TranslationCandidate，
+// 自定义检查器与缓存协同场景：公开类型区分 SourceUnit / Translation（record vs content）/ TranslationCandidate，
 // 规则检查与现存译文不同的候选，缓存命中时重新应用新豁免，默认裁剪零诊断 executions。
 type CustomUnit = {
   readonly source: string;

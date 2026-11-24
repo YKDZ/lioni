@@ -41,7 +41,7 @@ export function createLinkTargetExistsCheck<
 }) {
   return createVueI18nMessageCheck({
     id: options.identity.id,
-    version: version("link-target-exists"),
+    version: version("link-target-exists", 2),
     adapter: options.prepare,
     loadPolicies: options.loadPolicies,
     policyRequirements: ["resources"],
@@ -122,7 +122,7 @@ export function createLinkCycleCheck<
 }) {
   return createVueI18nMessageCheck({
     id: options.identity.id,
-    version: version("link-cycle"),
+    version: version("link-cycle", 3),
     adapter: options.prepare,
     loadPolicies: options.loadPolicies,
     policyRequirements: ["resources"],
@@ -262,8 +262,11 @@ function findCycle(
   };
 }
 
-function version(kind: string): string {
-  const base = `vue-i18n-suite/${kind}/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`;
+function version(
+  kind: "link-target-exists" | "link-cycle",
+  major: 2 | 3,
+): string {
+  const base = `vue-i18n-suite/${kind}/v${major}+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`;
   return base;
 }
 

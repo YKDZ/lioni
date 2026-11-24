@@ -185,7 +185,7 @@ export function createQualityFixture(input: {
     return projection({
       key: value.sourceKey,
       language: value.language,
-      sourceUnit: value.sourceUnit as SourceUnit<Unit>,
+      sourceUnit: value.sourceUnit,
       sourceRange:
         value.sourceUnit.scopeIndex >= 0
           ? sourcePolicy.resources.source.range
@@ -277,11 +277,11 @@ export function createQualityFixture(input: {
 
   return {
     run(
-      candidates: readonly TranslationCandidate<Body>[],
+      candidates?: readonly TranslationCandidate<Body>[],
       selectedIds?: readonly (typeof checkIds)[keyof typeof checkIds][],
     ) {
       return runQa(config, {
-        candidates,
+        ...(candidates === undefined ? {} : { candidates }),
         ...(selectedIds === undefined ? {} : { checkIds: selectedIds }),
       });
     },
