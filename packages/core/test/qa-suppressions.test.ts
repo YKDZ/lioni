@@ -66,7 +66,20 @@ void describe("QA 豁免", () => {
     const sdkReport = {
       suppressions: [],
       version: "sha256:report",
-      checks: [{ checkId: execution.checkId, executions }],
+      diagnostics: [
+        { checkId: execution.checkId, executionId: 10 },
+        { checkId: execution.checkId, executionId: 11 },
+      ],
+      checks: [
+        {
+          checkId: execution.checkId,
+          diagnostics: [
+            { checkId: execution.checkId, executionId: 10 },
+            { checkId: execution.checkId, executionId: 11 },
+          ],
+          executions,
+        },
+      ],
     };
     const writes: QaSuppression[] = [];
     let loads = 0;
@@ -89,7 +102,14 @@ void describe("QA 豁免", () => {
       store,
     });
     const cliSuppression = await upsertQaSuppressionFromReport({
-      report: { schemaVersion: "2", data: sdkReport },
+      report: {
+        schemaVersion: "3",
+        command: "qa",
+        outputMode: "structured",
+        kind: "data",
+        variant: "notPassed",
+        data: sdkReport,
+      },
       checkId: execution.checkId,
       executionId: 10,
       id: "first-candidate-approval",
@@ -118,9 +138,11 @@ void describe("QA 豁免", () => {
       upsertQaSuppressionFromReport({
         report: {
           suppressions: [],
+          diagnostics: [{ checkId: execution.checkId, executionId: 12 }],
           checks: [
             {
               checkId: execution.checkId,
+              diagnostics: [{ checkId: execution.checkId, executionId: 12 }],
               executions: [
                 {
                   ...execution,
@@ -142,14 +164,80 @@ void describe("QA 豁免", () => {
     assert.equal(writes, 0);
   });
 
+  void it("禁止使用零诊断或缺少诊断明细的执行建立豁免", async () => {
+    let writes = 0;
+    const store = {
+      async load() {
+        return [];
+      },
+      async upsert() {
+        writes += 1;
+      },
+    };
+
+    await assert.rejects(
+      upsertQaSuppressionFromReport({
+        report: {
+          suppressions: [],
+          diagnostics: [{ checkId: execution.checkId, executionId: 99 }],
+          checks: [
+            {
+              checkId: execution.checkId,
+              diagnostics: [{ checkId: execution.checkId, executionId: 99 }],
+              executions: [
+                { ...execution, executionId: 99 },
+                { ...execution, executionId: 100, sourceKey: "clean" },
+              ],
+            },
+          ],
+        },
+        checkId: execution.checkId,
+        executionId: 100,
+        id: "clean-execution-approval",
+        reason: "无诊断记录不应建立豁免。",
+        store,
+      }),
+      {
+        name: "QaSuppressionFormatError",
+        reason: "invalid",
+      },
+    );
+
+    await assert.rejects(
+      upsertQaSuppressionFromReport({
+        report: {
+          suppressions: [],
+          checks: [
+            {
+              checkId: execution.checkId,
+              executions: [{ ...execution, executionId: 101 }],
+            },
+          ],
+        },
+        checkId: execution.checkId,
+        executionId: 101,
+        id: "missing-diagnostics-approval",
+        reason: "缺少诊断数组不应建立豁免。",
+        store,
+      }),
+      {
+        name: "QaSuppressionFormatError",
+        reason: "invalid",
+      },
+    );
+    assert.equal(writes, 0);
+  });
+
   void it("报告中的空原文键保持原值", async () => {
     let saved: QaSuppression | undefined;
     const suppression = await upsertQaSuppressionFromReport({
       report: {
         suppressions: [],
+        diagnostics: [{ checkId: execution.checkId, executionId: 13 }],
         checks: [
           {
             checkId: execution.checkId,
+            diagnostics: [{ checkId: execution.checkId, executionId: 13 }],
             executions: [{ ...execution, executionId: 13, sourceKey: "" }],
           },
         ],
@@ -229,7 +317,7 @@ void describe("QA 豁免", () => {
     );
   });
 
-  void it("只接受新格式并拒绝重复身份", () => {
+  void it("只接受新格式并拒绝重复身份与同绑定多身份冲突", () => {
     const suppression = createQaSuppression({
       id: "save-copy-meaning-fr",
       reason: "保留原意。",
@@ -246,8 +334,37 @@ void describe("QA 豁免", () => {
     assert.doesNotThrow(() =>
       validateQaSuppressionFile({
         format: "lioni.qa-suppressions/v1",
-        suppressions: [suppression, { ...suppression, id: "second-approval" }],
+        suppressions: [
+          suppression,
+          {
+            ...suppression,
+            id: "second-approval",
+            sourceKey: "submit",
+          },
+          {
+            ...suppression,
+            id: "third-approval",
+            inputFingerprint: "sha256:other-input",
+          },
+        ],
       }),
+    );
+    assert.throws(
+      () =>
+        validateQaSuppressionFile({
+          format: "lioni.qa-suppressions/v1",
+          suppressions: [
+            suppression,
+            { ...suppression, id: "second-approval" },
+          ],
+        }),
+      (error: Error) => {
+        assert.ok(error instanceof QaSuppressionFormatError);
+        assert.equal(error.reason, "invalid");
+        assert.match(error.message, /save-copy-meaning-fr/u);
+        assert.match(error.message, /second-approval/u);
+        return true;
+      },
     );
     assert.throws(
       () =>
