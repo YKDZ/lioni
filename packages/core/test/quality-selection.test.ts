@@ -93,10 +93,11 @@ void test("按分组并集去重并保持配置顺序执行，未归组项不运
   assert.deepEqual(result.checkScope, {
     configuredCount: 3,
     selectedIds: ["terms", "syntax"],
+    evaluatedCount: 2,
   });
   assert.match(
     formatQualityReport(result),
-    /检查项范围：配置 3 项，本次子集 2 项（terms、syntax）/u,
+    /检查项范围：配置 3 项，本次子集 2 项（terms、syntax）；运行了 2 项检查/u,
   );
 
   executed.length = 0;

@@ -125,6 +125,7 @@ export default defineConfig({
     assert.deepEqual(all.checkScope, {
       configuredCount: 2,
       selectedIds: ["first", "second"],
+      evaluatedCount: 2,
     });
     assert.deepEqual(
       selected.checks.map(
@@ -135,6 +136,7 @@ export default defineConfig({
     assert.deepEqual(selected.checkScope, {
       configuredCount: 2,
       selectedIds: ["second"],
+      evaluatedCount: 1,
     });
     assert.deepEqual(
       repeatedChecks.checks.map(
@@ -151,6 +153,7 @@ export default defineConfig({
     assert.deepEqual(selectedGroup.checkScope, {
       configuredCount: 2,
       selectedIds: ["second"],
+      evaluatedCount: 1,
     });
 
     assert.deepEqual(repeatedChecks.progress, [
@@ -177,7 +180,7 @@ export default defineConfig({
     assert.equal(readable?.exitCode, 0, readable?.stderr ?? "");
     assert.match(
       readable?.stdout ?? "",
-      /检查项范围：配置 2 项，本次子集 1 项（second）/u,
+      /检查项范围：配置 2 项，本次子集 1 项（second）；运行了 1 项检查/u,
     );
     assert.match(
       readable?.stdout ?? "",

@@ -274,6 +274,7 @@ const qualityRunResultSchema = z.object({
   checkScope: z.object({
     configuredCount: z.number(),
     selectedIds: z.array(z.string()),
+    evaluatedCount: z.number(),
   }),
   relationships: z.array(
     z.looseObject({

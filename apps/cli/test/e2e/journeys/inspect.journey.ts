@@ -459,7 +459,7 @@ export default {
     assert.match(qaText?.stdout ?? "", /语言范围：读取 fr；所选候选语言 fr/u);
     assert.match(
       qaText?.stdout ?? "",
-      /检查项范围：配置 1 项，本次全量 1 项（host-rule）/u,
+      /检查项范围：配置 1 项，本次全量 1 项（host-rule）；运行了 1 项检查/u,
     );
     assert.match(qaText?.stdout ?? "", /送检范围：1 项，其中 1 项提供了译文/u);
     assert.match(
@@ -476,7 +476,7 @@ export default {
     assert.match(noChecks?.stdout ?? "", /语言范围：读取 fr；所选候选语言 fr/u);
     assert.match(
       noChecks?.stdout ?? "",
-      /检查项范围：配置 0 项，本次无检查项/u,
+      /检查项范围：配置 0 项，本次无检查项；运行了 0 项检查/u,
     );
     assert.match(
       noChecks?.stdout ?? "",
