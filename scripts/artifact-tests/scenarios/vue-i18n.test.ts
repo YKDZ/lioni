@@ -48,7 +48,7 @@ testArtifactConsumer(
     const invalidFull = await runProcess(executable, [
       "qa",
       "lioni.config.ts",
-      "--output-format",
+      "--output",
       "structured",
     ]);
     assert.equal(invalidFull.status, 1);
@@ -75,7 +75,7 @@ testArtifactConsumer(
       "lioni.config.ts",
       "--check",
       "vue-i18n/target-syntax",
-      "--output-format",
+      "--output",
       "structured",
     ]);
     assert.equal(invalidSyntaxOnly.status, 1);
