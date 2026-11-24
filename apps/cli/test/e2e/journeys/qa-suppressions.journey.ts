@@ -107,7 +107,7 @@ export default defineConfig({
       cliPath,
       "qa",
       "qa.config.ts",
-      "--output-format",
+      "--output",
       "structured",
     ];
     const reportProcess = spawnSync(process.execPath, cliArguments, {
@@ -130,7 +130,7 @@ export default defineConfig({
     return [
       {
         name: "CLI 输出可用于创建豁免的结构化 QA 报告",
-        args: ["qa", "qa.config.ts", "--output-format", "structured"],
+        args: ["qa", "qa.config.ts", "--output", "structured"],
       },
       {
         name: "CLI 根据报告创建豁免",
@@ -151,7 +151,7 @@ export default defineConfig({
       },
       {
         name: "CLI 在后续检查中应用报告豁免",
-        args: ["qa", "qa.config.ts", "--output-format", "structured"],
+        args: ["qa", "qa.config.ts", "--output", "structured"],
       },
     ];
   },
