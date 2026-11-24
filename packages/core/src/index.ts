@@ -1,8 +1,8 @@
-import { readStatus } from "./read-coverage.ts";
 import {
   beginQualityProfile,
   type QualityProfiler,
 } from "./quality/profiler.ts";
+import { readStatus } from "./read-coverage.ts";
 export { createQualityProfiler } from "./quality/profiler.ts";
 export type {
   QualityProfiler,
@@ -26,22 +26,30 @@ import {
 } from "./language-scope.ts";
 import { isPlainRecord, isRecord } from "./object-guards.ts";
 import type { UpdatePolicy } from "./plans.ts";
-import { savedTranslationCandidates, validateQualityCandidateScope } from "./quality/candidate-contract.ts";
 import {
+  savedTranslationCandidates,
+  validateQualityCandidateScope,
+} from "./quality/candidate-contract.ts";
+import {
+  assertQaSuppressionBindings,
+  validateQaSuppressions,
+} from "./quality/qa-suppressions.ts";
+import type {
+  QaSuppression,
+  QaSuppressionStore,
+} from "./quality/qa-suppressions.ts";
+import {
+  assertReadableSnapshot,
+  assertSelectedAssociationsComplete,
   createQualityDataReader,
+  pruneCleanExecutions,
   runQualityChecksWithQualityData,
   type QualityCheckDefinition,
   type QualityRunResult,
   type QualityObject,
   type QualityRelationship,
 } from "./quality/qa.ts";
-import { decideQualityReport } from "./quality/report.ts";
 import type { QualityCheckResultCache } from "./quality/quality-cache.ts";
-import { assertQaSuppressionBindings, validateQaSuppressions } from "./quality/qa-suppressions.ts";
-import type {
-  QaSuppression,
-  QaSuppressionStore,
-} from "./quality/qa-suppressions.ts";
 import { validateTranslationCandidate } from "./semantic-edits.ts";
 import type {
   JsonValue,
@@ -129,7 +137,6 @@ export type {
   CheckerDefinition,
   CheckerLoadInput,
   CheckerPrepareInput,
-  QualityCheckStatus,
   QualityObject,
   QualityLocation,
   QualitySubject,
@@ -160,7 +167,6 @@ export {
   isQualityReportPassing,
 } from "./quality/report.ts";
 export type {
-  QualityExecutionStatus,
   QualityReportDecision,
   QualityReportDecisionStatus,
 } from "./quality/report.ts";
@@ -582,11 +588,7 @@ export type ComparisonSnapshot<
   readonly source: SourceSnapshot<TUnit>;
   readonly translations: {
     readonly reads: readonly TranslationReadCoverage[];
-    readonly records: readonly Translation<
-      TTranslation,
-      TBody,
-      TUnavailable
-    >[];
+    readonly records: readonly Translation<TTranslation, TBody, TUnavailable>[];
   };
 };
 
@@ -910,6 +912,8 @@ export async function runQa<
       ) => readonly TranslationCandidate<TBody>[];
       readonly memo?: MemoScope;
       readonly profiler?: QualityProfiler;
+      /** 按需包含零诊断执行归属与指纹；默认仅保留产生了实际原始诊断的执行记录。 */
+      readonly includeCleanExecutions?: boolean;
     } = {},
 ): Promise<QualityRunResult<QualityObject, TBody>> {
   const profile =
@@ -937,23 +941,54 @@ export async function runQa<
     const qualityData = createQualityDataReader();
     try {
       stage = profile?.stage("candidates");
+      const isDraft = options.candidates !== undefined;
+      assertReadableSnapshot(snapshot, { draft: isDraft });
       let selection: readonly TranslationCandidate<TBody>[] | undefined;
-      if (options.candidates !== undefined || options.selectCandidates !== undefined) {
-        const supplied = options.candidates === undefined ? savedTranslationCandidates(snapshot) : options.candidates;
-        if (!Array.isArray(supplied)) throw new TypeError("candidates 必须是译文候选数组。");
+      if (
+        options.candidates !== undefined ||
+        options.selectCandidates !== undefined
+      ) {
+        const supplied =
+          options.candidates === undefined
+            ? savedTranslationCandidates(snapshot)
+            : options.candidates;
+        if (!Array.isArray(supplied))
+          throw new TypeError("candidates 必须是译文候选数组。");
         const candidates: TranslationCandidate<TBody>[] = [];
         for (const candidate of supplied)
-          candidates.push(freezeJsonValue(await validateTranslationCandidate(candidate, config)));
+          candidates.push(
+            freezeJsonValue(
+              await validateTranslationCandidate(candidate, config),
+            ),
+          );
         validateQualityCandidateScope(snapshot, candidates);
         selection = candidates;
         if (options.selectCandidates !== undefined) {
           const selected = options.selectCandidates(Object.freeze(candidates));
-          if (!Array.isArray(selected)) throw new TypeError("selectCandidates 必须返回候选数组。");
+          if (!Array.isArray(selected))
+            throw new TypeError("selectCandidates 必须返回候选数组。");
           const offered = new Set(candidates);
           if (selected.some((candidate) => !offered.has(candidate)))
-            throw new TypeError("selectCandidates 只能筛选或重排传入的候选；请通过 candidates 提供候选。");
+            throw new TypeError(
+              "selectCandidates 只能筛选或重排传入的候选；请通过 candidates 提供候选。",
+            );
           validateQualityCandidateScope(snapshot, selected);
           selection = selected;
+        }
+        if (!isDraft) {
+          const selectedIdentities = new Set(
+            selection.map(({ sourceKey, language }) =>
+              JSON.stringify([sourceKey, language]),
+            ),
+          );
+          assertSelectedAssociationsComplete(
+            snapshot,
+            snapshot.associations.filter((association) =>
+              selectedIdentities.has(
+                JSON.stringify([association.sourceKey, association.language]),
+              ),
+            ),
+          );
         }
       }
 
@@ -969,6 +1004,7 @@ export async function runQa<
         selectedChecks,
         {
           memo,
+          includeCleanExecutions: true,
           ...(profile === undefined ? {} : { profile }),
           ...(quality?.resultCache === undefined
             ? {}
@@ -978,32 +1014,46 @@ export async function runQa<
       );
       stage?.();
       const configuredChecks = quality?.checks ?? [];
+      const reportedChecks =
+        options.includeCleanExecutions === true
+          ? result.checks
+          : pruneCleanExecutions(result.checks);
       const report = {
         ...result,
+        checks: reportedChecks,
         checkScope: {
           configuredCount: configuredChecks.length,
           selectedIds: selectedChecks.map(({ id }) => id),
         },
       };
-      // 草稿与局部调试无法代表项目的已保存资源，也不能使其豁免失效。
-      const { executionStatus } = decideQualityReport(report);
-      if (selection !== undefined || options.checkIds !== undefined || options.groups !== undefined ||
-          executionStatus === "failed" || executionStatus === "incomplete") {
+      // 只有未筛选对象且覆盖全部已配置规则的已保存资源运行才代表全量范围，其余为草稿或局部调试。
+      const isFullScope =
+        options.candidates === undefined &&
+        options.selectCandidates === undefined &&
+        selectedChecks.length === configuredChecks.length;
+      if (!isFullScope) {
         completed = true;
         return report;
       }
 
+      // 须先传入未裁剪的完整执行集完成失效豁免核验，再返回裁剪后的公开报告。
       assertQaSuppressionBindings({
         suppressions,
         configuredCheckIds: configuredChecks.map(({ id }) => id),
         configuredLanguages: config.translations?.languages ?? [],
-        completeSourceKeys: new Set(snapshot.source.units.map(({ key }) => key)),
+        completeSourceKeys: new Set(
+          snapshot.source.units.map(({ key }) => key),
+        ),
         savedChecks: result.checks,
-        ...(options.languages === undefined ? {} : { selectedLanguages: options.languages }),
+        ...(options.languages === undefined
+          ? {}
+          : { selectedLanguages: options.languages }),
       });
-      const activeExecutions = new Set(result.diagnostics
-        .filter(({ handling }) => handling.status === "active")
-        .map(({ executionId }) => executionId));
+      const activeExecutions = new Set(
+        result.diagnostics
+          .filter(({ handling }) => handling.status === "active")
+          .map(({ executionId }) => executionId),
+      );
       const remaining = new Map<string, Set<string>>();
       for (const check of result.checks) {
         for (const { executionId, sourceKey, language } of check.executions) {
@@ -1019,7 +1069,12 @@ export async function runQa<
       const total = snapshot.source.units.length;
       const progress = snapshot.translations.reads.map(({ language }) => {
         const finished = total - (remaining.get(language)?.size ?? 0);
-        return { language, completed: finished, total, ...(total === 0 ? {} : { percentage: 100 * finished / total }) };
+        return {
+          language,
+          completed: finished,
+          total,
+          ...(total === 0 ? {} : { percentage: (100 * finished) / total }),
+        };
       });
       completed = true;
       return { ...report, progress };
@@ -1168,7 +1223,6 @@ function invalidReadStructure(message: string): never {
     message,
   );
 }
-
 
 function snapshotVersion(value: object): string {
   return `sha256:${createHash("sha256").update(JSON.stringify(value)).digest("hex")}`;

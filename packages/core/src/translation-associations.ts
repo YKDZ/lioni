@@ -1,9 +1,9 @@
-import { readStatus } from "./read-coverage.ts";
 import type {
   ComparisonSnapshot,
   TranslationAssociation,
   TranslationUnitInput,
 } from "./index.ts";
+import { readStatus } from "./read-coverage.ts";
 
 /** 当前读取与历史快照共用消息键关联；范围只决定读取依据，不排除已知的同键译文。 */
 export function associateSnapshot<
@@ -54,4 +54,3 @@ export function associateSnapshot<
   }
   return associations;
 }
-

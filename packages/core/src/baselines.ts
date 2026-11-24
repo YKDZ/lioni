@@ -1,4 +1,3 @@
-import { readStatus } from "./read-coverage.ts";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
@@ -16,6 +15,7 @@ import type {
 } from "./index.ts";
 import { readComparisonSnapshot } from "./index.ts";
 import { isRecord } from "./object-guards.ts";
+import { readStatus } from "./read-coverage.ts";
 import type { JsonValue } from "./semantic-edits.ts";
 import { stableStringify } from "./stable-json.ts";
 import { assertJsonValue } from "./standard-schema.ts";
@@ -457,8 +457,7 @@ function createTranslations<
   TUnavailable
 >["translations"] {
   const reads: TranslationReadCoverage[] = [];
-  const records: Translation<TTranslation, TBody, TUnavailable>[] =
-    [];
+  const records: Translation<TTranslation, TBody, TUnavailable>[] = [];
   for (const read of options.entries) {
     const previousRead = options.previous?.snapshot.translations.reads.find(
       (candidate) => candidate.language === read.language,
@@ -542,7 +541,6 @@ function createSourceRead(
     ...(error === undefined ? {} : { error }),
   };
 }
-
 
 function assertCompleteSnapshot<
   TUnit extends TranslationUnitInput,
@@ -752,7 +750,10 @@ function validateTranslationSnapshot(
     validateStatus(read.status);
     if (languages.has(read.language)) invalidBaseline("目标语言读取重复。");
     languages.add(read.language);
-    readsByLanguage.set(read.language, read as unknown as TranslationReadCoverage);
+    readsByLanguage.set(
+      read.language,
+      read as unknown as TranslationReadCoverage,
+    );
     for (const [scopeIndex, scope] of read.scopes.entries()) {
       if (
         !isRecord(scope) ||

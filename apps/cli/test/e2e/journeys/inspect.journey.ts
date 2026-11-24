@@ -507,7 +507,7 @@ export default {
       issues: [{ code: "missingRequiredField", field: "config" }],
     });
     const empty = results[9];
-    assert.equal(empty?.exitCode, 0, empty?.stderr);
+    assert.equal(empty?.exitCode, 0, empty?.stderr ?? "");
     assert.match(empty?.stdout ?? "", /^翻译进度 fr：0\/0$/mu);
   },
 };

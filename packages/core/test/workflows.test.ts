@@ -94,26 +94,26 @@ function diagnosedEditScenario() {
           version: "needs-review-v1",
           inputSchema: schemaFromExamples({ sourceKey: "", language: "" }),
           prepare: ({ association }) => ({
-              sourceKey: association.sourceKey,
-              language: association.language,
-            }),
-          check: ({ sourceKey, language }): readonly QualityFinding[] => ([
-              {
-                severity: "error",
-                object: {
-                  kind: "translation-unit",
-                  key: sourceKey,
-                  language,
-                },
-                location: {
-                  language,
-                  range: "fr.json",
-                  key: sourceKey,
-                },
-                message: "需要人工复核。",
-                evidence: [],
+            sourceKey: association.sourceKey,
+            language: association.language,
+          }),
+          check: ({ sourceKey, language }): readonly QualityFinding[] => [
+            {
+              severity: "error",
+              object: {
+                kind: "translation-unit",
+                key: sourceKey,
+                language,
               },
-            ]),
+              location: {
+                language,
+                range: "fr.json",
+                key: sourceKey,
+              },
+              message: "需要人工复核。",
+              evidence: [],
+            },
+          ],
         }),
       ],
     },
@@ -226,7 +226,10 @@ void describe("configured analysis workflow", () => {
         content: { text: "Sauver", state: "draft" },
       },
     ]);
-    assert.equal(result.status, "complete");
+    assert.deepEqual(result.checks[0]?.coverage, {
+      selected: 1,
+      evaluated: 1,
+    });
     assert.deepEqual(observed, [
       {
         candidate: {
@@ -336,7 +339,10 @@ void describe("configured analysis workflow", () => {
 
     const result = await runQa(config, { candidates: [] });
 
-    assert.equal(result.status, "not-run");
+    assert.deepEqual(result.checks[0]?.coverage, {
+      selected: 0,
+      evaluated: 0,
+    });
     assert.equal(invoked, false);
     assert.equal(unavailableContentRead, false);
     assert.deepEqual(
@@ -463,10 +469,10 @@ void describe("configured analysis workflow", () => {
               associationStatus: "matched",
             }),
             prepare: ({ association }) => ({
-                enabled: true,
-                sourceKey: association.sourceKey,
-                associationStatus: association.status,
-              }),
+              enabled: true,
+              sourceKey: association.sourceKey,
+              associationStatus: association.status,
+            }),
             check: (input) => {
               observed = input;
               return [];
@@ -481,7 +487,10 @@ void describe("configured analysis workflow", () => {
     assert.deepEqual(result.candidates, [
       { sourceKey: "save", language: "fr", content: "Enregistrer" },
     ]);
-    assert.equal(result.status, "complete");
+    assert.deepEqual(result.checks[0]?.coverage, {
+      selected: 1,
+      evaluated: 1,
+    });
     assert.deepEqual(
       result.checks.map(({ checkId }) => checkId),
       ["translation-present"],
@@ -549,7 +558,7 @@ void describe("configured analysis workflow", () => {
     assert.deepEqual(result.candidates, [
       { sourceKey: "external", language: "fr", content: "外部" },
     ]);
-    assert.equal(result.status, "not-run");
+    assert.deepEqual(result.checks, []);
 
     const invalidConfig = defineConfig({
       source: {
@@ -617,7 +626,7 @@ void describe("configured analysis workflow", () => {
     const accepted = await writeTranslationRequests(
       [request],
       config,
-      () => quality.status === "complete" && quality.diagnostics.length === 1,
+      () => quality.diagnostics.length === 1,
     );
     assert.equal(accepted.results[0]?.status, "written");
     assert.equal(translation.text, "Sauver");

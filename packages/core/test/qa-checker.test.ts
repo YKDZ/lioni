@@ -36,6 +36,7 @@ const relationship = {
 function config(
   checks: readonly QualityCheckDefinition<TranslationUnitInput, unknown>[],
   resultCache?: QualityCheckResultCache,
+  covers: readonly string[] = ["a", "b", "c"],
 ) {
   return defineConfig({
     source: {
@@ -64,7 +65,7 @@ function config(
         scopes: [
           {
             range: "translated",
-            covers: ["a", "b"],
+            covers,
             enumeration: "complete",
             records: [{ bodyAvailability: "available", value: translation }],
           },
@@ -108,7 +109,7 @@ void describe("三阶段自定义检查", () => {
       },
       check: () => complete,
     });
-    const result = await runQa(config([checker]), {
+    const result = await runQa(config([checker], undefined, ["a", "b"]), {
       candidates: [
         { sourceKey: "a", language: "fr", content: "编辑 A" },
         { sourceKey: "b", language: "fr", content: "新增 B" },
@@ -183,8 +184,9 @@ void describe("三阶段自定义检查", () => {
     assert.equal(reads, 2);
   });
 
-  void it("加载失败覆盖整项，准备和计算失败仅覆盖当前候选", async () => {
+  void it("加载、准备和计算失败时携带定位信息立即拒绝且不交付部分报告", async () => {
     let reads = 0;
+    let independentRuns = 0;
     const unavailable = () => {
       reads += 1;
       throw new Error("检查资料不可用");
@@ -199,59 +201,58 @@ void describe("三阶段自定义检查", () => {
         check: () => assert.fail("加载失败后不得执行检查"),
       }),
     );
-    const local = defineChecker({
-      id: "local",
+    const independent = defineChecker({
+      id: "independent",
       version: "1",
       inputSchema: schemaFromExamples(""),
-      prepare({ association }) {
-        if (association.sourceKey === "a") throw new TypeError("准备失败");
-        return association.sourceKey;
-      },
-      check(key) {
-        if (key === "b") throw new Error("计算失败");
+      prepare: ({ association }) => association.sourceKey,
+      check: () => {
+        independentRuns += 1;
         return complete;
       },
     });
-    const coverage = defineChecker({
-      id: "coverage",
-      version: "1",
-      inputSchema: schemaFromExamples(""),
-      prepare({ association }) {
-        if (association.sourceKey === "b") throw new Error("缺少依据");
-        return association.sourceKey;
-      },
-      check(key) {
-        assert.notEqual(key, "b");
-        return complete;
-      },
-    });
-    const result = await runQa(config([...loading, local, coverage]), {
-      candidates: ["a", "b", "c"].map((sourceKey) => ({
-        sourceKey,
-        language: "fr",
-        content: "编辑",
-      })),
-    });
+    const candidates = ["a", "b", "c"].map((sourceKey) => ({
+      sourceKey,
+      language: "fr",
+      content: "编辑",
+    }));
+
+    await assert.rejects(
+      runQa(config([...loading, independent]), { candidates }),
+      /QA 检查项 load-first 加载失败：检查资料不可用/,
+    );
     assert.equal(reads, 1);
-    assert.equal(result.status, "failed");
-    assert.deepEqual(
-      result.checks.map(({ executions }) =>
-        executions.map(({ status }) => status),
-      ),
-      [
-        ["failed", "failed", "failed"],
-        ["failed", "failed", "failed"],
-        ["failed", "failed", "complete"],
-        ["complete", "failed", "complete"],
-      ],
+    assert.equal(independentRuns, 0);
+
+    const prepareFailing = defineChecker({
+      id: "local-prepare",
+      version: "1",
+      inputSchema: schemaFromExamples(""),
+      prepare({ association }) {
+        if (association.sourceKey === "b") throw new TypeError("准备失败");
+        return association.sourceKey;
+      },
+      check: () => complete,
+    });
+    await assert.rejects(
+      runQa(config([prepareFailing]), { candidates }),
+      /QA 检查项 local-prepare 准备失败（原文键：b，语言：fr）：准备失败/,
     );
-    assert.deepEqual(
-      result.checks[2]?.executions.flatMap((e) =>
-        e.error === undefined ? [] : [e.error],
-      ),
-      ["准备失败", "计算失败"],
+
+    const checkFailing = defineChecker({
+      id: "local-check",
+      version: "1",
+      inputSchema: schemaFromExamples(""),
+      prepare: ({ association }) => association.sourceKey,
+      check(key) {
+        if (key === "c") throw new Error("计算失败");
+        return complete;
+      },
+    });
+    await assert.rejects(
+      runQa(config([checkFailing]), { candidates }),
+      /QA 检查项 local-check 执行失败（原文键：c，语言：fr）：计算失败/,
     );
-    assert.equal(result.checks[3]?.executions[1]?.error, "缺少依据");
   });
 
   void it("准备或规则返回无效结构时中止检查", async () => {
@@ -310,14 +311,21 @@ void describe("三阶段自定义检查", () => {
     const qa = config([checker], cache);
     const a = { sourceKey: "a", language: "fr", content: "编辑 A" };
     const b = { sourceKey: "b", language: "fr", content: "新增 B" };
-    const first = await runQa(qa, { candidates: [a, b] });
-    const filtered = await runQa(qa, { candidates: [b] });
+    const cleanDefault = await runQa(qa, { candidates: [a, b] });
+    assert.deepEqual(cleanDefault.checks[0]?.executions, []);
+    const first = await runQa(qa, {
+      candidates: [a, b],
+      includeCleanExecutions: true,
+    });
+    const filtered = await runQa(qa, {
+      candidates: [b],
+      includeCleanExecutions: true,
+    });
     assert.deepEqual(checked, ["a", "b"]);
     const firstB = first.checks[0]?.executions[1];
     const filteredB = filtered.checks[0]?.executions[0];
     assert.ok(firstB?.inputFingerprint);
     assert.equal(filteredB?.inputFingerprint, firstB.inputFingerprint);
-    assert.equal(filteredB?.status, "complete");
   });
 
   void it("拒绝改值、删字段、原地修改及非 JSON 输入", async () => {

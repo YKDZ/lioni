@@ -248,7 +248,7 @@ void describe("QA 结果缓存", () => {
     );
   });
 
-  void it("普通规则异常保持 failed 且不进入缓存", async () => {
+  void it("普通规则异常直接拒绝调用且不进入缓存", async () => {
     let checkCount = 0;
     let cacheWrites = 0;
     const cache: QualityCheckResultCache = {
@@ -268,12 +268,15 @@ void describe("QA 结果缓存", () => {
     });
     const config = createTestConfig(check, { cache });
 
-    const first = await runQa(config);
-    const second = await runQa(config);
+    await assert.rejects(
+      runQa(config),
+      /ordinary-error.*message:hello.*fr.*规则运行失败/,
+    );
+    await assert.rejects(
+      runQa(config),
+      /ordinary-error.*message:hello.*fr.*规则运行失败/,
+    );
 
-    assert.equal(first.status, "failed");
-    assert.equal(second.status, "failed");
-    assert.equal(first.checks[0]?.executions[0]?.error, "规则运行失败。");
     assert.equal(checkCount, 2);
     assert.equal(cacheWrites, 0);
   });
@@ -335,7 +338,11 @@ void describe("QA 结果缓存", () => {
         scenario.name,
       );
       assert.deepEqual(result.diagnostics[0]?.evidence, [], scenario.name);
-      assert.equal(result.checks[0]?.status, "complete", scenario.name);
+      assert.deepEqual(
+        result.checks[0]?.coverage,
+        { selected: 1, evaluated: 1 },
+        scenario.name,
+      );
     }
   });
 
@@ -436,7 +443,10 @@ void describe("QA 结果缓存", () => {
       ),
     );
 
-    assert.equal(result.status, "complete");
+    assert.deepEqual(result.checks[0]?.coverage, {
+      selected: 1,
+      evaluated: 1,
+    });
     assert.equal(result.diagnostics.length, 1);
     assert.equal(checkCount, 1);
   });
@@ -460,7 +470,10 @@ void describe("QA 结果缓存", () => {
         ),
       );
 
-      assert.equal(result.status, "complete");
+      assert.deepEqual(result.checks[0]?.coverage, {
+        selected: 1,
+        evaluated: 1,
+      });
       assert.equal(result.diagnostics[0]?.message, "请复核译文。");
       assert.equal(checkCount, 1);
     } finally {

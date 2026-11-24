@@ -51,18 +51,15 @@ const passingReport: QualityRunResult = {
   checkScope: { configuredCount: 1, selectedIds: ["messages"] },
   relationships: [],
   suppressions: [],
-  status: "complete",
   diagnostics: [],
   checks: [
     {
       checkId: "messages",
       version: "messages-v1",
-      status: "complete",
       diagnostics: [],
       coverage: {
         selected: 1,
         evaluated: 1,
-        failed: 0,
       },
       executions: [
         {
@@ -71,7 +68,6 @@ const passingReport: QualityRunResult = {
           checkId: "messages",
           sourceKey: "welcome",
           language: "fr",
-          status: "complete",
           inputFingerprint: "sha256:private-fingerprint",
         },
       ],
@@ -146,24 +142,6 @@ void describe("质量报告", () => {
       false,
     );
     assert.equal(
-      decideQualityReport(changedReport({ status: "failed" })).status,
-      "failed",
-    );
-    assert.equal(
-      decideQualityReport(
-        changedReport({
-          readCoverage: {
-            ...passingReport.readCoverage,
-            source: {
-              ...passingReport.readCoverage.source,
-              status: "incomplete",
-            },
-          },
-        }),
-      ).status,
-      "incomplete",
-    );
-    assert.equal(
       isQualityReportPassing(
         changedReport({
           candidates: [],
@@ -186,11 +164,21 @@ void describe("质量报告", () => {
       decideQualityReport(changedReport({ checks: [] })).status,
       "no-checks",
     );
+    assert.equal(
+      isQualityReportPassing(
+        changedReport({
+          candidates: [],
+          checks: [],
+          progress: [{ language: "fr", completed: 0, total: 0 }],
+          readCoverage: { ...passingReport.readCoverage, associations: [] },
+        }),
+      ),
+      true,
+    );
   });
 
-  void it("显示语言和候选范围、有效问题、位置与未完成原因", () => {
+  void it("显示语言和候选范围、有效问题与位置且省去重复状态", () => {
     const report = changedReport({
-      status: "failed",
       diagnostics: [
         {
           checkId: "messages",
@@ -207,28 +195,17 @@ void describe("质量报告", () => {
           handling: { status: "active" },
         },
       ],
-      checks: passingReport.checks.map((check) => ({
-        ...check,
-        status: "failed",
-        executions: check.executions.map((e) => ({
-          ...e,
-          status: "failed",
-          error: "宿主只返回部分目录。",
-        })),
-      })),
     });
 
     const text = formatQualityReport(report);
 
     assert.match(text, /质量结论：未通过/u);
-    assert.match(text, /执行状态：失败/u);
     assert.match(text, /语言范围：读取 fr；所选候选语言 fr/u);
     assert.match(text, /检查项范围：配置 1 项，本次全量 1 项（messages）/u);
     assert.match(text, /送检范围：1 项，其中 1 项提供了译文/u);
     assert.match(text, /有效问题：错误 1，警告 0，提示 0/u);
     assert.match(text, /locales\/fr\.json.*welcome\.title.*缺少必要内容/u);
-    assert.match(text, /未完成原因：/u);
-    assert.match(text, /宿主只返回部分目录/u);
+    assert.doesNotMatch(text, /执行状态：|未完成原因：/u);
     assert.doesNotMatch(text, /private-fingerprint|sha256:|执行 0/u);
     assert.doesNotMatch(text, /全项目通过/u);
   });
@@ -237,7 +214,6 @@ void describe("质量报告", () => {
     const noCandidates = formatQualityReport(
       changedReport({
         candidates: [],
-        status: "not-run",
         readCoverage: { ...passingReport.readCoverage, associations: [] },
       }),
     );
@@ -245,17 +221,12 @@ void describe("质量报告", () => {
       changedReport({
         checkScope: { configuredCount: 0, selectedIds: [] },
         checks: [],
-        status: "not-run",
       }),
     );
-    assert.match(noCandidates, /没有检查对象/u);
+    assert.match(noCandidates, /送检范围：0 项，其中 0 项提供了译文/u);
     assert.match(noCandidates, /语言范围：读取 fr；所选候选语言 无/u);
     assert.match(noChecks, /检查项范围：配置 0 项，本次无检查项/u);
-    assert.match(noChecks, /没有配置检查项/u);
-    assert.equal(
-      isQualityReportPassing(changedReport({ status: "not-run" })),
-      false,
-    );
+    assert.equal(isQualityReportPassing(changedReport({ checks: [] })), false);
   });
 
   void it("进度百分比最多显示两位小数，未完成时不会舍入为 100%", () => {

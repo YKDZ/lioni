@@ -18,7 +18,6 @@ const execution = {
   checkId: "copy/meaning",
   sourceKey: "save",
   language: "fr",
-  status: "complete",
   inputFingerprint: "sha256:complete-input",
   fingerprintSummary: {
     version: "2",
@@ -185,7 +184,6 @@ void describe("QA 豁免", () => {
             checkId: execution.checkId,
             sourceKey: execution.sourceKey,
             language: execution.language,
-            status: execution.status,
             fingerprintSummary: execution.fingerprintSummary,
           },
         }),
@@ -202,7 +200,6 @@ void describe("QA 豁免", () => {
             checkId: execution.checkId,
             sourceKey: execution.sourceKey,
             language: execution.language,
-            status: execution.status,
             inputFingerprint: execution.inputFingerprint,
           },
         }),

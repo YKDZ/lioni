@@ -82,7 +82,6 @@ type HeapProfileNode = {
 type QualityResultSummary = {
   readonly sha256: string;
   readonly jsonBytes: number;
-  readonly status: string;
   readonly candidateCount: number;
   readonly diagnosticCount: number;
   readonly diagnosticEvidenceCount: number;
@@ -94,7 +93,6 @@ type QualityResultSummary = {
   };
   readonly checks: readonly {
     readonly checkId: string;
-    readonly status: string;
     readonly coverage: QualityRunResult["checks"][number]["coverage"];
     readonly diagnosticCount: number;
     readonly executionCount: number;
@@ -189,7 +187,6 @@ function ordinaryWorkloads(): Workload[] {
   );
 }
 
-
 function createConfig(
   workload: Workload,
   cache: QualityCheckResultCache,
@@ -211,21 +208,21 @@ function createConfig(
     };
     const location = { language: input.candidate.language, range: "memory" };
     return [
-        {
-          severity: "warning",
-          object,
-          location,
-          message: "固定诊断依据负载",
-          evidence: [
-            {
-              role: "input",
-              object,
-              location,
-              value: input.evidencePayload,
-            },
-          ],
-        },
-      ];
+      {
+        severity: "warning",
+        object,
+        location,
+        message: "固定诊断依据负载",
+        evidence: [
+          {
+            role: "input",
+            object,
+            location,
+            value: input.evidencePayload,
+          },
+        ],
+      },
+    ];
   };
   const checks = Array.from({ length: workload.checkCount }, (_, index) => {
     const id = "artifact-cost-check-" + (index + 1);
@@ -265,8 +262,8 @@ function createConfig(
     >({
       ...common,
       prepare: ({ candidate }) => {
-          assert.ok(candidate);
-          return {
+        assert.ok(candidate);
+        return {
           candidate: {
             sourceKey: candidate.sourceKey,
             language: candidate.language,
@@ -275,7 +272,7 @@ function createConfig(
           payload: basisPayload,
           ...(evidencePayload === undefined ? {} : { evidencePayload }),
         };
-        },
+      },
     });
   });
 
@@ -437,7 +434,6 @@ function summarizeQualityResult<TBody>(
   return {
     sha256: createHash("sha256").update(serialized).digest("hex"),
     jsonBytes: Buffer.byteLength(serialized),
-    status: result.status,
     candidateCount: result.candidates.length,
     diagnosticCount: result.diagnostics.length,
     diagnosticEvidenceCount: evidence.length,
@@ -449,7 +445,6 @@ function summarizeQualityResult<TBody>(
     },
     checks: result.checks.map((check) => ({
       checkId: check.checkId,
-      status: check.status,
       coverage: check.coverage,
       diagnosticCount: check.diagnostics.length,
       executionCount: check.executions.length,
@@ -496,7 +491,10 @@ async function runWorker(): Promise<void> {
 
   const expectedExecutions = workload.candidateCount * workload.checkCount;
   if (workload.cacheMode === "warm") {
-    const warmed = await runQa(config, { candidates });
+    const warmed = await runQa(config, {
+      candidates,
+      includeCleanExecutions: true,
+    });
     assert.equal(
       warmed.checks.reduce(
         (total, check) => total + check.executions.length,
@@ -531,6 +529,7 @@ async function runWorker(): Promise<void> {
     const started = performance.now();
     const result = await runQa(config, {
       candidates,
+      includeCleanExecutions: true,
       ...(profiler === undefined ? {} : { profiler }),
     });
     const elapsedMs = performance.now() - started;
@@ -548,11 +547,6 @@ async function runWorker(): Promise<void> {
     const executions = result.checks.flatMap((check) => check.executions);
     const expectedDiagnostics =
       evidencePayload === undefined ? 0 : expectedExecutions;
-    assert.equal(
-      result.status,
-      "complete",
-      JSON.stringify(executions.filter(({ status }) => status === "failed")),
-    );
     assert.equal(result.checks.length, workload.checkCount);
     assert.equal(executions.length, expectedExecutions);
     assert.ok(

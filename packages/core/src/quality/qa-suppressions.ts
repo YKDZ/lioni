@@ -28,7 +28,6 @@ export type QaSuppressionExecution = {
   readonly checkId: string;
   readonly sourceKey: string;
   readonly language: string;
-  readonly status: string;
   readonly inputFingerprint?: string;
   readonly fingerprintSummary?: QaSuppressionFingerprintSummary;
 };
@@ -287,7 +286,8 @@ export function assertQaSuppressionBindings(input: {
         if (current === undefined) reasons.push("检查指纹已改变");
         else {
           const versionChanged = recorded.version !== current.version;
-          const inputChanged = recorded.inputFingerprint !== current.inputFingerprint;
+          const inputChanged =
+            recorded.inputFingerprint !== current.inputFingerprint;
           if (versionChanged) reasons.push("检查实现版本已改变");
           if (inputChanged) reasons.push("检查输入指纹已改变");
           if (!versionChanged && !inputChanged) reasons.push("检查指纹已改变");

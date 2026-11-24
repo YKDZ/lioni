@@ -1,5 +1,3 @@
-import type { QualityCheckStatus } from "./qa.ts";
-
 /**
  * 框架阶段、检查项准备及候选处理子阶段；同名阶段按所在层级解释。
  * 运行级 snapshot 记录资源读取和关联耗时，checks 包含公共准备、检查计算和豁免汇总。
@@ -20,8 +18,12 @@ export type QualityProfileStage =
   | "execute"
   | "cacheWrite"
   | "results";
-/** 候选中断独立于规则返回状态；not-run 只沿用质量检查状态词汇。 */
-export type QualityProfileCandidateStatus = QualityCheckStatus | "interrupted";
+/** 候选中断独立于规则结果。 */
+export type QualityProfileCandidateStatus =
+  | "complete"
+  | "failed"
+  | "not-run"
+  | "interrupted";
 type CacheReads = Record<"hit" | "miss" | "invalid" | "error", number>;
 type CacheWrites = Record<"completed" | "error", number>;
 /** 缓存接口可见证据；适配器内部吞掉的错误不计入 error。 */

@@ -27,7 +27,7 @@ function fixture(
     readonly sourceUnits?: readonly Unit[];
     readonly translations?: readonly Translation[];
     readonly languages?: readonly string[];
-    readonly enumeration?: "complete" | "partial";
+    readonly enumeration?: "complete" | "partial" | "failed";
     readonly sourceBodyAvailability?: "available" | "unavailable";
     readonly relationships?: readonly {
       readonly kind: "translation-family";
@@ -38,6 +38,14 @@ function fixture(
       }[];
     }[];
     readonly observe?: (input: {
+      readonly candidate: {
+        readonly sourceKey: string;
+        readonly language: string;
+        readonly content: JsonValue;
+      } | null;
+      readonly translation: {
+        readonly content?: JsonValue;
+      } | null;
       readonly association: {
         readonly sourceKey: string;
         readonly language: string;
@@ -127,13 +135,61 @@ function fixture(
 }
 
 void describe("QA 候选入口与身份", () => {
-  void it("默认纳入已读取且正文可用的同键译文，即使覆盖范围不完整", async () => {
-    const result = await runQa(fixture({ enumeration: "partial" }));
+  void it("非草稿读取不完整时直接拒绝，草稿仅在读取失败时拒绝并保留参照", async () => {
+    await assert.rejects(
+      runQa(fixture({ enumeration: "partial" })),
+      /译文 zh-CN读取不完整.*zh-CN\.json/,
+    );
+    await assert.rejects(
+      runQa(fixture({ enumeration: "failed" }), {
+        candidates: [{ sourceKey: "save", language: "zh-CN", content: "保存" }],
+      }),
+      /译文 zh-CN读取失败.*zh-CN\.json/,
+    );
+
+    const draftResult = await runQa(fixture({ enumeration: "partial" }), {
+      candidates: [{ sourceKey: "save", language: "zh-CN", content: "草稿" }],
+    });
+    assert.deepEqual(draftResult.candidates, [
+      { sourceKey: "save", language: "zh-CN", content: "草稿" },
+    ]);
+    assert.equal(draftResult.readCoverage.associations[0]?.status, "unknown");
+    assert.equal(draftResult.progress, undefined);
+  });
+
+  void it("按原文键和目标语言枚举对象，缺少候选仍调用 prepare 且区分三者空值", async () => {
+    const visits: unknown[] = [];
+    const result = await runQa(
+      fixture({
+        observe: ({ association, candidate, translation }) => {
+          visits.push({
+            sourceKey: association.sourceKey,
+            language: association.language,
+            candidateContent: candidate === null ? null : candidate.content,
+            translationContent:
+              translation === null ? null : (translation.content ?? null),
+          });
+        },
+      }),
+    );
 
     assert.deepEqual(result.candidates, [
       { sourceKey: "save", language: "zh-CN", content: "保存" },
     ]);
-    assert.equal(result.readCoverage.associations[0]?.status, "unknown");
+    assert.deepEqual(visits, [
+      {
+        sourceKey: "save",
+        language: "zh-CN",
+        candidateContent: "保存",
+        translationContent: "保存",
+      },
+      {
+        sourceKey: "save",
+        language: "fr",
+        candidateContent: null,
+        translationContent: null,
+      },
+    ]);
   });
 
   void it("显式候选子集只限制检查对象，完整事实与关系仍可见", async () => {
@@ -317,7 +373,11 @@ void describe("QA 候选入口与身份", () => {
 
     assert.deepEqual(result.candidates, []);
     assert.equal(calls, 0);
-    assert.equal(result.status, "not-run");
+    assert.deepEqual(result.checks[0]?.coverage, {
+      selected: 0,
+      evaluated: 0,
+    });
+    assert.equal(result.progress, undefined);
   });
 
   void it("显式 null 不会被当成省略候选而触发默认候选", async () => {

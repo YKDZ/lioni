@@ -3,10 +3,12 @@ import path from "node:path";
 
 import {
   runQa,
+  defineChecker,
   formatQualityReport,
   upsertQaSuppressionFromReport,
   type QualityRunResult,
 } from "@lioni/lioni";
+import * as z from "zod";
 
 import config from "./lioni.config.ts";
 import {
@@ -180,22 +182,100 @@ const changedDependency = await capture(() =>
 
 setSharedRevision("v3");
 setTermsLoaderMode("failure");
-const isolatedLoaderFailure = await capture(() =>
-  runQa(config, { memo }),
-);
+const isolatedLoaderFailure = await capture(() => runQa(config, { memo }));
 setTermsLoaderMode("none");
 
 setSharedRevision("v4");
 setSharedReadFails(true);
-const sharedLoaderFailure = await capture(() =>
-  runQa(config, { memo }),
-);
+const sharedLoaderFailure = await capture(() => runQa(config, { memo }));
 setSharedReadFails(false);
 setTermsLoaderMode("reader-contract-error");
-const readerContractError = await capture(() =>
-  runQa(config, { memo }),
-);
+const readerContractError = await capture(() => runQa(config, { memo }));
 setTermsLoaderMode("none");
+setSharedRevision("v1");
+
+const withCleanExecutions = await capture(() =>
+  runQa(config, { includeCleanExecutions: true, memo }),
+);
+const explicitAllChecks = await capture(() =>
+  runQa(config, { checkIds: ["unlisted", "terms", "syntax"], memo }),
+);
+const groupedAllConfig = {
+  ...config,
+  quality: {
+    ...config.quality,
+    groups: {
+      daily: ["terms", "syntax"] as const,
+      syntaxOnly: ["syntax"] as const,
+      empty: [] as const,
+      rest: ["unlisted"] as const,
+    },
+  },
+};
+const groupedAllChecks = await capture(() =>
+  runQa(groupedAllConfig, { groups: ["daily", "rest"], memo }),
+);
+
+const translations = config.translations;
+if (translations === undefined)
+  throw new Error("check-selection 配置缺少 translations 适配器。");
+
+const incompleteTranslationRead = await capture(() =>
+  runQa({
+    ...config,
+    translations: {
+      ...translations,
+      read: (_language, sourceUnits) => ({
+        scopes: [
+          {
+            range: "partial-fr.json",
+            enumeration: "partial",
+            covers: sourceUnits.map(({ key }) => key),
+            records: [],
+          },
+        ],
+      }),
+    },
+  }),
+);
+
+const prepareFailure = await capture(() =>
+  runQa({
+    ...config,
+    quality: {
+      checks: [
+        defineChecker({
+          id: "prepare-boom",
+          version: "1",
+          inputSchema: z.string(),
+          prepare() {
+            throw new Error("准备阶段缺材料");
+          },
+          check: () => [],
+        }),
+      ],
+    },
+  }),
+);
+
+const checkFailure = await capture(() =>
+  runQa({
+    ...config,
+    quality: {
+      checks: [
+        defineChecker({
+          id: "check-boom",
+          version: "1",
+          inputSchema: z.string(),
+          prepare: ({ association }) => association.sourceKey,
+          check() {
+            throw new Error("执行阶段崩溃");
+          },
+        }),
+      ],
+    },
+  }),
+);
 
 const evidence = {
   full,
@@ -203,6 +283,12 @@ const evidence = {
   duplicateIds,
   groupUnion,
   termsOnly,
+  withCleanExecutions,
+  explicitAllChecks,
+  groupedAllChecks,
+  incompleteTranslationRead,
+  prepareFailure,
+  checkFailure,
   invalidSelections: {
     unknownId,
     unknownGroup,
