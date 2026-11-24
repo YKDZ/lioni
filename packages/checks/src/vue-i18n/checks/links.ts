@@ -263,7 +263,7 @@ function findCycle(
 }
 
 function version(kind: string): string {
-  const base = `vue-i18n-suite/${kind}/v3+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`;
+  const base = `vue-i18n-suite/${kind}/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`;
   return base;
 }
 

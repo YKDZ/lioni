@@ -7,20 +7,29 @@ import { createConfig } from "./lioni.config.ts";
 const cases = [
   { target: "你好 {name}", expected: undefined },
   { target: "你好 {person}", expected: "vue-i18n/variable-correspondence" },
-  { target: "无效 }", expected: "vue-i18n/target-syntax" },
 ];
 const summaries = [];
 for (const { target, expected } of cases) {
   const result = await runQa(createConfig(target));
   const diagnostics = result.diagnostics.map(({ checkId }) => checkId).sort();
   if (expected === undefined) {
-    assert.equal(result.status, "complete");
     assert.deepEqual(diagnostics, []);
   } else {
     assert.ok(diagnostics.includes(expected));
   }
-  summaries.push({ target, status: result.status, diagnostics });
+  summaries.push({ target, diagnostics });
 }
+const syntaxOnly = await runQa(createConfig("无效 }"), {
+  checkIds: ["vue-i18n/source-syntax", "vue-i18n/target-syntax"],
+});
+assert.deepEqual(
+  syntaxOnly.diagnostics.map(({ checkId }) => checkId),
+  ["vue-i18n/target-syntax"],
+);
+await assert.rejects(
+  runQa(createConfig("无效 }")),
+  /vue-i18n\/variable-correspondence.*message.*zh-CN/u,
+);
 // 使用安装后的正式 SDK 验证无关消息编辑不会撤销术语豁免。
 const terms: TermbaseData = {
   concepts: [

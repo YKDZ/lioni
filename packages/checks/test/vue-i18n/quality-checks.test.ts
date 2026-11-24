@@ -11,6 +11,11 @@ import { TermContractError } from "@lioni/terminology";
 import type { TermbaseData } from "@lioni/terminology";
 
 import {
+  VUE_I18N_PROTECTED_LITERAL_COMPARISON_VERSION,
+  VUE_I18N_QUANTITY_COMPARISON_VERSION,
+} from "../../src/vue-i18n/versions.ts";
+import { VUE_I18N_MESSAGE_COMPILER_VERSION } from "../../src/vue-i18n/vue-i18n-messages.ts";
+import {
   checkIds,
   createQualityFixture,
   policyFor,
@@ -44,18 +49,45 @@ function check(
   return result.checks.find((item) => item.checkId === id);
 }
 
-void test("检查组保留独立身份，并从投影位置报告原文和候选语法错误", async () => {
+void test("检查组保留独立身份与既有规则版本，并从投影位置报告原文和候选语法错误", async () => {
+  const validPolicy = policyFor({
+    sourceMessages: { label: "Hello" },
+    targetMessages: { label: "你好" },
+  });
+  const valid = await createQualityFixture({ policies: [validPolicy] }).run([
+    candidate("label", "你好"),
+  ]);
+  for (const id of Object.values(checkIds)) assert.ok(check(valid, id), id);
+  assert.deepEqual(
+    Object.fromEntries(
+      valid.checks.map((item) => [item.checkId, item.version]),
+    ),
+    {
+      [checkIds.sourceSyntax]: `checks.vue-i18n/source-syntax/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
+      [checkIds.targetSyntax]: `checks.vue-i18n/target-syntax/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
+      [checkIds.variableCorrespondence]: `checks.vue-i18n/variable-correspondence/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
+      [checkIds.linkTargetExists]: `vue-i18n-suite/link-target-exists/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
+      [checkIds.linkCycle]: `vue-i18n-suite/link-cycle/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
+      [checkIds.protectedLiterals]: `vue-i18n-suite/protected-literals/v2+${VUE_I18N_PROTECTED_LITERAL_COMPARISON_VERSION}`,
+      [checkIds.quantities]: `vue-i18n-suite/quantities/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}+${VUE_I18N_QUANTITY_COMPARISON_VERSION}`,
+      [checkIds.allowedTerminology]: "checks.terminology-rule/v3",
+      [checkIds.forbiddenTerminology]: "checks.terminology-rule/v3",
+      [checkIds.messageFamilyConsistency]:
+        "checks.message-family-consistency/v6",
+    },
+  );
+
   const policy = policyFor({
     sourceMessages: { label: "bad } source" },
     targetMessages: { label: "bad } target" },
     sourceRange: "catalog/en.json",
     targetRange: "catalog/zh-CN.json",
   });
-  const result = await createQualityFixture({ policies: [policy] }).run([
-    candidate("label", "bad } target"),
-  ]);
-
-  for (const id of Object.values(checkIds)) assert.ok(check(result, id), id);
+  const fixture = createQualityFixture({ policies: [policy] });
+  const result = await fixture.run(
+    [candidate("label", "bad } target")],
+    [checkIds.sourceSyntax, checkIds.targetSyntax],
+  );
 
   const source = findings(result, checkIds.sourceSyntax)[0];
   const target = findings(result, checkIds.targetSyntax)[0];
@@ -69,9 +101,12 @@ void test("检查组保留独立身份，并从投影位置报告原文和候选
   assert.equal(target?.location.range, "catalog/zh-CN.json");
   assert.ok(source?.location.span);
   assert.ok(target?.location.span);
-  assert.equal(
-    check(result, checkIds.variableCorrespondence)?.status,
-    "failed",
+  await assert.rejects(
+    fixture.run(
+      [candidate("label", "bad } target")],
+      [checkIds.variableCorrespondence],
+    ),
+    /vue-i18n\/variable-correspondence.*label.*zh-CN/u,
   );
 });
 
@@ -127,7 +162,10 @@ void test("特殊消息键和带未知字段的 JSON 资源范围沿正式投影
         },
       },
     }),
-  }).run(keys.map((key) => candidate(key, "bad } target")));
+  }).run(
+    keys.map((key) => candidate(key, "bad } target")),
+    [checkIds.sourceSyntax, checkIds.targetSyntax],
+  );
   const targetSyntaxFindings = findings(result, checkIds.targetSyntax);
 
   assert.deepEqual(
@@ -339,21 +377,59 @@ void test("变量可换序但精确保留身份、重复次数与分支模式", 
   );
 });
 
-void test("非法语法使变量比较未完成，缺译、不可用和真实空正文彼此有别", async () => {
+void test("非法语法使依赖解析的检查抛错拒绝，缺译、不可用和真实空正文彼此有别", async () => {
   const policy = policyFor({
     sourceMessages: { label: "Hello {name}", absent: "" },
     targetMessages: { label: "已保存" },
   });
   const fixture = createQualityFixture({ policies: [policy] });
 
-  const invalid = await fixture.run([candidate("label", "你好 {name} }")]);
-  const targetUnavailable = await fixture.run([
-    candidate("label", "bad } target", "zh-CN", "unavailable"),
-  ]);
+  await assert.rejects(
+    fixture.run(
+      [candidate("label", "你好 {name} }")],
+      [checkIds.variableCorrespondence],
+    ),
+    /vue-i18n\/variable-correspondence.*label.*zh-CN/u,
+  );
+  await assert.rejects(
+    fixture.run([candidate("label", "你好 {name} }")], [checkIds.quantities]),
+    /vue-i18n\/quantities.*label.*zh-CN/u,
+  );
+  const invalidTargetSyntax = await fixture.run(
+    [candidate("label", "你好 {name} }")],
+    [checkIds.sourceSyntax, checkIds.targetSyntax],
+  );
+  assert.equal(findings(invalidTargetSyntax, checkIds.targetSyntax).length, 1);
+
+  await assert.rejects(
+    fixture.run(
+      [candidate("label", "bad } target", "zh-CN", "unavailable")],
+      [checkIds.targetSyntax],
+    ),
+    /vue-i18n\/target-syntax.*label.*zh-CN/u,
+  );
+  const targetUnavailableSourceOnly = await fixture.run(
+    [candidate("label", "bad } target", "zh-CN", "unavailable")],
+    [checkIds.sourceSyntax],
+  );
+  assert.deepEqual(
+    findings(targetUnavailableSourceOnly, checkIds.sourceSyntax),
+    [],
+  );
+
   const targetMissing = await fixture.run([
     candidate("label", "bad } target", "zh-CN", "missing"),
   ]);
+  assert.deepEqual(targetMissing.diagnostics, []);
+  assert.equal(
+    check(targetMissing, checkIds.variableCorrespondence)?.coverage.evaluated,
+    1,
+  );
+
   const empty = await fixture.run([candidate("label", "")]);
+  assert.deepEqual(findings(empty, checkIds.targetSyntax), []);
+  assert.equal(findings(empty, checkIds.variableCorrespondence).length, 1);
+
   await assert.rejects(
     createQualityFixture({
       policies: [
@@ -365,6 +441,7 @@ void test("非法语法使变量比较未完成，缺译、不可用和真实空
     }).run([candidate("orphan", "bad } target")]),
     /原文键.*不存在于本次已读取的原文/,
   );
+
   const unavailableSourceFixture = createQualityFixture({
     policies: [policy],
     unavailableSourceKeys: ["label"],
@@ -373,57 +450,33 @@ void test("非法语法使变量比较未完成，缺译、不可用和真实空
       source: { status: "available", text: "Hello {name}" },
     }),
   });
-  const unavailableSource = await unavailableSourceFixture.run([
-    candidate("label", "你好"),
-  ]);
-  const unavailableSourceWithMissingTarget = await unavailableSourceFixture.run(
-    [candidate("label", "无关占位", "zh-CN", "missing")],
-  );
-
-  assert.equal(
-    check(invalid, checkIds.variableCorrespondence)?.status,
-    "failed",
-  );
-  assert.equal(check(invalid, checkIds.quantities)?.status, "failed");
-  assert.equal(
-    check(targetUnavailable, checkIds.targetSyntax)?.status,
-    "failed",
-  );
-  assert.equal(
-    check(targetUnavailable, checkIds.sourceSyntax)?.status,
-    "complete",
-  );
-  assert.equal(check(targetMissing, checkIds.targetSyntax)?.status, "complete");
-  assert.equal(check(targetMissing, checkIds.sourceSyntax)?.status, "complete");
-  assert.equal(
-    check(targetMissing, checkIds.variableCorrespondence)?.status,
-    "complete",
-  );
-  assert.deepEqual(findings(targetMissing, checkIds.targetSyntax), []);
-  assert.equal(check(empty, checkIds.targetSyntax)?.status, "complete");
-  assert.equal(findings(empty, checkIds.variableCorrespondence).length, 1);
   const emptySource = await fixture.run([candidate("absent", "")]);
-  assert.equal(check(emptySource, checkIds.sourceSyntax)?.status, "complete");
-  assert.equal(
-    check(unavailableSource, checkIds.sourceSyntax)?.status,
-    "failed",
+  assert.deepEqual(findings(emptySource, checkIds.sourceSyntax), []);
+  for (const id of [
+    checkIds.sourceSyntax,
+    checkIds.variableCorrespondence,
+    checkIds.allowedTerminology,
+    checkIds.messageFamilyConsistency,
+  ]) {
+    await assert.rejects(
+      unavailableSourceFixture.run([candidate("label", "你好")], [id]),
+      new RegExp(`${id}.*label.*zh-CN`, "u"),
+    );
+  }
+  const unavailableSourceTargetOnly = await unavailableSourceFixture.run(
+    [candidate("label", "你好")],
+    [checkIds.targetSyntax],
   );
-  assert.equal(
-    check(unavailableSource, checkIds.variableCorrespondence)?.status,
-    "failed",
+  assert.deepEqual(
+    findings(unavailableSourceTargetOnly, checkIds.targetSyntax),
+    [],
   );
-  assert.equal(
-    check(unavailableSource, checkIds.allowedTerminology)?.status,
-    "failed",
-  );
-  assert.equal(
-    check(unavailableSource, checkIds.messageFamilyConsistency)?.status,
-    "failed",
-  );
-  assert.deepEqual(findings(unavailableSource, checkIds.targetSyntax), []);
-  assert.equal(
-    check(unavailableSourceWithMissingTarget, checkIds.sourceSyntax)?.status,
-    "failed",
+  await assert.rejects(
+    unavailableSourceFixture.run(
+      [candidate("label", "无关占位", "zh-CN", "missing")],
+      [checkIds.sourceSyntax],
+    ),
+    /vue-i18n\/source-syntax.*label.*zh-CN/u,
   );
 });
 
@@ -438,7 +491,6 @@ void test("目标独有关联仍检查，缺失目标可见，当前候选覆盖
 
   assert.equal(findings(missing, checkIds.linkTargetExists).length, 1);
   assert.equal(findings(cycle, checkIds.linkCycle).length, 1);
-  assert.equal(check(cycle, checkIds.linkCycle)?.status, "complete");
 });
 
 void test("术语与受保护字面值接受声明形式并拒绝不允许的译法", async () => {
@@ -559,7 +611,7 @@ void test("数量比较保留单位语义，显式策略支持换算和能力不
   }).run([candidate("expiry", "二次验证一小时后过期")]);
   assert.deepEqual(findings(ignoredLiteral, checkIds.quantities), []);
 
-  const unsupported = await createQualityFixture({
+  const unsupportedFixture = createQualityFixture({
     policies: [
       policyFor({
         sourceMessages: { label: "Wait 20 seconds {name}" },
@@ -568,10 +620,20 @@ void test("数量比较保留单位语义，显式策略支持换算和能力不
         targetRange: "catalog/de-DE.json",
       }),
     ],
-  }).run([candidate("label", "Warten {other}", "de-DE")]);
-  assert.equal(check(unsupported, checkIds.quantities)?.status, "failed");
+  });
+  await assert.rejects(
+    unsupportedFixture.run(
+      [candidate("label", "Warten {other}", "de-DE")],
+      [checkIds.quantities],
+    ),
+    /vue-i18n\/quantities.*label.*de-DE/u,
+  );
+  const unsupportedVariables = await unsupportedFixture.run(
+    [candidate("label", "Warten {other}", "de-DE")],
+    [checkIds.variableCorrespondence],
+  );
   assert.equal(
-    findings(unsupported, checkIds.variableCorrespondence).length,
+    findings(unsupportedVariables, checkIds.variableCorrespondence).length,
     1,
   );
 });
@@ -655,7 +717,7 @@ void test("消息族目标等价声明仅影响其目标语言", async () => {
   );
 });
 
-void test("无效的已保存译文不使其他消息族变为未完成", async () => {
+void test("无效的已保存译文不使其他消息族失败，解析失败的候选整体抛错", async () => {
   const policy = policyFor({
     sourceMessages: {
       first: "Enabled",
@@ -665,19 +727,25 @@ void test("无效的已保存译文不使其他消息族变为未完成", async 
     targetMessages: { first: "A", second: "B", broken: "bad }" },
     scopes: [{ scope: "ui", keys: ["first", "second", "broken"] }],
   });
-  const result = await createQualityFixture({ policies: [policy] }).run([
-    candidate("first", "A"),
-    candidate("broken", "bad }"),
-  ]);
-
-  const familyCheck = check(result, checkIds.messageFamilyConsistency);
-  assert.equal(familyCheck?.status, "failed");
-  assert.deepEqual(
-    familyCheck?.executions.map(({ status }) => status),
-    ["complete", "failed"],
+  const fixture = createQualityFixture({ policies: [policy] });
+  const isolated = await fixture.run(
+    [candidate("first", "A")],
+    [checkIds.messageFamilyConsistency],
   );
-  assert.equal(findings(result, checkIds.messageFamilyConsistency).length, 1);
-  assert.equal(findings(result, checkIds.targetSyntax).length, 1);
+  assert.equal(findings(isolated, checkIds.messageFamilyConsistency).length, 1);
+
+  await assert.rejects(
+    fixture.run(
+      [candidate("first", "A"), candidate("broken", "bad }")],
+      [checkIds.messageFamilyConsistency],
+    ),
+    /message-family-consistency.*broken.*zh-CN/u,
+  );
+  const targetSyntax = await fixture.run(
+    [candidate("first", "A"), candidate("broken", "bad }")],
+    [checkIds.targetSyntax],
+  );
+  assert.equal(findings(targetSyntax, checkIds.targetSyntax).length, 1);
 });
 
 void test("多语言沿用各自资源位置，反向语言对仍标注正确来源", async () => {
@@ -720,10 +788,13 @@ void test("多语言沿用各自资源位置，反向语言对仍标注正确来
   const multilingual = await createQualityFixture({
     policies: [chinese, japanese],
     terms,
-  }).run([
-    candidate("label", "显示器", "zh-CN"),
-    candidate("label", "モニター", "ja"),
-  ]);
+  }).run(
+    [
+      candidate("label", "显示器", "zh-CN"),
+      candidate("label", "モニター", "ja"),
+    ],
+    [checkIds.forbiddenTerminology],
+  );
   const forbidden = findings(multilingual, checkIds.forbiddenTerminology);
 
   assert.equal(forbidden.length, 1);
@@ -955,12 +1026,15 @@ void test("每次质量运行读取一次 Vue 动态规则并使用最新术语�
     },
   });
 
-  const first = await fixture.run([
-    candidate("monitor", "显示器"),
-    candidate("other", "其他"),
-  ]);
+  const first = await fixture.run(
+    [candidate("monitor", "显示器"), candidate("other", "其他")],
+    [checkIds.forbiddenTerminology],
+  );
   forbidDisplayTerm = false;
-  const second = await fixture.run([candidate("monitor", "显示器")]);
+  const second = await fixture.run(
+    [candidate("monitor", "显示器")],
+    [checkIds.forbiddenTerminology],
+  );
 
   assert.equal(reads, 2);
   assert.equal(findings(first, checkIds.forbiddenTerminology).length, 1);
@@ -1015,11 +1089,20 @@ void test("只选 Vue 语法时不读取术语库或消息族策略", async () =
     ],
   );
   assert.deepEqual(
-    result.checks.map(({ checkId, status }) => ({ checkId, status })),
+    result.checks.map(({ checkId, coverage }) => ({ checkId, coverage })),
     [
-      { checkId: checkIds.sourceSyntax, status: "complete" },
-      { checkId: checkIds.targetSyntax, status: "complete" },
-      { checkId: checkIds.variableCorrespondence, status: "complete" },
+      {
+        checkId: checkIds.sourceSyntax,
+        coverage: { selected: 1, evaluated: 1 },
+      },
+      {
+        checkId: checkIds.targetSyntax,
+        coverage: { selected: 1, evaluated: 1 },
+      },
+      {
+        checkId: checkIds.variableCorrespondence,
+        coverage: { selected: 1, evaluated: 1 },
+      },
     ],
   );
 });
@@ -1070,10 +1153,10 @@ void test("缺少目标候选时不把缺译占位转成空消息", async () => 
   const fixture = createQualityFixture({ policies: [policy] });
   const result = await fixture.run([]);
 
-  assert.equal(
-    check(result, checkIds.variableCorrespondence)?.status,
-    "not-run",
-  );
+  assert.deepEqual(check(result, checkIds.variableCorrespondence)?.coverage, {
+    selected: 0,
+    evaluated: 0,
+  });
   assert.deepEqual(findings(result, checkIds.variableCorrespondence), []);
 });
 
@@ -1264,7 +1347,8 @@ void test("局部规则复用无关消息和策略变更前的豁免，相关输
         },
       },
     });
-    const run = (text = scenario.target) => fixture.run([candidate("a", text)]);
+    const run = (text = scenario.target) =>
+      fixture.run([candidate("a", text)], [scenario.id]);
     const first = await run();
     assert.equal(findings(first, scenario.id).length, 1, scenario.id);
     suppressions = [
@@ -1391,43 +1475,60 @@ void test("链接豁免按直接键存在性和完整可达闭包复用缓存", 
   const added = await run();
   assert.deepEqual(sameInputs(added), [false, false]);
   assert.deepEqual(findings(added, checkIds.linkTargetExists), []);
-  // 即使先遇到有效循环，另一条可达分支解析失败仍会使整次检查失败。
+  // 即使先遇到有效循环，另一条可达分支解析失败仍会使整次检查抛错拒绝。
   targetMessages.missing = "bad }";
-  const partial = await run();
-  assert.equal(check(partial, checkIds.linkCycle)?.status, "failed");
-  assert.deepEqual(findings(partial, checkIds.linkCycle), []);
+  await assert.rejects(
+    fixture.run([candidate("a", text)], [checkIds.linkCycle]),
+    /vue-i18n\/link-cycle.*a.*zh-CN/u,
+  );
   delete targetMessages.missing;
   targetMessages.b = "bad }";
-  const invalid = await run();
-  assert.equal(check(invalid, checkIds.linkCycle)?.status, "failed");
-  assert.deepEqual(sameInputs(invalid), [true, false]);
+  await assert.rejects(
+    fixture.run([candidate("a", text)], [checkIds.linkCycle]),
+    /vue-i18n\/link-cycle.*a.*zh-CN/u,
+  );
+  const linkTargetOnly = await fixture.run(
+    [candidate("a", text)],
+    [checkIds.linkTargetExists],
+  );
+  assert.equal(
+    check(linkTargetOnly, checkIds.linkTargetExists)?.executions[0]
+      ?.inputFingerprint,
+    check(first, checkIds.linkTargetExists)?.executions[0]?.inputFingerprint,
+  );
 });
 
 void test("缺失关联键后来补全成循环会重新检查", async () => {
   const sourceMessages = { a: "Root" };
   const targetMessages: Record<string, string> = { a: "@:missing" };
-  let suppressions: readonly QaSuppression[] = [];
+  const cache = new Map<
+    string,
+    Awaited<ReturnType<QualityCheckResultCache["get"]>>
+  >();
+  let hits = 0;
   const fixture = createQualityFixture({
     policies: [policyFor({ sourceMessages, targetMessages })],
-    suppressionStore: {
-      load: async () => suppressions,
-      upsert: async (value) => {
-        suppressions = [...suppressions, value];
+    resultCache: {
+      async get(key) {
+        const value = cache.get(key);
+        if (value !== undefined) hits++;
+        return value;
+      },
+      async set(key, value) {
+        cache.set(key, value);
       },
     },
   });
-  const run = () => fixture.run([candidate("a", "@:missing")]);
+  const run = () =>
+    fixture.run([candidate("a", "@:missing")], [checkIds.linkCycle]);
   const first = await run();
   assert.deepEqual(findings(first, checkIds.linkCycle), []);
-  suppressions = [
-    createQaSuppression({
-      id: "cycle",
-      reason: "当前没有循环",
-      execution: check(first, checkIds.linkCycle)!.executions[0]!,
-    }),
-  ];
+  assert.equal(hits, 0);
+  await run();
+  assert.equal(hits, 1);
   targetMessages.missing = "@:a";
   const added = await run();
+  assert.equal(hits, 1);
   assert.equal(
     findings(added, checkIds.linkCycle)[0]?.handling.status,
     "active",
@@ -1435,11 +1536,11 @@ void test("缺失关联键后来补全成循环会重新检查", async () => {
   assert.equal(findings(added, checkIds.linkCycle).length, 1);
 });
 
-void test("消息族按已知源族局部化目标语法缺口，未知源族仍保守未完成", async () => {
-  for (const [source, expected] of [
-    ["Enabled", "failed"],
-    ["Other", "complete"],
-    ["bad } source", "failed"],
+void test("消息族按已知源族局部化目标语法缺口，未知源族仍抛错拒绝", async () => {
+  for (const [source, shouldReject] of [
+    ["Enabled", true],
+    ["Other", false],
+    ["bad } source", true],
   ] as const) {
     const fixture = createQualityFixture({
       policies: [
@@ -1450,16 +1551,25 @@ void test("消息族按已知源族局部化目标语法缺口，未知源族仍
         }),
       ],
     });
-    const result = await fixture.run([candidate("a", "启用")]);
-    assert.equal(
-      check(result, checkIds.messageFamilyConsistency)?.status,
-      expected,
-      source,
-    );
-    assert.equal(
-      findings(result, checkIds.messageFamilyConsistency).length,
-      expected === "failed" ? 0 : 1,
-    );
+    if (shouldReject) {
+      await assert.rejects(
+        fixture.run(
+          [candidate("a", "启用")],
+          [checkIds.messageFamilyConsistency],
+        ),
+        /message-family-consistency.*a.*zh-CN/u,
+      );
+    } else {
+      const result = await fixture.run(
+        [candidate("a", "启用")],
+        [checkIds.messageFamilyConsistency],
+      );
+      assert.equal(
+        findings(result, checkIds.messageFamilyConsistency).length,
+        1,
+        source,
+      );
+    }
   }
 });
 
@@ -1503,7 +1613,7 @@ void test("消息族只随实际采用的目标等价变化重新判断", async 
   assert.deepEqual(findings(related, checkIds.messageFamilyConsistency), []);
 });
 
-void test("Vue 准备适配先验证返回结构与投影，普通 TypeError 保留失败报告", async () => {
+void test("Vue 准备适配先验证返回结构与投影，普通 TypeError 同样抛错中止运行", async () => {
   const policies = [policyFor({ sourceMessages: { label: "Hello" } })];
   const selectedIds = [
     checkIds.sourceSyntax,
@@ -1534,13 +1644,14 @@ void test("Vue 准备适配先验证返回结构与投影，普通 TypeError 保
         throw new TypeError("宿主消息提取失败");
       },
     });
-    const failed = await fixture.run([candidate("label", "你好")], [checkId]);
-    assert.equal(failed.status, "failed");
-    assert.equal(failed.checks[0]?.executions[0]?.error, "宿主消息提取失败");
+    await assert.rejects(
+      fixture.run([candidate("label", "你好")], [checkId]),
+      new RegExp(`${checkId}.*label.*zh-CN.*宿主消息提取失败`, "u"),
+    );
   }
 });
 
-void test("Vue 消息族参照投影的非法返回中止运行，宿主普通 TypeError 只使检查失败", async () => {
+void test("Vue 消息族参照投影的非法返回与宿主普通 TypeError 均抛错中止运行", async () => {
   const policies = [
     policyFor({
       sourceMessages: { editing: "Hello", saved: "Hello" },
@@ -1566,10 +1677,11 @@ void test("Vue 消息族参照投影的非法返回中止运行，宿主普通 T
       throw new TypeError("宿主参照提取失败");
     },
   });
-  const failed = await fixture.run(
-    [candidate("editing", "你好")],
-    [checkIds.messageFamilyConsistency],
+  await assert.rejects(
+    fixture.run(
+      [candidate("editing", "你好")],
+      [checkIds.messageFamilyConsistency],
+    ),
+    /message-family-consistency.*editing.*zh-CN.*宿主参照提取失败/u,
   );
-  assert.equal(failed.status, "failed");
-  assert.equal(failed.checks[0]?.executions[0]?.error, "宿主参照提取失败");
 });
