@@ -6,13 +6,21 @@ import {
 import { z } from "zod";
 
 const subjectSchema = z.object({ key: z.string(), language: z.string() });
+const sameTextInputSchema = subjectSchema
+  .extend({
+    source: z.string(),
+    target: z.string(),
+    sourceRange: z.unknown(),
+    targetRange: z.unknown(),
+  })
+  .nullable();
 
 /** 只检查是否提供了候选正文。空字符串也是已提供的译文。 */
 export function createMissingTranslationChecker<
   TUnit extends TranslationUnitInput = TranslationUnitInput,
   TTranslation = unknown,
   TBody = unknown,
-  TUnavailable = never,
+  TUnavailable = unknown,
 >() {
   return defineChecker.withTypes<TUnit, TTranslation, TBody, TUnavailable>()({
     id: "missing-translation",
@@ -44,15 +52,13 @@ export function createSameTextChecker<
   TUnit extends TranslationUnitInput = TranslationUnitInput,
   TTranslation = unknown,
   TBody = unknown,
-  TUnavailable = never,
+  TUnavailable = unknown,
 >() {
   return defineChecker.withTypes<TUnit, TTranslation, TBody, TUnavailable>()({
     id: "same-text",
     version: "checks.same-text/v1",
-    inputSchema: subjectSchema
-      .extend({ source: z.string(), target: z.string() })
-      .nullable(),
-    prepare({ sourceUnit, candidate, association }) {
+    inputSchema: sameTextInputSchema,
+    prepare({ snapshot, sourceUnit, translation, candidate, association }) {
       if (candidate === null) {
         if (association.status !== "missing")
           throw new Error("无法读取候选正文以检查同文。");
@@ -62,12 +68,16 @@ export function createSameTextChecker<
         throw new Error("无法读取原文正文以检查同文。");
       const source = sourceUnit.unit.source;
       const target = candidate.content;
-      if (typeof source !== "string" || typeof target !== "string") return null;
+      if (typeof source !== "string" || typeof target !== "string")
+        throw new Error("无法取得原文或候选译文的字符串正文。");
       return {
         key: association.sourceKey,
         language: association.language,
         source,
         target,
+        sourceRange:
+          snapshot.source.read.scopes[sourceUnit.scopeIndex]?.range ?? null,
+        targetRange: translation?.range ?? null,
       };
     },
     check(input): readonly QualityFinding[] {
@@ -77,10 +87,15 @@ export function createSameTextChecker<
         key: input.key,
         language: input.language,
       };
+      const sourceLocation = {
+        language: null,
+        range: input.sourceRange,
+        key: input.key,
+      };
       const location = {
         key: input.key,
         language: input.language,
-        range: null,
+        range: input.targetRange,
       };
       return [
         {
@@ -89,7 +104,18 @@ export function createSameTextChecker<
           location,
           message: "译文与原文完全相同。",
           evidence: [
-            { role: "same-text", object, location, value: input.target },
+            {
+              role: "source",
+              object: { kind: "source-unit", key: input.key },
+              location: sourceLocation,
+              value: input.source,
+            },
+            {
+              role: "target",
+              object,
+              location,
+              value: input.target,
+            },
           ],
         },
       ];
