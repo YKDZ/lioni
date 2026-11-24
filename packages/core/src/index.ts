@@ -169,6 +169,7 @@ export {
 export type {
   QualityReportDecision,
   QualityReportDecisionStatus,
+  QualityReportFormatOptions,
 } from "./quality/report.ts";
 export type {
   CachedQualityFindings,

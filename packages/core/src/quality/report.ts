@@ -14,6 +14,12 @@ export type QualityReportDecision = {
   readonly activeErrorCount: number;
 };
 
+/** 终端质量报告文本呈现的筛选与折叠选项，只影响问题明细展示。 */
+export type QualityReportFormatOptions = {
+  readonly severities?: readonly ("error" | "warning" | "info")[];
+  readonly maxPerCheck?: number;
+};
+
 const severityText = {
   error: "错误",
   warning: "警告",
@@ -57,7 +63,18 @@ export function decideQualityReport(
 }
 
 /** 生成可供 CLI 与 SDK 脚本共用的简体中文质量报告。 */
-export function formatQualityReport(report: QualityReport): string {
+export function formatQualityReport(
+  report: QualityReport,
+  options?: QualityReportFormatOptions,
+): string {
+  const maxPerCheck = options?.maxPerCheck;
+  if (
+    maxPerCheck !== undefined &&
+    (!Number.isInteger(maxPerCheck) || maxPerCheck < 1)
+  ) {
+    throw new RangeError("maxPerCheck 必须是正整数。");
+  }
+
   const activeDiagnostics = report.diagnostics.filter(
     ({ handling }) => handling.status === "active",
   );
@@ -84,14 +101,57 @@ export function formatQualityReport(report: QualityReport): string {
     `有效问题：错误 ${countSeverity(activeDiagnostics, "error")}，警告 ${countSeverity(activeDiagnostics, "warning")}，提示 ${countSeverity(activeDiagnostics, "info")}；已豁免 ${suppressedCount}`,
   ];
 
+  const selectedSeverities =
+    options?.severities === undefined ? undefined : new Set(options.severities);
+  const matchingDiagnostics =
+    selectedSeverities === undefined
+      ? report.diagnostics
+      : report.diagnostics.filter(({ severity }) =>
+          selectedSeverities.has(severity),
+        );
+
   if (report.diagnostics.length === 0) {
     lines.push("问题：无");
+  } else if (matchingDiagnostics.length === 0) {
+    lines.push("问题：按所选严重度无匹配明细");
   } else {
-    lines.push("问题：");
-    lines.push(...report.diagnostics.map(formatDiagnostic));
+    lines.push(
+      "问题：",
+      ...formatDiagnosticDetails(matchingDiagnostics, maxPerCheck),
+    );
   }
 
   return lines.join("\n");
+}
+
+function formatDiagnosticDetails(
+  diagnostics: readonly QualityRunResult["diagnostics"][number][],
+  maxPerCheck: number | undefined,
+): string[] {
+  if (maxPerCheck === undefined) {
+    return diagnostics.map(formatDiagnostic);
+  }
+
+  // 先由调用方按严重度筛选后再按检查项分组折叠，确保省略数只计其余匹配明细。
+  const grouped = new Map<string, QualityRunResult["diagnostics"][number][]>();
+  for (const diagnostic of diagnostics) {
+    const items = grouped.get(diagnostic.checkId);
+    if (items === undefined) grouped.set(diagnostic.checkId, [diagnostic]);
+    else items.push(diagnostic);
+  }
+
+  const lines: string[] = [];
+  for (const [checkId, items] of grouped) {
+    const shown = items.slice(0, maxPerCheck);
+    const omittedCount = items.length - shown.length;
+    lines.push(...shown.map(formatDiagnostic));
+    if (omittedCount > 0) {
+      lines.push(
+        `- ${checkId}：另有 ${omittedCount} 条匹配明细因上限（${maxPerCheck}）被省略`,
+      );
+    }
+  }
+  return lines;
 }
 
 /** 显示到小数点后两位，仅在所有检查对象均已完成时显示 100%。 */

@@ -86,6 +86,7 @@ export type {
   QualityRelationship,
   QualityReportDecision,
   QualityReportDecisionStatus,
+  QualityReportFormatOptions,
   TranslationProgress,
   QualityRunResult,
   QualitySubject,
