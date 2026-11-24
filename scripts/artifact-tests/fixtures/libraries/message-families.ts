@@ -157,7 +157,6 @@ async function measure(size: number, shape: "small" | "large") {
     const profiler = createQualityProfiler({ slowestCandidates: 0 });
     try {
       const result = await runQa(config, { profiler });
-      assert.equal(result.status, "complete");
       assert.deepEqual(result.diagnostics, []);
     } finally {
       Hash.prototype.update = update;

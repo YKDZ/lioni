@@ -53,7 +53,7 @@ export function createProtectedLiteralCheck<
   >;
 }) {
   const version = [
-    "vue-i18n-suite/protected-literals/v3",
+    "vue-i18n-suite/protected-literals/v2",
     VUE_I18N_PROTECTED_LITERAL_COMPARISON_VERSION,
   ].join("+");
   return createVueI18nMessageCheck({
@@ -94,7 +94,7 @@ export function createQuantityCheck<
   >;
 }) {
   const version = [
-    "vue-i18n-suite/quantities/v3",
+    "vue-i18n-suite/quantities/v2",
     `@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
     VUE_I18N_QUANTITY_COMPARISON_VERSION,
   ].join("+");
