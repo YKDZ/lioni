@@ -58,12 +58,7 @@ export default defineConfig({
       },
       {
         name: "readable baseline result",
-        args: [
-          "baseline",
-          "project/lioni.config.ts",
-          "--output-format",
-          "text",
-        ],
+        args: ["baseline", "project/lioni.config.ts", "--output", "text"],
       },
       {
         name: "reject incomplete read without replacing baseline",
@@ -85,7 +80,7 @@ export default defineConfig({
     assert.equal(recorded?.exitCode, 0, recorded?.stderr ?? "");
     assert.equal(recorded?.stderr, "");
     assert.partialDeepStrictEqual(JSON.parse(recorded?.stdout ?? ""), {
-      schemaVersion: "2",
+      schemaVersion: "3",
       kind: "data",
       variant: "recorded",
       data: { outcome: "saved", path: baselinePath },

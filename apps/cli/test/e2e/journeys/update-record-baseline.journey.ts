@@ -106,7 +106,7 @@ export default defineConfig({
           "update",
           "lioni.config.ts",
           "--record-baseline",
-          "--output-format",
+          "--output",
           "text",
         ],
       },

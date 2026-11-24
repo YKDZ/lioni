@@ -30,7 +30,7 @@ testArtifactConsumer(
       const cli = await runProcess(executable, [
         "qa",
         "lioni.config.ts",
-        "--output-format",
+        "--output",
         "structured",
       ]);
       assert.equal(cli.status, diagnostics.length === 0 ? 0 : 1);

@@ -131,5 +131,144 @@ testArtifactConsumer(
     await assert.rejects(read("fr/A.json"), { code: "ENOENT" });
     assert.equal(await read("fr/unrelated.json"), unrelated);
     assert.equal(await read("baseline.json"), baseline);
+
+    // 升级前保存的 v2 比较基线与 v2 更新计划文件在当前制品中仍可兼容读回并检测冲突。
+    await rm(path.join(root, "baseline.json"));
+    await rm(path.join(root, "plan.json"));
+    await json("source.json", sources("v2-旧"));
+    await json("fr/A.json", { id: "A", text: "译文 A" });
+    await json("fr/B.json", { id: "B", text: "译文 B" });
+    assert.partialDeepStrictEqual(await run("baseline"), { outcome: "saved" });
+    const legacyBaseline = toLegacyV2Baseline(
+      JSON.parse(await read("baseline.json")),
+    );
+    const legacyBaselineText = JSON.stringify(legacyBaseline);
+    await writeFile(
+      path.join(root, "baseline.json"),
+      legacyBaselineText,
+      "utf8",
+    );
+
+    assert.partialDeepStrictEqual(await run("baseline"), {
+      outcome: "unchanged",
+    });
+    assert.equal(await read("baseline.json"), legacyBaselineText);
+
+    await json("source.json", sources("v2-新版"));
+    assert.deepEqual(await run("plan"), [
+      ["A", "write"],
+      ["B", "write"],
+    ]);
+    const legacyPlan = toLegacyV2Plan(JSON.parse(await read("plan.json")));
+    await writeFile(
+      path.join(root, "plan.json"),
+      JSON.stringify(legacyPlan),
+      "utf8",
+    );
+
+    await json("source.json", sources("v2-外部原文改动"));
+    assert.partialDeepStrictEqual(await run("apply"), {
+      status: "failed",
+      results: [{ status: "conflict" }, { status: "conflict" }],
+    });
+
+    await json("source.json", sources("v2-新版"));
+    await json("fr/A.json", { id: "A", text: "译文 A", extra: "changed" });
+    assert.partialDeepStrictEqual(await run("apply"), {
+      status: "failed",
+      results: [{ status: "conflict" }, { status: "written" }],
+    });
+    assert.partialDeepStrictEqual(JSON.parse(await read("fr/A.json")), {
+      text: "译文 A",
+      extra: "changed",
+    });
+
+    await json("fr/A.json", { id: "A", text: "译文 A" });
+    await json("fr/B.json", { id: "B", text: "译文 B" });
+    assert.partialDeepStrictEqual(await run("apply"), {
+      status: "completed",
+      results: [{ status: "written" }, { status: "written" }],
+    });
+    assert.partialDeepStrictEqual(JSON.parse(await read("fr/A.json")), {
+      text: "更新译文 A",
+    });
+    assert.partialDeepStrictEqual(JSON.parse(await read("fr/B.json")), {
+      text: "更新译文 B",
+    });
   },
 );
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function toLegacyTranslationRecord(value: unknown): unknown {
+  if (!isPlainObject(value) || !Object.hasOwn(value, "record")) return value;
+  const { record, ...rest } = value;
+  return { ...rest, translation: record };
+}
+
+function toLegacySnapshot(value: unknown): unknown {
+  if (!isPlainObject(value) || !isPlainObject(value.translations)) return value;
+  const records = value.translations.records;
+  if (!Array.isArray(records)) return value;
+  return {
+    ...value,
+    translations: {
+      ...value.translations,
+      records: records.map(toLegacyTranslationRecord),
+    },
+  };
+}
+
+function toLegacyTranslationChange(value: unknown): unknown {
+  if (!isPlainObject(value)) return value;
+  return {
+    ...value,
+    ...(value.previous === undefined
+      ? {}
+      : { previous: toLegacyTranslationRecord(value.previous) }),
+    ...(value.current === undefined
+      ? {}
+      : { current: toLegacyTranslationRecord(value.current) }),
+  };
+}
+
+function toLegacyV2Baseline(value: unknown): Record<string, unknown> {
+  assert.ok(isPlainObject(value));
+  return {
+    ...value,
+    snapshot: toLegacySnapshot(value.snapshot),
+  };
+}
+
+function toLegacyV2Plan(value: unknown): Record<string, unknown> {
+  assert.ok(isPlainObject(value));
+  assert.ok(isPlainObject(value.comparisons));
+  assert.ok(Array.isArray(value.items));
+  return {
+    ...value,
+    ...(value.previous === undefined
+      ? {}
+      : { previous: toLegacySnapshot(value.previous) }),
+    current: toLegacySnapshot(value.current),
+    comparisons: {
+      ...value.comparisons,
+      translationChanges: Array.isArray(value.comparisons.translationChanges)
+        ? value.comparisons.translationChanges.map(toLegacyTranslationChange)
+        : [],
+    },
+    items: value.items.map((item) => {
+      if (!isPlainObject(item) || !isPlainObject(item.changes)) return item;
+      return {
+        ...item,
+        changes: {
+          ...item.changes,
+          translations: Array.isArray(item.changes.translations)
+            ? item.changes.translations.map(toLegacyTranslationChange)
+            : [],
+        },
+      };
+    }),
+  };
+}

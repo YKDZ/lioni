@@ -677,4 +677,55 @@ void describe("snapshot comparison", () => {
         error.reason === "invalid-input",
     );
   });
+
+  void it("normalizes pre-upgrade v2 translation records when comparing snapshots", async () => {
+    const previous = await readSnapshot(
+      [{ range: "messages.json", records: [{ value: unit("save", "Save") }] }],
+      [
+        {
+          language: "fr",
+          range: "fr.json",
+          records: [translated("messages", "save", "Enregistrer")],
+        },
+        { language: "de", range: "de.json", records: [] },
+      ],
+    );
+    const current = await readSnapshot(
+      [{ range: "messages.json", records: [{ value: unit("save", "Save") }] }],
+      [
+        {
+          language: "fr",
+          range: "fr.json",
+          records: [translated("messages", "save", "Sauver")],
+        },
+        { language: "de", range: "de.json", records: [] },
+      ],
+    );
+    const legacyPrevious = {
+      ...previous,
+      translations: {
+        ...previous.translations,
+        records: previous.translations.records.map(({ record, ...rest }) => ({
+          ...rest,
+          translation: record,
+        })),
+      },
+    } as unknown as typeof previous;
+
+    const result = await compareSnapshots({
+      previous: legacyPrevious,
+      current,
+    });
+    const changed = translationChange(result, "fr", "messages", "save");
+    assert.equal(changed.status, "modified");
+    assert.deepStrictEqual(changed.previous?.record, {
+      namespace: "messages",
+      id: "save",
+      text: "Enregistrer",
+    });
+    assert.equal(
+      Object.hasOwn(changed.previous as Record<string, unknown>, "translation"),
+      false,
+    );
+  });
 });

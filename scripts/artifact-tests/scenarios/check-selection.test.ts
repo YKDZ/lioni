@@ -258,7 +258,7 @@ testArtifactConsumer(
       "daily",
       "--group",
       "syntaxOnly",
-      "--output-format",
+      "--output",
       "structured",
     );
     assert.equal(grouped.status, 0);

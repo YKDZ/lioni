@@ -1,3 +1,4 @@
+import { appendFileSync, existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 
 import {
@@ -22,10 +23,13 @@ const textOf = (body: Body): string =>
 
 const numberPreparation = (
   input: CheckerPrepareInput<Unit, Translation, Body, never>,
-): NumberCheckerPreparation => input.candidate === null ? null : ({
-  source: textOf(input.sourceUnit.unit.source),
-  target: textOf(input.candidate.content),
-});
+): NumberCheckerPreparation =>
+  input.candidate === null
+    ? null
+    : {
+        source: textOf(input.sourceUnit.unit.source),
+        target: textOf(input.candidate.content),
+      };
 const numberOptions: NumberCheckerOptions<Unit, Translation, Body, never> = {
   prepare: numberPreparation,
 };
@@ -56,18 +60,27 @@ export function createConfig() {
   return defineConfig({
     source: {
       schema: unitSchema,
-      read: () => ({
-        scopes: [
-          {
-            range: "source",
-            enumeration: "complete",
-            records: units.map((value) => ({
-              value,
-              bodyAvailability: "available",
-            })),
-          },
-        ],
-      }),
+      read: () => {
+        if (existsSync(new URL("./.track-reads", import.meta.url))) {
+          appendFileSync(
+            new URL("./.qa-reads.log", import.meta.url),
+            "source:read\n",
+            "utf8",
+          );
+        }
+        return {
+          scopes: [
+            {
+              range: "source",
+              enumeration: "complete",
+              records: units.map((value) => ({
+                value,
+                bodyAvailability: "available",
+              })),
+            },
+          ],
+        };
+      },
     },
     keyOf: (unit) => unit.id,
     translations: {
