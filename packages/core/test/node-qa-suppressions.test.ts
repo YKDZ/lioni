@@ -345,7 +345,7 @@ void describe("Node.js QA 豁免存储", () => {
         inputSchema: schemaFromExamples(""),
         prepare: ({ association, candidate }) =>
           `${association.sourceKey}:${candidate?.content ?? ""}`,
-        check(input) {
+        check(input): readonly QualityFinding[] {
           ruleACalls += 1;
           if (input.startsWith("clean:")) return [];
           return [
@@ -365,7 +365,7 @@ void describe("Node.js QA 豁免存储", () => {
         inputSchema: schemaFromExamples(""),
         prepare: ({ association, candidate }) =>
           `${association.sourceKey}:${candidate?.content ?? ""}`,
-        check(input) {
+        check(input): readonly QualityFinding[] {
           if (input.startsWith("clean:")) return [];
           return [makeFinding("flag", "另一检查项的问题")];
         },
@@ -523,6 +523,128 @@ void describe("Node.js QA 豁免存储", () => {
           ["rule-b", "active"],
         ],
       );
+    });
+  });
+
+  void it("全量发现失效豁免或执行失败时保留文件记录，手工清理后可重新运行取得进度", async () => {
+    await withDirectory(async (directory) => {
+      const filePath = path.join(directory, "lioni.suppressions.yaml");
+      const store = createFileQaSuppressionStore(filePath);
+      let translationText = "Drapeau";
+      let checkerThrows = false;
+      const rule = defineChecker.withTypes<
+        { readonly key: string; readonly source: string },
+        { readonly id: string; readonly text: string },
+        string,
+        never
+      >()({
+        id: "rule-file",
+        version: "rule-file-v1",
+        inputSchema: schemaFromExamples(""),
+        prepare: ({ association, candidate }) => {
+          if (checkerThrows) throw new Error("检查读取异常");
+          return `${association.sourceKey}:${candidate?.content ?? ""}`;
+        },
+        check(input): readonly QualityFinding[] {
+          if (input === "flag:Drapeau") {
+            return [
+              {
+                severity: "error",
+                object: {
+                  kind: "translation-unit",
+                  key: "flag",
+                  language: "fr",
+                },
+                location: { language: "fr", range: "fr.json", key: "flag" },
+                message: "需要确认",
+                evidence: [],
+              },
+            ];
+          }
+          return [];
+        },
+      });
+      const config = defineConfig({
+        source: {
+          schema: sourceSchemaFromExamples({ key: "flag", source: "Flag" }),
+          read: () => ({
+            scopes: [
+              {
+                range: "source.json",
+                enumeration: "complete",
+                records: [
+                  {
+                    value: { key: "flag", source: "Flag" },
+                    bodyAvailability: "available",
+                  },
+                ],
+              },
+            ],
+          }),
+        },
+        keyOf: ({ key }) => key,
+        translations: {
+          languages: ["fr"],
+          schema: schemaFromExamples({ id: "flag", text: "Drapeau" }),
+          contentSchema: schemaFromExamples(""),
+          contentOf: ({ text }) => text,
+          keyOf: fixtureTranslationKey,
+          read: () => ({
+            scopes: [
+              {
+                range: "fr.json",
+                covers: ["flag"],
+                enumeration: "complete",
+                records: [
+                  {
+                    value: { id: "flag", text: translationText },
+                    bodyAvailability: "available",
+                  },
+                ],
+              },
+            ],
+          }),
+        },
+        quality: {
+          checks: [rule],
+          suppressionStore: store,
+        },
+      });
+
+      const initial = await runQa(config);
+      const execution = initial.checks[0]?.executions[0];
+      assert.ok(execution);
+      await upsertQaSuppressionFromReport({
+        report: initial,
+        checkId: "rule-file",
+        executionId: execution.executionId,
+        id: "flag-file-fr",
+        reason: "初版保留。",
+        store,
+      });
+      const recordedContents = await readFile(filePath, "utf8");
+
+      checkerThrows = true;
+      await assert.rejects(runQa(config), /检查读取异常/u);
+      assert.equal(await readFile(filePath, "utf8"), recordedContents);
+
+      checkerThrows = false;
+      translationText = "Pavillon";
+      await assert.rejects(
+        runQa(config),
+        /flag-file-fr（rule-file，flag，fr）：检查输入指纹已改变/u,
+      );
+      assert.equal(await readFile(filePath, "utf8"), recordedContents);
+
+      await writeFile(
+        filePath,
+        "format: lioni.qa-suppressions/v1\nsuppressions: []\n",
+        "utf8",
+      );
+      const afterCleanup = await runQa(config);
+      assert.deepEqual(afterCleanup.progress, [
+        { language: "fr", completed: 1, total: 1, percentage: 100 },
+      ]);
     });
   });
 });
