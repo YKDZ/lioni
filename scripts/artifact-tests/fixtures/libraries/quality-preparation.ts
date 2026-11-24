@@ -874,7 +874,7 @@ async function runBenchmark(): Promise<void> {
       worker: "independent Node process per sample",
       allocationSampler: "V8 Inspector HeapProfiler sampling",
       allocationSamplingIntervalBytes,
-      snapshot: "one in-memory source fact; no translation reads",
+      snapshot: "one in-memory source unit; no translation reads",
       resultCache: "in-memory Map using public QA cache contract",
       allocationGates:
         "按工作单位归一化的产品栈采样分配不得超过小规模的4倍；最终输入固定阶段须被分配采样覆盖",

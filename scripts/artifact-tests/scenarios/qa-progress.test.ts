@@ -201,7 +201,7 @@ testArtifactConsumer(
       return report;
     }
 
-    // 1. 主流程与 S5/S8/S9：1/3 -> 关闭或豁免缺译检查 -> 草稿不改已保存进度 -> 同步占位 1/3 -> 补译 2/3 -> 豁免品牌同文 3/3。
+    // 1. 主流程与缺译/草稿/不可读边界：1/3 -> 关闭或豁免缺译检查 -> 草稿不改已保存进度 -> 同步占位 1/3 -> 补译 2/3 -> 豁免品牌同文 3/3。
     const first = await verifyProgress(
       [{ language: "fr", completed: 1, total: 3 }],
       { expectedEvaluatedCount: 2, verifyText: true },
@@ -214,7 +214,7 @@ testArtifactConsumer(
       ],
     );
 
-    // S5(a)：关闭 missing-translation 检查时不产生缺译诊断，其他检查仍影响进度（2/3）。
+    // 关闭 missing-translation 检查时不产生缺译诊断，其他检查仍影响进度（2/3）。
     const withoutMissing = await verifyProgress(
       [{ language: "fr", completed: 2, total: 3 }],
       {
@@ -231,7 +231,7 @@ testArtifactConsumer(
       [["same-text", "brand"]],
     );
 
-    // S5(b)：为缺译诊断建立豁免后，已豁免缺译诊断保留在报告中、该对象仍计入 total=3 分母，
+    // 为缺译诊断建立豁免后，已豁免缺译诊断保留在报告中、该对象仍计入 total=3 分母，
     // 其他检查（same-text）发现的问题仍影响进度（2/3）。
     const missingButton = first.diagnostics.find(
       ({ checkId, object }) =>
@@ -277,13 +277,13 @@ testArtifactConsumer(
     );
     await rm(resource("lioni.suppressions.yaml"), { force: true });
 
-    // S8：草稿送检与空候选后，再次全量检查已保存资源仍报告缺译 1/3。
+    // 草稿送检与空候选后，再次全量检查已保存资源仍报告缺译 1/3。
     await runNode("consumer.ts", ["draft"]);
     await verifyProgress([{ language: "fr", completed: 1, total: 3 }], {
       expectedEvaluatedCount: 2,
     });
 
-    // S9：已保存资源存在记录但正文不可读时，CLI 非零退出、显示原因且无最终进度。
+    // 已保存资源存在记录但正文不可读时，CLI 非零退出、显示原因且无最终进度。
     for (const args of [
       ["qa", "unavailable.config.ts"],
       ["qa", "unavailable.config.ts", "--output", "structured"],
@@ -454,7 +454,7 @@ testArtifactConsumer(
       "suppressed",
     );
 
-    // S6：同一检查在一对象产生 2 条诊断、另一对象 0 条诊断时：
+    // 同一检查在一对象产生 2 条诊断、另一对象 0 条诊断时的豁免绑定与冲突校验：
     // 任选一条建立豁免 -> 两条均 suppressed；同 ID 更新理由生效；换用另一 ID 冲突列出两 ID；零诊断执行拒绝建立。
     const toneAButtonDiag = severityInitial.diagnostics.find(
       ({ checkId, object }) => checkId === "tone-a" && object.key === "button",
@@ -615,7 +615,7 @@ testArtifactConsumer(
     ]);
     assert.match(zeroDiagSdk.stdout, /没有实际诊断，不能建立豁免/u);
 
-    // 4. S7：已保存资源同时存在有效豁免与全部五类失效豁免时，
+    // 4. 失效豁免核验：已保存资源同时存在有效豁免与全部五类失效豁免时，
     // 验证部分检查、草稿送检、单一语言、全项目完整检查与手工清理恢复。
     await writeFile(
       resource("lioni.suppressions.yaml"),

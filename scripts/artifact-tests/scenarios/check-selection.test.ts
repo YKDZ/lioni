@@ -299,7 +299,7 @@ testArtifactConsumer(
       assert.deepEqual(await eventsIn(root), []);
     }
 
-    // S11：读取范围不完整、prepare 抛错、check 抛错时，CLI 非零退出、指出范围/检查项/键/语言且不交付部分报告。
+    // 读取或执行失败场景：读取范围不完整、prepare 抛错、check 抛错时，CLI 非零退出、指出范围/检查项/键/语言且不交付部分报告。
     for (const [configFile, pattern] of [
       ["incomplete-read.config.ts", /fr.*partial-fr\.json/u],
       ["prepare-failure.config.ts", /prepare-boom.*save.*fr.*准备阶段缺材料/u],

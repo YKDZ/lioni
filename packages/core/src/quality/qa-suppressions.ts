@@ -136,10 +136,10 @@ export async function upsertQaSuppressionFromReport(
     if (check.checkId !== checkId) continue;
     for (const execution of check.executions) {
       if (!isPlainRecord(execution))
-        throw invalid("QA 报告中的候选执行结构无效。");
+        throw invalid("QA 报告中的检查执行结构无效。");
       if (execution.executionId !== executionId) continue;
       if (execution.checkId !== checkId)
-        throw invalid("候选执行的检查身份与报告分组不一致。");
+        throw invalid("检查执行的检查身份与报告分组不一致。");
       if (selectedExecution !== undefined)
         throw invalid("QA 报告中存在重复的检查与执行身份。");
       selectedCheck = check;
@@ -208,7 +208,7 @@ function hasMatchedDiagnostic(
       diagnostic.checkId !== checkId &&
       !requireCheckId
     )
-      throw invalid("候选诊断的检查身份与报告分组不一致。");
+      throw invalid("实际诊断的检查身份与报告分组不一致。");
     if (
       (requireCheckId
         ? diagnostic.checkId === checkId

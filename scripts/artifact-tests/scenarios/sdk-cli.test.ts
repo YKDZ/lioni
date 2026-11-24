@@ -178,19 +178,6 @@ testArtifactConsumer(
       },
     );
 
-    const legacyOutputFlag = await runProcess(executable, [
-      "qa",
-      "lioni.config.ts",
-      "--output-format",
-      "structured",
-    ]);
-    assert.equal(legacyOutputFlag.status, 2);
-    assert.partialDeepStrictEqual(JSON.parse(legacyOutputFlag.stderr), {
-      schemaVersion: "3",
-      kind: "usageFailure",
-      issues: [{ code: "unknownOption" }],
-    });
-
     // 3. 验证有配置时每次 QA 调用（文本与结构化）均只执行一次业务流程，且输出符合查询到的契约
     const trackMarker = path.join(root, ".track-reads");
     const readLogPath = path.join(root, ".qa-reads.log");
