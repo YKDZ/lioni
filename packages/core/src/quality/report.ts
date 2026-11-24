@@ -1,10 +1,11 @@
-import type { QualityRunResult } from "./qa.ts";
+import type { QualityObject, QualityRunResult } from "./qa.ts";
+
+type QualityReport = QualityRunResult<QualityObject, unknown>;
 
 export type QualityExecutionStatus =
   | "complete"
   | "incomplete"
   | "failed"
-  | "not-applicable"
   | "not-run";
 
 export type QualityReportDecisionStatus =
@@ -13,7 +14,6 @@ export type QualityReportDecisionStatus =
   | "incomplete"
   | "no-candidates"
   | "no-checks"
-  | "not-applicable"
   | "not-run";
 
 export type QualityReportDecision = {
@@ -27,7 +27,6 @@ const executionStatusText: Readonly<Record<QualityExecutionStatus, string>> = {
   complete: "完整",
   incomplete: "未完成",
   failed: "失败",
-  "not-applicable": "全部不适用",
   "not-run": "未执行",
 };
 
@@ -39,15 +38,15 @@ const severityText = {
 
 /**
  * 判断本次质量检查是否足以通过。
- * 只有存在可评估工作、执行完整且没有未豁免错误时才通过。
+ * 完整空项目可正常结束；有检查对象时仍须运行检查并通过现有错误门禁。
  */
-export function isQualityReportPassing(report: QualityRunResult): boolean {
+export function isQualityReportPassing(report: QualityReport): boolean {
   return decideQualityReport(report).passed;
 }
 
 /** 返回可供脚本按执行状态和未通过原因分支处理的结论。 */
 export function decideQualityReport(
-  report: QualityRunResult,
+  report: QualityReport,
 ): QualityReportDecision {
   const currentExecutionStatus = executionStatus(report);
   const activeErrorCount = report.diagnostics.filter(
@@ -59,10 +58,13 @@ export function decideQualityReport(
 
   if (currentExecutionStatus === "failed") status = "failed";
   else if (currentExecutionStatus === "incomplete") status = "incomplete";
-  else if (report.candidates.length === 0) status = "no-candidates";
-  else if (report.checks.length === 0) status = "no-checks";
-  else if (currentExecutionStatus === "not-applicable")
-    status = "not-applicable";
+  else if (
+    !report.readCoverage.associations.some((a) => a.subjectSelected) &&
+    report.progress === undefined
+  )
+    status = "no-candidates";
+  else if (report.checks.length === 0 && !isEmptyProjectRun(report))
+    status = "no-checks";
   else if (currentExecutionStatus === "not-run") status = "not-run";
   else if (activeErrorCount > 0) status = "failed";
   else status = "passed";
@@ -76,12 +78,12 @@ export function decideQualityReport(
 }
 
 /** 生成可供 CLI 与 SDK 脚本共用的简体中文质量报告。 */
-export function formatQualityReport(report: QualityRunResult): string {
+export function formatQualityReport(report: QualityReport): string {
   const activeDiagnostics = report.diagnostics.filter(
     ({ handling }) => handling.status === "active",
   );
-  const exceptedCount = report.diagnostics.length - activeDiagnostics.length;
-  const readLanguages = report.factCoverage.translations.map(
+  const suppressedCount = report.diagnostics.length - activeDiagnostics.length;
+  const readLanguages = report.readCoverage.translations.map(
     ({ language }) => language,
   );
   const candidateLanguages = report.candidates.map(({ language }) => language);
@@ -97,8 +99,12 @@ export function formatQualityReport(report: QualityRunResult): string {
     `执行状态：${executionStatusText[decision.executionStatus]}`,
     `语言范围：${readLanguages.length === 0 ? "无译文语言" : `读取 ${readLanguages.join("、")}`}；所选候选语言 ${candidateLanguages.length === 0 ? "无" : [...new Set(candidateLanguages)].join("、")}`,
     `检查项范围：${checkScope}`,
-    `候选范围：已选候选 ${report.candidates.length} 条`,
-    `有效问题：错误 ${countSeverity(activeDiagnostics, "error")}，警告 ${countSeverity(activeDiagnostics, "warning")}，提示 ${countSeverity(activeDiagnostics, "info")}；已豁免 ${exceptedCount}`,
+    `送检范围：${report.readCoverage.associations.filter((a) => a.subjectSelected).length} 项，其中 ${report.candidates.length} 项提供了译文`,
+    ...(report.progress ?? []).map(
+      ({ language, completed, total, percentage }) =>
+        `翻译进度 ${language}：${completed}/${total}${percentage === undefined ? "" : `（${formatPercentage(percentage, completed === total)}%）`}`,
+    ),
+    `有效问题：错误 ${countSeverity(activeDiagnostics, "error")}，警告 ${countSeverity(activeDiagnostics, "warning")}，提示 ${countSeverity(activeDiagnostics, "info")}；已豁免 ${suppressedCount}`,
   ];
 
   if (report.diagnostics.length === 0) {
@@ -114,54 +120,34 @@ export function formatQualityReport(report: QualityRunResult): string {
   return lines.join("\n");
 }
 
-function executionStatus(report: QualityRunResult): QualityExecutionStatus {
-  const readStatuses = [
-    report.factCoverage.source,
-    ...report.factCoverage.translations,
-  ];
-  const checkStatuses = report.checks.map(({ status, coverage }) => {
-    if (status === "failed" || coverage.failed > 0) return "failed";
-    if (status === "incomplete" || coverage.incomplete > 0) return "incomplete";
-    return status;
-  });
+/** 显示到小数点后两位，仅在所有检查对象均已完成时显示 100%。 */
+function formatPercentage(percentage: number, complete: boolean): number {
+  return complete ? 100 : Math.min(99.99, Number(percentage.toFixed(2)));
+}
 
+function isEmptyProjectRun(report: QualityReport): boolean {
+  return report.progress?.every(({ total }) => total === 0) === true;
+}
+
+function executionStatus(report: QualityReport): QualityExecutionStatus {
+  const readStatuses = [
+    report.readCoverage.source,
+    ...report.readCoverage.translations,
+  ];
   if (
     report.status === "failed" ||
-    checkStatuses.includes("failed") ||
-    readStatuses.some(
-      (read) =>
-        read.status === "failed" ||
-        read.scopes.some(({ enumeration }) => enumeration === "failed"),
-    )
+    readStatuses.some((read) => read.status === "failed")
   )
     return "failed";
-
   if (
-    report.status === "incomplete" ||
-    checkStatuses.includes("incomplete") ||
-    readStatuses.some(
-      (read) =>
-        read.status !== "complete" ||
-        read.scopes.some(({ enumeration }) => enumeration !== "complete"),
+    readStatuses.some((read) => read.status !== "complete") ||
+    report.readCoverage.associations.some(
+      (a) => a.subjectSelected && a.coverageStatus !== "complete",
     )
   )
     return "incomplete";
-
-  if (
-    report.candidates.length === 0 ||
-    report.checks.length === 0 ||
-    report.status === "not-run" ||
-    checkStatuses.includes("not-run")
-  )
-    return "not-run";
-
-  if (
-    report.status === "not-applicable" ||
-    (checkStatuses.length > 0 &&
-      checkStatuses.every((status) => status === "not-applicable"))
-  )
-    return "not-applicable";
-
+  if (report.status === "not-run" && isEmptyProjectRun(report))
+    return "complete";
   return report.status;
 }
 
@@ -183,11 +169,11 @@ function formatDiagnostic(
     diagnostic.location.key === undefined
       ? ""
       : `，位置键 ${diagnostic.location.key}`;
-  const exception =
-    diagnostic.handling.status === "excepted"
+  const suppression =
+    diagnostic.handling.status === "suppressed"
       ? `（已豁免：${diagnostic.handling.reason}）`
       : "";
-  return `- [${severityText[diagnostic.severity]}] ${diagnostic.checkId} ${diagnostic.object.key}（${language}，${range}${key}）：${diagnostic.message}${exception}`;
+  return `- [${severityText[diagnostic.severity]}] ${diagnostic.checkId} ${diagnostic.object.key}（${language}，${range}${key}）：${diagnostic.message}${suppression}`;
 }
 
 function displayRange(range: unknown): string {
@@ -196,52 +182,36 @@ function displayRange(range: unknown): string {
   return JSON.stringify(range) ?? "位置未知";
 }
 
-function unfinishedReasons(report: QualityRunResult): string[] {
+function unfinishedReasons(report: QualityReport): string[] {
   const reasons = new Set<string>();
-  addReadReasons(reasons, "原文", report.factCoverage.source);
-  for (const read of report.factCoverage.translations)
+  addReadReasons(reasons, "原文", report.readCoverage.source);
+  for (const read of report.readCoverage.translations)
     addReadReasons(reasons, `译文 ${read.language}`, read);
 
-  if (report.candidates.length === 0) reasons.add("本次没有候选可检查");
-  if (report.checkScope.configuredCount === 0) reasons.add("没有配置检查项");
-  if (
-    report.checks.length > 0 &&
-    report.checks.every(({ status }) => status === "not-applicable")
-  )
-    reasons.add("全部检查项均不适用");
-
-  for (const check of report.checks) {
-    const checkStatus = checkExecutionStatus(check);
-    if (checkStatus === "complete") continue;
-
-    if (check.issues.length === 0) {
+  for (const association of report.readCoverage.associations) {
+    if (
+      association.subjectSelected &&
+      association.coverageStatus !== "complete"
+    )
       reasons.add(
-        `检查项 ${check.checkId}：${executionStatusText[checkStatus]}`,
+        `译文 ${association.language} 的 ${association.sourceKey} 未完整读取`,
       );
-      continue;
-    }
-    for (const issue of check.issues)
-      reasons.add(`检查项 ${check.checkId}：${issue.message}`);
   }
-
+  for (const check of report.checks) {
+    for (const execution of check.executions) {
+      if (execution.status === "failed")
+        reasons.add(
+          `检查项 ${check.checkId}（${execution.language}，${execution.sourceKey}）：${execution.error ?? "检查失败"}`,
+        );
+    }
+  }
   if (
-    report.status === "failed" &&
-    report.checks.every(({ status }) => status !== "failed")
+    report.progress === undefined &&
+    !report.readCoverage.associations.some((a) => a.subjectSelected)
   )
-    reasons.add("质量检查执行失败");
-  else if (
-    report.status === "incomplete" &&
-    report.checks.every(({ status }) => status !== "incomplete")
-  )
-    reasons.add("质量检查未完整完成");
-
-  if (
-    report.status === "not-run" &&
-    report.candidates.length > 0 &&
-    report.checks.length > 0
-  )
-    reasons.add("本次没有完成任何检查");
-
+    reasons.add("本次没有检查对象");
+  if (report.checkScope.configuredCount === 0 && !isEmptyProjectRun(report))
+    reasons.add("没有配置检查项");
   return [...reasons];
 }
 
@@ -249,8 +219,8 @@ function addReadReasons(
   reasons: Set<string>,
   label: string,
   read:
-    | QualityRunResult["factCoverage"]["source"]
-    | QualityRunResult["factCoverage"]["translations"][number],
+    | QualityRunResult["readCoverage"]["source"]
+    | QualityRunResult["readCoverage"]["translations"][number],
 ): void {
   const partialScopes = read.scopes.filter(
     ({ enumeration }) => enumeration !== "complete",
@@ -275,23 +245,4 @@ function addReadReasons(
   reasons.add(
     `${label}读取${status}${details.length === 0 ? "" : `：${details.join("；")}`}`,
   );
-}
-
-function statusForCheck(
-  status: QualityRunResult["status"],
-): QualityExecutionStatus {
-  if (status === "not-applicable") return "not-applicable";
-  if (status === "not-run") return "not-run";
-  if (status === "incomplete") return "incomplete";
-  if (status === "failed") return "failed";
-  return "complete";
-}
-
-function checkExecutionStatus(
-  check: QualityRunResult["checks"][number],
-): QualityExecutionStatus {
-  if (check.status === "failed" || check.coverage.failed > 0) return "failed";
-  if (check.status === "incomplete" || check.coverage.incomplete > 0)
-    return "incomplete";
-  return statusForCheck(check.status);
 }

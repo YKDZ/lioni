@@ -1,14 +1,14 @@
 /** Node.js 文件适配器与资源读取入口。 */
 export {
   createDefaultDirectoryQualityCheckResultCache,
-  createDefaultQualityExceptionStore,
+  createDefaultQaSuppressionStore,
   createFileComparisonBaselineStore,
   createDirectoryQualityCheckResultCache,
-  createFileQualityExceptionStore,
+  createFileQaSuppressionStore,
   createFileUpdatePlanStore,
   loadConfig,
   resolveDefaultQualityCheckResultCacheDirectory,
-  resolveDefaultQualityExceptionFilePath,
+  resolveDefaultQaSuppressionFilePath,
 } from "@lioni/core/node";
 export { loadTermbaseYaml } from "@lioni/terminology/node";
 export type { UpdatePlanStore } from "@lioni/core/node";

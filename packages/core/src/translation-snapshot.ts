@@ -1,13 +1,12 @@
+import { readStatus } from "./read-coverage.ts";
 import type {
-  ActualTranslationFact,
-  CoverageStatus,
-  EnumerationCompleteness,
-  SourceUnitFact,
+  Translation,
+  SourceUnit,
   TranslationAdapter,
   TranslationIdentity,
   TranslationRead,
-  TranslationReadFact,
-  TranslationReadScopeFact,
+  TranslationReadCoverage,
+  TranslationReadScopeCoverage,
   TranslationUnitInput,
 } from "./index.ts";
 import { isRecord } from "./object-guards.ts";
@@ -18,9 +17,9 @@ import {
   validateWithStandardSchema,
 } from "./standard-schema.ts";
 
-export type TranslationFactsSnapshot<TTranslation, TBody, TUnavailable> = {
-  readonly reads: readonly TranslationReadFact[];
-  readonly records: readonly ActualTranslationFact<
+export type TranslationSnapshot<TTranslation, TBody, TUnavailable> = {
+  readonly reads: readonly TranslationReadCoverage[];
+  readonly records: readonly Translation<
     TTranslation,
     TBody,
     TUnavailable
@@ -76,7 +75,7 @@ export function validateTranslationAdapterConfig(translations: unknown): void {
 }
 
 /** 按给定原文单元读取并验证译文；空集合可用于独立目标身份操作。 */
-export async function readTranslationFacts<
+export async function readTranslationSnapshot<
   TUnit extends TranslationUnitInput,
   TTranslation,
   TBody,
@@ -85,12 +84,12 @@ export async function readTranslationFacts<
   adapter:
     | TranslationAdapter<TUnit, TTranslation, TBody, TUnavailable>
     | undefined,
-  sourceUnits: readonly SourceUnitFact<TUnit>[],
+  sourceUnits: readonly SourceUnit<TUnit>[],
   languages: readonly string[] = adapter?.languages ?? [],
-): Promise<TranslationFactsSnapshot<TTranslation, TBody, TUnavailable>> {
+): Promise<TranslationSnapshot<TTranslation, TBody, TUnavailable>> {
   const translations = {
-    reads: [] as TranslationReadFact[],
-    records: [] as ActualTranslationFact<TTranslation, TBody, TUnavailable>[],
+    reads: [] as TranslationReadCoverage[],
+    records: [] as Translation<TTranslation, TBody, TUnavailable>[],
   };
   if (adapter === undefined) return translations;
   validateTranslationAdapterConfig(adapter);
@@ -107,7 +106,7 @@ export async function readTranslationFacts<
     }
     if (errorMessage === undefined) validateTranslationRead(read);
 
-    const scopes: TranslationReadScopeFact[] = [];
+    const scopes: TranslationReadScopeCoverage[] = [];
     for (const [scopeIndex, scope] of (read?.scopes ?? []).entries()) {
       const translationIndexes: number[] = [];
       for (const record of scope.records) {
@@ -143,7 +142,7 @@ export async function readTranslationFacts<
           );
           translations.records.push({
             ...fact,
-            translation,
+            record: translation,
             identity,
             content,
             bodyAvailability: "available",
@@ -173,7 +172,7 @@ export async function readTranslationFacts<
           );
           translations.records.push({
             ...fact,
-            translation,
+            record: translation,
             identity,
             bodyAvailability: "unavailable",
           });
@@ -244,20 +243,6 @@ function invalidTranslationRead(message: string): never {
   );
 }
 
-function readStatus(
-  scopes: readonly { readonly enumeration: EnumerationCompleteness }[],
-  errorMessage?: string,
-): CoverageStatus {
-  if (
-    errorMessage !== undefined ||
-    scopes.some(({ enumeration }) => enumeration === "failed")
-  )
-    return "failed";
-  if (scopes.length === 0) return "notRead";
-  return scopes.every(({ enumeration }) => enumeration === "complete")
-    ? "complete"
-    : "incomplete";
-}
 
 function readTranslationIdentity(
   value: unknown,

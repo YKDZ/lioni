@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  analyzeQuality,
-  createQualityException,
+  runQa,
+  createQaSuppression,
   defineChecker,
   defineConfig,
   type QualityCheckDefinition,
-  type QualityCheckOutcome,
-  type QualityExceptionStore,
+  type QualityFinding,
+  type QaSuppressionStore,
   type QualityObject,
 } from "../src/index.ts";
 import {
@@ -33,7 +33,7 @@ const candidates = [{ sourceKey: "hello", language: "fr", content: "Bonjour" }];
 
 function configFor(
   checks: readonly Checker[],
-  exceptionStore?: QualityExceptionStore,
+  suppressionStore?: QaSuppressionStore,
 ) {
   return defineConfig({
     source: {
@@ -68,114 +68,29 @@ function configFor(
     },
     quality: {
       checks,
-      ...(exceptionStore === undefined ? {} : { exceptionStore }),
+      ...(suppressionStore === undefined ? {} : { suppressionStore }),
     },
   });
 }
 
-const complete = {
-  status: "complete",
-  diagnostics: [],
-  issues: [],
-  coverage: {
-    selected: 1,
-    evaluated: 1,
-    notApplicable: 0,
-    incomplete: 0,
-    failed: 0,
-  },
-} satisfies QualityCheckOutcome;
-
-void test("按最终输入指纹为无诊断的 not-applicable 执行应用例外", async () => {
-  const checker = defineChecker.withTypes<Unit, Translation, string, never>()({
-    id: "scope-specific-check",
-    version: "scope-specific-v1",
-    inputSchema: schemaFromExamples(""),
-    prepare: ({ candidate }) => ({
-      status: "ready",
-      input: candidate.content,
-    }),
-    check(input) {
-      assert.equal(input, "Bonjour");
-      return {
-        status: "not-applicable",
-        diagnostics: [],
-        issues: [],
-        coverage: {
-          selected: 1,
-          evaluated: 0,
-          notApplicable: 1,
-          incomplete: 0,
-          failed: 0,
-        },
-      };
-    },
-  });
-  const first = await analyzeQuality(configFor([checker]), { candidates });
-  const execution = first.checks[0]?.executions[0];
-  assert.ok(execution?.inputFingerprint);
-  const exception = createQualityException({
-    id: "allow-scope-specific",
-    reason: "该检查结果不适用于此候选。",
-    execution,
-  });
-  const store: QualityExceptionStore = {
-    async load() {
-      return [exception];
-    },
-    async upsert() {},
-  };
-
-  const result = await analyzeQuality(configFor([checker], store), {
-    candidates,
-  });
-
-  assert.deepEqual(result.diagnostics, []);
-  assert.deepEqual(result.exceptionApplicability, [
-    {
-      exceptionId: "allow-scope-specific",
-      checkId: "scope-specific-check",
-      sourceKey: "hello",
-      language: "fr",
-      executionId: 0,
-      candidateIndex: 0,
-      status: "applicable",
-    },
-  ]);
-});
-
-void test("区分未配置检查、空候选与不适用结果，并拒绝重复 ID", async () => {
+void test("区分未配置检查、空候选与无诊断结果，并拒绝重复 ID", async () => {
   let checkCalls = 0;
   const checker = defineChecker.withTypes<Unit, Translation, string, never>()({
     id: "scope-check",
     version: "scope-check-v1",
     inputSchema: schemaFromExamples(""),
-    prepare: ({ candidate }) => ({
-      status: "ready",
-      input: candidate.content,
-    }),
+    prepare: ({ candidate }) => candidate?.content ?? "",
     check() {
       checkCalls += 1;
-      return {
-        status: "not-applicable",
-        diagnostics: [],
-        issues: [],
-        coverage: {
-          selected: 1,
-          evaluated: 0,
-          notApplicable: 1,
-          incomplete: 0,
-          failed: 0,
-        },
-      };
+      return [];
     },
   });
 
-  const noChecks = await analyzeQuality(configFor([]));
-  const noCandidates = await analyzeQuality(configFor([checker]), {
+  const noChecks = await runQa(configFor([]));
+  const noCandidates = await runQa(configFor([checker]), {
     candidates: [],
   });
-  const notApplicable = await analyzeQuality(configFor([checker]), {
+  const evaluated = await runQa(configFor([checker]), {
     candidates,
   });
 
@@ -183,13 +98,13 @@ void test("区分未配置检查、空候选与不适用结果，并拒绝重复
   assert.equal(noChecks.checkScope.configuredCount, 0);
   assert.equal(noCandidates.checks[0]?.executions.length, 0);
   assert.equal(checkCalls, 1);
-  assert.equal(notApplicable.checks[0]?.status, "not-applicable");
-  await assert.rejects(analyzeQuality(configFor([checker, checker])), {
+  assert.equal(evaluated.checks[0]?.status, "complete");
+  await assert.rejects(runQa(configFor([checker, checker])), {
     message: "QA 检查项 id scope-check 重复。",
   });
 });
 
-void test("例外豁免匹配执行的全部诊断并保留证据", async () => {
+void test("豁免匹配执行的全部诊断并保留证据", async () => {
   const makeDiagnostic = (value: string) => ({
     severity: "error" as const,
     object: { kind: "translation-unit", key: "hello", language: "fr" },
@@ -210,12 +125,9 @@ void test("例外豁免匹配执行的全部诊断并保留证据", async () => 
     id: "example-rule",
     version: "example-rule-v1",
     inputSchema: schemaFromExamples(""),
-    prepare: ({ candidate }) => ({
-      status: "ready",
-      input: candidate.content,
-    }),
-    check(): QualityCheckOutcome {
-      return { ...complete, diagnostics: [sourceDiagnostic, targetDiagnostic] };
+    prepare: ({ candidate }) => candidate?.content ?? "",
+    check(): ReadonlyArray<QualityFinding> {
+      return [sourceDiagnostic, targetDiagnostic];
     },
   });
   const independent = defineChecker.withTypes<
@@ -227,34 +139,28 @@ void test("例外豁免匹配执行的全部诊断并保留证据", async () => 
     id: "other-rule",
     version: "other-rule-v1",
     inputSchema: schemaFromExamples(""),
-    prepare: ({ candidate }) => ({
-      status: "ready",
-      input: candidate.content,
-    }),
-    check(): QualityCheckOutcome {
-      return {
-        ...complete,
-        diagnostics: [{ ...sourceDiagnostic, message: "独立检查仍需复核。" }],
-      };
+    prepare: ({ candidate }) => candidate?.content ?? "",
+    check(): ReadonlyArray<QualityFinding> {
+      return [{ ...sourceDiagnostic, message: "独立检查仍需复核。" }];
     },
   });
   const checks: readonly Checker[] = [review, independent];
-  const first = await analyzeQuality(configFor(checks), { candidates });
+  const first = await runQa(configFor(checks), { candidates });
   const execution = first.checks[0]?.executions[0];
   assert.ok(execution?.inputFingerprint);
-  const exception = createQualityException({
+  const suppression = createQaSuppression({
     id: "allow-reviewed-copy",
     reason: "该候选已经由维护者确认。",
     execution,
   });
-  const store: QualityExceptionStore = {
+  const store: QaSuppressionStore = {
     async load() {
-      return [exception];
+      return [suppression];
     },
     async upsert() {},
   };
 
-  const result = await analyzeQuality(configFor(checks, store), { candidates });
+  const result = await runQa(configFor(checks, store), { candidates });
 
   assert.deepEqual(
     result.diagnostics.map(({ checkId, handling, evidence }) => ({
@@ -266,8 +172,8 @@ void test("例外豁免匹配执行的全部诊断并保留证据", async () => 
       {
         checkId: "example-rule",
         handling: {
-          status: "excepted",
-          exceptionId: "allow-reviewed-copy",
+          status: "suppressed",
+          suppressionId: "allow-reviewed-copy",
           reason: "该候选已经由维护者确认。",
         },
         evidence: ["source marker"],
@@ -275,8 +181,8 @@ void test("例外豁免匹配执行的全部诊断并保留证据", async () => 
       {
         checkId: "example-rule",
         handling: {
-          status: "excepted",
-          exceptionId: "allow-reviewed-copy",
+          status: "suppressed",
+          suppressionId: "allow-reviewed-copy",
           reason: "该候选已经由维护者确认。",
         },
         evidence: ["target marker"],
@@ -288,5 +194,4 @@ void test("例外豁免匹配执行的全部诊断并保留证据", async () => 
       },
     ],
   );
-  assert.equal(result.exceptionApplicability[0]?.status, "applicable");
 });

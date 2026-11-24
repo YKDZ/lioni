@@ -2,14 +2,14 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
-  analyzeQuality,
+  runQa,
   DuplicateTranslationUnitKeyError,
   decideQualityReport,
   formatQualityReport,
-  readFacts,
+  readProjectSnapshot,
   previewUpdate,
   recordComparisonBaseline,
-  upsertQualityExceptionFromReport,
+  upsertQaSuppressionFromReport,
   update,
   type FrameworkConfig,
   type LanguageSelectionOptions,
@@ -92,7 +92,7 @@ const readStatusSchema = z.enum([
   "notRead",
 ]);
 
-const factsSchema = z.object({
+const projectSnapshotSchema = z.object({
   version: z.string(),
   source: z.object({
     version: z.string(),
@@ -146,7 +146,7 @@ const factsSchema = z.object({
             language: z.string(),
             key: z.string(),
           }),
-          translation: z.unknown(),
+          record: z.unknown(),
           content: z.unknown(),
           bodyAvailability: z.literal("available"),
         }),
@@ -159,7 +159,7 @@ const factsSchema = z.object({
             language: z.string(),
             key: z.string(),
           }),
-          translation: z.unknown(),
+          record: z.unknown(),
           bodyAvailability: z.literal("unavailable"),
         }),
       ]),
@@ -647,25 +647,25 @@ function createCliContract(identity: CliCommandIdentity) {
             read: {
               description: "源译事实",
               exitCode: 0,
-              schema: factsSchema,
-              text: (facts) =>
+              schema: projectSnapshotSchema,
+              text: (snapshot) =>
                 text.lines([
-                  `源译事实（已知 ${facts.source.units.length} 个原文）`,
-                  `事实版本：${facts.version}`,
-                  `原文读取：${readStatusText(facts.source.read.status)}；总数：${facts.source.totalUnitCount ?? "未知"}`,
-                  ...facts.source.read.scopes.map(
+                  `源译事实（已知 ${snapshot.source.units.length} 个原文）`,
+                  `事实版本：${snapshot.version}`,
+                  `原文读取：${readStatusText(snapshot.source.read.status)}；总数：${snapshot.source.totalUnitCount ?? "未知"}`,
+                  ...snapshot.source.read.scopes.map(
                     ({ range, enumeration, recordCount, error }) =>
                       `原文范围 ${rangeText(range)}：${enumerationText(enumeration)}，发现 ${recordCount} 条${error === undefined ? "" : `；${error}`}`,
                   ),
-                  ...facts.source.units.flatMap(
+                  ...snapshot.source.units.flatMap(
                     ({ key, unit, bodyAvailability }) => [
                       `- ${key}（正文${bodyAvailability === "available" ? "可用" : "不可用"}）`,
                       `  ${JSON.stringify(unit) ?? "null"}`,
                     ],
                   ),
-                  ...(facts.translations.reads.length === 0
+                  ...(snapshot.translations.reads.length === 0
                     ? ["目标语言：未配置"]
-                    : facts.translations.reads.flatMap(
+                    : snapshot.translations.reads.flatMap(
                         ({ language, status, scopes, error }) => [
                           `目标语言 ${language} 读取：${readStatusText(status)}${error === undefined ? "" : `；${error}`}`,
                           ...scopes.map(
@@ -680,11 +680,11 @@ function createCliContract(identity: CliCommandIdentity) {
                           ),
                         ],
                       )),
-                  ...facts.translations.records.map(
-                    ({ index, language, translation, bodyAvailability }) =>
-                      `译文 #${index}（${language}，正文${bodyAvailability === "available" ? "可用" : "不可用"}）：${JSON.stringify(translation) ?? "null"}`,
+                  ...snapshot.translations.records.map(
+                    ({ index, language, record, bodyAvailability }) =>
+                      `译文 #${index}（${language}，正文${bodyAvailability === "available" ? "可用" : "不可用"}）：${JSON.stringify(record) ?? "null"}`,
                   ),
-                  ...facts.associations.map(
+                  ...snapshot.associations.map(
                     ({
                       sourceKey,
                       language,
@@ -723,38 +723,8 @@ function createCliContract(identity: CliCommandIdentity) {
         async handler({ input, outcome }) {
           try {
             const config = await loadConfig(input.config);
-            const facts = await readFacts(config, languageSelection(input));
-            return outcome.data.read({
-              ...facts,
-              source: {
-                ...facts.source,
-                read: {
-                  ...facts.source.read,
-                  scopes: facts.source.read.scopes.map((scope) => ({
-                    ...scope,
-                  })),
-                },
-                units: facts.source.units.map((unit) => ({ ...unit })),
-              },
-              translations: {
-                reads: facts.translations.reads.map((read) => ({
-                  ...read,
-                  scopes: read.scopes.map((scope) => ({
-                    ...scope,
-                    covers: [...scope.covers],
-                    translationIndexes: [...scope.translationIndexes],
-                  })),
-                })),
-                records: facts.translations.records.map((record) => ({
-                  ...record,
-                })),
-              },
-              associations: facts.associations.map((association) => ({
-                ...association,
-                scopeIndexes: [...association.scopeIndexes],
-                translationIndexes: [...association.translationIndexes],
-              })),
-            });
+            const snapshot = await readProjectSnapshot(config, languageSelection(input));
+            return outcome.data.read(projectSnapshotSchema.parse(snapshot));
           } catch (error) {
             if (error instanceof DuplicateTranslationUnitKeyError)
               return outcome.failure.duplicateIdentity({
@@ -768,17 +738,17 @@ function createCliContract(identity: CliCommandIdentity) {
           }
         },
       }),
-      exceptions: {
+      suppressions: {
         kind: "commandGroup",
         parent: "cli",
-        name: "exceptions",
-        description: "从 QA 报告维护例外记录。",
+        name: "suppressions",
+        description: "从 QA 报告维护豁免记录。",
       },
-      ...define.command("exceptionsUpsert")({
+      ...define.command("suppressionsUpsert")({
         kind: "command",
-        parent: "exceptions",
+        parent: "suppressions",
         name: "upsert",
-        description: "从已有 QA 报告创建或更新一条例外。",
+        description: "从已有 QA 报告创建或更新一条豁免。",
         fields: {
           config: { kind: "positional", description: "宿主配置文件路径" },
           report: {
@@ -798,12 +768,12 @@ function createCliContract(identity: CliCommandIdentity) {
           id: {
             kind: "valueOption",
             longOption: "--id",
-            description: "例外身份",
+            description: "豁免身份",
           },
           reason: {
             kind: "valueOption",
             longOption: "--reason",
-            description: "例外理由",
+            description: "豁免理由",
           },
         },
         input: z.object({
@@ -818,7 +788,7 @@ function createCliContract(identity: CliCommandIdentity) {
           kind: "data",
           variants: {
             upserted: {
-              description: "例外已写入配置选定的存储",
+              description: "豁免已写入配置选定的存储",
               exitCode: 0,
               schema: z.object({
                 id: z.string(),
@@ -829,18 +799,18 @@ function createCliContract(identity: CliCommandIdentity) {
               }),
               text: ({ id, checkId, sourceKey, language, executionId }) =>
                 text.line(
-                  `例外 ${id} 已更新：${checkId} ${sourceKey} → ${language}（执行 ${executionId}）。`,
+                  `豁免 ${id} 已更新：${checkId} ${sourceKey} → ${language}（执行 ${executionId}）。`,
                 ),
             },
           },
         },
         failures: {
           upsertFailed: {
-            description: "从 QA 报告创建或更新例外失败",
+            description: "从 QA 报告创建或更新豁免失败",
             exitCode: 1,
             schema: z.object({ path: z.string(), message: z.string() }),
             text: ({ path: reportPath, message }) =>
-              text.line(`根据报告 ${reportPath} 更新 QA 例外失败：${message}`),
+              text.line(`根据报告 ${reportPath} 更新 QA 豁免失败：${message}`),
           },
         },
         async handler({ input, outcome }) {
@@ -852,10 +822,10 @@ function createCliContract(identity: CliCommandIdentity) {
             const configPath = path.resolve(process.cwd(), input.config);
             const config = await loadConfig(configPath);
             const executionId = Number(input.executionId);
-            const store = config.quality?.exceptionStore;
+            const store = config.quality?.suppressionStore;
             if (store === undefined)
-              throw new TypeError("配置未提供 QA 例外存储。");
-            const exception = await upsertQualityExceptionFromReport({
+              throw new TypeError("配置未提供 QA 豁免存储。");
+            const suppression = await upsertQaSuppressionFromReport({
               report,
               checkId: input.checkId,
               executionId,
@@ -864,10 +834,10 @@ function createCliContract(identity: CliCommandIdentity) {
               store,
             });
             return outcome.data.upserted({
-              id: exception.id,
-              checkId: exception.checkId,
-              sourceKey: exception.sourceKey,
-              language: exception.language,
+              id: suppression.id,
+              checkId: suppression.checkId,
+              sourceKey: suppression.sourceKey,
+              language: suppression.language,
               executionId,
             });
           } catch (error) {
@@ -922,13 +892,16 @@ function createCliContract(identity: CliCommandIdentity) {
             description: "读取事实或执行质量检查失败",
             exitCode: 1,
             schema: z.object({ message: z.string() }),
-            text: ({ message }) => text.line(`质量检查失败：${message}`),
+            text: ({ message }) => {
+              const [first, ...details] = message.split(/\r?\n/u);
+              return text.lines([`质量检查失败：${first}`, ...details]);
+            },
           },
         },
         async handler({ input, outcome }) {
           try {
             const config = await loadConfig(input.config);
-            const result = await analyzeQuality(config, {
+            const result = await runQa(config, {
               ...languageSelection(input),
               ...qualityCheckSelection(input),
             });

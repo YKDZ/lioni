@@ -4,18 +4,18 @@ import path from "node:path";
 
 import { isRecord } from "../object-guards.ts";
 import {
-  isCacheableQualityCheckOutcome,
-  type CacheableQualityCheckOutcome,
+  isCachedQualityFindings,
+  type CachedQualityFindings,
   type QualityCheckResultCache,
 } from "../quality/quality-cache.ts";
 import { stableStringify } from "../stable-json.ts";
 
-const QUALITY_CACHE_ENTRY_FORMAT = "lioni.qa-cache-entry/v1" as const;
+const QUALITY_CACHE_ENTRY_FORMAT = "lioni.qa-cache-entry/v2" as const;
 
 type QualityCacheEntry = {
   readonly format: typeof QUALITY_CACHE_ENTRY_FORMAT;
   readonly key: string;
-  readonly outcome: CacheableQualityCheckOutcome;
+  readonly outcome: CachedQualityFindings;
   readonly contentDigest: string;
 };
 
@@ -51,7 +51,7 @@ export function createDirectoryQualityCheckResultCache(
     },
 
     async set(key, outcome) {
-      if (!isCacheKey(key) || !isCacheableQualityCheckOutcome(outcome)) return;
+      if (!isCacheKey(key) || !isCachedQualityFindings(outcome)) return;
 
       const entry: QualityCacheEntry = {
         format: QUALITY_CACHE_ENTRY_FORMAT,
@@ -112,16 +112,13 @@ function isQualityCacheEntry(
     isRecord(value) &&
     value.format === QUALITY_CACHE_ENTRY_FORMAT &&
     value.key === expectedKey &&
-    isCacheableQualityCheckOutcome(value.outcome) &&
+    isCachedQualityFindings(value.outcome) &&
     isContentDigest(value.contentDigest) &&
     value.contentDigest === contentDigest(value.key, value.outcome)
   );
 }
 
-function contentDigest(
-  key: string,
-  outcome: CacheableQualityCheckOutcome,
-): string {
+function contentDigest(key: string, outcome: CachedQualityFindings): string {
   const content = stableStringify({ key, outcome });
   return `sha256:${createHash("sha256").update(content).digest("hex")}`;
 }

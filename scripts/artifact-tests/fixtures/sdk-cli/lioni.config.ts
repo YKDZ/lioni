@@ -22,8 +22,7 @@ const textOf = (body: Body): string =>
 
 const numberPreparation = (
   input: CheckerPrepareInput<Unit, Translation, Body, never>,
-): NumberCheckerPreparation => ({
-  status: "ready",
+): NumberCheckerPreparation => input.candidate === null ? null : ({
   source: textOf(input.sourceUnit.unit.source),
   target: textOf(input.candidate.content),
 });
@@ -38,7 +37,7 @@ const directNumberInput: NumberTextInput = {
   targetLocation: { language: "fr", range: "fr.json", key: "catalog" },
   targetContent: { text: "Utiliser 2 fichiers" },
 };
-if (compareNumberText(directNumberInput).status !== "complete")
+if (compareNumberText(directNumberInput).length !== 0)
   throw new Error("直接数字比较应当完成。");
 
 // 同一公开配置组合字符串和对象正文，验证发布声明仍允许宿主定义资源形态。

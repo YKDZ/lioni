@@ -4,11 +4,11 @@ import os from "node:os";
 import path from "node:path";
 
 import {
-  analyzeQuality,
+  runQa,
   createQualityProfiler,
   createNumberChecker,
   defineChecker,
-  readFacts,
+  readProjectSnapshot,
   StandardSchemaContractError,
 } from "@lioni/lioni";
 import { createDirectoryQualityCheckResultCache } from "@lioni/lioni/node";
@@ -16,13 +16,13 @@ import * as z from "zod";
 
 import config, { createConfig } from "./lioni.config.ts";
 
-const facts = await readFacts(config);
-assert.equal(facts.source.units.length, 2);
-assert.equal(facts.source.read.status, "complete");
+const snapshot = await readProjectSnapshot(config);
+assert.equal(snapshot.source.units.length, 2);
+assert.equal(snapshot.source.read.status, "complete");
 assert.deepEqual(
-  facts.translations.records.map(({ language, translation, identity }) => ({
+  snapshot.translations.records.map(({ language, record, identity }) => ({
     language,
-    id: translation.id,
+    id: record.id,
     identity,
   })),
   [
@@ -49,7 +49,7 @@ assert.deepEqual(
   ],
 );
 assert.deepEqual(
-  facts.associations.map(
+  snapshot.associations.map(
     ({ sourceKey, language, status, coverageStatus, translationIndexes }) => ({
       sourceKey,
       language,
@@ -89,14 +89,14 @@ assert.deepEqual(
     },
   ],
 );
-const quality = await analyzeQuality(config);
+const quality = await runQa(config);
 assert.equal(quality.status, "complete");
 assert.equal(quality.diagnostics.length, 1);
 const defaultNumberConfig = {
   ...config,
   quality: { ...config.quality, checks: [createNumberChecker()] },
 };
-const defaultNumberQuality = await analyzeQuality(defaultNumberConfig, {
+const defaultNumberQuality = await runQa(defaultNumberConfig, {
   candidates: [
     { sourceKey: "catalog", language: "fr", content: "Enregistrer 2 fichiers" },
   ],
@@ -122,26 +122,26 @@ try {
       resultCache: createDirectoryQualityCheckResultCache(cacheDirectory),
     },
   });
-  assert.deepEqual(await analyzeQuality(cachedConfig()), quality);
-  assert.deepEqual(await analyzeQuality(cachedConfig()), quality);
+  assert.deepEqual(await runQa(cachedConfig()), quality);
+  assert.deepEqual(await runQa(cachedConfig()), quality);
 } finally {
   await rm(cacheDirectory, { recursive: true, force: true });
 }
-const selected = await readFacts(config, { languages: ["de"] });
+const selected = await readProjectSnapshot(config, { languages: ["de"] });
 assert.deepEqual(
   selected.translations.reads.map(({ language }) => language),
   ["de"],
 );
-const selectedQuality = await analyzeQuality(config, { languages: ["de"] });
+const selectedQuality = await runQa(config, { languages: ["de"] });
 assert.equal(selectedQuality.status, "complete");
 assert.equal(selectedQuality.diagnostics.length, 0);
 assert.ok(
   selectedQuality.candidates.every(({ language }) => language === "de"),
 );
-process.stdout.write(JSON.stringify(facts));
+process.stdout.write(JSON.stringify(snapshot));
 
 const profiler = createQualityProfiler({ slowestCandidates: 1 });
-assert.deepEqual(await analyzeQuality(config, { profiler }), quality);
+assert.deepEqual(await runQa(config, { profiler }), quality);
 const evidence = profiler.report();
 assert.equal(evidence.status, "completed");
 assert.ok(evidence.totalMs >= 0);
@@ -168,25 +168,14 @@ const invalidDataConfig = {
         version: "1",
         inputSchema: z.string(),
         load: ({ qualityData }) => qualityData.read(invalidDependencyData),
-        prepare: () => ({ status: "not-applicable" }),
-        check: () => ({
-          status: "complete",
-          diagnostics: [],
-          issues: [],
-          coverage: {
-            selected: 1,
-            evaluated: 1,
-            notApplicable: 0,
-            incomplete: 0,
-            failed: 0,
-          },
-        }),
+        prepare: () => "",
+        check: () => ([]),
       }),
     ],
   },
 };
 await assert.rejects(
-  analyzeQuality(invalidDataConfig, { profiler: interrupted }),
+  runQa(invalidDataConfig, { profiler: interrupted }),
   (error: unknown) =>
     error instanceof StandardSchemaContractError &&
     error.kind === "invalid-json",

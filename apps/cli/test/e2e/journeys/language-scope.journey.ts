@@ -26,25 +26,17 @@ const check = defineChecker({
   id: "selected-language",
   version: "1",
   inputSchema: z.object({ sourceKey: z.string(), language: z.string() }),
-  prepare({ candidate }) {
-    return {
-      status: "ready",
-      input: { sourceKey: candidate.sourceKey, language: candidate.language },
-    };
+  prepare({ association }) {
+    return { sourceKey: association.sourceKey, language: association.language };
   },
   check(input) {
-    return {
-      status: "complete",
-      diagnostics: [{
-        severity: "warning",
-        object: { kind: "translation-unit", key: input.sourceKey, language: input.language },
-        location: { language: input.language, range: input.language + ".json" },
-        message: "已检查所选语言。",
-        evidence: [],
-      }],
-      issues: [],
-      coverage: { selected: 1, evaluated: 1, notApplicable: 0, incomplete: 0, failed: 0 },
-    };
+    return [{
+      severity: "warning",
+      object: { kind: "translation-unit", key: input.sourceKey, language: input.language },
+      location: { language: input.language, range: input.language + ".json" },
+      message: "已检查所选语言。",
+      evidence: [],
+    }];
   },
 });
 
@@ -135,12 +127,12 @@ export default defineConfig({
         env: { READ_LOG: "unknown.log" },
       },
       {
-        name: "QA 只检查所选语言的候选",
+        name: "QA 覆盖所选语言的全部原文键",
         args: [
           "qa",
           "lioni.config.ts",
           "--language",
-          "de",
+          "fr",
           "--output-format",
           "structured",
         ],
@@ -172,6 +164,18 @@ export default defineConfig({
       ),
       ["fr"],
     );
+    assert.deepEqual(
+      selected.associations.map(
+        ({ sourceKey, status }: { sourceKey: string; status: string }) => [
+          sourceKey,
+          status,
+        ],
+      ),
+      [
+        ["save", "matched"],
+        ["submit", "missing"],
+      ],
+    );
     assert.deepEqual(multiple, all);
     assert.equal(results[3]?.exitCode, 1);
     assert.match(results[3]?.stderr ?? "", /es/u);
@@ -180,8 +184,11 @@ export default defineConfig({
       quality.candidates.map(
         (candidate: { language: string }) => candidate.language,
       ),
-      ["de", "de"],
+      ["fr"],
     );
+    assert.deepEqual(quality.progress, [
+      { language: "fr", completed: 0, total: 2, percentage: 0 },
+    ]);
     assert.equal(quality.diagnostics.length, 2);
     const plan = dataOf(results[5]);
     assert.equal(plan.items.length, 2);
@@ -212,7 +219,7 @@ export default defineConfig({
       ["all.log", ["fr", "de"]],
       ["selected.log", ["fr"]],
       ["multiple.log", ["fr", "de"]],
-      ["qa.log", ["de"]],
+      ["qa.log", ["fr"]],
       ["preview.log", ["fr"]],
     ] as const) {
       const reads = await readFile(path.join(context.workDir, file), "utf8");

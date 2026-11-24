@@ -1,7 +1,6 @@
 import type {
-  QualityCheckOutcome,
+  QualityFinding,
   QualityEvidence,
-  QualityIssue,
   QualityLocation,
   QualityObject,
   TranslationUnitInput,
@@ -60,21 +59,23 @@ export function createVueI18nMessageCheck<
   readonly check: (
     projection: VueI18nMessageProjection,
     prepared: TPrepared,
-  ) => QualityCheckOutcome;
+  ) => readonly QualityFinding[];
 }) {
   assertVueI18nPreparer(options.adapter);
   const inputSchema: import("@lioni/core").StandardSchemaV1<{
     readonly projection: VueI18nMessageProjection;
     readonly prepared: TPrepared;
-  }> = {
+  } | null> = {
     "~standard": {
       version: 1,
       vendor: "lioni-vue-i18n",
       async validate(value) {
+        if (value === null) return { value: null };
         if (
           !value ||
           typeof value !== "object" ||
           !("projection" in value) ||
+          value.projection === null ||
           !("prepared" in value)
         )
           return { issues: [{ message: "Vue I18n 检查输入缺少消息或依据。" }] };
@@ -96,56 +97,45 @@ export function createVueI18nMessageCheck<
     id: options.id,
     version: options.version,
     inputSchema,
-    load: async ({ facts, memo, qualityData }) =>
+    load: async ({ snapshot, memo, qualityData }) =>
       readVueI18nPolicies(
-        await qualityData.read(options.loadPolicies, facts, memo),
+        await qualityData.read(options.loadPolicies, snapshot, memo),
         options.policyRequirements,
       ),
     prepare: async (input) => {
-      const policy = input.loaded.get(input.candidate.language);
-      if (!policy) return { status: "not-applicable" };
-      const prepared = await prepareVueI18nMessage(input, options.adapter);
-      if (prepared.status !== "ready") return prepared;
-      const projection = prepared.input;
+      const policy = input.loaded.get(input.association.language);
+      if (!policy) return null;
+      const projection = await prepareVueI18nMessage(input, options.adapter);
+      if (projection === null) return null;
       if (options.requiresTarget) {
-        if (projection.target.status === "missing")
-          return { status: "not-applicable" };
+        if (projection.target.status === "missing") return null;
         if (projection.target.status === "unavailable")
-          return incompleteSelection(
-            "targetUnavailable",
-            "目标消息正文不可用，检查未执行。",
-          );
+          throw new Error("目标消息正文不可用，检查未执行。");
       }
       if (options.requiresSource) {
-        if (projection.source.status === "absent")
-          return { status: "not-applicable" };
+        if (projection.source.status === "absent") return null;
         if (
           projection.source.status === "unavailable" ||
           input.sourceUnit.bodyAvailability !== "available"
         )
-          return incompleteSelection(
-            "sourceUnavailable",
-            "原文正文不可用，检查未执行。",
-          );
+          throw new Error("原文正文不可用，检查未执行。");
       }
       if (
         options.targetMustContainText &&
         (projection.target.status !== "available" ||
           !projection.target.text.trim())
       )
-        return { status: "not-applicable" };
-      if (options.applies && !options.applies(projection, policy))
-        return { status: "not-applicable" };
+        return null;
+      if (options.applies && !options.applies(projection, policy)) return null;
       return {
-        status: "ready",
-        input: {
-          projection,
-          prepared: options.prepare(projection, policy, input.memo),
-        },
+        projection,
+        prepared: options.prepare(projection, policy, input.memo),
       };
     },
-    check: ({ projection, prepared }) =>
-      options.check(projection, prepared as TPrepared),
+    check: (input) =>
+      input === null
+        ? []
+        : options.check(input.projection, input.prepared as TPrepared),
   });
 }
 
@@ -175,54 +165,6 @@ export function messageLocation(
   };
 }
 
-export function completeOutcome(
-  diagnostics: QualityCheckOutcome["diagnostics"],
-): QualityCheckOutcome {
-  return {
-    status: "complete",
-    diagnostics,
-    issues: [],
-    coverage: {
-      selected: 1,
-      evaluated: 1,
-      notApplicable: 0,
-      incomplete: 0,
-      failed: 0,
-    },
-  };
-}
-
-export function incompleteOutcome(
-  issues: readonly QualityIssue[],
-  diagnostics: QualityCheckOutcome["diagnostics"] = [],
-): QualityCheckOutcome {
-  return {
-    status: "incomplete",
-    diagnostics,
-    issues,
-    coverage: {
-      selected: 1,
-      evaluated: 0,
-      notApplicable: 0,
-      incomplete: 1,
-      failed: 0,
-    },
-  };
-}
-
-export function issue(
-  code: string,
-  message: string,
-  projection: VueI18nMessageProjection,
-): QualityIssue {
-  return {
-    code,
-    message,
-    object: translationObject(projection),
-    location: projection.locations.target,
-  };
-}
-
 export function finding(
   projection: VueI18nMessageProjection,
   code: string,
@@ -236,12 +178,5 @@ export function finding(
     location: messageLocation(projection, span),
     message,
     evidence,
-  };
-}
-
-function incompleteSelection(code: string, message: string) {
-  return {
-    status: "incomplete" as const,
-    issue: { code, message },
   };
 }

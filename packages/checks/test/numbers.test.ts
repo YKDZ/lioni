@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
-  analyzeQuality,
-  createQualityException,
+  runQa,
+  createQaSuppression,
   defineConfig,
   QualityCheckerContractError,
   type BodyAvailability,
   type JsonValue,
-  type SemanticEditCandidate,
+  type TranslationCandidate,
 } from "@lioni/core";
 import { z } from "zod";
 
@@ -169,7 +169,7 @@ function defaultNumberConfigFor(source: string, target: string) {
 }
 
 async function check(source: string, target: string) {
-  return analyzeQuality(configFor(source, target));
+  return runQa(configFor(source, target));
 }
 
 void describe("阿拉伯数字对应检查", () => {
@@ -181,7 +181,7 @@ void describe("阿拉伯数字对应检查", () => {
   });
 
   void it("用默认工厂检查字符串正文并报告资源位置与证据", async () => {
-    const result = await analyzeQuality(
+    const result = await runQa(
       defaultNumberConfigFor("Wait 12 seconds", "Attendre 21 secondes"),
     );
 
@@ -252,7 +252,7 @@ void describe("阿拉伯数字对应检查", () => {
 
   void it("检查未保存的候选正文，并保留原文与候选证据", async () => {
     const config = configFor("Wait 12 seconds", "Attendre 12 secondes");
-    const result = await analyzeQuality(config, {
+    const result = await runQa(config, {
       candidates: [
         {
           sourceKey: "hash:message",
@@ -278,17 +278,17 @@ void describe("阿拉伯数字对应检查", () => {
     );
   });
 
-  void it("缺译没有候选时不执行，明确提供候选后可检查和报告空内容", async () => {
+  void it("缺少候选时数字检查通过，显式的空正文仍须检查", async () => {
     const config = configFor("12 seconds", undefined);
-    assert.equal((await analyzeQuality(config)).status, "not-run");
-    const passed = await analyzeQuality(config, {
+    assert.equal((await runQa(config)).status, "complete");
+    const passed = await runQa(config, {
       candidates: [
         { sourceKey: "hash:message", language: "fr", content: "12 secondes" },
       ],
     });
     assert.equal(passed.status, "complete");
     assert.deepEqual(passed.diagnostics, []);
-    const empty = await analyzeQuality(config, {
+    const empty = await runQa(config, {
       candidates: [{ sourceKey: "hash:message", language: "fr", content: "" }],
     });
     assert.equal(empty.diagnostics[0]?.message, "译文缺少数字：12。");
@@ -308,6 +308,7 @@ void describe("阿拉伯数字对应检查", () => {
     >()({
       prepare: ({ sourceUnit, translation, candidate }) => {
         const source = sourceUnit.unit.source;
+        if (candidate === null) return null;
         const content = candidate.content;
         const target =
           content !== null &&
@@ -317,15 +318,8 @@ void describe("阿拉伯数字对应检查", () => {
             ? (content as { readonly text: string }).text
             : undefined;
         if (typeof source !== "string" || target === undefined)
-          return {
-            status: "incomplete",
-            issue: {
-              code: "textUnavailable",
-              message: "无法从结构化正文中取得字符串。",
-            },
-          };
+          throw new Error("无法从结构化正文中取得字符串。");
         return {
-          status: "ready",
           source,
           target,
           sourceLocation: {
@@ -338,7 +332,7 @@ void describe("阿拉伯数字对应检查", () => {
             range: translation?.range ?? null,
             key:
               translation?.bodyAvailability === "available"
-                ? translation.translation.nativeKey
+                ? translation.record.nativeKey
                 : candidate.sourceKey,
           },
         };
@@ -352,7 +346,7 @@ void describe("阿拉伯数字对应检查", () => {
       ["12 secondes", 0],
       ["21 secondes", 1],
     ] as const) {
-      const result = await analyzeQuality(config, {
+      const result = await runQa(config, {
         candidates: [
           {
             sourceKey: "hash:message",
@@ -390,7 +384,7 @@ void describe("阿拉伯数字对应检查", () => {
 
   void it("拒绝未读取原文的候选，并报告正文不可用或无法取得字符串", async () => {
     await assert.rejects(
-      analyzeQuality(configFor(undefined, "12"), {
+      runQa(configFor(undefined, "12"), {
         candidates: [
           { sourceKey: "hash:message", language: "fr", content: "12" },
         ],
@@ -403,7 +397,7 @@ void describe("阿拉伯数字对应检查", () => {
       [configFor("12", null), null],
       [configFor({ text: "12" }, { text: "12" }), { text: "12" }],
     ] as const) {
-      const result = await analyzeQuality(config, {
+      const result = await runQa(config, {
         candidates: [
           {
             sourceKey: "hash:message",
@@ -412,10 +406,10 @@ void describe("阿拉伯数字对应检查", () => {
           },
         ],
       });
-      assert.equal(result.status, "incomplete");
+      assert.equal(result.status, "failed");
       assert.deepEqual(result.diagnostics, []);
-      assert.equal(result.checks[0]?.coverage.incomplete, 1);
-      assert.equal(result.checks[0]?.issues.length, 1);
+      assert.equal(result.checks[0]?.coverage.failed, 1);
+      assert.equal(result.checks[0]?.executions[0]?.error === undefined, false);
     }
   });
 
@@ -435,18 +429,11 @@ void describe("阿拉伯数字对应检查", () => {
       never
     >()({
       prepare: ({ sourceUnit, candidate }) => {
-        if (sourceUnit.unit.kind === "list")
-          return { status: "not-applicable" };
+        if (sourceUnit.unit.kind === "list") return null;
+        if (candidate === null) return null;
         if (typeof candidate.content !== "string")
-          return {
-            status: "incomplete",
-            issue: {
-              code: "textUnavailable",
-              message: "文本候选必须是字符串。",
-            },
-          };
+          throw new Error("文本候选必须是字符串。");
         return {
-          status: "ready",
           source: sourceUnit.unit.source,
           target: candidate.content,
         };
@@ -494,8 +481,8 @@ void describe("阿拉伯数字对应检查", () => {
       quality: { checks: [checker] },
     });
 
-    const result = await analyzeQuality(config);
-    const typedCandidates: readonly SemanticEditCandidate<MixedBody>[] =
+    const result = await runQa(config);
+    const typedCandidates: readonly TranslationCandidate<MixedBody>[] =
       result.candidates;
 
     assert.equal(result.status, "complete");
@@ -505,9 +492,7 @@ void describe("阿拉伯数字对应检查", () => {
     );
     assert.deepEqual(result.checks[0]?.coverage, {
       selected: 2,
-      evaluated: 1,
-      notApplicable: 1,
-      incomplete: 0,
+      evaluated: 2,
       failed: 0,
     });
     assert.equal(result.diagnostics.length, 1);
@@ -529,7 +514,7 @@ void describe("数字检查的显式依据", () => {
       { nativeKey: "other", text: "8" },
     ];
     let range = "fr.json";
-    let exceptions: readonly import("@lioni/core").QualityException[] = [];
+    let suppressions: readonly import("@lioni/core").QaSuppression[] = [];
     const cache = new Map<
       string,
       Awaited<ReturnType<import("@lioni/core").QualityCheckResultCache["get"]>>
@@ -575,10 +560,10 @@ void describe("数字检查的显式依据", () => {
       quality: {
         checks: [createNumberChecker()],
         groups: { daily: ["number-correspondence"] },
-        exceptionStore: {
-          load: async () => exceptions,
+        suppressionStore: {
+          load: async () => suppressions,
           upsert: async (value) => {
-            exceptions = [...exceptions, value];
+            suppressions = [...suppressions, value];
           },
         },
         resultCache: {
@@ -594,21 +579,21 @@ void describe("数字检查的显式依据", () => {
       },
     });
     function verifySelectionTypes() {
-      void analyzeQuality(config, { checkIds: ["number-correspondence"] });
-      void analyzeQuality(config, { groups: ["daily"] });
+      void runQa(config, { checkIds: ["number-correspondence"] });
+      void runQa(config, { groups: ["daily"] });
       // @ts-expect-error 动态选择不能扩张静态配置里的检查项 ID。
-      void analyzeQuality(config, { checkIds: ["number-correspondance"] });
+      void runQa(config, { checkIds: ["number-correspondance"] });
       // @ts-expect-error 动态选择不能扩张静态配置里的分组名。
-      void analyzeQuality(config, { groups: ["nightly"] });
+      void runQa(config, { groups: ["nightly"] });
     }
     void verifySelectionTypes;
     const run = () =>
-      analyzeQuality(config, {
+      runQa(config, {
         candidates: [{ sourceKey: "message", language: "fr", content: "21" }],
       });
     const first = await run();
-    exceptions = [
-      createQualityException({
+    suppressions = [
+      createQaSuppression({
         id: "number",
         reason: "接受数字差异",
         execution: first.checks[0]!.executions[0]!,
@@ -617,38 +602,34 @@ void describe("数字检查的显式依据", () => {
     sources[1]!.source = "9";
     translations.reverse();
     const unrelated = await run();
-    assert.equal(unrelated.exceptionApplicability[0]?.status, "applicable");
-    assert.equal(unrelated.diagnostics[0]?.handling.status, "excepted");
+    assert.equal(unrelated.diagnostics[0]?.handling.status, "suppressed");
     assert.equal(hits, 1);
     range = "moved.json";
     const moved = await run();
-    assert.equal(moved.exceptionApplicability[0]?.status, "basis-changed");
+    assert.equal(moved.diagnostics[0]?.handling.status, "active");
     assert.equal(moved.diagnostics[0]?.location.range, range);
     range = "fr.json";
-    assert.equal((await run()).exceptionApplicability[0]?.status, "applicable");
+    assert.equal((await run()).diagnostics[0]?.handling.status, "suppressed");
     translations.splice(
       translations.findIndex(({ nativeKey }) => nativeKey === "message"),
       1,
     );
-    assert.equal(
-      (await run()).exceptionApplicability[0]?.status,
-      "basis-changed",
-    );
+    assert.equal((await run()).diagnostics[0]?.handling.status, "active");
   });
 });
 
 void it("数字准备适配的非法返回中止运行，适配器普通 TypeError 保留失败报告", async () => {
   const config = configFor("Save 1", "保存 1");
   await assert.rejects(
-    analyzeQuality({
+    runQa({
       ...config,
       quality: {
-        checks: [createNumberChecker({ prepare: () => null as never })],
+        checks: [createNumberChecker({ prepare: () => undefined as never })],
       },
     }),
     QualityCheckerContractError,
   );
-  const failed = await analyzeQuality({
+  const failed = await runQa({
     ...config,
     quality: {
       checks: [
@@ -661,5 +642,5 @@ void it("数字准备适配的非法返回中止运行，适配器普通 TypeErr
     },
   });
   assert.equal(failed.status, "failed");
-  assert.equal(failed.checks[0]?.issues[0]?.message, "宿主提取失败");
+  assert.equal(failed.checks[0]?.executions[0]?.error, "宿主提取失败");
 });

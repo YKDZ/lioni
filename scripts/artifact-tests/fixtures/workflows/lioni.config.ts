@@ -37,7 +37,7 @@ const updatePolicy: UpdatePolicy<Unit, Translation, string> = async (input) => {
       ({ key }) => key === change.key,
     );
     const target = input.current.translations.records.find(
-      ({ translation }) => translation.id === change.key,
+      ({ record }) => record.id === change.key,
     );
     if (source === undefined || target?.bodyAvailability !== "available")
       continue;
@@ -72,7 +72,7 @@ const updatePolicy: UpdatePolicy<Unit, Translation, string> = async (input) => {
                 identity: target.identity,
                 content: target.content,
                 range: "fr",
-                record: target.translation,
+                record: target.record,
               },
             },
           },
@@ -143,8 +143,8 @@ export default defineConfig({
     locateExistingTarget: ({ translation }) => ({
       status: "located",
       locator:
-        translation.translation.writePath ??
-        targetPath(translation.translation.id),
+        translation.record.writePath ??
+        targetPath(translation.record.id),
     }),
     locateNewTarget: () => ({
       status: "notWritable",
@@ -161,7 +161,7 @@ export default defineConfig({
         await writeFile(
           target.locator,
           JSON.stringify({
-            ...currentTranslation.translation,
+            ...currentTranslation.record,
             text: request.content,
           }),
         );

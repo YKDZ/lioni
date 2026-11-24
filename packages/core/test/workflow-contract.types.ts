@@ -3,7 +3,7 @@ import {
   validateUpdatePlan,
   type FrameworkConfig,
   type QualityCheckRequest,
-  type SemanticEditCandidate,
+  type TranslationCandidate,
   type StandardSchemaV1,
   type TranslationUnitInput,
   type TranslationWriteRequest,
@@ -41,7 +41,7 @@ if (unknownPlan.items[0]?.action === "write") {
 // @ts-expect-error the saved-plan validator does not take host type parameters.
 validateUpdatePlan<Unit, Translation, Body>(unknownPlan);
 
-const candidate: SemanticEditCandidate<Body> = {
+const candidate: TranslationCandidate<Body> = {
   sourceKey: "toolbar.save",
   language: "fr",
   content: { message: "Enregistrer", state: "draft" },
@@ -96,7 +96,7 @@ const policy: UpdatePolicy<Unit, Translation, Body> = (input) => {
 const writeback: TranslationWritebackAdapter<Unit, Translation, Body> = {
   locateExistingTarget: ({ translation }) => ({
     status: "located",
-    locator: translation.translation.id,
+    locator: translation.record.id,
   }),
   locateNewTarget: ({ sourceKey }) => ({
     status: "located",
@@ -154,17 +154,17 @@ const config = defineConfig<
 const frameworkConfig: FrameworkConfig<Unit, Translation, Body> = config;
 void frameworkConfig;
 
-const oldExceptionRequest: Omit<QualityCheckRequest<Body>, "exceptions"> = {
+const oldSuppressionRequest: Omit<QualityCheckRequest<Body>, "suppressions"> = {
   candidates: [],
-  // @ts-expect-error 例外来源只由 quality.exceptionStore 装配。
-  exceptions: [],
+  // @ts-expect-error 豁免来源只由 quality.suppressionStore 装配。
+  suppressions: [],
 };
-void oldExceptionRequest;
+void oldSuppressionRequest;
 
 declare const typedPlan: UpdatePlan<Unit, Translation, Body>;
 void typedPlan;
 
-const invalidCandidate: SemanticEditCandidate<Body> = {
+const invalidCandidate: TranslationCandidate<Body> = {
   sourceKey: "toolbar.save",
   language: "fr",
   content: {

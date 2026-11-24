@@ -2,9 +2,9 @@ import { rm } from "node:fs/promises";
 import path from "node:path";
 
 import {
-  analyzeQuality,
+  runQa,
   formatQualityReport,
-  upsertQualityExceptionFromReport,
+  upsertQaSuppressionFromReport,
   type QualityRunResult,
 } from "@lioni/lioni";
 
@@ -85,57 +85,57 @@ function createLongLivedMemo() {
 }
 
 const memo = createLongLivedMemo();
-const exceptionFile = path.join(process.cwd(), "lioni.exceptions.yaml");
+const suppressionFile = path.join(process.cwd(), "lioni.suppressions.yaml");
 const cacheDirectory = path.join(process.cwd(), ".lioni");
-await rm(exceptionFile, { force: true });
+await rm(suppressionFile, { force: true });
 await rm(cacheDirectory, { recursive: true, force: true });
 
 setSharedRevision("v1");
 setSharedReadFails(false);
 setTermsLoaderMode("none");
 
-const full = await capture(() => analyzeQuality(config, { memo }));
+const full = await capture(() => runQa(config, { memo }));
 const syntaxExecution = full.result?.checks.find(
   ({ checkId }) => checkId === "syntax",
 )?.executions[0];
-const exceptionStore = config.quality?.exceptionStore;
-if (syntaxExecution === undefined || exceptionStore === undefined)
-  throw new Error("无法从正式 QA 结果创建术语选择验收例外。");
-await upsertQualityExceptionFromReport({
+const suppressionStore = config.quality?.suppressionStore;
+if (syntaxExecution === undefined || suppressionStore === undefined)
+  throw new Error("无法从正式 QA 结果创建术语选择验收豁免。");
+await upsertQaSuppressionFromReport({
   report: full.result,
   checkId: "syntax",
   executionId: syntaxExecution.executionId,
   id: "approved-syntax",
-  reason: "制品选择场景验证缓存与例外身份。",
-  store: exceptionStore,
+  reason: "制品选择场景验证缓存与豁免身份。",
+  store: suppressionStore,
 });
 
 const direct = await capture(() =>
-  analyzeQuality(config, { checkIds: ["syntax"], memo }),
+  runQa(config, { checkIds: ["syntax"], memo }),
 );
 const duplicateIds = await capture(() =>
-  analyzeQuality(config, { checkIds: ["terms", "syntax", "terms"], memo }),
+  runQa(config, { checkIds: ["terms", "syntax", "terms"], memo }),
 );
 const groupUnion = await capture(() =>
-  analyzeQuality(config, { groups: ["daily", "syntaxOnly"], memo }),
+  runQa(config, { groups: ["daily", "syntaxOnly"], memo }),
 );
 const termsOnly = await capture(() =>
-  analyzeQuality(config, { checkIds: ["terms"], memo }),
+  runQa(config, { checkIds: ["terms"], memo }),
 );
 
 const unknownId = await capture(() =>
-  analyzeQuality(config, { checkIds: ["missing"] } as never),
+  runQa(config, { checkIds: ["missing"] } as never),
 );
 const unknownGroup = await capture(() =>
-  analyzeQuality(config, { groups: ["all"] } as never),
+  runQa(config, { groups: ["all"] } as never),
 );
-const emptyIds = await capture(() => analyzeQuality(config, { checkIds: [] }));
-const emptyGroups = await capture(() => analyzeQuality(config, { groups: [] }));
+const emptyIds = await capture(() => runQa(config, { checkIds: [] }));
+const emptyGroups = await capture(() => runQa(config, { groups: [] }));
 const selectedEmptyGroup = await capture(() =>
-  analyzeQuality(config, { groups: ["empty"] }),
+  runQa(config, { groups: ["empty"] }),
 );
 const conflictingSelection = await capture(() =>
-  analyzeQuality(config, { checkIds: ["syntax"], groups: ["daily"] } as never),
+  runQa(config, { checkIds: ["syntax"], groups: ["daily"] } as never),
 );
 const invalidDirectoryConfig = {
   ...config,
@@ -148,7 +148,7 @@ const invalidDirectoryConfig = {
   },
 } as unknown as typeof config;
 const invalidDirectory = await capture(() =>
-  analyzeQuality(invalidDirectoryConfig, { checkIds: ["syntax"] }),
+  runQa(invalidDirectoryConfig, { checkIds: ["syntax"] }),
 );
 const ungroupedConfig = {
   ...config,
@@ -158,14 +158,14 @@ const ungroupedConfig = {
   },
 } as unknown as typeof config;
 const ungroupedUnknownGroup = await capture(() =>
-  analyzeQuality(ungroupedConfig, { groups: ["daily"] } as never),
+  runQa(ungroupedConfig, { groups: ["daily"] } as never),
 );
 
 const noProvidedCandidates = await capture(() =>
-  analyzeQuality(config, { candidates: [], memo }),
+  runQa(config, { candidates: [], memo }),
 );
 const explicitCandidates = await capture(() =>
-  analyzeQuality(config, {
+  runQa(config, {
     candidates: [
       { sourceKey: "save", language: "fr", content: "Enregistrer 1 fichier" },
     ],
@@ -175,25 +175,25 @@ const explicitCandidates = await capture(() =>
 
 setSharedRevision("v2");
 const changedDependency = await capture(() =>
-  analyzeQuality(config, { checkIds: ["syntax"], memo }),
+  runQa(config, { checkIds: ["syntax"], memo }),
 );
 
 setSharedRevision("v3");
 setTermsLoaderMode("failure");
 const isolatedLoaderFailure = await capture(() =>
-  analyzeQuality(config, { memo }),
+  runQa(config, { memo }),
 );
 setTermsLoaderMode("none");
 
 setSharedRevision("v4");
 setSharedReadFails(true);
 const sharedLoaderFailure = await capture(() =>
-  analyzeQuality(config, { memo }),
+  runQa(config, { memo }),
 );
 setSharedReadFails(false);
 setTermsLoaderMode("reader-contract-error");
 const readerContractError = await capture(() =>
-  analyzeQuality(config, { memo }),
+  runQa(config, { memo }),
 );
 setTermsLoaderMode("none");
 

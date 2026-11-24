@@ -4,8 +4,7 @@ import {
   type Awaitable,
   type CheckerPrepareInput,
   type QualityCheckDefinition,
-  type QualityCheckOutcome,
-  type QualityIssue,
+  type QualityFinding,
   type QualityLocation,
   type QualityObject,
   type QualitySubject,
@@ -40,16 +39,12 @@ export type NumberTextInput = {
   readonly targetContent: unknown;
 };
 
-export type NumberCheckerPreparation =
-  | {
-      readonly status: "ready";
-      readonly source: string;
-      readonly target: string;
-      readonly sourceLocation?: QualityLocation;
-      readonly targetLocation?: QualityLocation;
-    }
-  | { readonly status: "not-applicable" }
-  | { readonly status: "incomplete"; readonly issue: QualityIssue };
+export type NumberCheckerPreparation = {
+  readonly source: string;
+  readonly target: string;
+  readonly sourceLocation?: QualityLocation;
+  readonly targetLocation?: QualityLocation;
+} | null;
 
 export type NumberCheckerOptions<
   TUnit extends TranslationUnitInput = TranslationUnitInput,
@@ -93,31 +88,30 @@ function createNumberCheckerImplementation<
 
   return defineChecker.withTypes<TUnit, TTranslation, TBody, TUnavailable>()({
     id: "number-correspondence",
-    version: "checks.number-correspondence/v3",
-    inputSchema: numberTextInputSchema,
+    version: "checks.number-correspondence/v4",
+    inputSchema: numberTextInputSchema.nullable(),
     async prepare(input) {
+      if (input.candidate === null) {
+        if (input.association.status !== "missing")
+          throw new Error("候选正文不可用。");
+        return null;
+      }
       const preparation =
         options.prepare === undefined
-          ? input.sourceUnit.bodyAvailability === "available"
-            ? defaultNumberPreparation(input)
-            : sourceUnavailablePreparation()
+          ? defaultNumberPreparation(input)
           : await options.prepare(input);
-      if (
-        preparation === null ||
-        typeof preparation !== "object" ||
-        Array.isArray(preparation)
-      )
+      if (preparation === null) return null;
+      if (typeof preparation !== "object" || Array.isArray(preparation))
         throw new QualityCheckerContractError(
           "number-correspondence",
           "prepare",
           "的 prepare 返回了无效结果。",
         );
-      if (preparation.status !== "ready") return preparation;
       if (input.sourceUnit.bodyAvailability !== "available")
-        return sourceUnavailablePreparation();
+        throw new Error("原文正文不可用，无法核对数字。");
 
       const sourceRange =
-        input.facts.source.read.scopes[input.sourceUnit.scopeIndex]?.range ??
+        input.snapshot.source.read.scopes[input.sourceUnit.scopeIndex]?.range ??
         null;
       const sourceLocation = { language: null, range: sourceRange };
       const targetLocation = {
@@ -136,12 +130,12 @@ function createNumberCheckerImplementation<
         targetLocation: preparation.targetLocation ?? targetLocation,
         targetContent: input.candidate.content,
       } as CheckerNumberTextInput;
-      return {
-        status: "ready",
-        input: checkerInput,
-      };
+      return checkerInput;
     },
-    check: checkPreparedNumberText,
+    check: (input) =>
+      input === null
+        ? []
+        : compareNumberText(input as unknown as NumberTextInput),
   });
 }
 
@@ -170,25 +164,6 @@ export const createNumberChecker = Object.assign(
   { withTypes: createNumberCheckerWithTypes },
 );
 
-function checkPreparedNumberText(
-  input: CheckerNumberTextInput,
-): QualityCheckOutcome {
-  return compareNumberText(input as unknown as NumberTextInput);
-}
-
-function sourceUnavailablePreparation(): Extract<
-  NumberCheckerPreparation,
-  { readonly status: "incomplete" }
-> {
-  return {
-    status: "incomplete",
-    issue: {
-      code: "sourceUnavailable",
-      message: "原文正文不可用，无法核对数字。",
-    },
-  };
-}
-
 function defaultNumberPreparation<
   TUnit extends TranslationUnitInput,
   TTranslation,
@@ -198,19 +173,15 @@ function defaultNumberPreparation<
   input: CheckerPrepareInput<TUnit, TTranslation, TBody, TUnavailable>,
 ): NumberCheckerPreparation {
   const source = input.sourceUnit.unit.source;
-  const target = input.candidate.content;
+  const target = input.candidate?.content;
   if (typeof source !== "string" || typeof target !== "string")
-    return {
-      status: "incomplete",
-      issue: {
-        code: "textUnavailable",
-        message: "无法取得原文或候选译文的字符串正文。",
-      },
-    };
-  return { status: "ready", source, target };
+    throw new Error("无法取得原文或候选译文的字符串正文。");
+  return { source, target };
 }
 
-export function compareNumberText(input: NumberTextInput): QualityCheckOutcome {
+export function compareNumberText(
+  input: NumberTextInput,
+): readonly QualityFinding[] {
   const sourceNumbers = numbersIn(input.source);
   const targetNumbers = numbersIn(input.target);
   const missing = difference(sourceNumbers, targetNumbers);
@@ -234,36 +205,24 @@ export function compareNumberText(input: NumberTextInput): QualityCheckOutcome {
       value: input.targetContent,
     },
   ] as const;
-  return {
-    status: "complete",
-    diagnostics:
-      missing.length === 0 && extra.length === 0
-        ? []
-        : [
-            {
-              severity: "error",
-              object,
-              location: input.targetLocation,
-              message: [
-                ...(missing.length === 0
-                  ? []
-                  : [`译文缺少数字：${missing.join("、")}。`]),
-                ...(extra.length === 0
-                  ? []
-                  : [`译文多出数字：${extra.join("、")}。`]),
-              ].join(""),
-              evidence,
-            },
-          ],
-    issues: [],
-    coverage: {
-      selected: 1,
-      evaluated: 1,
-      notApplicable: 0,
-      incomplete: 0,
-      failed: 0,
-    },
-  };
+  return missing.length === 0 && extra.length === 0
+    ? []
+    : [
+        {
+          severity: "error",
+          object,
+          location: input.targetLocation,
+          message: [
+            ...(missing.length === 0
+              ? []
+              : [`译文缺少数字：${missing.join("、")}。`]),
+            ...(extra.length === 0
+              ? []
+              : [`译文多出数字：${extra.join("、")}。`]),
+          ].join(""),
+          evidence,
+        },
+      ];
 }
 
 function numbersIn(text: string): Map<string, number> {

@@ -49,22 +49,12 @@ const fixedKey = "fixed-query-and-update";
 const operationRepeats = 100;
 const measuredBlocks = 5;
 const scales = [0, 100, 1000, 5000] as const;
-const outcome: CacheValue = {
-  status: "complete",
-  diagnostics: [],
-  issues: [],
-  coverage: {
-    selected: 1,
-    evaluated: 1,
-    notApplicable: 0,
-    incomplete: 0,
-    failed: 0,
-  },
-};
-const updatedOutcome: CacheValue = {
-  ...outcome,
-  coverage: { ...outcome.coverage, selected: 1_000_000 },
-};
+const outcome: CacheValue = [];
+const updatedOutcome: CacheValue = [{
+  severity: "warning", object: { kind: "translation-unit", key: "sample" },
+  location: { language: "fr", range: "sample.json" },
+  message: "样本需要检查。", evidence: [],
+}];
 
 async function fileSnapshot(
   directory: string,

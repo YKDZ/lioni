@@ -8,7 +8,7 @@ import {
   type CheckerLoadInput,
   type CheckerPrepareInput,
   type QualityCheckDefinition,
-  type QualityIssue,
+  type QualityFinding,
   type QualityLocation,
   type QualityObject,
   type StandardSchemaV1,
@@ -37,14 +37,10 @@ export type TermCheckerLoaded<TContext> = {
   readonly context: TContext;
 };
 
-export type TermCheckerPreparation<TSubject> =
-  | { readonly status: "not-applicable" }
-  | { readonly status: "incomplete"; readonly issue: QualityIssue }
-  | {
-      readonly status: "ready";
-      readonly comparison: TermComparisonInput;
-      readonly subject: TSubject;
-    };
+export type TermCheckerPreparation<TSubject> = {
+  readonly comparison: TermComparisonInput;
+  readonly subject: TSubject;
+} | null;
 
 export type TermCheckerLocationInput<TSubject> = {
   readonly ref: JsonValue;
@@ -111,7 +107,7 @@ export type TermCheckerOptions<
   ) => QualityLocation;
 };
 
-const termCheckerVersion = "checks.terminology-rule/v3";
+const termCheckerVersion = "checks.terminology-rule/v4";
 
 /** 一次绑定一条规则；加载资料和分析在 prepare 中交接给纯判断。 */
 function createTermCheckerImplementation<
@@ -258,21 +254,30 @@ function createTermCheckerImplementation<
       TermCheckerLoaded<TContext>
     >,
   ) => {
+    if (input.candidate === null) {
+      if (input.association.status !== "missing")
+        throw new Error("候选正文不可用。");
+      return null;
+    }
     const prepared = await options.prepare(input);
-    if (!isTermCheckerPreparation(prepared))
+    if (prepared === null) return null;
+    if (
+      !isRecord(prepared) ||
+      !Object.hasOwn(prepared, "comparison") ||
+      !Object.hasOwn(prepared, "subject")
+    )
       throw new QualityCheckerContractError(
         checkerId,
         "prepare",
         "的 prepare 返回了无效结果。",
       );
-    if (prepared.status !== "ready") return prepared;
 
     const comparison = await validateComparisonInput(prepared.comparison);
     const analysis = await analyzeTermUse(input.loaded.terms, comparison, {
       memo: input.memo,
     });
     const sourceRange =
-      input.facts.source.read.scopes[input.sourceUnit.scopeIndex]?.range ??
+      input.snapshot.source.read.scopes[input.sourceUnit.scopeIndex]?.range ??
       null;
     const targetRange = input.translation?.range ?? null;
     const locations = comparison.groups.map((group, groupIndex) => {
@@ -286,14 +291,14 @@ function createTermCheckerImplementation<
           ref,
           language,
           side,
-          sourceKey: input.candidate.sourceKey,
+          sourceKey: input.association.sourceKey,
           subject: prepared.subject,
           groupIndex,
           ...(fragmentIndex === undefined ? {} : { fragmentIndex }),
         }) ?? {
           language: side === "source" ? null : language,
           range: side === "source" ? sourceRange : targetRange,
-          key: input.candidate.sourceKey,
+          key: input.association.sourceKey,
         };
       const source = group.source.fragments.map((fragment, fragmentIndex) =>
         mapLocation(
@@ -317,14 +322,11 @@ function createTermCheckerImplementation<
       return { source, target, targetFallback };
     });
     return {
-      status: "ready" as const,
-      input: {
-        sourceKey: input.candidate.sourceKey,
-        language: input.candidate.language,
-        ruleId,
-        analysis,
-        locations,
-      },
+      sourceKey: input.association.sourceKey,
+      language: input.association.language,
+      ruleId,
+      analysis,
+      locations,
     };
   };
   const definition: CheckerDefinition<
@@ -500,27 +502,6 @@ function isCompiledTermsShape(value: unknown): value is CompiledTerms {
   );
 }
 
-function isTermCheckerPreparation<TSubject>(
-  value: unknown,
-): value is TermCheckerPreparation<TSubject> {
-  return (
-    isRecord(value) &&
-    (value.status === "not-applicable" ||
-      (value.status === "incomplete" && isQualityIssue(value.issue)) ||
-      (value.status === "ready" &&
-        Object.hasOwn(value, "comparison") &&
-        Object.hasOwn(value, "subject")))
-  );
-}
-
-function isQualityIssue(value: unknown): value is QualityIssue {
-  return (
-    isRecord(value) &&
-    typeof value.code === "string" &&
-    typeof value.message === "string"
-  );
-}
-
 async function validateComparisonInput(
   value: unknown,
 ): Promise<TermComparisonInput> {
@@ -560,11 +541,19 @@ async function validateComparisonInput(
   return result.value;
 }
 
-function checkTermUse(input: TermCheckerInput) {
+function checkTermUse(
+  input: TermCheckerInput | null,
+): readonly QualityFinding[] {
+  if (input === null) return [];
   const analysis = input.analysis as unknown as TermUseAnalysis;
   const assessment = assessTermUse(analysis.input, analysis, {
     rules: [ruleFromId(input.ruleId)],
   });
+  if (assessment.status === "incomplete")
+    throw new Error(
+      assessment.issues.map(({ message }) => message).join(" ") ||
+        "缺少完整的术语判断依据。",
+    );
   const object = {
     kind: "translation",
     key: input.sourceKey,
@@ -621,35 +610,7 @@ function checkTermUse(input: TermCheckerInput) {
       ],
     };
   });
-  const incomplete = assessment.status === "incomplete";
-  const empty = analysis.input.groups.length === 0;
-  return {
-    status: incomplete
-      ? ("incomplete" as const)
-      : empty
-        ? ("not-applicable" as const)
-        : ("complete" as const),
-    diagnostics,
-    issues: assessment.issues.map((issue) => ({
-      code: issue.code,
-      message: issue.message,
-      object: {
-        ...object,
-        groupIndex: issue.groupIndex,
-        ...(issue.conceptId === undefined
-          ? {}
-          : { conceptId: issue.conceptId }),
-        ...(issue.ruleId === undefined ? {} : { ruleId: issue.ruleId }),
-      },
-    })),
-    coverage: {
-      selected: 1,
-      evaluated: !incomplete && !empty ? 1 : 0,
-      notApplicable: empty ? 1 : 0,
-      incomplete: incomplete ? 1 : 0,
-      failed: 0,
-    },
-  };
+  return diagnostics;
 }
 
 function ruleFromId(ruleId: TermRuleId): TermRule {
@@ -707,14 +668,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 const termCheckerInputSchema: StandardSchemaV1<
-  TermCheckerInput,
-  TermCheckerInput
+  TermCheckerInput | null,
+  TermCheckerInput | null
 > = {
   "~standard": {
     version: 1,
     vendor: "lioni-checks-terminology",
     validate(value) {
-      return isTermCheckerInput(value)
+      return value === null || isTermCheckerInput(value)
         ? { value }
         : {
             issues: [

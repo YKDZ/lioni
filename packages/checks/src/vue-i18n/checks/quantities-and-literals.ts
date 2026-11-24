@@ -1,5 +1,5 @@
 import type {
-  QualityCheckOutcome,
+  QualityFinding,
   QualityEvidence,
   TranslationUnitInput,
 } from "@lioni/core";
@@ -29,11 +29,8 @@ import {
   VUE_I18N_MESSAGE_COMPILER_VERSION,
 } from "../vue-i18n-messages.ts";
 import {
-  completeOutcome,
   createVueI18nMessageCheck,
   finding,
-  incompleteOutcome,
-  issue,
   sourceObject,
   translationObject,
 } from "./common.ts";
@@ -56,7 +53,7 @@ export function createProtectedLiteralCheck<
   >;
 }) {
   const version = [
-    "vue-i18n-suite/protected-literals/v2",
+    "vue-i18n-suite/protected-literals/v3",
     VUE_I18N_PROTECTED_LITERAL_COMPARISON_VERSION,
   ].join("+");
   return createVueI18nMessageCheck({
@@ -97,7 +94,7 @@ export function createQuantityCheck<
   >;
 }) {
   const version = [
-    "vue-i18n-suite/quantities/v2",
+    "vue-i18n-suite/quantities/v3",
     `@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
     VUE_I18N_QUANTITY_COMPARISON_VERSION,
   ].join("+");
@@ -131,14 +128,12 @@ export function createQuantityCheck<
 function evaluateProtectedLiterals(
   projection: VueI18nMessageProjection,
   literals: readonly string[],
-): QualityCheckOutcome {
+): readonly QualityFinding[] {
   if (
     projection.source.status !== "available" ||
     projection.target.status !== "available"
   )
-    return incompleteOutcome([
-      issue("messageBodyUnavailable", "原文或目标消息正文不可用。", projection),
-    ]);
+    throw new Error("原文或目标消息正文不可用。");
   const issues = compareProtectedLiterals({
     source: projection.source.text,
     target: projection.target.text,
@@ -159,23 +154,21 @@ function evaluateProtectedLiterals(
       value: projection.target.text,
     },
   ];
-  return completeOutcome(
-    issues.map(({ literal }) =>
-      finding(
-        projection,
-        "protected-literal-missing",
-        `译文没有保留技术字面值 ${literal}。`,
-        span,
-        [
-          ...evidence,
-          {
-            role: "protected-literal",
-            object: translationObject(projection),
-            location: projection.locations.target,
-            value: literal,
-          },
-        ],
-      ),
+  return issues.map(({ literal }) =>
+    finding(
+      projection,
+      "protected-literal-missing",
+      `译文没有保留技术字面值 ${literal}。`,
+      span,
+      [
+        ...evidence,
+        {
+          role: "protected-literal",
+          object: translationObject(projection),
+          location: projection.locations.target,
+          value: literal,
+        },
+      ],
     ),
   );
 }
@@ -190,14 +183,12 @@ function evaluateQuantities(
       readonly target: QuantityOptions & { readonly profile: string | null };
     };
   },
-): QualityCheckOutcome {
+): readonly QualityFinding[] {
   if (
     projection.source.status !== "available" ||
     projection.target.status !== "available"
   )
-    return incompleteOutcome([
-      issue("messageBodyUnavailable", "原文或目标消息正文不可用。", projection),
-    ]);
+    throw new Error("原文或目标消息正文不可用。");
   const quantityPolicy = policy.quantities;
   const sourceId = quantityPolicy?.source.profile;
   const targetId = quantityPolicy?.target.profile;
@@ -210,32 +201,18 @@ function evaluateQuantities(
     policy.targetLanguage,
   );
   if (!sourceProfile)
-    return incompleteOutcome([
-      issue(
-        "unsupported-language-profile",
-        `源语言 ${policy.sourceLanguage} 没有已声明的数值分析能力。`,
-        projection,
-      ),
-    ]);
+    throw new Error(
+      `源语言 ${policy.sourceLanguage} 没有已声明的数值分析能力。`,
+    );
   if (!targetProfile)
-    return incompleteOutcome([
-      issue(
-        "unsupported-language-profile",
-        `目标语言 ${policy.targetLanguage} 没有已声明的数值分析能力。`,
-        projection,
-      ),
-    ]);
+    throw new Error(
+      `目标语言 ${policy.targetLanguage} 没有已声明的数值分析能力。`,
+    );
 
   const source = parseVueI18nMessage(projection.source.text);
   const target = parseVueI18nMessage(projection.target.text);
   if (source.errors.length > 0 || target.errors.length > 0)
-    return incompleteOutcome([
-      issue(
-        "invalid-message-syntax",
-        "原文或译文消息语法无效，数量检查未执行。",
-        projection,
-      ),
-    ]);
+    throw new Error("原文或译文消息语法无效，数量检查未执行。");
 
   const sourceOptions = quantityPolicy.source;
   const targetOptions = quantityPolicy.target;
@@ -243,12 +220,24 @@ function evaluateQuantities(
   const targetText = projection.target.text;
   const sourceBranches = source.branches.map((branch) => ({
     values: [
-      ...branchFacts(sourceProfile, source, sourceText, branch, sourceOptions),
+      ...branchQuantities(
+        sourceProfile,
+        source,
+        sourceText,
+        branch,
+        sourceOptions,
+      ),
     ],
   }));
   const targetBranches = target.branches.map((branch) => ({
     values: [
-      ...branchFacts(targetProfile, target, targetText, branch, targetOptions),
+      ...branchQuantities(
+        targetProfile,
+        target,
+        targetText,
+        branch,
+        targetOptions,
+      ),
     ],
   }));
   const differences = compareQuantityBranches({
@@ -290,7 +279,7 @@ function evaluateQuantities(
       ],
     };
   });
-  return completeOutcome(diagnostics);
+  return diagnostics;
 }
 
 function quantityOptions(
@@ -325,7 +314,7 @@ function quantityOptions(
   };
 }
 
-function branchFacts(
+function branchQuantities(
   profile: QuantityProfile,
   message: VueI18nMessage,
   text: string,

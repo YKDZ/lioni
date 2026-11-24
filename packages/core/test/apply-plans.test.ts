@@ -482,7 +482,7 @@ void describe("apply update plan", () => {
     assert.deepEqual(
       scenario
         .currentBaseline()
-        ?.snapshot.translations.records.map(({ translation }) => translation),
+        ?.snapshot.translations.records.map(({ record }) => record),
       [{ id: "A", text: "Source A" }],
     );
   });
@@ -925,7 +925,7 @@ void describe("apply update plan", () => {
     ]);
   });
 
-  void it("keeps no-write decisions successful without requiring a writer or reading facts during apply", async () => {
+  void it("keeps no-write decisions successful without requiring a writer or reading snapshot during apply", async () => {
     const scenario = createScenario({
       sources: [sampleSource()],
       translations: [sampleTranslation()],

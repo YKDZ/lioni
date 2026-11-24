@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  analyzeQuality,
+  runQa,
   createQualityProfiler,
   defineChecker,
   defineConfig,
@@ -13,14 +13,14 @@ void test("配置验证抛错后仍可读取中断的性能证据，原异常保
   const profiler = createQualityProfiler();
   assert.throws(() => profiler.report());
   // 非法配置通过正式入口触发早期验证，不依赖内部计时实现。
-  const config = null as unknown as Parameters<typeof analyzeQuality>[0];
+  const config = null as unknown as Parameters<typeof runQa>[0];
   let original: unknown;
   try {
-    await analyzeQuality(config);
+    await runQa(config);
   } catch (error) {
     original = error;
   }
-  await assert.rejects(analyzeQuality(config, { profiler }), {
+  await assert.rejects(runQa(config, { profiler }), {
     name: (original as Error).name,
     message: (original as Error).message,
   });
@@ -39,18 +39,7 @@ import {
   fixtureTranslationKey,
 } from "./source-schema.ts";
 
-const complete = () => ({
-  status: "complete" as const,
-  diagnostics: [],
-  issues: [],
-  coverage: {
-    selected: 1,
-    evaluated: 1,
-    notApplicable: 0,
-    incomplete: 0,
-    failed: 0,
-  },
-});
+const complete = () => [];
 
 function configFor(runCheck: () => void, keys: readonly string[] = ["save"]) {
   const sources = keys.map((id) => ({ id, source: "Save" }));
@@ -103,7 +92,7 @@ function configFor(runCheck: () => void, keys: readonly string[] = ["save"]) {
           version: "profile-v1",
           inputSchema: schemaFromExamples(""),
           load: () => "loaded",
-          prepare: ({ loaded }) => ({ status: "ready", input: loaded }),
+          prepare: ({ loaded }) => loaded,
           check: (input) => {
             assert.equal(input, "loaded");
             runCheck();
@@ -134,7 +123,7 @@ void test("完整运行只输出结构化证据，缓存命中仍记录准备且
     },
   };
   const cold = createQualityProfiler();
-  const first = await analyzeQuality(config, { profiler: cold });
+  const first = await runQa(config, { profiler: cold });
   assert.equal(cold.report().status, "completed");
   assert.equal(calls, 2);
   for (const check of cold.report().checks) {
@@ -149,7 +138,7 @@ void test("完整运行只输出结构化证据，缓存命中仍记录准备且
     );
   }
   const warm = createQualityProfiler({ slowestCandidates: 0 });
-  const second = await analyzeQuality(config, { profiler: warm });
+  const second = await runQa(config, { profiler: warm });
   assert.deepEqual(second, first);
   assert.equal(calls, 2);
   const evidence = warm.report();
@@ -165,14 +154,14 @@ void test("完整运行只输出结构化证据，缓存命中仍记录准备且
       ),
     );
   }
-  await assert.rejects(analyzeQuality(config, { profiler: cold }), TypeError);
+  await assert.rejects(runQa(config, { profiler: cold }), TypeError);
   assert.equal(calls, 2);
 });
 
 void test("普通规则失败完成采集，契约异常保留未完成候选和原异常", async () => {
   const ordinary = new Error("规则失败");
   const profiler = createQualityProfiler();
-  const failed = await analyzeQuality(
+  const failed = await runQa(
     configFor(() => {
       throw ordinary;
     }),
@@ -191,7 +180,7 @@ void test("普通规则失败完成采集，契约异常保留未完成候选和
   );
   const interrupted = createQualityProfiler();
   await assert.rejects(
-    analyzeQuality(
+    runQa(
       configFor(() => {
         throw reason;
       }),
@@ -220,13 +209,13 @@ void test("每项检查以候选总成本保留慢项并只保存定位证据", 
     language: "zh-CN",
     content: "正文不应进入性能证据",
   }));
-  await analyzeQuality(config, { candidates, profiler });
+  await runQa(config, { candidates, profiler });
   const evidence = profiler.report();
   for (const check of evidence.checks) {
     assert.equal(check.candidateCount, 4);
     assert.equal(check.executedRules, 4);
     assert.deepEqual(
-      check.slowestCandidates.map((item) => item.candidateIndex),
+      check.slowestCandidates.map((item) => item.subjectIndex),
       [3, 2],
     );
     assert.ok(
@@ -264,7 +253,7 @@ void test("缓存读写按接口结果计数，隐藏的存储失败不能被推
       },
     };
     const profiler = createQualityProfiler();
-    await analyzeQuality(config, { profiler });
+    await runQa(config, { profiler });
     for (const check of profiler.report().checks) {
       assert.equal(check.cache.reads[mode], 1);
       assert.equal(check.cache.writes.error, 1);
@@ -276,7 +265,7 @@ void test("缓存读写按接口结果计数，隐藏的存储失败不能被推
 void test("空选择不伪造缓存查询和候选执行，借用 memo 仍归宿主管理", async () => {
   const memo = createMemoScope();
   const profiler = createQualityProfiler();
-  await analyzeQuality(
+  await runQa(
     configFor(() => {}),
     { candidates: [], profiler, memo },
   );
@@ -295,21 +284,16 @@ void test("空选择不伪造缓存查询和候选执行，借用 memo 仍归宿
     );
 });
 
-void test("仅汇总模式仍保留完整、失败、不完整、不适用及中断状态计数", async () => {
+void test("仅汇总模式仍保留完整、失败及中断状态计数", async () => {
   let index = 0;
-  const statuses = [
-    "complete",
-    "failed",
-    "incomplete",
-    "not-applicable",
-  ] as const;
+  const statuses = ["complete", "failed"] as const;
   const reason = new QualityCheckerContractError(
     "mixed",
     "check",
     "返回了无效结果。",
   );
   const keys = Array.from(
-    { length: 5 },
+    { length: statuses.length + 1 },
     (_, candidateIndex) => `save-${candidateIndex}`,
   );
   const base = configFor(() => {}, keys);
@@ -317,27 +301,17 @@ void test("仅汇总模式仍保留完整、失败、不完整、不适用及中
     id: "mixed",
     version: "mixed-v1",
     inputSchema: schemaFromExamples(null),
-    prepare: () => ({ status: "ready", input: null }),
+    prepare: () => null,
     check() {
       const status = statuses[index++];
       if (status === undefined) throw reason;
-      return {
-        status,
-        diagnostics: [],
-        issues: [],
-        coverage: {
-          selected: 1,
-          evaluated: status === "complete" ? 1 : 0,
-          failed: status === "failed" ? 1 : 0,
-          incomplete: status === "incomplete" ? 1 : 0,
-          notApplicable: status === "not-applicable" ? 1 : 0,
-        },
-      };
+      if (status === "failed") throw new Error("当前检查失败。");
+      return [];
     },
   });
   const profiler = createQualityProfiler({ slowestCandidates: 0 });
   await assert.rejects(
-    analyzeQuality(
+    runQa(
       { ...base, quality: { checks: [check] } },
       {
         profiler,
@@ -351,12 +325,10 @@ void test("仅汇总模式仍保留完整、失败、不完整、不适用及中
     (error) => error === reason,
   );
   const evidence = profiler.report().checks[0]!;
-  assert.equal(evidence.candidateCount, 5);
+  assert.equal(evidence.candidateCount, 3);
   assert.deepEqual(evidence.outcomes, {
     complete: 1,
     failed: 1,
-    incomplete: 1,
-    "not-applicable": 1,
     interrupted: 1,
   });
   assert.deepEqual(evidence.slowestCandidates, []);
@@ -379,11 +351,11 @@ void test("运行中拒绝读取与并发复用，无检查项的运行仍正常
     quality: { checks: [] },
   };
   const profiler = createQualityProfiler();
-  const pending = analyzeQuality(config, { profiler });
+  const pending = runQa(config, { profiler });
   await entered.promise;
   try {
     assert.throws(() => profiler.report(), TypeError);
-    await assert.rejects(analyzeQuality(base, { profiler }), TypeError);
+    await assert.rejects(runQa(base, { profiler }), TypeError);
   } finally {
     release.resolve();
   }

@@ -2,18 +2,7 @@ import { defineChecker, type StandardSchemaV1 } from "../src/index.ts";
 import { schemaFromExamples } from "./source-schema.ts";
 
 const inputSchema = schemaFromExamples({ text: "" });
-const check = () => ({
-  status: "complete" as const,
-  diagnostics: [],
-  issues: [],
-  coverage: {
-    selected: 1,
-    evaluated: 1,
-    notApplicable: 0,
-    incomplete: 0,
-    failed: 0,
-  },
-});
+const check = () => [];
 
 const simple = defineChecker({
   id: "simple",
@@ -21,7 +10,7 @@ const simple = defineChecker({
   inputSchema,
   prepare({ loaded }) {
     loaded satisfies undefined;
-    return { status: "ready", input: { text: "正文" } };
+    return { text: "正文" };
   },
   check(input) {
     input.text satisfies string;
@@ -44,10 +33,7 @@ const nested = defineChecker({
   id: "nested-readonly",
   version: "1",
   inputSchema: nestedInputSchema,
-  prepare: () => ({
-    status: "ready" as const,
-    input: { payload: { key: "message" }, entries: ["one"] },
-  }),
+  prepare: () => ({ payload: { key: "message" }, entries: ["one"] }),
   check(input) {
     // @ts-expect-error 可修改 JSON 对象必须在最终输入中递归只读。
     input.payload.key = "changed";
@@ -67,15 +53,16 @@ const typed = defineChecker.withTypes<Unit, unknown, string>()({
     return new Map<string, number>([["message", 2]]);
   },
   prepare({ candidate, sourceUnit, loaded }) {
-    loaded.get(candidate.content) satisfies number | undefined;
+    if (candidate !== null)
+      loaded.get(candidate.content) satisfies number | undefined;
     sourceUnit.unit.source.message satisfies string;
-    return { status: "ready", input: { text: sourceUnit.unit.source.message } };
+    return { text: sourceUnit.unit.source.message };
   },
   check,
 });
 typed.id satisfies "typed";
 
-const prepare = () => ({ status: "ready" as const, input: { text: "正文" } });
+const prepare = () => ({ text: "正文" });
 const declaration = {
   id: "required",
   version: "1",
@@ -108,7 +95,7 @@ defineChecker(transforming);
 
 const invalidInput = {
   ...declaration,
-  prepare: () => ({ status: "ready" as const, input: { text: 7 } }),
+  prepare: () => ({ text: 7 }),
 };
 // @ts-expect-error 准备结果必须符合 inputSchema。
 defineChecker(invalidInput);

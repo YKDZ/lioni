@@ -1,8 +1,7 @@
 import type {
-  QualityCheckOutcome,
+  QualityFinding,
   QualityCheckDefinition,
   QualityEvidence,
-  QualityIssue,
   QualityObject,
   TranslationUnitInput,
 } from "@lioni/core";
@@ -110,62 +109,50 @@ export function createVueI18nVariableCorrespondenceChecker<
   assertVueI18nCallback(options?.loadLanguages, "loadLanguages");
   return defineChecker.withTypes<TUnit, TTranslation, TBody, TUnavailable>()({
     id: options?.id ?? "vue-i18n/variable-correspondence",
-    version: `checks.vue-i18n/variable-correspondence/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
+    version: `checks.vue-i18n/variable-correspondence/v3+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
     inputSchema: vueI18nMessageProjectionSchema,
-    load: async ({ facts, memo, qualityData }) =>
+    load: async ({ snapshot, memo, qualityData }) =>
       options?.loadLanguages
         ? readVueI18nLanguagePolicies(
-            await qualityData.read(options?.loadLanguages, facts, memo),
+            await qualityData.read(options?.loadLanguages, snapshot, memo),
           )
         : null,
     prepare: async (input) => {
-      if (input.loaded !== null && !input.loaded.has(input.candidate.language))
-        return { status: "not-applicable" };
-      const prepared = await prepareVueI18nMessage(input, options?.prepare);
-      if (prepared.status !== "ready") return prepared;
-      const projection = prepared.input;
-      if (projection.target.status === "missing")
-        return { status: "not-applicable" };
+      if (
+        input.loaded !== null &&
+        !input.loaded.has(input.association.language)
+      )
+        return null;
+      const projection = await prepareVueI18nMessage(input, options?.prepare);
+      if (projection === null) return null;
+      if (projection.target.status === "missing") return null;
       if (projection.target.status === "unavailable")
-        return incompleteSelection(
-          "candidateBodyUnavailable",
-          "目标消息正文不可用，Vue I18n 检查未执行。",
-        );
-      if (projection.source.status === "absent")
-        return { status: "not-applicable" };
+        throw new Error("目标消息正文不可用，Vue I18n 检查未执行。");
+      if (projection.source.status === "absent") return null;
       if (
         projection.source.status === "unavailable" ||
         input.sourceUnit.bodyAvailability !== "available"
       )
-        return incompleteSelection(
-          "sourceUnavailable",
-          "原文正文不可用，无法检查变量对应。",
-        );
-      return { status: "ready", input: projection };
+        throw new Error("原文正文不可用，无法检查变量对应。");
+      return projection;
     },
-    check: (input) => compareVariables(input),
+    check: (input) => (input === null ? [] : compareVariables(input)),
   });
 }
 
 function compareVariables(
   projection: VueI18nMessageProjection,
-): QualityCheckOutcome {
+): readonly QualityFinding[] {
   if (
     projection.source.status !== "available" ||
     projection.target.status !== "available"
   )
-    return incompleteOutcome([
-      issue(
-        "messageBodyUnavailable",
-        "变量对应检查所需的原文或译文正文不可用。",
-        projection,
-      ),
-    ]);
+    throw new Error("变量对应检查所需的原文或译文正文不可用。");
 
   const source = parseVueI18nMessage(projection.source.text);
   const target = parseVueI18nMessage(projection.target.text);
-  const syntaxIssues = invalidSyntaxIssues(projection, source, target);
-  if (syntaxIssues.length > 0) return incompleteOutcome(syntaxIssues);
+  if (source.errors.length > 0 || target.errors.length > 0)
+    throw new Error("原文或译文语法无效，无法核对变量。");
 
   const sourcePatterns = variablePatterns(source);
   const targetPatterns = variablePatterns(target);
@@ -175,7 +162,7 @@ function compareVariables(
     ({ key }) => !targetPatternKeys.has(key),
   );
   const extra = targetPatterns.filter(({ key }) => !sourcePatternKeys.has(key));
-  if (missing.length === 0 && extra.length === 0) return completeOutcome([]);
+  if (missing.length === 0 && extra.length === 0) return [];
 
   const sourceObject: QualityObject = {
     kind: "source-unit",
@@ -208,7 +195,7 @@ function compareVariables(
       value: { missing, extra },
     },
   ];
-  return completeOutcome([
+  return [
     {
       severity: "error",
       object: targetObject,
@@ -216,7 +203,7 @@ function compareVariables(
       message: describeDifference(missing, extra),
       evidence,
     },
-  ]);
+  ];
 }
 
 function variablePatterns(message: VueI18nMessage): readonly VariablePattern[] {
@@ -234,33 +221,6 @@ function variablePatterns(message: VueI18nMessage): readonly VariablePattern[] {
   return [...patterns.values()].sort((left, right) =>
     compareText(left.key, right.key),
   );
-}
-
-function invalidSyntaxIssues(
-  projection: VueI18nMessageProjection,
-  source: VueI18nMessage,
-  target: VueI18nMessage,
-) {
-  const issues: QualityIssue[] = [];
-  if (source.errors.length > 0)
-    issues.push({
-      code: "sourceMessageSyntaxInvalid",
-      message: "原文语法无效，变量对应检查未执行。",
-      object: { kind: "source-unit", key: projection.key },
-      location: projection.locations.source,
-    });
-  if (target.errors.length > 0)
-    issues.push({
-      code: "targetMessageSyntaxInvalid",
-      message: "译文语法无效，变量对应检查未执行。",
-      object: {
-        kind: "translation-unit",
-        key: projection.key,
-        language: projection.language,
-      },
-      location: projection.locations.target,
-    });
-  return issues;
 }
 
 function describeDifference(
@@ -283,61 +243,6 @@ function describePattern(pattern: VariablePattern): string {
     : pattern.variables
         .map(({ identity, count }) => `${identity} × ${count}`)
         .join("、");
-}
-
-function completeOutcome(
-  diagnostics: QualityCheckOutcome["diagnostics"],
-): QualityCheckOutcome {
-  return {
-    status: "complete",
-    diagnostics,
-    issues: [],
-    coverage: {
-      selected: 1,
-      evaluated: 1,
-      notApplicable: 0,
-      incomplete: 0,
-      failed: 0,
-    },
-  };
-}
-
-function incompleteOutcome(
-  issues: QualityCheckOutcome["issues"],
-): QualityCheckOutcome {
-  return {
-    status: "incomplete",
-    diagnostics: [],
-    issues,
-    coverage: {
-      selected: 1,
-      evaluated: 0,
-      notApplicable: 0,
-      incomplete: 1,
-      failed: 0,
-    },
-  };
-}
-
-function issue(
-  code: string,
-  message: string,
-  projection: VueI18nMessageProjection,
-): QualityIssue {
-  return {
-    code,
-    message,
-    object: {
-      kind: "translation-unit",
-      key: projection.key,
-      language: projection.language,
-    },
-    location: projection.locations.target,
-  };
-}
-
-function incompleteSelection(code: string, message: string) {
-  return { status: "incomplete" as const, issue: { code, message } };
 }
 
 function compareText(left: string, right: string): number {

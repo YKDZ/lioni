@@ -1,3 +1,7 @@
+export {
+  createMissingTranslationChecker,
+  createSameTextChecker,
+} from "./translation.ts";
 export { compareNumberText, createNumberChecker } from "./numbers.ts";
 export type {
   NumberCheckerOptions,

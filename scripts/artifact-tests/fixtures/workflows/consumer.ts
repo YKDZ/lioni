@@ -4,7 +4,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import {
   applyUpdatePlan,
   previewUpdate,
-  readFacts,
+  readProjectSnapshot,
   recordComparisonBaseline,
   validateTranslationWriteRequest,
   validateUpdatePlan,
@@ -54,10 +54,10 @@ else if (mode === "plan") {
     () => process.argv[3] !== "reject",
   );
 } else if (mode === "save-edit") {
-  const facts = await readFacts(config);
-  const source = facts.source.units.find(({ key }) => key === "A");
-  const target = facts.translations.records.find(
-    ({ translation }) => translation.id === "A",
+  const snapshot = await readProjectSnapshot(config);
+  const source = snapshot.source.units.find(({ key }) => key === "A");
+  const target = snapshot.translations.records.find(
+    ({ record }) => record.id === "A",
   );
   assert.ok(source && target?.bodyAvailability === "available");
   const request: TranslationWriteRequest<string, Unit> = {
@@ -76,7 +76,7 @@ else if (mode === "plan") {
       identity: target.identity,
       content: target.content,
       range: "fr",
-      record: target.translation,
+      record: target.record,
     },
   };
   await writeFile("edit.json", JSON.stringify(request));
@@ -87,11 +87,11 @@ else if (mode === "plan") {
   );
   result = await writeTranslationRequests([request], config);
 } else if (mode === "batch-edit") {
-  const facts = await readFacts(config);
+  const snapshot = await readProjectSnapshot(config);
   const requests: TranslationWriteRequest<string, Unit>[] = ["A", "B"].map(
     (id) => {
-      const target = facts.translations.records.find(
-        ({ translation }) => translation.id === id,
+      const target = snapshot.translations.records.find(
+        ({ record }) => record.id === id,
       );
       assert.ok(target?.bodyAvailability === "available");
       return {
@@ -102,7 +102,7 @@ else if (mode === "plan") {
           status: "present",
           identity: target.identity,
           content: target.content,
-          record: target.translation,
+          record: target.record,
         },
       };
     },
@@ -116,9 +116,9 @@ else if (mode === "plan") {
           status: "located" as const,
           locator: {
             file:
-              translation.translation.writePath ??
-              `fr/${translation.translation.id}.json`,
-            key: translation.translation.id,
+              translation.record.writePath ??
+              `fr/${translation.record.id}.json`,
+            key: translation.record.id,
           },
         };
       },

@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 import {
   StandardSchemaContractError,
   defineConfig,
-  validateSemanticEditCandidate,
+  validateTranslationCandidate,
   writeTranslationRequests,
   type JsonValue,
   type TranslationIdentity,
@@ -29,7 +29,7 @@ type BatchWriteInput = Parameters<
 void describe("译文候选验证", () => {
   void it("隔离来源并在独立快照中保留共享对象", async () => {
     const shared = { text: "same" };
-    const candidate = await validateSemanticEditCandidate(
+    const candidate = await validateTranslationCandidate(
       {
         sourceKey: "message",
         language: "fr",

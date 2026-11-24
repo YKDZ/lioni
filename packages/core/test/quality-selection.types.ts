@@ -1,4 +1,4 @@
-import { analyzeQuality, defineChecker, defineConfig } from "../src/index.ts";
+import { runQa, defineChecker, defineConfig } from "../src/index.ts";
 import {
   schemaFromExamples,
   sourceSchemaFromExamples,
@@ -50,16 +50,14 @@ const checker = defineChecker.withTypes<Unit, Translation, Body, Unavailable>()(
     },
     prepare({ candidate, sourceUnit, translation, association, loaded }) {
       const sourceText: string = sourceUnit.unit.source;
-      const translationId: string | undefined = translation?.translation.id;
+      const translationId: string | undefined = translation?.record.id;
+      if (candidate === null) throw new Error("缺少候选正文");
       const candidateBody: Body = candidate.content;
       const associationStatus: string = association.status;
       const minimum: number = loaded.get(candidate.sourceKey) ?? 0;
       void translationId;
       void associationStatus;
-      return {
-        status: "ready",
-        input: { sourceText, candidateText: candidateBody, minimum },
-      };
+      return { sourceText, candidateText: candidateBody, minimum };
     },
     check(input) {
       const candidateText: Body = input.candidateText;
@@ -79,18 +77,7 @@ const explicitId: "custom/explicit" = checker.id;
 void explicitId;
 
 function completeOutcome() {
-  return {
-    status: "complete" as const,
-    diagnostics: [],
-    issues: [],
-    coverage: {
-      selected: 1,
-      evaluated: 1,
-      notApplicable: 0,
-      incomplete: 0,
-      failed: 0,
-    },
-  };
+  return [];
 }
 
 const config = defineConfig.withTypes<
@@ -121,13 +108,13 @@ const config = defineConfig.withTypes<
 });
 
 function verifySelectionTypes() {
-  void analyzeQuality(config, { groups: ["daily"] });
-  void analyzeQuality(config, { checkIds: ["custom/explicit"] });
+  void runQa(config, { groups: ["daily"] });
+  void runQa(config, { checkIds: ["custom/explicit"] });
 
   // @ts-expect-error SDK 消费者获得配置中的精确检查项 ID。
-  void analyzeQuality(config, { checkIds: ["custom/explict"] });
+  void runQa(config, { checkIds: ["custom/explict"] });
   // @ts-expect-error SDK 消费者获得配置中的分组名联合类型。
-  void analyzeQuality(config, { groups: ["nightly"] });
+  void runQa(config, { groups: ["nightly"] });
 }
 void verifySelectionTypes;
 
@@ -142,7 +129,7 @@ const narrowChecker = defineChecker.withTypes<NarrowUnit, unknown, string>()({
   version: "1",
   inputSchema: schemaFromExamples(""),
   prepare({ sourceUnit }) {
-    return { status: "ready", input: sourceUnit.unit.context.key };
+    return sourceUnit.unit.context.key;
   },
   check: completeOutcome,
 });

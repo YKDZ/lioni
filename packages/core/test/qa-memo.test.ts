@@ -8,7 +8,7 @@ import {
 } from "@lioni/memo";
 
 import {
-  analyzeQuality,
+  runQa,
   createQualityProfiler,
   defineChecker,
   defineConfig,
@@ -22,18 +22,7 @@ import {
   fixtureTranslationKey,
 } from "./source-schema.ts";
 
-const complete = () => ({
-  status: "complete" as const,
-  diagnostics: [],
-  issues: [],
-  coverage: {
-    selected: 1,
-    evaluated: 1,
-    notApplicable: 0,
-    incomplete: 0,
-    failed: 0,
-  },
-});
+const complete = () => [];
 
 function configFor(compute: (memo: MemoScope) => void) {
   const source = { id: "save", source: "Save" };
@@ -77,7 +66,7 @@ function configFor(compute: (memo: MemoScope) => void) {
           inputSchema: schemaFromExamples(null),
           prepare: ({ memo }) => {
             compute(memo);
-            return { status: "ready", input: null };
+            return null;
           },
           check: complete,
         }),
@@ -95,16 +84,16 @@ void test("声明不执行计算，同次 QA 共享范围，运行结束关闭�
     memo.memo(operation)("Save");
   });
   assert.equal(calls, 0);
-  const first = await analyzeQuality(config);
+  const first = await runQa(config);
   assert.equal(first.status, "complete");
   assert.equal(calls, 1);
   assert.equal(observed[0], observed[1]);
   assert.throws(() => observed[0]!.memo(operation), MemoScopeClosedError);
-  await analyzeQuality(config);
+  await runQa(config);
   assert.equal(calls, 2);
   assert.notEqual(observed[0], observed[2]);
   assert.equal(JSON.stringify(first).includes('"memo"'), false);
-  await analyzeQuality(config, { candidates: [] });
+  await runQa(config, { candidates: [] });
   assert.equal(calls, 2);
 });
 
@@ -120,7 +109,7 @@ void test("同次检查资料可显式共享，借入长期 memo 也会在下次
       version: "shared-policy-v1",
       inputSchema: schemaFromExamples({ revision: 0 }),
       load: ({ qualityData }) => qualityData.read(loadPolicy),
-      prepare: ({ loaded }) => ({ status: "ready", input: loaded }),
+      prepare: ({ loaded }) => loaded,
       check(input) {
         observed.push(input);
         return complete();
@@ -130,12 +119,12 @@ void test("同次检查资料可显式共享，借入长期 memo 也会在下次
   const config = { ...base, quality: { checks } };
 
   try {
-    const first = await analyzeQuality(config, { memo });
+    const first = await runQa(config, { memo });
     assert.equal(reads, 1);
     assert.deepEqual(observed, [{ revision: 1 }, { revision: 1 }]);
     assert.equal(JSON.stringify(first).includes('"revision":1'), false);
 
-    await analyzeQuality(config, { memo });
+    await runQa(config, { memo });
     assert.equal(reads, 2);
     assert.deepEqual(observed, [
       { revision: 1 },
@@ -199,12 +188,9 @@ void test("共享读取资料可嵌入各项输入并复用同一项纯计算", 
         loadedTerms.push(loaded.terms);
         const compiled = memo.memo(compile)(loaded.terms);
         return {
-          status: "ready",
-          input: {
-            language: loaded.language,
-            terms: loaded.terms,
-            compiled,
-          },
+          language: loaded.language,
+          terms: loaded.terms,
+          compiled,
         };
       },
       check(input) {
@@ -219,7 +205,7 @@ void test("共享读取资料可嵌入各项输入并复用同一项纯计算", 
   );
   const config = { ...base, quality: { checks } };
 
-  await analyzeQuality(config);
+  await runQa(config);
 
   assert.equal(reads, 1);
   assert.equal(compiles, 1);
@@ -237,7 +223,7 @@ void test("共享读取资料可嵌入各项输入并复用同一项纯计算", 
   assert.ok(Object.isFrozen(checkerInputs[0]?.terms.entries));
   assert.ok(Object.isFrozen(checkerInputs[0]?.terms.entries[0]));
 
-  await analyzeQuality(config);
+  await runQa(config);
 
   const refreshedTerms = compiledInputs[1];
   assert.equal(reads, 2);
@@ -262,15 +248,15 @@ void test("相同最终输入保持指纹，动态资料进入输入后会改变
       version: "changing-input-v1",
       inputSchema: schemaFromExamples({ revision: 0 }),
       load: () => ({ revision }),
-      prepare: ({ loaded }) => ({ status: "ready", input: loaded }),
+      prepare: ({ loaded }) => loaded,
       check: complete,
     }),
   ];
   const config = { ...base, quality: { checks } };
 
-  const first = await analyzeQuality(config);
+  const first = await runQa(config);
   revision += 1;
-  const second = await analyzeQuality(config);
+  const second = await runQa(config);
 
   assert.equal(
     first.checks[0]?.executions[0]?.inputFingerprint,
@@ -324,7 +310,7 @@ void test("共享资料失败只读取一次并隔离到相关检查，独立检
           version: "independent-v1",
           inputSchema: schemaFromExamples({ available: true }),
           load: () => ({ available: true }),
-          prepare: ({ loaded }) => ({ status: "ready", input: loaded }),
+          prepare: ({ loaded }) => loaded,
           check() {
             independentRuns += 1;
             return complete();
@@ -335,7 +321,7 @@ void test("共享资料失败只读取一次并隔离到相关检查，独立检
   };
   const profiler = createQualityProfiler();
 
-  const result = await analyzeQuality(config, { profiler });
+  const result = await runQa(config, { profiler });
 
   assert.equal(reads, 1);
   assert.equal(independentRuns, 1);
@@ -349,7 +335,7 @@ void test("共享资料失败只读取一次并隔离到相关检查，独立检
       ["independent", "complete"],
     ],
   );
-  assert.equal(result.checks[0]?.issues[0]?.message, sharedFailure.message);
+  assert.equal(result.checks[0]?.executions[0]?.error, sharedFailure.message);
   const profile = profiler.report();
   for (const check of profile.checks.slice(0, 3)) {
     assert.equal(check.timings.find(({ stage }) => stage === "load")?.calls, 1);
@@ -372,7 +358,7 @@ void test("无效读取函数作为读取器契约错误中止 QA", async () => 
   });
   const config = { ...base, quality: { checks: [badCheck] } };
 
-  await assert.rejects(analyzeQuality(config), (error: unknown) => {
+  await assert.rejects(runQa(config), (error: unknown) => {
     assert.ok(error instanceof QualityDataReaderContractError);
     assert.ok(error instanceof TypeError);
     assert.equal(error.name, "QualityDataReaderContractError");
@@ -403,25 +389,22 @@ void test("直接配置检查器并按运行读取资料，筛选不裁剪事实
       content: "",
       run: 0,
     }),
-    async load({ facts, memo }) {
+    async load({ snapshot, memo }) {
       dependencyReads += 1;
       assert.equal(sourceReads, dependencyReads);
-      dependencySourceKeys.push(facts.source.units.map(({ key }) => key));
+      dependencySourceKeys.push(snapshot.source.units.map(({ key }) => key));
       await Promise.resolve();
       memo.memo(() => "loaded")();
       return { run: dependencyReads };
     },
-    prepare: ({ candidate, facts, relationships, loaded }) => {
+    prepare: ({ candidate, snapshot, relationships, loaded }) => {
       observedContexts.push({
-        translationRecords: facts.translations.records.map(
+        translationRecords: snapshot.translations.records.map(
           ({ content }) => content,
         ),
         relationships,
       });
-      return {
-        status: "ready",
-        input: { content: candidate.content, run: loaded.run },
-      };
+      return { content: candidate?.content ?? "", run: loaded.run };
     },
     check: ({ content, run }) => {
       assert.ok(run >= 1);
@@ -488,7 +471,7 @@ void test("直接配置检查器并按运行读取资料，筛选不裁剪事实
   });
 
   assert.equal(dependencyReads, 0);
-  const first = await analyzeQuality(config);
+  const first = await runQa(config);
   assert.equal(first.status, "complete");
   assert.equal(dependencyReads, 1);
   assert.deepEqual(first.candidates, [
@@ -497,7 +480,7 @@ void test("直接配置检查器并按运行读取资料，筛选不裁剪事实
   ]);
   assert.equal(JSON.stringify(first).includes('"run":1'), false);
 
-  const second = await analyzeQuality(config, {
+  const second = await runQa(config, {
     candidates: [
       { sourceKey: "save", language: "zh-CN", content: "保存候选 A" },
       { sourceKey: "cancel", language: "zh-CN", content: "取消候选 B" },
@@ -510,12 +493,12 @@ void test("直接配置检查器并按运行读取资料，筛选不裁剪事实
   ]);
   assert.equal(JSON.stringify(second).includes('"run":2'), false);
   assert.deepEqual(
-    second.factCoverage.associations.map(
-      ({ candidateSelected }) => candidateSelected,
+    second.readCoverage.associations.map(
+      ({ subjectSelected }) => subjectSelected,
     ),
     [false, true],
   );
-  const third = await analyzeQuality(config, {
+  const third = await runQa(config, {
     selectCandidates: () => [],
   });
   assert.equal(dependencyReads, 2);
@@ -538,15 +521,15 @@ void test("直接配置检查器并按运行读取资料，筛选不裁剪事实
         },
       ],
     });
-  assert.equal(second.factCoverage.translations.length, 1);
-  assert.equal(second.factCoverage.associations.length, 2);
+  assert.equal(second.readCoverage.translations.length, 1);
+  assert.equal(second.readCoverage.associations.length, 2);
   assert.deepEqual(dependencySourceKeys, [
     ["save", "cancel"],
     ["save", "cancel"],
   ]);
   assert.ok(
-    third.factCoverage.associations.every(
-      ({ candidateSelected }) => !candidateSelected,
+    third.readCoverage.associations.every(
+      ({ subjectSelected }) => !subjectSelected,
     ),
   );
 });
@@ -559,8 +542,8 @@ void test("调用方范围可以跨运行复用，core 不取得关闭权", asyn
     assert.equal(borrowed, memo);
     borrowed.memo(operation)();
   });
-  await analyzeQuality(config, { memo });
-  await analyzeQuality(config, { memo });
+  await runQa(config, { memo });
+  await runQa(config, { memo });
   assert.equal(memo.memo(operation)(), 1);
   assert.equal(calls, 1);
   memo.dispose();
@@ -580,7 +563,7 @@ void test("显式候选沿用正式 QA 共享范围并在返回后关闭自有�
     content: "保存",
   };
 
-  const result = await analyzeQuality(config, { candidates: [candidate] });
+  const result = await runQa(config, { candidates: [candidate] });
 
   assert.equal(result.status, "complete");
   assert.equal(calls, 1);
@@ -599,8 +582,8 @@ void test("检查失败和绑定异常均释放自有范围，借用范围仍归
       throw reason;
     });
     if (reason instanceof QualityCheckerContractError)
-      await assert.rejects(analyzeQuality(config), (error) => error === reason);
-    else assert.equal((await analyzeQuality(config)).status, "failed");
+      await assert.rejects(runQa(config), (error) => error === reason);
+    else assert.equal((await runQa(config)).status, "failed");
     assert.ok(observed);
     assert.throws(() => observed!.memo(() => 1), MemoScopeClosedError);
   }
@@ -611,7 +594,7 @@ void test("检查失败和绑定异常均释放自有范围，借用范围仍归
     "准备时发生契约错误。",
   );
   await assert.rejects(
-    analyzeQuality(
+    runQa(
       configFor(() => {
         throw reason;
       }),

@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 
 import {
-  analyzeQuality,
+  runQa,
   defineChecker,
   defineConfig,
-  readFacts,
-  type QualityCheckOutcome,
+  readProjectSnapshot,
+  type QualityFinding,
   type StandardSchemaV1,
 } from "@lioni/lioni";
 import { z } from "zod";
@@ -49,8 +49,8 @@ const config = defineConfig({
   },
   keyOf: ({ source }) => source,
 });
-const facts = await readFacts(config);
-assert.deepEqual(facts.source.units[0]?.unit, input);
+const snapshot = await readProjectSnapshot(config);
+assert.deepEqual(snapshot.source.units[0]?.unit, input);
 
 const checker = defineChecker.withTypes<Unit, Unit, string>()({
   id: "action-copy",
@@ -61,7 +61,7 @@ const checker = defineChecker.withTypes<Unit, Unit, string>()({
     file: z.string(),
     text: z.string(),
     expected: z.string(),
-  }),
+  }).nullable(),
   load() {
     const index: ReadonlyMap<string, string> = new Map([
       ["Save", "Enregistrer"],
@@ -73,24 +73,21 @@ const checker = defineChecker.withTypes<Unit, Unit, string>()({
     };
   },
   prepare({ candidate, sourceUnit, loaded }) {
+    if (candidate === null) return null;
     const expected = loaded.lookup(candidate.sourceKey);
-    if (expected === undefined) return { status: "not-applicable" };
+    if (expected === undefined) return null;
     return {
-      status: "ready",
-      input: {
         key: candidate.sourceKey,
         language: candidate.language,
         file: sourceUnit.unit.context.file,
         text: candidate.content,
         expected,
-      },
-    };
+      };
   },
-  check({ key, language, file, text, expected }): QualityCheckOutcome {
-    return {
-      status: "complete",
-      diagnostics:
-        text === expected
+  check(input): readonly QualityFinding[] {
+    if (input === null) return [];
+    const { key, language, file, text, expected } = input;
+    return text === expected
           ? []
           : [
               {
@@ -100,16 +97,7 @@ const checker = defineChecker.withTypes<Unit, Unit, string>()({
                 message: `请使用 ${expected}。`,
                 evidence: [],
               },
-            ],
-      issues: [],
-      coverage: {
-        selected: 1,
-        evaluated: 1,
-        notApplicable: 0,
-        incomplete: 0,
-        failed: 0,
-      },
-    };
+            ];
   },
 });
 
@@ -126,7 +114,7 @@ const qaConfig = defineConfig({
   },
   quality: { checks: [checker] },
 });
-const result = await analyzeQuality(qaConfig, {
+const result = await runQa(qaConfig, {
   checkIds: ["action-copy"],
   candidates: [{ sourceKey: "Save", language: "fr", content: "Sauver" }],
 });

@@ -1,18 +1,18 @@
 import { isDeepStrictEqual } from "node:util";
 
 import type {
-  ActualTranslationFact,
+  Translation,
   Awaitable,
   BodyAvailability,
   ComparisonSnapshot,
   CoverageStatus,
   EnumerationCompleteness,
   JsonValue,
-  SourceFacts,
-  SourceReadFact,
-  SourceUnitFact,
+  SourceSnapshot,
+  SourceReadCoverage,
+  SourceUnit,
   TranslationIdentity,
-  TranslationReadFact,
+  TranslationReadCoverage,
   TranslationUnitInput,
 } from "./index.ts";
 import { isRecord } from "./object-guards.ts";
@@ -48,8 +48,8 @@ export type ComparisonStatus =
 export type SourceChange<TUnit extends TranslationUnitInput> = {
   readonly key: string;
   readonly status: ComparisonStatus;
-  readonly previous: SourceUnitFact<TUnit> | undefined;
-  readonly current: SourceUnitFact<TUnit> | undefined;
+  readonly previous: SourceUnit<TUnit> | undefined;
+  readonly current: SourceUnit<TUnit> | undefined;
 };
 
 export type TranslationChange<
@@ -60,16 +60,16 @@ export type TranslationChange<
   readonly identity: TranslationIdentity;
   readonly status: ComparisonStatus;
   readonly previous:
-    | ActualTranslationFact<TTranslation, TBody, TUnavailable>
+    | Translation<TTranslation, TBody, TUnavailable>
     | undefined;
   readonly current:
-    | ActualTranslationFact<TTranslation, TBody, TUnavailable>
+    | Translation<TTranslation, TBody, TUnavailable>
     | undefined;
 };
 
 export type SnapshotReadEvidence = {
-  readonly source: SourceReadFact;
-  readonly translations: readonly TranslationReadFact[];
+  readonly source: SourceReadCoverage;
+  readonly translations: readonly TranslationReadCoverage[];
 };
 
 export type ComparisonResult<
@@ -230,7 +230,7 @@ function createSourceChanges<
 ): SourceChange<TUnit>[] {
   const previous =
     input.previous === undefined
-      ? new Map<string, SourceUnitFact<TUnit>>()
+      ? new Map<string, SourceUnit<TUnit>>()
       : sourceRecordMap(input.previous);
   const current = sourceRecordMap(input.current);
   const keys = [...new Set([...previous.keys(), ...current.keys()])].sort(
@@ -266,7 +266,7 @@ function createTranslationChanges<
     input.previous === undefined
       ? new Map<
           string,
-          ActualTranslationFact<TTranslation, TBody, TUnavailable>
+          Translation<TTranslation, TBody, TUnavailable>
         >()
       : translationRecordMap(input.previous);
   const current = translationRecordMap(input.current);
@@ -295,10 +295,10 @@ function createTranslationChanges<
 }
 
 function compareSourceStatus<TUnit extends TranslationUnitInput>(
-  previousSource: SourceFacts<TUnit> | undefined,
-  currentSource: SourceFacts<TUnit>,
-  previous: SourceUnitFact<TUnit> | undefined,
-  current: SourceUnitFact<TUnit> | undefined,
+  previousSource: SourceSnapshot<TUnit> | undefined,
+  currentSource: SourceSnapshot<TUnit>,
+  previous: SourceUnit<TUnit> | undefined,
+  current: SourceUnit<TUnit> | undefined,
 ): ComparisonStatus {
   const evidenceStatus = sourceEvidenceStatus(
     previousSource,
@@ -315,10 +315,10 @@ function compareSourceStatus<TUnit extends TranslationUnitInput>(
 }
 
 function sourceEvidenceStatus<TUnit extends TranslationUnitInput>(
-  previousSource: SourceFacts<TUnit> | undefined,
-  currentSource: SourceFacts<TUnit>,
-  previous: SourceUnitFact<TUnit> | undefined,
-  current: SourceUnitFact<TUnit> | undefined,
+  previousSource: SourceSnapshot<TUnit> | undefined,
+  currentSource: SourceSnapshot<TUnit>,
+  previous: SourceUnit<TUnit> | undefined,
+  current: SourceUnit<TUnit> | undefined,
 ): ComparisonStatus | "comparable" {
   if (previous === undefined && current !== undefined) {
     if (previousSource === undefined) return "historyMissing";
@@ -362,9 +362,9 @@ function compareTranslationStatus<
     | undefined,
   currentSnapshot: ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
   previous:
-    | ActualTranslationFact<TTranslation, TBody, TUnavailable>
+    | Translation<TTranslation, TBody, TUnavailable>
     | undefined,
-  current: ActualTranslationFact<TTranslation, TBody, TUnavailable> | undefined,
+  current: Translation<TTranslation, TBody, TUnavailable> | undefined,
 ): ComparisonStatus {
   const evidenceStatus = translationEvidenceStatus(
     previousSnapshot,
@@ -391,9 +391,9 @@ function translationEvidenceStatus<
     | undefined,
   currentSnapshot: ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
   previous:
-    | ActualTranslationFact<TTranslation, TBody, TUnavailable>
+    | Translation<TTranslation, TBody, TUnavailable>
     | undefined,
-  current: ActualTranslationFact<TTranslation, TBody, TUnavailable> | undefined,
+  current: Translation<TTranslation, TBody, TUnavailable> | undefined,
 ): ComparisonStatus | "comparable" {
   if (previous === undefined && current !== undefined) {
     if (previousSnapshot === undefined) return "historyMissing";
@@ -439,7 +439,7 @@ function validateSourceChanges<
 ): void {
   const previous =
     input.previous === undefined
-      ? new Map<string, SourceUnitFact<TUnit>>()
+      ? new Map<string, SourceUnit<TUnit>>()
       : sourceRecordMap(input.previous);
   const current = sourceRecordMap(input.current);
   const expectedKeys = new Set([...previous.keys(), ...current.keys()]);
@@ -483,7 +483,7 @@ function validateTranslationChanges<
     input.previous === undefined
       ? new Map<
           string,
-          ActualTranslationFact<TTranslation, TBody, TUnavailable>
+          Translation<TTranslation, TBody, TUnavailable>
         >()
       : translationRecordMap(input.previous);
   const current = translationRecordMap(input.current);
@@ -552,10 +552,10 @@ function validateBeforeAndAfter(
 }
 
 function validateSourceStatus<TUnit extends TranslationUnitInput>(
-  previousSource: SourceFacts<TUnit> | undefined,
-  currentSource: SourceFacts<TUnit>,
-  previous: SourceUnitFact<TUnit> | undefined,
-  current: SourceUnitFact<TUnit> | undefined,
+  previousSource: SourceSnapshot<TUnit> | undefined,
+  currentSource: SourceSnapshot<TUnit>,
+  previous: SourceUnit<TUnit> | undefined,
+  current: SourceUnit<TUnit> | undefined,
   status: unknown,
   description: string,
 ): void {
@@ -592,9 +592,9 @@ function validateTranslationStatus<
     | undefined,
   currentSnapshot: ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
   previous:
-    | ActualTranslationFact<TTranslation, TBody, TUnavailable>
+    | Translation<TTranslation, TBody, TUnavailable>
     | undefined,
-  current: ActualTranslationFact<TTranslation, TBody, TUnavailable> | undefined,
+  current: Translation<TTranslation, TBody, TUnavailable> | undefined,
   status: unknown,
   description: string,
 ): void {
@@ -638,7 +638,7 @@ function validateStatusChoice(
 
 function sourceRecordMap<TUnit extends TranslationUnitInput>(
   snapshot: ComparisonSnapshot<TUnit, unknown, unknown, unknown>,
-): Map<string, SourceUnitFact<TUnit>> {
+): Map<string, SourceUnit<TUnit>> {
   return new Map(
     snapshot.source.units.map((unit) => [unit.key, unit] as const),
   );
@@ -651,7 +651,7 @@ function translationRecordMap<
   TUnavailable,
 >(
   snapshot: ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
-): Map<string, ActualTranslationFact<TTranslation, TBody, TUnavailable>> {
+): Map<string, Translation<TTranslation, TBody, TUnavailable>> {
   return new Map(
     snapshot.translations.records.map(
       (record) => [translationIdentityKey(record.identity), record] as const,
@@ -736,7 +736,7 @@ function validateSnapshot(
 }
 
 function hasCompleteSourceScope(
-  read: SourceFacts<TranslationUnitInput>["read"],
+  read: SourceSnapshot<TranslationUnitInput>["read"],
   range: unknown,
 ): boolean {
   return read.scopes.some(
@@ -746,7 +746,7 @@ function hasCompleteSourceScope(
 }
 
 function hasCompleteTranslationScope(
-  reads: readonly TranslationReadFact[],
+  reads: readonly TranslationReadCoverage[],
   language: string,
   range: unknown,
 ): boolean {
@@ -762,8 +762,8 @@ function hasCompleteTranslationScope(
 }
 
 function sourceRange<TUnit extends TranslationUnitInput>(
-  source: SourceFacts<TUnit>,
-  fact: SourceUnitFact<TUnit>,
+  source: SourceSnapshot<TUnit>,
+  fact: SourceUnit<TUnit>,
 ): unknown {
   return source.read.scopes[fact.scopeIndex]?.range;
 }

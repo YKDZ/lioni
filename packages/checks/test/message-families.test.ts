@@ -13,16 +13,16 @@ import type {
   MessageFamilyReferenceProjection,
 } from "@lioni/checks";
 import {
-  analyzeQuality,
-  createQualityException,
+  runQa,
+  createQaSuppression,
   defineConfig,
-  readFacts,
+  readProjectSnapshot,
   runQualityChecks,
   type CheckerPrepareInput,
-  type SourceUnitFact,
+  type SourceUnit,
   type QualityDataLoadInput,
-  type QualityException,
-  type QualityExceptionStore,
+  type QaSuppression,
+  type QaSuppressionStore,
   StandardSchemaContractError,
   QualityCheckerContractError,
   type QualityCheckResultCache,
@@ -52,7 +52,7 @@ type Unit = z.output<typeof unitSchema>;
 type Translation = z.output<typeof translationSchema>;
 
 type MessageFamilySubject<TUnit extends Unit, TBody> = {
-  readonly sourceUnit: SourceUnitFact<TUnit>;
+  readonly sourceUnit: SourceUnit<TUnit>;
   readonly sourceKey: string;
   readonly language: string;
   readonly content: TBody;
@@ -164,20 +164,17 @@ function checkerFor(
     prepare: (
       input: CheckerPrepareInput<Unit, Translation, string, never, unknown>,
     ) => {
-      if (input.candidate.language !== "zh")
-        return { status: "not-applicable" };
-      return {
-        status: "ready",
-        input: projectMessage({
-          kind: "candidate",
-          subject: {
-            sourceUnit: input.sourceUnit,
-            sourceKey: input.candidate.sourceKey,
-            language: input.candidate.language,
-            content: input.candidate.content,
-          },
-        }),
-      };
+      if (input.candidate === null || input.candidate.language !== "zh")
+        return null;
+      return projectMessage({
+        kind: "candidate",
+        subject: {
+          sourceUnit: input.sourceUnit,
+          sourceKey: input.candidate.sourceKey,
+          language: input.candidate.language,
+          content: input.candidate.content,
+        },
+      });
     },
     reference: projectMessage,
     analysis:
@@ -228,7 +225,7 @@ void test("消息族正式入口验证展示上限并保留投影证据", async 
     enumerable: true,
     value: { retained: true },
   });
-  const result = await analyzeQuality(
+  const result = await runQa(
     configFor(
       [
         { id: "editing", source: "Save" },
@@ -277,7 +274,7 @@ void test("一致且没有诊断时也在投影入口拒绝特殊键中的非 JS
         : { referenceProjection: invalidProjection },
     );
     await assert.rejects(
-      analyzeQuality(
+      runQa(
         configFor(
           [
             { id: "editing", source: "Save" },
@@ -309,7 +306,7 @@ void test("同次 QA 的固定消息族策略只准备每份保存参照一次",
     source: "Hello",
   }));
   const projected = { count: 0 };
-  const result = await analyzeQuality(
+  const result = await runQa(
     configFor(
       units,
       units.map(({ id }) => ({ id, text: "你好" })),
@@ -341,7 +338,7 @@ void test("排除旧物理记录后的族依据不随候选顺序和旧自身正
   const first = { sourceKey: "message-0", language: "zh", content: "你好" };
   const other = { sourceKey: "message-1", language: "zh", content: "你好" };
   const run = (candidates: (typeof first)[]) =>
-    analyzeQuality(configFor(units, translations, checker), { candidates });
+    runQa(configFor(units, translations, checker), { candidates });
   const initial = await run([first]);
   const fingerprint = initial.checks[0]!.executions[0]!.inputFingerprint;
   assert.ok(fingerprint);
@@ -387,10 +384,10 @@ void test("非法旧参照不阻止自身替换，但作为其他候选参照时
     checkerFor({ referenceProjection }),
   );
   const self = { sourceKey: "editing", language: "zh", content: "你好" };
-  const result = await analyzeQuality(config, { candidates: [self] });
-  assert.equal(result.status, "not-applicable");
+  const result = await runQa(config, { candidates: [self] });
+  assert.equal(result.status, "complete");
   await assert.rejects(
-    analyzeQuality(config, {
+    runQa(config, {
       candidates: [self, { ...self, sourceKey: "other" }],
     }),
     StandardSchemaContractError,
@@ -417,7 +414,7 @@ void test("同次 QA 的两项固定等价策略分别准备参照", async () =>
     [{ id: "saved", text: "错误 504" }],
     strict,
   );
-  const result = await analyzeQuality(
+  const result = await runQa(
     {
       ...base,
       quality: { ...base.quality, checks: [relaxed, strict] },
@@ -462,12 +459,12 @@ void test("借入同一 memo 的后续运行仍使用新的事实与等价依赖
     ],
   };
   try {
-    assert.equal((await analyzeQuality(base, options)).diagnostics.length, 1);
+    assert.equal((await runQa(base, options)).diagnostics.length, 1);
     relaxed = true;
-    assert.equal((await analyzeQuality(base, options)).diagnostics.length, 0);
+    assert.equal((await runQa(base, options)).diagnostics.length, 0);
     relaxed = false;
     translations[0] = { id: "saved", text: "错误码 504" };
-    assert.equal((await analyzeQuality(base, options)).diagnostics.length, 0);
+    assert.equal((await runQa(base, options)).diagnostics.length, 0);
   } finally {
     memo.dispose();
   }
@@ -481,10 +478,10 @@ void test("候选不适用时仍共享准备一次保存参照", async () => {
     never,
     unknown
   >({
-    prepare: () => ({ status: "not-applicable" }),
+    prepare: () => null,
     reference: () => ({ groups: [] }),
   });
-  const result = await analyzeQuality(
+  const result = await runQa(
     configFor(
       [{ id: "saved", source: "Hello" }],
       [{ id: "saved", text: "你好" }],
@@ -492,10 +489,10 @@ void test("候选不适用时仍共享准备一次保存参照", async () => {
     ),
     { candidates: [{ sourceKey: "saved", language: "zh", content: "你好" }] },
   );
-  assert.equal(result.status, "not-applicable");
+  assert.equal(result.status, "complete");
 });
 
-void test("旧消息族版本例外在重新执行时失配，未运行时保持未验证", async () => {
+void test("旧消息族版本豁免在重新执行时失配，未运行时保持未验证", async () => {
   const units = [
     { id: "editing", source: "Hello" },
     { id: "saved", source: "Hello" },
@@ -505,16 +502,15 @@ void test("旧消息族版本例外在重新执行时失配，未运行时保持
   const candidates = [
     { sourceKey: "editing", language: "zh", content: "你好" },
   ];
-  const initial = await analyzeQuality(
-    configFor(units, translations, checker),
-    { candidates },
-  );
-  const current = createQualityException({
+  const initial = await runQa(configFor(units, translations, checker), {
+    candidates,
+  });
+  const current = createQaSuppression({
     id: "previous-release",
     reason: "接受之前的表达。",
     execution: initial.checks[0]!.executions[0]!,
   });
-  const old: QualityException = {
+  const old: QaSuppression = {
     ...current,
     inputFingerprint: `sha256:${"0".repeat(64)}`,
     fingerprintSummary: {
@@ -522,20 +518,16 @@ void test("旧消息族版本例外在重新执行时失配，未运行时保持
       version: "checks.message-family-consistency/v2+message-families-test-v1",
     },
   };
-  const store: QualityExceptionStore = {
+  const store: QaSuppressionStore = {
     load: async () => [old],
     upsert: async () => {},
   };
   const config = configFor(units, translations, checker, store);
-  const result = await analyzeQuality(config, { candidates });
-  assert.equal(result.exceptionApplicability[0]?.status, "basis-changed");
-  assert.ok(
-    result.exceptionApplicability[0]?.reasons?.includes("check-implementation"),
-  );
+  const result = await runQa(config, { candidates });
   assert.equal(result.diagnostics[0]?.handling.status, "active");
   assert.equal((await store.load())[0], old);
-  const skipped = await analyzeQuality(config, { candidates: [] });
-  assert.equal(skipped.exceptionApplicability[0]?.status, "not-verified");
+  const skipped = await runQa(config, { candidates: [] });
+  assert.deepEqual(skipped.checks[0]?.executions, []);
 });
 
 void test("唯一旧译文正文不可用时仍能完整检查替换候选", async () => {
@@ -563,10 +555,10 @@ void test("唯一旧译文正文不可用时仍能完整检查替换候选", asy
     string,
     Translation
   >({
-    prepare: ({ candidate }) => ({
-      status: "ready",
-      input: projection(candidate.sourceKey, candidate.content),
-    }),
+    prepare: ({ candidate }) =>
+      candidate === null
+        ? null
+        : projection(candidate.sourceKey, candidate.content),
     reference: (reference) => {
       if (reference.sourceKey === "editing")
         throw new Error("自身旧正文不可用");
@@ -601,19 +593,18 @@ void test("唯一旧译文正文不可用时仍能完整检查替换候选", asy
     },
     quality: { checks: [checker] },
   });
-  const result = await analyzeQuality(config, {
+  const result = await runQa(config, {
     candidates: [{ sourceKey: "editing", language: "zh", content: "你好" }],
   });
   assert.equal(result.status, "complete");
   assert.deepEqual(result.diagnostics, []);
-  assert.deepEqual(result.checks[0]!.issues, []);
 });
 
 function configFor(
   units: readonly Unit[],
   translations: readonly Translation[],
   qualityChecker: ReturnType<typeof checkerFor>,
-  exceptionStore?: QualityExceptionStore,
+  suppressionStore?: QaSuppressionStore,
   resultCache?: QualityCheckResultCache,
 ) {
   return defineConfig({
@@ -655,7 +646,7 @@ function configFor(
     },
     quality: {
       checks: [qualityChecker],
-      ...(exceptionStore === undefined ? {} : { exceptionStore }),
+      ...(suppressionStore === undefined ? {} : { suppressionStore }),
       ...(resultCache === undefined ? {} : { resultCache }),
     },
   });
@@ -747,7 +738,7 @@ void test("排除当前替代记录并保留其他内容相同的事实", async 
     ],
     checker,
   );
-  const result = await analyzeQuality(config, {
+  const result = await runQa(config, {
     candidates: [
       { sourceKey: "editing", language: "zh", content: "错误码 404" },
     ],
@@ -807,7 +798,7 @@ void test("声明的目标等价表达可合并，未声明签名仍独立计类
       ),
     );
   const analyze = (extra: boolean) =>
-    analyzeQuality(
+    runQa(
       configFor(
         [
           { id: "editing", source: "Error Code 404" },
@@ -855,18 +846,13 @@ void test("业务范围不同的消息不会相互比较", async () => {
     ],
     checkerFor({ separateScopeFor: "other-scope" }),
   );
-  const result = await analyzeQuality(config, {
+  const result = await runQa(config, {
     candidates: [
       { sourceKey: "editing", language: "zh", content: "错误码 404" },
     ],
   });
 
   assert.equal(result.diagnostics.length, 0);
-  assert.ok(
-    result.checks[0]?.issues.some(
-      ({ code }) => code === "noComparableReference",
-    ),
-  );
 });
 
 void test("待写回候选不会成为彼此的参照", async () => {
@@ -879,7 +865,7 @@ void test("待写回候选不会成为彼此的参照", async () => {
     [{ id: "saved", text: "错误码 404" }],
     checkerFor({ referenceProjections: projected }),
   );
-  const result = await analyzeQuality(config, {
+  const result = await runQa(config, {
     candidates: [
       { sourceKey: "saved", language: "zh", content: "错误码 404" },
       { sourceKey: "pending", language: "zh", content: "错误 504" },
@@ -908,7 +894,7 @@ void test("QA 输出限制类别与代表来源，但比较覆盖全部参照", 
     ],
     checkerFor({ limits: { maxCategories: 1, maxSourcesPerCategory: 1 } }),
   );
-  const result = await analyzeQuality(config, {
+  const result = await runQa(config, {
     candidates: [
       { sourceKey: "editing", language: "zh", content: "错误码 404" },
     ],
@@ -943,23 +929,18 @@ void test("QA 输出限制类别与代表来源，但比较覆盖全部参照", 
   );
 });
 
-void test("完整资料没有同族参照时明确返回不适用", async () => {
+void test("完整资料没有同族参照时返回空诊断", async () => {
   const config = configFor(
     [{ id: "new", source: "Error Code 404" }],
     [],
     checkerFor(),
   );
-  const result = await analyzeQuality(config, {
+  const result = await runQa(config, {
     candidates: [{ sourceKey: "new", language: "zh", content: "错误码 404" }],
   });
 
-  assert.equal(result.status, "not-applicable");
+  assert.equal(result.status, "complete");
   assert.equal(result.diagnostics.length, 0);
-  assert.ok(
-    result.checks[0]?.issues.some(
-      ({ code }) => code === "noComparableReference",
-    ),
-  );
 });
 
 void test("候选为空时不投影已保存参照", async () => {
@@ -971,7 +952,7 @@ void test("候选为空时不投影已保存参照", async () => {
   );
   assert.equal(projections.count, 0);
 
-  const result = await analyzeQuality(config, { candidates: [] });
+  const result = await runQa(config, { candidates: [] });
 
   assert.equal(result.status, "not-run");
   assert.equal(projections.count, 0);
@@ -989,7 +970,7 @@ void test("非法 UTF-16 保护范围作为投影契约错误拒绝", async () =
     );
 
     await assert.rejects(
-      analyzeQuality(config, {
+      runQa(config, {
         candidates: [{ sourceKey: "editing", language: "zh", content: "😀" }],
       }),
       (error: unknown) =>
@@ -1019,19 +1000,14 @@ void test("投影不完整时保留已知警告", async () => {
     translations,
     checkerFor({ partialCandidate: true }),
   );
-  const result = await analyzeQuality(config, { candidates: [candidate] });
+  const result = await runQa(config, { candidates: [candidate] });
 
-  assert.equal(result.status, "incomplete");
-  assert.equal(result.diagnostics.length, 1);
-  assert.equal(result.diagnostics[0]?.severity, "warning");
-  assert.ok(
-    result.checks[0]?.issues.some(
-      ({ code }) => code === "candidateProjectionPartial",
-    ),
-  );
+  assert.equal(result.status, "failed");
+  assert.deepEqual(result.diagnostics, []);
+  assert.ok(result.checks[0]?.executions[0]?.error);
 });
 
-void test("目标结构分析不完整时保留已知参照差异并标记不完整", async () => {
+void test("无法完整分析候选目标结构时返回错误", async () => {
   const numbers = asciiNumbers();
   const analysis = createTextAnalysis({
     recognizers: [
@@ -1066,36 +1042,31 @@ void test("目标结构分析不完整时保留已知参照差异并标记不完
     ],
     checkerFor({ analysis }),
   );
-  const result = await analyzeQuality(config, {
+  const result = await runQa(config, {
     candidates: [
       { sourceKey: "editing", language: "zh", content: "错误码 405" },
     ],
   });
 
-  assert.equal(result.status, "incomplete");
-  assert.equal(result.diagnostics.length, 1);
-  assert.equal(result.diagnostics[0]?.severity, "warning");
-  assert.ok(
-    result.checks[0]?.issues.some(
-      ({ code }) => code === "partialTargetStructure",
-    ),
-  );
+  assert.equal(result.status, "failed");
+  assert.deepEqual(result.diagnostics, []);
+  assert.ok(result.checks[0]?.executions[0]?.error);
 });
 
-void test("例外保留警告处理状态，无关消息不改变消息族依据", async () => {
-  let exceptions: readonly QualityException[] = [];
-  const exceptionStore: QualityExceptionStore = {
+void test("豁免保留警告处理状态，无关消息不改变消息族依据", async () => {
+  let suppressions: readonly QaSuppression[] = [];
+  const suppressionStore: QaSuppressionStore = {
     async load() {
-      return exceptions;
+      return suppressions;
     },
-    async upsert(exception) {
-      exceptions = [
-        ...exceptions.filter(({ id }) => id !== exception.id),
-        exception,
+    async upsert(suppression) {
+      suppressions = [
+        ...suppressions.filter(({ id }) => id !== suppression.id),
+        suppression,
       ];
     },
   };
-  const exceptionConfig = configFor(
+  const suppressionConfig = configFor(
     [
       { id: "editing", source: "Error Code 404" },
       { id: "different", source: "Error Code 504" },
@@ -1105,38 +1076,38 @@ void test("例外保留警告处理状态，无关消息不改变消息族依据
       { id: "different", text: "错误 504" },
     ],
     checkerFor(),
-    exceptionStore,
+    suppressionStore,
   );
   const candidates = [
     { sourceKey: "editing", language: "zh", content: "错误码 404" },
   ];
-  const initial = await analyzeQuality(exceptionConfig, { candidates });
+  const initial = await runQa(suppressionConfig, { candidates });
   const execution = initial.checks
     .find(({ checkId }) => checkId === "message-family-consistency")
     ?.executions.find(
       ({ sourceKey, language }) => sourceKey === "editing" && language === "zh",
     );
   assert.ok(execution);
-  await exceptionStore.upsert(
-    createQualityException({
+  await suppressionStore.upsert(
+    createQaSuppression({
       id: "known-family-variation",
       reason: "保留现有界面用语。",
       execution,
     }),
   );
 
-  const result = await analyzeQuality(exceptionConfig, {
+  const result = await runQa(suppressionConfig, {
     candidates,
   });
 
   assert.equal(result.diagnostics.length, 1);
   assert.equal(result.diagnostics[0]?.severity, "warning");
   assert.deepEqual(result.diagnostics[0]?.handling, {
-    status: "excepted",
-    exceptionId: "known-family-variation",
+    status: "suppressed",
+    suppressionId: "known-family-variation",
     reason: "保留现有界面用语。",
   });
-  const changed = await analyzeQuality(
+  const changed = await runQa(
     configFor(
       [
         { id: "editing", source: "Error Code 404" },
@@ -1149,16 +1120,16 @@ void test("例外保留警告处理状态，无关消息不改变消息族依据
         { id: "unrelated", text: "保存" },
       ],
       checkerFor(),
-      exceptionStore,
+      suppressionStore,
     ),
     { candidates },
   );
-  assert.equal(changed.exceptionApplicability[0]?.status, "applicable");
+  assert.equal(changed.diagnostics[0]?.handling.status, "suppressed");
 });
 
 void test("固定等价策略的上下文不暴露当前候选", async () => {
   let calls = 0;
-  const result = await analyzeQuality(
+  const result = await runQa(
     configFor(
       [
         { id: "first", source: "Error Code 404" },
@@ -1171,7 +1142,7 @@ void test("固定等价策略的上下文不暴露当前候选", async () => {
           calls++;
           assert.equal("candidate" in context, false);
           assert.equal("sourceUnit" in context, false);
-          assert.ok(context.facts);
+          assert.ok(context.snapshot);
           return signatureKey(signature);
         },
       }),
@@ -1188,7 +1159,7 @@ void test("固定等价策略的上下文不暴露当前候选", async () => {
   assert.ok(calls > 0);
 });
 
-void test("显式消息族依据复用无关编辑的缓存和例外，并跟随全部同族成员与位置变化", async () => {
+void test("显式消息族依据复用无关编辑的缓存和豁免，并跟随全部同族成员与位置变化", async () => {
   const units: Unit[] = [
     { id: "editing", source: "Error Code 404" },
     { id: "saved-a", source: "Error Code 504" },
@@ -1218,13 +1189,13 @@ void test("显式消息族依据复用无关编辑的缓存和例外，并跟随
       stored.set(key, value);
     },
   };
-  let exceptions: readonly QualityException[] = [];
-  const exceptionStore: QualityExceptionStore = {
+  let suppressions: readonly QaSuppression[] = [];
+  const suppressionStore: QaSuppressionStore = {
     async load() {
-      return exceptions;
+      return suppressions;
     },
     async upsert(value) {
-      exceptions = [value];
+      suppressions = [value];
     },
   };
   const checker = checkerFor({
@@ -1234,14 +1205,13 @@ void test("显式消息族依据复用无关编辑的缓存和例外，并跟随
     { sourceKey: "editing", language: "zh", content: "错误码 404" },
   ];
   const run = () =>
-    analyzeQuality(
-      configFor(units, translations, checker, exceptionStore, cache),
-      { candidates },
-    );
+    runQa(configFor(units, translations, checker, suppressionStore, cache), {
+      candidates,
+    });
   const initial = await run();
   assert.equal(initial.diagnostics.length, 1);
-  await exceptionStore.upsert(
-    createQualityException({
+  await suppressionStore.upsert(
+    createQaSuppression({
       id: "family",
       reason: "保留已有表达。",
       execution: initial.checks[0]!.executions[0]!,
@@ -1249,8 +1219,7 @@ void test("显式消息族依据复用无关编辑的缓存和例外，并跟随
   );
   const assertRestored = async () => {
     const result = await run();
-    assert.equal(result.exceptionApplicability[0]?.status, "applicable");
-    assert.equal(result.diagnostics[0]?.handling.status, "excepted");
+    assert.equal(result.diagnostics[0]?.handling.status, "suppressed");
     assert.deepEqual(
       result.diagnostics[0]?.evidence,
       initial.diagnostics[0]?.evidence,
@@ -1287,9 +1256,9 @@ void test("显式消息族依据复用无关编辑的缓存和例外，并跟随
     ...translations[hiddenIndex]!,
     text: hidden === "saved-a" ? "错误 505" : "告警 305",
   };
-  assert.equal(
-    (await run()).exceptionApplicability[0]?.status,
-    "basis-changed",
+  assert.notEqual(
+    (await run()).checks[0]?.executions[0]?.inputFingerprint,
+    initial.checks[0]?.executions[0]?.inputFingerprint,
   );
   assert.equal(hits, 3);
   units.splice(0, units.length, ...initialUnits);
@@ -1299,24 +1268,30 @@ void test("显式消息族依据复用无关编辑的缓存和例外，并跟随
 
   units.push({ id: "new-member", source: "Error Code 204" });
   translations.push({ id: "new-member", text: "错误 204" });
-  assert.equal(
-    (await run()).exceptionApplicability[0]?.status,
-    "basis-changed",
+  assert.notEqual(
+    (await run()).checks[0]?.executions[0]?.inputFingerprint,
+    initial.checks[0]?.executions[0]?.inputFingerprint,
   );
   assert.equal(hits, 4);
   units.pop();
   translations.pop();
   units[3] = { id: "other", source: "Error Code 104" };
-  assert.equal(
-    (await run()).exceptionApplicability[0]?.status,
-    "basis-changed",
+  assert.notEqual(
+    (await run()).checks[0]?.executions[0]?.inputFingerprint,
+    initial.checks[0]?.executions[0]?.inputFingerprint,
   );
   assert.equal(hits, 4);
   units[3] = initialUnits[3]!;
   await assertRestored();
   assert.equal(hits, 5);
 
-  const moved = configFor(units, translations, checker, exceptionStore, cache);
+  const moved = configFor(
+    units,
+    translations,
+    checker,
+    suppressionStore,
+    cache,
+  );
   const originalAdapter = moved.translations!;
   const movedConfig = defineConfig({
     ...moved,
@@ -1334,10 +1309,10 @@ void test("显式消息族依据复用无关编辑的缓存和例外，并跟随
       },
     },
   });
-  assert.equal(
-    (await analyzeQuality(movedConfig, { candidates }))
-      .exceptionApplicability[0]?.status,
-    "basis-changed",
+  assert.notEqual(
+    (await runQa(movedConfig, { candidates })).checks[0]?.executions[0]
+      ?.inputFingerprint,
+    initial.checks[0]?.executions[0]?.inputFingerprint,
   );
   assert.equal(hits, 5);
 });
@@ -1368,7 +1343,7 @@ void test("同一保存记录的同类别重复组稳定选择完整证据，缓
     texts: readonly string[],
     resultCache?: QualityCheckResultCache,
   ) =>
-    analyzeQuality(
+    runQa(
       configFor(
         [
           { id: "editing", source: "Save" },
@@ -1434,8 +1409,9 @@ void test("显式候选语言决定参照目录，加载的运行时资料只供
       return new Set(candidates.map(({ language }) => language));
     },
     prepare: ({ candidate, loaded }) => {
+      if (candidate === null) return null;
       assert.ok(loaded.has(candidate.language));
-      return { status: "ready", input: projection(candidate.language) };
+      return projection(candidate.language);
     },
     reference: (reference, { loaded }) => {
       assert.ok(loaded.has(reference.language));
@@ -1448,7 +1424,7 @@ void test("显式候选语言决定参照目录，加载的运行时资料只供
     [{ id: "message", text: "こんにちは" }],
     checker,
   );
-  const result = await analyzeQuality(
+  const result = await runQa(
     defineConfig({
       ...base,
       translations: { ...base.translations!, languages: ["zh", "ja"] },
@@ -1461,7 +1437,7 @@ void test("显式候选语言决定参照目录，加载的运行时资料只供
   );
   assert.equal(loads, 1);
   assert.deepEqual(projectedLanguages, ["ja"]);
-  assert.equal(result.status, "not-applicable");
+  assert.equal(result.status, "complete");
   assert.ok(result.checks[0]!.executions[0]!.inputFingerprint);
 });
 
@@ -1497,11 +1473,11 @@ void test("已知其他族的目标缺口保持局部，归属未知的缺口限
         },
       }),
     );
-    const result = await analyzeQuality(config, {
+    const result = await runQa(config, {
       candidates: [{ sourceKey: "editing", language: "zh", content: "您好" }],
     });
-    assert.equal(result.status, unknown ? "incomplete" : "complete");
-    assert.equal(result.diagnostics.length, 1);
+    assert.equal(result.status, unknown ? "failed" : "complete");
+    assert.equal(result.diagnostics.length, unknown ? 0 : 1);
   }
 });
 
@@ -1538,14 +1514,14 @@ void test("相同事实与检查器的重叠运行分别固定参照结果与失
         paused.resolve();
         await resume.promise;
       }
-      return { status: "ready", input: projection };
+      return projection;
     },
     reference: (_reference, { loaded }) => {
       if (loaded === 2) throw new Error("只有运行 B 的参照出错");
       return projection;
     },
   });
-  const facts = await readFacts(
+  const snapshot = await readProjectSnapshot(
     configFor(
       [
         { id: "editing", source: "Save" },
@@ -1558,22 +1534,22 @@ void test("相同事实与检查器的重叠运行分别固定参照结果与失
   const request = {
     candidates: [{ sourceKey: "editing", language: "zh", content: "保存" }],
   };
-  const first = runQualityChecks(facts, request, [checker]);
+  const first = runQualityChecks(snapshot, request, [checker]);
   await paused.promise;
   let second: Awaited<typeof first>;
   try {
-    second = await runQualityChecks(facts, request, [checker]);
+    second = await runQualityChecks(snapshot, request, [checker]);
   } finally {
     resume.resolve();
   }
   assert.equal((await first).status, "complete");
   assert.equal(second.status, "failed");
-  assert.equal(second.checks[0]?.issues[0]?.message, "只有运行 B 的参照出错");
+  assert.equal(second.checks[0]?.executions[0]?.error, "只有运行 B 的参照出错");
 });
 
 void test("消息族准备适配的非法返回中止运行，适配器普通 TypeError 保留失败报告", async () => {
   const run = (prepare: () => never) =>
-    analyzeQuality(
+    runQa(
       configFor(
         [{ id: "editing", source: "Save" }],
         [{ id: "editing", text: "保存" }],
@@ -1584,12 +1560,12 @@ void test("消息族准备适配的非法返回中止运行，适配器普通 Ty
       ),
     );
   await assert.rejects(
-    run(() => null as never),
+    run(() => undefined as never),
     QualityCheckerContractError,
   );
   const failed = await run(() => {
     throw new TypeError("宿主投影失败");
   });
   assert.equal(failed.status, "failed");
-  assert.equal(failed.checks[0]?.issues[0]?.message, "宿主投影失败");
+  assert.equal(failed.checks[0]?.executions[0]?.error, "宿主投影失败");
 });

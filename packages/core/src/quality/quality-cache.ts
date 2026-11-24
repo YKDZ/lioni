@@ -1,79 +1,30 @@
 import { isRecord } from "../object-guards.ts";
 import { assertJsonValue } from "../standard-schema.ts";
-import type { QualityCheckOutcome, QualityObject } from "./qa.ts";
+import type { QualityFinding, QualityObject } from "./qa.ts";
 
-export type CacheableQualityCheckOutcome<
+export type CachedQualityFindings<
   TObject extends QualityObject = QualityObject,
-> = Omit<QualityCheckOutcome<TObject>, "status"> & {
-  readonly status: "complete" | "not-applicable";
-};
+> = readonly QualityFinding<TObject>[];
 
-/**
- * 原始检查结果缓存；异常处理和本次执行关联由缓存消费者在读取后完成。
- * 适配器可保留并返回传入的同一引用，但双方都必须只读使用；需要修改时先复制。
- */
+/** 缓存成功执行的原始诊断。空数组可复用，豁免按本次配置重新应用。 */
 export type QualityCheckResultCache<
   TObject extends QualityObject = QualityObject,
 > = {
-  get(key: string): Promise<CacheableQualityCheckOutcome<TObject> | undefined>;
-  set(
-    key: string,
-    outcome: CacheableQualityCheckOutcome<TObject>,
-  ): Promise<void>;
+  get(key: string): Promise<CachedQualityFindings<TObject> | undefined>;
+  set(key: string, findings: CachedQualityFindings<TObject>): Promise<void>;
 };
 
-/** 校验缓存边界上的原始结果，损坏数据只会造成一次重新计算。 */
-export function isCacheableQualityCheckOutcome(
+export function isCachedQualityFindings(
   value: unknown,
-): value is CacheableQualityCheckOutcome {
-  if (!isQualityCheckOutcome(value) || !isReusableQualityCheckOutcome(value))
-    return false;
+): value is CachedQualityFindings {
+  if (!Array.isArray(value) || !value.every(isQualityFinding)) return false;
   try {
-    assertJsonValue(value, "QA 原始检查结果");
+    assertJsonValue(value, "QA 原始诊断");
+    return true;
   } catch {
     return false;
   }
-  return true;
 }
-
-export function isReusableQualityCheckOutcome(
-  value: QualityCheckOutcome,
-): value is CacheableQualityCheckOutcome {
-  return value.status === "complete" || value.status === "not-applicable";
-}
-
-export function isQualityCheckOutcome(
-  value: unknown,
-): value is QualityCheckOutcome {
-  if (
-    !isRecord(value) ||
-    (value.status !== "complete" &&
-      value.status !== "not-applicable" &&
-      value.status !== "incomplete" &&
-      value.status !== "failed") ||
-    !Array.isArray(value.diagnostics) ||
-    !value.diagnostics.every(isQualityFinding) ||
-    !Array.isArray(value.issues) ||
-    !value.issues.every(isQualityIssue) ||
-    !isRecord(value.coverage)
-  )
-    return false;
-
-  for (const key of [
-    "selected",
-    "evaluated",
-    "notApplicable",
-    "incomplete",
-    "failed",
-  ]) {
-    const count = value.coverage[key];
-    if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0)
-      return false;
-  }
-
-  return true;
-}
-
 function isQualityFinding(value: unknown): boolean {
   return (
     isRecord(value) &&
@@ -85,19 +36,6 @@ function isQualityFinding(value: unknown): boolean {
     typeof value.message === "string" &&
     Array.isArray(value.evidence) &&
     value.evidence.every(isQualityEvidence)
-  );
-}
-
-export function isQualityIssue(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    typeof value.code === "string" &&
-    typeof value.message === "string" &&
-    (value.object === undefined || isQualityObject(value.object)) &&
-    (value.location === undefined || isQualityLocation(value.location)) &&
-    (value.evidence === undefined ||
-      (Array.isArray(value.evidence) &&
-        value.evidence.every(isQualityEvidence)))
   );
 }
 

@@ -17,19 +17,19 @@ import {
 import { validateUpdatePlan, type UpdatePlanStore } from "../plans.ts";
 import type { JsonValue } from "../semantic-edits.ts";
 import { StandardSchemaContractError } from "../standard-schema.ts";
-import { createDefaultQualityExceptionStore } from "./quality-exceptions.ts";
+import { createDefaultQaSuppressionStore } from "./qa-suppressions.ts";
 
 export {
-  createDefaultQualityExceptionStore,
-  createFileQualityExceptionStore,
-  resolveDefaultQualityExceptionFilePath,
-} from "./quality-exceptions.ts";
+  createDefaultQaSuppressionStore,
+  createFileQaSuppressionStore,
+  resolveDefaultQaSuppressionFilePath,
+} from "./qa-suppressions.ts";
 export {
   createDefaultDirectoryQualityCheckResultCache,
   createDirectoryQualityCheckResultCache,
   resolveDefaultQualityCheckResultCacheDirectory,
 } from "./quality-cache.ts";
-export type { QualityExceptionStore } from "../quality/quality-exceptions.ts";
+export type { QaSuppressionStore } from "../quality/qa-suppressions.ts";
 export type { QualityCheckResultCache } from "../quality/quality-cache.ts";
 export type { UpdatePlanStore } from "../plans.ts";
 
@@ -54,13 +54,13 @@ export async function loadConfig(
   const loadedConfig = configModule.default as RuntimeFrameworkConfig;
   validateFrameworkConfig(loadedConfig);
   const config =
-    loadedConfig.quality?.exceptionStore === undefined
+    loadedConfig.quality?.suppressionStore === undefined
       ? {
           ...loadedConfig,
           quality: {
             ...loadedConfig.quality,
-            exceptionStore:
-              createDefaultQualityExceptionStore(absoluteConfigPath),
+            suppressionStore:
+              createDefaultQaSuppressionStore(absoluteConfigPath),
           },
         }
       : loadedConfig;

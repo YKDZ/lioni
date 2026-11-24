@@ -160,7 +160,7 @@ async function withDirectory(
 }
 
 void describe("comparison baselines", () => {
-  void it("records actual source and target facts without associations or QA", async () => {
+  void it("records actual source and target snapshot without associations or QA", async () => {
     await withDirectory(async (directory) => {
       const config = makeConfig({
         sourceScopes: [

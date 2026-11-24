@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { defineConfig, readSourceFacts } from "@lioni/core";
+import { defineConfig, readSourceSnapshot } from "@lioni/core";
 import * as z from "zod";
 
 const transformedSourceSchema = z
@@ -17,7 +17,7 @@ defineConfig({
 });
 
 void describe("Standard Schema 原文契约", () => {
-  void it("通过公开事实链路接入 Zod schema", async () => {
+  void it("原文快照保留宿主通过 Zod 声明的字段", async () => {
     const config = defineConfig({
       source: {
         schema: z.object({
@@ -44,10 +44,10 @@ void describe("Standard Schema 原文契约", () => {
       },
       keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
     });
-    const facts = await readSourceFacts(config);
+    const snapshot = await readSourceSnapshot(config);
 
-    assert.equal(facts.units[0]?.key, "messages.ts:18");
-    assert.deepStrictEqual(facts.units[0]?.unit, {
+    assert.equal(snapshot.units[0]?.key, "messages.ts:18");
+    assert.deepStrictEqual(snapshot.units[0]?.unit, {
       source: "Save",
       context: { file: "messages.ts", line: 18 },
     });

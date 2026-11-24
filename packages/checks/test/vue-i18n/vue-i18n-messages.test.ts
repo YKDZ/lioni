@@ -28,8 +28,7 @@ void test("保留 Vue I18n 分支变量次数、范围和关联目标", () => {
       { identity: "named:n", start: 34, end: 37 },
     ],
   );
-  assert.deepEqual(parsed.links, ["account"]);
-  assert.deepEqual(parsed.linkFacts, [
+  assert.deepEqual(parsed.links, [
     {
       kind: "dynamic",
       variables: ["named:linked"],

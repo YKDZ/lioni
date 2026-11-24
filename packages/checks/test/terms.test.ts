@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  analyzeQuality,
-  createQualityException,
+  runQa,
+  createQaSuppression,
   defineConfig,
-  readFacts,
+  readProjectSnapshot,
   StandardSchemaContractError,
   type JsonValue,
-  type QualityException,
+  type QaSuppression,
   type QualityCheckResultCache,
   writeTranslationRequests,
   type TranslationWriteRequest,
@@ -65,7 +65,7 @@ function createScenario(
   let sourceTitle = "workspace";
   let otherText = "消息 B";
   let targetLocationFile = "locale.json";
-  let exceptions: readonly QualityException[] = [];
+  let suppressions: readonly QaSuppression[] = [];
   let invalidProjection = false;
   let targetComplete = true;
   let segmentationCalls = 0;
@@ -155,38 +155,28 @@ function createScenario(
     readonly sourceUnit: { readonly unit: Unit } | null;
   }) => {
     if (invalidProjection)
-      return {
-        status: "ready" as const,
-        value: { groups: [{}] } as unknown as TermComparisonInput,
-      };
-    if (sourceUnit === null)
-      return {
-        status: "incomplete" as const,
-        issue: { code: "source-unavailable", message: "原文不可用。" },
-      };
+      return { groups: [{}] } as unknown as TermComparisonInput;
+    if (sourceUnit === null) throw new Error("原文不可用。");
     return {
-      status: "ready" as const,
-      value: {
-        groups: [
-          {
-            ref: "workspace",
-            source: {
-              language: "en",
-              fragments: [
-                { ref: "source-title", text: sourceUnit.unit.source.title },
-              ],
-            },
-            target: {
-              language: "zh",
-              fragments: [
-                { ref: "target-visible", text: candidate.content.visible },
-              ],
-              ...(targetComplete ? {} : { complete: false }),
-            },
+      groups: [
+        {
+          ref: "workspace",
+          source: {
+            language: "en",
+            fragments: [
+              { ref: "source-title", text: sourceUnit.unit.source.title },
+            ],
           },
-        ],
-      } satisfies TermComparisonInput,
-    };
+          target: {
+            language: "zh",
+            fragments: [
+              { ref: "target-visible", text: candidate.content.visible },
+            ],
+            ...(targetComplete ? {} : { complete: false }),
+          },
+        },
+      ],
+    } satisfies TermComparisonInput;
   };
 
   const checks = [
@@ -194,14 +184,11 @@ function createScenario(
       terms: options.loadTerms ?? terms,
       rule: requireAllowedTranslation(),
       prepare: ({ candidate, sourceUnit }) => {
-        const projection = project({ candidate, sourceUnit });
-        return projection.status === "incomplete"
-          ? projection
-          : {
-              status: "ready" as const,
-              comparison: projection.value,
-              subject: candidate.sourceKey,
-            };
+        if (candidate === null) return null;
+        return {
+          comparison: project({ candidate, sourceUnit }),
+          subject: candidate.sourceKey,
+        };
       },
       ...(options.useDefaultLocations
         ? {}
@@ -217,14 +204,11 @@ function createScenario(
       terms: options.loadTerms ?? terms,
       rule: rejectForbiddenTranslation(),
       prepare: ({ candidate, sourceUnit }) => {
-        const projection = project({ candidate, sourceUnit });
-        return projection.status === "incomplete"
-          ? projection
-          : {
-              status: "ready" as const,
-              comparison: projection.value,
-              subject: candidate.sourceKey,
-            };
+        if (candidate === null) return null;
+        return {
+          comparison: project({ candidate, sourceUnit }),
+          subject: candidate.sourceKey,
+        };
       },
       ...(options.useDefaultLocations
         ? {}
@@ -317,14 +301,14 @@ function createScenario(
       ...(options.resultCache === undefined
         ? {}
         : { resultCache: options.resultCache }),
-      exceptionStore: {
+      suppressionStore: {
         async load() {
-          return exceptions;
+          return suppressions;
         },
-        async upsert(exception) {
-          exceptions = [
-            ...exceptions.filter(({ id }) => id !== exception.id),
-            exception,
+        async upsert(suppression) {
+          suppressions = [
+            ...suppressions.filter(({ id }) => id !== suppression.id),
+            suppression,
           ];
         },
       },
@@ -350,8 +334,8 @@ function createScenario(
     setTargetComplete: (value: boolean) => {
       targetComplete = value;
     },
-    setExceptions: (value: readonly QualityException[]) => {
-      exceptions = value;
+    setSuppressions: (value: readonly QaSuppression[]) => {
+      suppressions = value;
     },
     candidate: () => ({
       sourceKey: "workspace",
@@ -368,7 +352,7 @@ void test("术语检查只投影宿主选定的 JSON 字段，并复用同次 QA
   const scenario = createScenario();
   assert.equal(scenario.segmentationCalls(), 0);
 
-  const accepted = await analyzeQuality(scenario.config, {
+  const accepted = await runQa(scenario.config, {
     candidates: [scenario.candidate()],
   });
   assert.equal(accepted.status, "complete");
@@ -380,7 +364,7 @@ void test("术语检查只投影宿主选定的 JSON 字段，并复用同次 QA
     language: "zh",
     content: { visible: "作业区", hidden: "工作区" },
   };
-  const checked = await analyzeQuality(scenario.config, {
+  const checked = await runQa(scenario.config, {
     candidates: [candidate],
   });
   assert.equal(scenario.segmentationCalls(), 2);
@@ -426,7 +410,7 @@ void test("术语检查只投影宿主选定的 JSON 字段，并复用同次 QA
 void test("两项术语规则复用同次 QA 术语识别", async () => {
   const scenario = createScenario({ countTermBoundary: true });
 
-  const result = await analyzeQuality(scenario.config, {
+  const result = await runQa(scenario.config, {
     candidates: [scenario.candidate()],
   });
 
@@ -435,20 +419,22 @@ void test("两项术语规则复用同次 QA 术语识别", async () => {
   assert.equal(scenario.termBoundaryCalls(), 1);
 });
 
-void test("QA 例外保留术语发现，宿主条件控制语义编辑", async () => {
+void test("QA 豁免保留术语发现，宿主条件控制语义编辑", async () => {
   const scenario = createScenario();
   const candidate = {
     sourceKey: "workspace",
     language: "zh",
     content: { visible: "作业区", hidden: "工作区" },
   };
-  const facts = await readFacts(scenario.config);
-  const sourceUnit = facts.source.units.find(({ key }) => key === "workspace");
+  const snapshot = await readProjectSnapshot(scenario.config);
+  const sourceUnit = snapshot.source.units.find(
+    ({ key }) => key === "workspace",
+  );
   const sourceScope =
     sourceUnit === undefined
       ? undefined
-      : facts.source.read.scopes[sourceUnit.scopeIndex];
-  const translation = facts.translations.records[0];
+      : snapshot.source.read.scopes[sourceUnit.scopeIndex];
+  const translation = snapshot.translations.records[0];
   assert.ok(sourceUnit);
   assert.ok(sourceScope);
   assert.ok(translation && translation.bodyAvailability === "available");
@@ -475,10 +461,10 @@ void test("QA 例外保留术语发现，宿主条件控制语义编辑", async 
       identity: translation.identity,
       content: translation.content,
       range: "locale.json",
-      record: translation.translation,
+      record: translation.record,
     },
   };
-  const rejectedQuality = await analyzeQuality(scenario.config, {
+  const rejectedQuality = await runQa(scenario.config, {
     candidates: [candidate],
   });
   const rejected = await writeTranslationRequests(
@@ -517,19 +503,19 @@ void test("QA 例外保留术语发现，宿主条件控制语义编辑", async 
     );
   assert.ok(missingAllowedExecution);
   assert.ok(forbiddenExecution);
-  scenario.setExceptions([
-    createQualityException({
+  scenario.setSuppressions([
+    createQaSuppression({
       id: "allow-missing-term-review",
       reason: "本地化审校接受此项候选。",
       execution: missingAllowedExecution,
     }),
-    createQualityException({
+    createQaSuppression({
       id: "allow-forbidden-term-review",
       reason: "本地化审校接受此项候选。",
       execution: forbiddenExecution,
     }),
   ]);
-  const passedQuality = await analyzeQuality(scenario.config, {
+  const passedQuality = await runQa(scenario.config, {
     candidates: [candidate],
   });
   assert.deepEqual(
@@ -538,7 +524,7 @@ void test("QA 例外保留术语发现，宿主条件控制语义编辑", async 
   );
   assert.deepEqual(
     passedQuality.diagnostics.map((diagnostic) => diagnostic.handling.status),
-    ["excepted", "excepted"],
+    ["suppressed", "suppressed"],
   );
   const applied = await writeTranslationRequests(
     [request],
@@ -546,7 +532,7 @@ void test("QA 例外保留术语发现，宿主条件控制语义编辑", async 
     () =>
       passedQuality.diagnostics.length === 2 &&
       passedQuality.diagnostics.every(
-        (diagnostic) => diagnostic.handling.status === "excepted",
+        (diagnostic) => diagnostic.handling.status === "suppressed",
       ),
   );
   assert.equal(applied.results[0]?.status, "written");
@@ -561,7 +547,7 @@ void test("log/record 允许命中可满足要求，禁用归属仍保持局部�
     language: "zh",
     content: { visible: "日志与记录", hidden: "作业区" },
   };
-  const checked = await analyzeQuality(scenario.config, {
+  const checked = await runQa(scenario.config, {
     candidates: [candidate],
   });
   const independent = await evaluateTerms(scenario.terms, {
@@ -580,25 +566,11 @@ void test("log/record 允许命中可满足要求，禁用归属仍保持局部�
     ],
   });
 
-  assert.equal(checked.status, "incomplete");
+  assert.equal(checked.status, "failed");
   assert.equal(independent.status, "incomplete");
   assert.deepEqual(checked.diagnostics, []);
   assert.deepEqual(independent.problems, []);
-  const byConcept = (left: readonly unknown[], right: readonly unknown[]) =>
-    String(left[0]).localeCompare(String(right[0]));
-  assert.deepEqual(
-    checked.checks
-      .flatMap((check) => check.issues)
-      .map((issue) => [
-        issue.object?.conceptId,
-        issue.object?.ruleId,
-        issue.code,
-      ])
-      .sort(byConcept),
-    independent.issues
-      .map((issue) => [issue.conceptId, issue.ruleId, issue.code])
-      .sort(byConcept),
-  );
+  assert.ok(checked.checks.every((check) => check.executions[0]?.error));
   assert.deepEqual(
     independent.issues.map((issue) => [
       issue.conceptId,
@@ -612,10 +584,10 @@ void test("log/record 允许命中可满足要求，禁用归属仍保持局部�
   );
 });
 
-void test("部分译文范围保留确定禁用诊断并标记不完整", async () => {
+void test("术语规则无法完整判断时返回执行错误", async () => {
   const scenario = createScenario();
   scenario.setTargetComplete(false);
-  const result = await analyzeQuality(scenario.config, {
+  const result = await runQa(scenario.config, {
     candidates: [
       {
         sourceKey: "workspace",
@@ -625,17 +597,9 @@ void test("部分译文范围保留确定禁用诊断并标记不完整", async 
     ],
   });
 
-  assert.equal(result.status, "incomplete");
-  assert.deepEqual(
-    result.diagnostics.map((diagnostic) => diagnostic.object.code),
-    ["forbidden-translation"],
-  );
-  assert.ok(result.checks.some((check) => check.status === "incomplete"));
-  assert.ok(
-    result.checks
-      .flatMap((check) => check.issues)
-      .some((issue) => issue.code === "incomplete-target-scope"),
-  );
+  assert.equal(result.status, "failed");
+  assert.deepEqual(result.diagnostics, []);
+  assert.ok(result.checks.some((check) => check.status === "failed"));
 });
 
 void test("术语投影不符合 Standard Schema 时保持正式契约错误", async () => {
@@ -643,7 +607,7 @@ void test("术语投影不符合 Standard Schema 时保持正式契约错误", a
   scenario.setInvalidProjection(true);
 
   await assert.rejects(
-    analyzeQuality(scenario.config, { candidates: [scenario.candidate()] }),
+    runQa(scenario.config, { candidates: [scenario.candidate()] }),
     (error) =>
       error instanceof StandardSchemaContractError &&
       error.kind === "schema-mismatch" &&
@@ -660,12 +624,12 @@ void test("术语指纹包含当前文本与位置，不包含无关消息", asy
       content: { visible: "作业区", hidden: "工作区" },
     },
   ];
-  const run = () => analyzeQuality(scenario.config, { candidates });
+  const run = () => runQa(scenario.config, { candidates });
   const first = await run();
-  scenario.setExceptions(
+  scenario.setSuppressions(
     first.checks.flatMap((check) =>
       check.executions.map((execution) =>
-        createQualityException({
+        createQaSuppression({
           id: execution.checkId,
           reason: "接受消息 A 的译法",
           execution,
@@ -674,42 +638,38 @@ void test("术语指纹包含当前文本与位置，不包含无关消息", asy
     ),
   );
   assert.deepEqual(
-    (await run()).exceptionApplicability.map((item) => item.status),
-    ["applicable", "applicable"],
+    (await run()).diagnostics.map((item) => item.handling.status),
+    ["suppressed", "suppressed"],
   );
 
   scenario.setOtherText("修改消息 B");
   const unrelated = await run();
   assert.deepEqual(
-    unrelated.exceptionApplicability.map((item) => item.status),
-    ["applicable", "applicable"],
-  );
-  assert.deepEqual(
     unrelated.diagnostics.map((item) => item.handling.status),
-    ["excepted", "excepted"],
+    ["suppressed", "suppressed"],
   );
 
   scenario.setTargetLocationFile("moved-locale.json");
   assert.deepEqual(
-    (await run()).exceptionApplicability.map((item) => item.status),
-    ["basis-changed", "basis-changed"],
+    (await run()).diagnostics.map((item) => item.handling.status),
+    ["active", "active"],
   );
   scenario.setTargetLocationFile("locale.json");
   assert.deepEqual(
-    (await run()).exceptionApplicability.map((item) => item.status),
-    ["applicable", "applicable"],
+    (await run()).diagnostics.map((item) => item.handling.status),
+    ["suppressed", "suppressed"],
   );
 
   scenario.setSourceTitle("workspace changed");
   assert.deepEqual(
-    (await run()).exceptionApplicability.map((item) => item.status),
-    ["basis-changed", "basis-changed"],
+    (await run()).diagnostics.map((item) => item.handling.status),
+    ["active", "active"],
   );
   scenario.setSourceTitle("workspace");
   scenario.setOtherText("消息 B");
   assert.deepEqual(
-    (await run()).exceptionApplicability.map((item) => item.status),
-    ["applicable", "applicable"],
+    (await run()).diagnostics.map((item) => item.handling.status),
+    ["suppressed", "suppressed"],
   );
 });
 
@@ -720,7 +680,7 @@ void test("术语默认位置沿用资源范围，新增译文保留身份但不
     content: { visible: "作业区", hidden: "工作区" },
   };
   const existing = createScenario({ useDefaultLocations: true });
-  const existingResult = await analyzeQuality(existing.config, {
+  const existingResult = await runQa(existing.config, {
     candidates: [candidate],
   });
   const existingEvidence = existingResult.diagnostics
@@ -741,7 +701,7 @@ void test("术语默认位置沿用资源范围，新增译文保留身份但不
     useDefaultLocations: true,
     includeWorkspaceTranslation: false,
   });
-  const addedResult = await analyzeQuality(added.config, {
+  const addedResult = await runQa(added.config, {
     candidates: [candidate],
   });
   const target = addedResult.diagnostics
@@ -762,17 +722,17 @@ void test("术语资料只在检查项已选且存在候选时加载", async () 
     },
   });
 
-  await analyzeQuality(scenario.config, { candidates: [] });
+  await runQa(scenario.config, { candidates: [] });
   assert.equal(reads, 0);
 
   const candidate = scenario.candidate();
-  await analyzeQuality(scenario.config, {
+  await runQa(scenario.config, {
     candidates: [candidate],
     checkIds: ["terminology/require-allowed-translation"],
   });
   assert.equal(reads, 1);
 
-  await analyzeQuality(scenario.config, {
+  await runQa(scenario.config, {
     candidates: [candidate],
     checkIds: ["terminology/reject-forbidden-translation"],
   });
@@ -786,7 +746,7 @@ void test("术语规则参数在工厂创建时校验", () => {
       createTermChecker<Unit, Translation, string, Body>({
         terms: scenario.terms,
         rule: { id: "unknown-rule" } as never,
-        prepare: () => ({ status: "not-applicable" }),
+        prepare: () => null,
       }),
     /rule 必须是受支持的术语规则/u,
   );
@@ -824,13 +784,13 @@ void test("术语工厂以本次异步加载的资料绑定指纹和计算，缓
       content: { visible: "作业区", hidden: "工作区" },
     },
   ];
-  const run = () => analyzeQuality(scenario.config, { candidates });
+  const run = () => runQa(scenario.config, { candidates });
   const first = await run();
   assert.equal(reads, 2);
-  scenario.setExceptions(
+  scenario.setSuppressions(
     first.checks.flatMap((check) =>
       check.executions.map((execution) =>
-        createQualityException({
+        createQaSuppression({
           id: execution.checkId,
           reason: "接受消息 A 的译法",
           execution,
@@ -844,21 +804,17 @@ void test("术语工厂以本次异步加载的资料绑定指纹和计算，缓
   assert.equal(reads, 4);
   assert.deepEqual(
     cached.diagnostics.map((item) => item.handling.status),
-    ["excepted", "excepted"],
+    ["suppressed", "suppressed"],
   );
   terms = compileTerms(createTermbase({ concepts: [] }));
   const changed = await run();
   assert.equal(reads, 6);
   assert.equal(hits, 2);
   assert.deepEqual(changed.diagnostics, []);
-  assert.deepEqual(
-    changed.exceptionApplicability.map((item) => item.status),
-    ["basis-changed", "basis-changed"],
-  );
   terms = original;
   assert.deepEqual(
     (await run()).diagnostics.map((item) => item.handling.status),
-    ["excepted", "excepted"],
+    ["suppressed", "suppressed"],
   );
   assert.equal(reads, 8);
   assert.equal(hits, 4);

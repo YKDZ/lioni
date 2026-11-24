@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
-  analyzeQuality,
+  runQa,
   defineChecker,
   defineConfig,
-  type CacheableQualityCheckOutcome,
+  type CachedQualityFindings,
   type QualityCheckResultCache,
 } from "../src/index.ts";
 import {
@@ -19,26 +19,15 @@ type Translation = { readonly id: string; readonly text: string };
 const unit: Unit = { id: "save", source: "Save" };
 const translation: Translation = { id: "save", text: "Enregistrer" };
 
-const oldOutcome: CacheableQualityCheckOutcome = {
-  status: "complete",
-  diagnostics: [
-    {
-      severity: "error",
-      object: { kind: "translation-unit", key: "save", language: "fr" },
-      location: { language: "fr", range: "fr.json" },
-      message: "结果来自旧检查输入契约。",
-      evidence: [],
-    },
-  ],
-  issues: [],
-  coverage: {
-    selected: 1,
-    evaluated: 1,
-    notApplicable: 0,
-    incomplete: 0,
-    failed: 0,
+const oldOutcome: CachedQualityFindings = [
+  {
+    severity: "error",
+    object: { kind: "translation-unit", key: "save", language: "fr" },
+    location: { language: "fr", range: "fr.json" },
+    message: "结果来自旧检查输入契约。",
+    evidence: [],
   },
-};
+];
 
 void describe("QA 输入指纹升级", () => {
   void it("旧契约缓存不命中并使用当前规则的原始结果", async () => {
@@ -63,22 +52,16 @@ void describe("QA 输入指纹升级", () => {
       inputSchema: schemaFromExamples({ source: "", content: "" }),
       prepare({ candidate, sourceUnit }) {
         return {
-          status: "ready",
-          input: {
-            source: sourceUnit.unit.source,
-            content: candidate.content,
-          },
+          source: sourceUnit.unit.source,
+          content: candidate?.content ?? "",
         };
       },
       check() {
         checkCount += 1;
-        return {
-          ...oldOutcome,
-          diagnostics: oldOutcome.diagnostics.map((diagnostic) => ({
-            ...diagnostic,
-            message: "结果由当前检查输入契约重新计算。",
-          })),
-        };
+        return oldOutcome.map((diagnostic) => ({
+          ...diagnostic,
+          message: "结果由当前检查输入契约重新计算。",
+        }));
       },
     });
     const config = defineConfig({
@@ -115,7 +98,7 @@ void describe("QA 输入指纹升级", () => {
       quality: { checks: [checker], resultCache: cache },
     });
 
-    const result = await analyzeQuality(config);
+    const result = await runQa(config);
 
     assert.equal(checkCount, 1);
     assert.equal(

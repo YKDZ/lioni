@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  analyzeQuality,
+  runQa,
   defineChecker,
   defineConfig,
   formatQualityReport,
@@ -33,21 +33,10 @@ void test("按分组并集去重并保持配置顺序执行，未归组项不运
         loaded.push(id);
         return {};
       },
-      prepare: () => ({ status: "ready", input: null }),
+      prepare: () => null,
       check: () => {
         executed.push(id);
-        return {
-          status: "complete",
-          diagnostics: [],
-          issues: [],
-          coverage: {
-            selected: 1,
-            evaluated: 1,
-            notApplicable: 0,
-            incomplete: 0,
-            failed: 0,
-          },
-        };
+        return [];
       },
     });
   const config = defineConfig({
@@ -91,7 +80,7 @@ void test("按分组并集去重并保持配置顺序执行，未归组项不运
     },
   });
 
-  const result = await analyzeQuality(config, {
+  const result = await runQa(config, {
     groups: ["syntaxOnly", "quick", "syntaxOnly"],
   });
 
@@ -112,31 +101,20 @@ void test("按分组并集去重并保持配置顺序执行，未归组项不运
 
   executed.length = 0;
   loaded.length = 0;
-  const fullRun = await analyzeQuality(config);
+  const fullRun = await runQa(config);
   assert.deepEqual(executed, ["unlisted", "terms", "syntax"]);
   assert.deepEqual(loaded, ["unlisted", "terms", "syntax"]);
   assert.match(formatQualityReport(fullRun), /本次全量 3 项/u);
 });
 
-void test("目录和选择错误在读取例外及项目事实前被拒绝", async () => {
+void test("目录和选择错误在读取豁免及项目事实前被拒绝", async () => {
   const source = { id: "save", source: "Save" };
   const makeConfig = (groups: Readonly<Record<string, readonly string[]>>) => {
     let sourceReads = 0;
-    let exceptionReads = 0;
+    let suppressionReads = 0;
     const check = defineTestChecker<Unit, unknown, JsonValue>({
       id: "known",
-      check: () => ({
-        status: "complete",
-        diagnostics: [],
-        issues: [],
-        coverage: {
-          selected: 1,
-          evaluated: 1,
-          notApplicable: 0,
-          incomplete: 0,
-          failed: 0,
-        },
-      }),
+      check: () => [],
     });
     const config = defineConfig({
       source: {
@@ -150,9 +128,9 @@ void test("目录和选择错误在读取例外及项目事实前被拒绝", asy
       quality: {
         checks: [check],
         groups,
-        exceptionStore: {
+        suppressionStore: {
           async load() {
-            exceptionReads += 1;
+            suppressionReads += 1;
             return [];
           },
           async upsert() {},
@@ -161,7 +139,7 @@ void test("目录和选择错误在读取例外及项目事实前被拒绝", asy
     });
     return {
       config,
-      reads: () => ({ sourceReads, exceptionReads }),
+      reads: () => ({ sourceReads, suppressionReads }),
     };
   };
 
@@ -208,7 +186,7 @@ void test("目录和选择错误在读取例外及项目事实前被拒绝", asy
 
   for (const { groups, options, message } of cases) {
     const { config, reads } = makeConfig(groups);
-    await assert.rejects(analyzeQuality(config, options as never), { message });
-    assert.deepEqual(reads(), { sourceReads: 0, exceptionReads: 0 });
+    await assert.rejects(runQa(config, options as never), { message });
+    assert.deepEqual(reads(), { sourceReads: 0, suppressionReads: 0 });
   }
 });

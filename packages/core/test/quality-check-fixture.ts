@@ -1,7 +1,7 @@
 import {
   defineChecker,
   type Awaitable,
-  type QualityCheckOutcome,
+  type QualityFinding,
   type TranslationUnitInput,
 } from "../src/index.ts";
 import { schemaFromExamples } from "./source-schema.ts";
@@ -17,13 +17,13 @@ export function defineTestChecker<
 >(definition: {
   readonly id: string;
   readonly version?: string;
-  readonly check: (input: null) => Awaitable<QualityCheckOutcome>;
+  readonly check: (input: null) => Awaitable<ReadonlyArray<QualityFinding>>;
 }) {
   return defineChecker.withTypes<TUnit, TTranslation, TBody, TUnavailable>()({
     id: definition.id,
     version: definition.version ?? "core-test-v1",
     inputSchema: emptyInputSchema,
-    prepare: () => ({ status: "ready", input: null }),
+    prepare: () => null,
     check: definition.check,
   });
 }

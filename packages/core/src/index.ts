@@ -1,3 +1,4 @@
+import { readStatus } from "./read-coverage.ts";
 import {
   beginQualityProfile,
   type QualityProfiler,
@@ -25,7 +26,7 @@ import {
 } from "./language-scope.ts";
 import { isPlainRecord, isRecord } from "./object-guards.ts";
 import type { UpdatePolicy } from "./plans.ts";
-import { validateQualityCandidateScope } from "./quality/candidate-contract.ts";
+import { savedTranslationCandidates, validateQualityCandidateScope } from "./quality/candidate-contract.ts";
 import {
   createQualityDataReader,
   runQualityChecksWithQualityData,
@@ -34,16 +35,17 @@ import {
   type QualityObject,
   type QualityRelationship,
 } from "./quality/qa.ts";
+import { decideQualityReport } from "./quality/report.ts";
 import type { QualityCheckResultCache } from "./quality/quality-cache.ts";
-import { validateQualityExceptions } from "./quality/quality-exceptions.ts";
+import { assertQaSuppressionBindings, validateQaSuppressions } from "./quality/qa-suppressions.ts";
 import type {
-  QualityException,
-  QualityExceptionStore,
-} from "./quality/quality-exceptions.ts";
-import { validateSemanticEditCandidate } from "./semantic-edits.ts";
+  QaSuppression,
+  QaSuppressionStore,
+} from "./quality/qa-suppressions.ts";
+import { validateTranslationCandidate } from "./semantic-edits.ts";
 import type {
   JsonValue,
-  SemanticEditCandidate,
+  TranslationCandidate,
   TranslationWritebackAdapter,
 } from "./semantic-edits.ts";
 import {
@@ -59,18 +61,18 @@ import type {
   StandardSchemaTypes,
 } from "./standard-schema.ts";
 import { associateSnapshot } from "./translation-associations.ts";
-import { readTranslationFacts } from "./translation-snapshot.ts";
+import { readTranslationSnapshot } from "./translation-snapshot.ts";
 
 export type { LanguageSelectionOptions } from "./language-scope.ts";
 
 export {
-  validateSemanticEditCandidate,
+  validateTranslationCandidate,
   validateTranslationWriteRequest,
   writeTranslationRequests,
 } from "./semantic-edits.ts";
 export type {
   JsonValue,
-  SemanticEditCandidate,
+  TranslationCandidate,
   TranslationWriteTarget,
   TranslationWriteSourceExpectation,
   TranslationWriteTargetExpectation,
@@ -99,28 +101,24 @@ export type {
   StandardSchemaV1Result,
 } from "./standard-schema.ts";
 export {
-  createQualityException,
-  evaluateQualityExceptionApplicability,
-  qualityExceptionMatchesExecution,
-  upsertQualityExceptionFromReport,
-  QualityExceptionFormatError,
-  validateQualityException,
-  validateQualityExceptionFile,
-  validateQualityExceptions,
-} from "./quality/quality-exceptions.ts";
+  createQaSuppression,
+  qaSuppressionMatchesExecution,
+  upsertQaSuppressionFromReport,
+  QaSuppressionFormatError,
+  validateQaSuppression,
+  validateQaSuppressionFile,
+  validateQaSuppressions,
+} from "./quality/qa-suppressions.ts";
 export type {
-  CreateQualityExceptionInput,
-  QualityException,
-  QualityExceptionApplicability,
-  QualityExceptionChangeReason,
-  QualityExceptionExecution,
-  QualityExceptionFile,
-  QualityExceptionFingerprintSummary,
-  QualityExceptionFormatErrorReason,
-  QualityExceptionNotVerifiedReason,
-  QualityExceptionStore,
-  UpsertQualityExceptionFromReportInput,
-} from "./quality/quality-exceptions.ts";
+  CreateQaSuppressionInput,
+  QaSuppression,
+  QaSuppressionExecution,
+  QaSuppressionFile,
+  QaSuppressionFingerprintSummary,
+  QaSuppressionFormatErrorReason,
+  QaSuppressionStore,
+  UpsertQaSuppressionFromReportInput,
+} from "./quality/qa-suppressions.ts";
 export {
   QualityCheckerContractError,
   QualityDataReaderContractError,
@@ -130,7 +128,6 @@ export {
 export type {
   CheckerDefinition,
   CheckerLoadInput,
-  CheckerPreparation,
   CheckerPrepareInput,
   QualityCheckStatus,
   QualityObject,
@@ -141,9 +138,7 @@ export type {
   QualityEvidence,
   QualityDiagnostic,
   QualityFinding,
-  QualityIssue,
   QualityCoverage,
-  QualityCheckOutcome,
   QualityInputFingerprintSummary,
   QualityCheckExecution,
   QualityCheckRequest,
@@ -154,7 +149,8 @@ export type {
   QualityDataLoadInput,
   QualityDataReader,
   QualityCheckScope,
-  QualityFactCoverage,
+  QualityReadCoverage,
+  TranslationProgress,
   QualityRunResult,
   QualityExecutionOptions,
 } from "./quality/qa.ts";
@@ -169,7 +165,7 @@ export type {
   QualityReportDecisionStatus,
 } from "./quality/report.ts";
 export type {
-  CacheableQualityCheckOutcome,
+  CachedQualityFindings,
   QualityCheckResultCache,
 } from "./quality/quality-cache.ts";
 export {
@@ -301,7 +297,7 @@ export type TranslationAdapter<
   ) => string;
   read(
     language: string,
-    sourceUnits: readonly SourceUnitFact<TUnit>[],
+    sourceUnits: readonly SourceUnit<TUnit>[],
   ): Awaitable<TranslationRead<TTranslation, TUnavailable>>;
 };
 
@@ -392,9 +388,9 @@ export type QualityConfiguration<
   readonly groups?: TGroups;
   /** 关系上下文不随候选筛选裁剪。 */
   readonly relationships?: readonly QualityRelationship[];
-  /** 显式启用原始结果缓存；命中后仍应用当前 QA 例外，存储故障不阻断检查。 */
+  /** 显式启用原始结果缓存；命中后仍应用当前 QA 豁免，存储故障不阻断检查。 */
   readonly resultCache?: QualityCheckResultCache;
-  readonly exceptionStore?: QualityExceptionStore;
+  readonly suppressionStore?: QaSuppressionStore;
 };
 
 type DefineConfigInput<
@@ -472,7 +468,7 @@ type TranslationAdapterInput<
   ) => string;
   read(
     language: string,
-    sourceUnits: readonly SourceUnitFact<NoInfer<TUnit>>[],
+    sourceUnits: readonly SourceUnit<NoInfer<TUnit>>[],
   ): Awaitable<
     TranslationRead<
       NoInfer<SchemaOutput<TTranslationSchema>>,
@@ -487,15 +483,15 @@ type SchemaOutput<TSchema> = TSchema extends never
     ? TOutput
     : never;
 
-export type SourceUnitFact<TUnit extends TranslationUnitInput> = {
+export type SourceUnit<TUnit extends TranslationUnitInput> = {
   readonly key: string;
   readonly unit: TUnit;
   readonly bodyAvailability: BodyAvailability;
   readonly scopeIndex: number;
 };
 
-export type SourceReadFact = {
-  readonly status: "complete" | "incomplete" | "failed" | "notRead";
+export type SourceReadCoverage = {
+  readonly status: CoverageStatus;
   readonly scopes: readonly {
     readonly range: unknown;
     readonly enumeration: EnumerationCompleteness;
@@ -505,11 +501,11 @@ export type SourceReadFact = {
   readonly error?: string;
 };
 
-export type SourceFacts<TUnit extends TranslationUnitInput> = {
+export type SourceSnapshot<TUnit extends TranslationUnitInput> = {
   readonly version: string;
-  readonly read: SourceReadFact;
+  readonly read: SourceReadCoverage;
   readonly totalUnitCount: number | null;
-  readonly units: readonly SourceUnitFact<TUnit>[];
+  readonly units: readonly SourceUnit<TUnit>[];
 };
 
 export type TranslationAssociationStatus =
@@ -520,7 +516,7 @@ export type TranslationAssociationStatus =
 
 export type CoverageStatus = "complete" | "incomplete" | "failed" | "notRead";
 
-export type TranslationReadScopeFact = {
+export type TranslationReadScopeCoverage = {
   readonly range: unknown;
   readonly covers: readonly string[];
   readonly enumeration: EnumerationCompleteness;
@@ -528,39 +524,39 @@ export type TranslationReadScopeFact = {
   readonly error?: string;
 };
 
-export type TranslationReadFact = {
+export type TranslationReadCoverage = {
   readonly language: string;
   readonly status: CoverageStatus;
-  readonly scopes: readonly TranslationReadScopeFact[];
+  readonly scopes: readonly TranslationReadScopeCoverage[];
   readonly error?: string;
 };
 
-type ActualTranslationFactBase = {
+type TranslationBase = {
   readonly index: number;
   readonly language: string;
   readonly scopeIndex: number;
   readonly range: unknown;
 };
 
-export type ActualTranslationFact<
+export type Translation<
   TTranslation,
   TBody = JsonValue,
   TUnavailable = never,
 > =
-  | (ActualTranslationFactBase & {
-      readonly translation: TTranslation;
+  | (TranslationBase & {
+      readonly record: TTranslation;
       readonly identity: TranslationIdentity;
       readonly content: TBody;
       readonly bodyAvailability: "available";
     })
-  | (ActualTranslationFactBase & {
-      readonly translation: TUnavailable;
+  | (TranslationBase & {
+      readonly record: TUnavailable;
       readonly identity: TranslationIdentity;
       readonly content?: never;
       readonly bodyAvailability: "unavailable";
     });
 
-export type TranslationAssociationFact = {
+export type TranslationAssociation = {
   readonly sourceKey: string;
   readonly language: string;
   readonly status: TranslationAssociationStatus;
@@ -583,10 +579,10 @@ export type ComparisonSnapshot<
   TUnavailable = never,
 > = {
   readonly version: string;
-  readonly source: SourceFacts<TUnit>;
+  readonly source: SourceSnapshot<TUnit>;
   readonly translations: {
-    readonly reads: readonly TranslationReadFact[];
-    readonly records: readonly ActualTranslationFact<
+    readonly reads: readonly TranslationReadCoverage[];
+    readonly records: readonly Translation<
       TTranslation,
       TBody,
       TUnavailable
@@ -594,13 +590,13 @@ export type ComparisonSnapshot<
   };
 };
 
-export type FrameworkFacts<
+export type ProjectSnapshot<
   TUnit extends TranslationUnitInput,
   TTranslation,
   TBody = JsonValue,
   TUnavailable = never,
 > = ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable> & {
-  readonly associations: readonly TranslationAssociationFact[];
+  readonly associations: readonly TranslationAssociation[];
 };
 
 export class DuplicateTranslationUnitKeyError extends Error {
@@ -716,7 +712,7 @@ function validateQualityConfiguration(value: unknown): void {
     invalidFrameworkConfig("defineConfig 的 quality.checks 必须是检查器数组。");
   if (Object.hasOwn(value, "buildCandidates"))
     invalidFrameworkConfig(
-      "defineConfig 的 quality.buildCandidates 已移除；请在 analyzeQuality 前构造 candidates。",
+      "defineConfig 的 quality.buildCandidates 已移除；请在 runQa 前构造 candidates。",
     );
   if (value.relationships !== undefined && !Array.isArray(value.relationships))
     invalidFrameworkConfig(
@@ -732,13 +728,13 @@ function validateQualityConfiguration(value: unknown): void {
       "defineConfig 的 quality.resultCache 必须提供 get 与 set 函数。",
     );
   if (
-    value.exceptionStore !== undefined &&
-    (!isRecord(value.exceptionStore) ||
-      typeof value.exceptionStore.load !== "function" ||
-      typeof value.exceptionStore.upsert !== "function")
+    value.suppressionStore !== undefined &&
+    (!isRecord(value.suppressionStore) ||
+      typeof value.suppressionStore.load !== "function" ||
+      typeof value.suppressionStore.upsert !== "function")
   )
     invalidFrameworkConfig(
-      "defineConfig 的 quality.exceptionStore 必须提供 load 与 upsert 函数。",
+      "defineConfig 的 quality.suppressionStore 必须提供 load 与 upsert 函数。",
     );
 }
 
@@ -750,14 +746,14 @@ function invalidFrameworkConfig(message: string): never {
   );
 }
 
-export async function readSourceFacts<
+export async function readSourceSnapshot<
   TUnit extends TranslationUnitInput,
   TTranslation,
   TBody,
   TUnavailable,
 >(
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
-): Promise<SourceFacts<TUnit>> {
+): Promise<SourceSnapshot<TUnit>> {
   validateSourceConfig(config);
   let read: SourceRead<TUnit> | undefined;
   let errorMessage: string | undefined;
@@ -771,7 +767,7 @@ export async function readSourceFacts<
   if (errorMessage === undefined) validateSourceRead(read);
 
   const firstIndexes = new Map<string, number>();
-  const units: SourceUnitFact<TUnit>[] = [];
+  const units: SourceUnit<TUnit>[] = [];
   const scopes = read?.scopes ?? [];
   for (const [scopeIndex, scope] of scopes.entries()) {
     for (const record of scope.records) {
@@ -798,23 +794,23 @@ export async function readSourceFacts<
     }
   }
 
-  const scopeFacts = scopes.map((scope) => ({
+  const scopeCoverage = scopes.map((scope) => ({
     range: scope.range,
     enumeration: scope.enumeration,
     recordCount: scope.records.length,
     ...(scope.error === undefined ? {} : { error: scope.error }),
   }));
-  const status = readStatus(scopeFacts, errorMessage);
+  const status = readStatus(scopeCoverage, errorMessage);
   const totalUnitCount = status === "complete" ? units.length : null;
-  const readFact: SourceReadFact = {
+  const readCoverage: SourceReadCoverage = {
     status,
-    scopes: scopeFacts,
+    scopes: scopeCoverage,
     ...(errorMessage === undefined ? {} : { error: errorMessage }),
   };
-  const version = sourceFactsVersion({ read: readFact, units });
+  const version = snapshotVersion({ read: readCoverage, units });
   return {
     version,
-    read: readFact,
+    read: readCoverage,
     totalUnitCount,
     units,
   };
@@ -847,18 +843,18 @@ async function collectComparisonSnapshot<
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
   languages: readonly string[],
 ): Promise<ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>> {
-  const source = await readSourceFacts(config);
-  const translations = await readTranslationFacts(
+  const source = await readSourceSnapshot(config);
+  const translations = await readTranslationSnapshot(
     config.translations,
     source.units,
     languages,
   );
 
-  const version = comparisonSnapshotVersion({ source, translations });
+  const version = snapshotVersion({ source, translations });
   return { version, source, translations };
 }
 
-export async function readFacts<
+export async function readProjectSnapshot<
   TUnit extends TranslationUnitInput,
   TTranslation,
   TBody,
@@ -866,7 +862,7 @@ export async function readFacts<
 >(
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
   options: LanguageSelectionOptions = {},
-): Promise<FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>> {
+): Promise<ProjectSnapshot<TUnit, TTranslation, TBody, TUnavailable>> {
   validateFrameworkConfig(config);
   const translationAdapter = config.translations;
   const languages = resolveLanguageSelection(
@@ -877,7 +873,7 @@ export async function readFacts<
 
   const associations = associateSnapshot(snapshot);
 
-  const version = factsVersion({
+  const version = snapshotVersion({
     source: snapshot.source,
     translations: snapshot.translations,
     associations,
@@ -885,7 +881,7 @@ export async function readFacts<
   return { ...snapshot, version, associations };
 }
 
-export async function analyzeQuality<
+export async function runQa<
   TUnit extends TranslationUnitInput,
   TTranslation,
   TBody,
@@ -907,11 +903,11 @@ export async function analyzeQuality<
       NoInfer<keyof TGroups & string>
     > & {
       /** 在 QA 前构造候选；身份必须引用本次读取到的原文键和译文语言。 */
-      readonly candidates?: readonly SemanticEditCandidate<TBody>[];
+      readonly candidates?: readonly TranslationCandidate<TBody>[];
       /** 仅筛选或重排传入的候选；返回项必须来自传入集合且身份不能重复。 */
       readonly selectCandidates?: (
-        candidates: readonly SemanticEditCandidate<TBody>[],
-      ) => readonly SemanticEditCandidate<TBody>[];
+        candidates: readonly TranslationCandidate<TBody>[],
+      ) => readonly TranslationCandidate<TBody>[];
       readonly memo?: MemoScope;
       readonly profiler?: QualityProfiler;
     } = {},
@@ -931,57 +927,44 @@ export async function analyzeQuality<
       options,
     );
     stage?.();
-    stage = profile?.stage("exceptions");
-    const exceptions = await loadQualityExceptions(config);
+    stage = profile?.stage("suppressions");
+    const suppressions = await loadQaSuppressions(config);
     stage?.();
-    stage = profile?.stage("facts");
-    const facts = await readFacts(config, options);
+    stage = profile?.stage("snapshot");
+    const snapshot = await readProjectSnapshot(config, options);
     stage?.();
     const memo = options.memo ?? createMemoScope();
     const qualityData = createQualityDataReader();
     try {
       stage = profile?.stage("candidates");
-      const candidateSource =
-        options.candidates === undefined
-          ? defaultQualityCandidates(facts)
-          : options.candidates;
-      if (!Array.isArray(candidateSource))
-        throw new TypeError("candidates 必须是译文候选数组。");
-
-      const candidates: SemanticEditCandidate<TBody>[] = [];
-      for (const candidate of candidateSource) {
-        const validated = await validateSemanticEditCandidate(
-          candidate,
-          config,
-        );
-        candidates.push(freezeJsonValue(validated));
-      }
-      validateQualityCandidateScope(facts, candidates);
-
-      let selection: readonly SemanticEditCandidate<TBody>[] = candidates;
-      if (options.selectCandidates !== undefined) {
-        const selected = options.selectCandidates(
-          Object.freeze(candidates.slice()),
-        );
-        if (!Array.isArray(selected))
-          throw new TypeError("selectCandidates 必须返回候选数组。");
-        const candidateSet = new Set(candidates);
-        if (selected.some((candidate) => !candidateSet.has(candidate)))
-          throw new TypeError(
-            "selectCandidates 只能筛选或重排传入的候选；请通过 candidates 提供候选。",
-          );
-        selection = selected;
-        validateQualityCandidateScope(facts, selection);
+      let selection: readonly TranslationCandidate<TBody>[] | undefined;
+      if (options.candidates !== undefined || options.selectCandidates !== undefined) {
+        const supplied = options.candidates === undefined ? savedTranslationCandidates(snapshot) : options.candidates;
+        if (!Array.isArray(supplied)) throw new TypeError("candidates 必须是译文候选数组。");
+        const candidates: TranslationCandidate<TBody>[] = [];
+        for (const candidate of supplied)
+          candidates.push(freezeJsonValue(await validateTranslationCandidate(candidate, config)));
+        validateQualityCandidateScope(snapshot, candidates);
+        selection = candidates;
+        if (options.selectCandidates !== undefined) {
+          const selected = options.selectCandidates(Object.freeze(candidates));
+          if (!Array.isArray(selected)) throw new TypeError("selectCandidates 必须返回候选数组。");
+          const offered = new Set(candidates);
+          if (selected.some((candidate) => !offered.has(candidate)))
+            throw new TypeError("selectCandidates 只能筛选或重排传入的候选；请通过 candidates 提供候选。");
+          validateQualityCandidateScope(snapshot, selected);
+          selection = selected;
+        }
       }
 
       stage?.();
       stage = profile?.stage("checks");
       const result = await runQualityChecksWithQualityData(
-        facts,
+        snapshot,
         {
-          candidates: selection,
+          ...(selection === undefined ? {} : { candidates: selection }),
           relationships: quality?.relationships ?? [],
-          exceptions,
+          suppressions,
         },
         selectedChecks,
         {
@@ -994,14 +977,52 @@ export async function analyzeQuality<
         qualityData,
       );
       stage?.();
-      completed = true;
-      return {
+      const configuredChecks = quality?.checks ?? [];
+      const report = {
         ...result,
         checkScope: {
-          configuredCount: quality?.checks?.length ?? 0,
+          configuredCount: configuredChecks.length,
           selectedIds: selectedChecks.map(({ id }) => id),
         },
       };
+      // 草稿与局部调试无法代表项目的已保存资源，也不能使其豁免失效。
+      const { executionStatus } = decideQualityReport(report);
+      if (selection !== undefined || options.checkIds !== undefined || options.groups !== undefined ||
+          executionStatus === "failed" || executionStatus === "incomplete") {
+        completed = true;
+        return report;
+      }
+
+      assertQaSuppressionBindings({
+        suppressions,
+        configuredCheckIds: configuredChecks.map(({ id }) => id),
+        configuredLanguages: config.translations?.languages ?? [],
+        completeSourceKeys: new Set(snapshot.source.units.map(({ key }) => key)),
+        savedChecks: result.checks,
+        ...(options.languages === undefined ? {} : { selectedLanguages: options.languages }),
+      });
+      const activeExecutions = new Set(result.diagnostics
+        .filter(({ handling }) => handling.status === "active")
+        .map(({ executionId }) => executionId));
+      const remaining = new Map<string, Set<string>>();
+      for (const check of result.checks) {
+        for (const { executionId, sourceKey, language } of check.executions) {
+          if (!activeExecutions.has(executionId)) continue;
+          let keys = remaining.get(language);
+          if (!keys) {
+            keys = new Set();
+            remaining.set(language, keys);
+          }
+          keys.add(sourceKey);
+        }
+      }
+      const total = snapshot.source.units.length;
+      const progress = snapshot.translations.reads.map(({ language }) => {
+        const finished = total - (remaining.get(language)?.size ?? 0);
+        return { language, completed: finished, total, ...(total === 0 ? {} : { percentage: 100 * finished / total }) };
+      });
+      completed = true;
+      return { ...report, progress };
     } finally {
       stage?.();
       stage = profile?.stage("cleanup");
@@ -1012,9 +1033,6 @@ export async function analyzeQuality<
         stage?.();
       }
     }
-  } catch (error) {
-    completed = false;
-    throw error;
   } finally {
     stage?.();
     profile?.finish(completed ? "completed" : "interrupted");
@@ -1098,42 +1116,19 @@ function resolveQualityCheckSelection<TCheck extends { readonly id: string }>(
   return checks.filter(({ id }) => selectedIds!.has(id));
 }
 
-async function loadQualityExceptions<
+async function loadQaSuppressions<
   TUnit extends TranslationUnitInput,
   TTranslation,
   TBody,
   TUnavailable,
 >(
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
-): Promise<readonly QualityException[]> {
-  const store = config.quality?.exceptionStore;
+): Promise<readonly QaSuppression[]> {
+  const store = config.quality?.suppressionStore;
   if (store === undefined) return [];
-  const exceptions: unknown = await store.load();
-  validateQualityExceptions(exceptions);
-  return exceptions;
-}
-
-function defaultQualityCandidates<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TBody,
-  TUnavailable,
->(
-  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
-): SemanticEditCandidate<TBody>[] {
-  return facts.associations.flatMap((association) => {
-    const record =
-      facts.translations.records[association.translationIndexes[0] as number];
-    return record === undefined || record.bodyAvailability !== "available"
-      ? []
-      : [
-          {
-            sourceKey: association.sourceKey,
-            language: association.language,
-            content: record.content,
-          },
-        ];
-  });
+  const suppressions: unknown = await store.load();
+  validateQaSuppressions(suppressions);
+  return suppressions;
 }
 
 function validateSourceRead(value: unknown): void {
@@ -1174,95 +1169,7 @@ function invalidReadStructure(message: string): never {
   );
 }
 
-function readStatus(
-  scopes: readonly {
-    readonly enumeration: EnumerationCompleteness;
-  }[],
-  errorMessage?: string,
-): CoverageStatus {
-  if (
-    errorMessage !== undefined ||
-    scopes.some(({ enumeration }) => enumeration === "failed")
-  )
-    return "failed";
-  if (scopes.length === 0) return "notRead";
-  return scopes.every(({ enumeration }) => enumeration === "complete")
-    ? "complete"
-    : "incomplete";
-}
 
-function comparisonSnapshotVersion<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TBody,
-  TUnavailable,
->(snapshot: {
-  readonly source: SourceFacts<TUnit>;
-  readonly translations: {
-    readonly reads: readonly TranslationReadFact[];
-    readonly records: readonly ActualTranslationFact<
-      TTranslation,
-      TBody,
-      TUnavailable
-    >[];
-  };
-}): string {
-  let serialized: string | undefined;
-  try {
-    serialized = JSON.stringify(snapshot);
-  } catch (error) {
-    throw new TypeError("比较快照及读取依据必须可序列化为 JSON。", {
-      cause: error,
-    });
-  }
-  if (serialized === undefined)
-    throw new TypeError("比较快照及读取依据必须可序列化为 JSON。");
-  return `sha256:${createHash("sha256").update(serialized).digest("hex")}`;
-}
-
-function sourceFactsVersion<TUnit extends TranslationUnitInput>(facts: {
-  readonly read: SourceReadFact;
-  readonly units: readonly SourceUnitFact<TUnit>[];
-}): string {
-  let serialized: string | undefined;
-  try {
-    serialized = JSON.stringify(facts);
-  } catch (error) {
-    throw new TypeError("原文事实及读取依据必须可序列化为 JSON。", {
-      cause: error,
-    });
-  }
-  if (serialized === undefined)
-    throw new TypeError("原文事实及读取依据必须可序列化为 JSON。");
-  return `sha256:${createHash("sha256").update(serialized).digest("hex")}`;
-}
-
-function factsVersion<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TBody,
-  TUnavailable,
->(facts: {
-  readonly source: SourceFacts<TUnit>;
-  readonly translations: {
-    readonly reads: readonly TranslationReadFact[];
-    readonly records: readonly ActualTranslationFact<
-      TTranslation,
-      TBody,
-      TUnavailable
-    >[];
-  };
-  readonly associations: readonly TranslationAssociationFact[];
-}): string {
-  let serialized: string | undefined;
-  try {
-    serialized = JSON.stringify(facts);
-  } catch (error) {
-    throw new TypeError("源译事实及读取依据必须可序列化为 JSON。", {
-      cause: error,
-    });
-  }
-  if (serialized === undefined)
-    throw new TypeError("源译事实及读取依据必须可序列化为 JSON。");
-  return `sha256:${createHash("sha256").update(serialized).digest("hex")}`;
+function snapshotVersion(value: object): string {
+  return `sha256:${createHash("sha256").update(JSON.stringify(value)).digest("hex")}`;
 }

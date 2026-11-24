@@ -56,7 +56,7 @@ export default defineConfig({
     }] })
   },
   translationWriteback: {
-    locateExistingTarget: ({ translation }) => ({ status: "located", locator: translation.translation.targetId }),
+    locateExistingTarget: ({ translation }) => ({ status: "located", locator: translation.record.targetId }),
     locateNewTarget: ({ sourceKey }) => ({ status: "located", locator: sourceKey }),
     ${
       options.batchFailure === true

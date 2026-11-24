@@ -1,9 +1,9 @@
-import { readSourceFacts } from "../src/index.ts";
+import { readSourceSnapshot } from "../src/index.ts";
 import { loadConfig } from "../src/node/index.ts";
 
 const dynamicFacts = loadConfig("host.config.ts").then(async (config) => {
-  const facts = await readSourceFacts(config);
-  const source = facts.units[0]?.unit.source;
+  const snapshot = await readSourceSnapshot(config);
+  const source = snapshot.units[0]?.unit.source;
   // @ts-expect-error 动态加载不能承诺调用者指定的原文业务类型。
   const text: string = source;
   void text;

@@ -1,5 +1,5 @@
 import {
-  analyzeQuality,
+  runQa,
   createMessageFamilyChecker,
   createTermChecker,
   requireAllowedTranslation,
@@ -16,19 +16,19 @@ import {
 
 import config from "./lioni.config.ts";
 
-const selectedById = analyzeQuality(config, { checkIds: ["syntax"] });
-const selectedByGroups = analyzeQuality(config, {
+const selectedById = runQa(config, { checkIds: ["syntax"] });
+const selectedByGroups = runQa(config, {
   groups: ["daily", "syntaxOnly"],
 });
 void selectedById;
 void selectedByGroups;
 
 // @ts-expect-error 发行声明应拒绝未配置的检查项 ID。
-analyzeQuality(config, { checkIds: ["missing"] });
+runQa(config, { checkIds: ["missing"] });
 // @ts-expect-error 发行声明应拒绝未配置的组名。
-analyzeQuality(config, { groups: ["all"] });
+runQa(config, { groups: ["all"] });
 // @ts-expect-error ID 与分组选择不能同时提供。
-analyzeQuality(config, { checkIds: ["syntax"], groups: ["daily"] });
+runQa(config, { checkIds: ["syntax"], groups: ["daily"] });
 
 type Body = { readonly text: string; readonly state: "draft" | "reviewed" };
 type Unit = {

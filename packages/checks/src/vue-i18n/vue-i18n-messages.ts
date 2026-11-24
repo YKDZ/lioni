@@ -26,7 +26,7 @@ export type VueI18nMessageBranch = {
   readonly variables: readonly string[];
 };
 
-export type VueI18nLinkFact =
+export type VueI18nLink =
   | {
       readonly kind: "static";
       readonly key: string;
@@ -42,13 +42,11 @@ export type VueI18nMessage = {
   readonly errors: readonly VueI18nSyntaxError[];
   readonly branches: readonly VueI18nMessageBranch[];
   readonly tokens: readonly TextToken[];
-  /** 静态关联键，便于按目标键建立消息关系。 */
-  readonly links: readonly string[];
-  /** 包含范围和动态键变量的关联事实。 */
-  readonly linkFacts: readonly VueI18nLinkFact[];
+  /** 保留每个关联的键、范围和动态变量。 */
+  readonly links: readonly VueI18nLink[];
 };
 
-/** 使用固定的 Vue I18n 编译器语法基准解析消息并提取共享事实。 */
+/** 使用固定版本的 Vue I18n 编译器提取消息分支、变量和关联。 */
 export function parseVueI18nMessage(text: string): VueI18nMessage {
   const errors: VueI18nSyntaxError[] = [];
   const { ast } = baseCompile(text, {
@@ -58,21 +56,19 @@ export function parseVueI18nMessage(text: string): VueI18nMessage {
   });
   const cases = "cases" in ast.body ? ast.body.cases : [ast.body];
   const tokens: TextToken[] = [];
-  const links: string[] = [];
-  const linkFacts: VueI18nLinkFact[] = [];
+  const links: VueI18nLink[] = [];
   const branches = cases.map((branch) =>
-    analyzeBranch(branch, text.length, tokens, links, linkFacts),
+    analyzeBranch(branch, text.length, tokens, links),
   );
 
-  return { errors, branches, tokens, links, linkFacts };
+  return { errors, branches, tokens, links };
 }
 
 function analyzeBranch(
   branch: MessageNode,
   textLength: number,
   tokens: TextToken[],
-  links: string[],
-  linkFacts: VueI18nLinkFact[],
+  links: VueI18nLink[],
 ): VueI18nMessageBranch {
   const variables: string[] = [];
   let projectedText = "";
@@ -86,8 +82,7 @@ function analyzeBranch(
     } else if (item.type === 6) {
       projectedText += " ";
       const link = analyzeLink(item, variables, tokens, textLength);
-      linkFacts.push(link);
-      if (link.kind === "static") links.push(link.key);
+      links.push(link);
     }
   }
 
@@ -103,7 +98,7 @@ function analyzeLink(
   variables: string[],
   tokens: TextToken[],
   textLength: number,
-): VueI18nLinkFact {
+): VueI18nLink {
   const range = nodeRange(item, textLength);
   const key = item.key;
   if (key.type === 7) return { kind: "static", key: key.value, range };

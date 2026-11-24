@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
-  analyzeQuality,
+  runQa,
   defineChecker,
   defineConfig,
   readComparisonSnapshot,
-  readFacts,
+  readProjectSnapshot,
   type FrameworkConfig,
   type QualityConfiguration,
 } from "../src/index.ts";
@@ -79,14 +79,14 @@ function fixture(quality?: QualityConfiguration<Unit, Translation, string>) {
 void describe("本次执行的语言范围", () => {
   void it("仅读取选中语言，去重后按配置顺序执行，并保留 adapter 的 this", async () => {
     const { config, reads } = fixture();
-    const facts = await readFacts(config, { languages: ["ja", "fr", "ja"] });
+    const snapshot = await readProjectSnapshot(config, { languages: ["ja", "fr", "ja"] });
     assert.deepStrictEqual(reads, ["source", "fr", "ja"]);
     assert.deepStrictEqual(
-      facts.translations.reads.map(({ language }) => language),
+      snapshot.translations.reads.map(({ language }) => language),
       ["fr", "ja"],
     );
     assert.deepStrictEqual(
-      facts.associations.map(({ language, translationIndexes }) => ({
+      snapshot.associations.map(({ language, translationIndexes }) => ({
         language,
         translationIndexes,
       })),
@@ -115,9 +115,9 @@ void describe("本次执行的语言范围", () => {
       config: FrameworkConfig<Unit, Translation, string>,
       languages: readonly string[],
     ) => Promise<unknown>)[] = [
-      (config, languages) => readFacts(config, { languages }),
+      (config, languages) => readProjectSnapshot(config, { languages }),
       (config, languages) => readComparisonSnapshot(config, { languages }),
-      (config, languages) => analyzeQuality(config, { languages }),
+      (config, languages) => runQa(config, { languages }),
     ];
     for (const run of runs) {
       for (const languages of [[], ["es"], ["fr", "es"]]) {
@@ -143,37 +143,23 @@ void describe("本次执行的语言范围", () => {
           id: "language-observer",
           version: "language-observer-v1",
           inputSchema: schemaFromExamples({ language: "" }),
-          load: ({ facts }) => {
+          load: ({ snapshot }) => {
             preparedLanguages.push(
-              facts.translations.reads.map(({ language }) => language),
+              snapshot.translations.reads.map(({ language }) => language),
             );
             return {};
           },
-          prepare({ candidate }) {
-            return {
-              status: "ready",
-              input: { language: candidate.language },
-            };
+          prepare({ association }) {
+            return { language: association.language };
           },
           check({ language }) {
             checkedLanguages.push(language);
-            return {
-              status: "complete",
-              diagnostics: [],
-              issues: [],
-              coverage: {
-                selected: 1,
-                evaluated: 1,
-                notApplicable: 0,
-                incomplete: 0,
-                failed: 0,
-              },
-            };
+            return [];
           },
         }),
       ],
     });
-    const result = await analyzeQuality(config, { languages: ["ja"] });
+    const result = await runQa(config, { languages: ["ja"] });
     assert.deepStrictEqual(reads, ["source", "ja"]);
     assert.deepStrictEqual(preparedLanguages, [["ja"]]);
     assert.deepStrictEqual(checkedLanguages, ["ja"]);
@@ -182,7 +168,7 @@ void describe("本次执行的语言范围", () => {
       ["ja"],
     );
     assert.deepStrictEqual(
-      result.factCoverage.translations.map(({ language }) => language),
+      result.readCoverage.translations.map(({ language }) => language),
       ["ja"],
     );
   });
@@ -191,18 +177,18 @@ void describe("本次执行的语言范围", () => {
     const outside = { sourceKey: "save", language: "ja", content: "保存" };
     const explicit = fixture();
     await assert.rejects(
-      analyzeQuality(explicit.config, {
+      runQa(explicit.config, {
         languages: ["fr"],
         candidates: [outside],
       }),
       /译文候选语言 "ja" 不在本次执行范围内/,
     );
 
-    const allLanguages = await analyzeQuality(explicit.config, {
+    const allLanguages = await runQa(explicit.config, {
       candidates: [outside],
     });
     assert.deepStrictEqual(allLanguages.candidates, [outside]);
-    const accepted = await analyzeQuality(explicit.config, {
+    const accepted = await runQa(explicit.config, {
       languages: ["ja"],
       candidates: [outside],
     });
@@ -210,7 +196,7 @@ void describe("本次执行的语言范围", () => {
 
     const external = { ...outside, language: "es" };
     await assert.rejects(
-      analyzeQuality(explicit.config, { candidates: [external] }),
+      runQa(explicit.config, { candidates: [external] }),
       /译文候选语言 "es" 不在本次执行范围内/,
     );
   });

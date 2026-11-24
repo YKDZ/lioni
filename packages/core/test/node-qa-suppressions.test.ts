@@ -4,10 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 
-import { createQualityException } from "../src/index.ts";
+import { createQaSuppression } from "../src/index.ts";
 import {
-  createFileQualityExceptionStore,
-  resolveDefaultQualityExceptionFilePath,
+  createFileQaSuppressionStore,
+  resolveDefaultQaSuppressionFilePath,
 } from "../src/node/index.ts";
 
 const execution = {
@@ -24,7 +24,7 @@ const execution = {
   },
 };
 
-const exception = createQualityException({
+const suppression = createQaSuppression({
   id: "save-copy-meaning-fr",
   reason: "译文保留了预期动作。",
   execution,
@@ -34,7 +34,7 @@ async function withDirectory(
   run: (directory: string) => Promise<void>,
 ): Promise<void> {
   const directory = await mkdtemp(
-    path.join(os.tmpdir(), "lioni-qa-exceptions-"),
+    path.join(os.tmpdir(), "lioni-qa-suppressions-"),
   );
   try {
     await run(directory);
@@ -43,33 +43,33 @@ async function withDirectory(
   }
 }
 
-void describe("Node.js QA 例外存储", () => {
-  void it("缺少默认文件时返回空例外列表", async () => {
+void describe("Node.js QA 豁免存储", () => {
+  void it("缺少默认文件时返回空豁免列表", async () => {
     await withDirectory(async (directory) => {
-      const store = createFileQualityExceptionStore(
-        path.join(directory, "lioni.exceptions.yaml"),
+      const store = createFileQaSuppressionStore(
+        path.join(directory, "lioni.suppressions.yaml"),
       );
 
       assert.deepEqual(await store.load(), []);
-      await store.upsert(exception);
-      assert.deepEqual(await store.load(), [exception]);
+      await store.upsert(suppression);
+      assert.deepEqual(await store.load(), [suppression]);
       const contents = await readFile(
-        path.join(directory, "lioni.exceptions.yaml"),
+        path.join(directory, "lioni.suppressions.yaml"),
         "utf8",
       );
-      assert.match(contents, /^format: lioni\.qa-exceptions\/v2$/mu);
+      assert.match(contents, /^format: lioni\.qa-suppressions\/v1$/mu);
     });
   });
 
   void it("读取手写 YAML 并校验版本化记录", async () => {
     await withDirectory(async (directory) => {
-      const filePath = path.join(directory, "lioni.exceptions.yaml");
+      const filePath = path.join(directory, "lioni.suppressions.yaml");
       await writeFile(
         filePath,
         [
           "# 人工维护的批准记录",
-          "format: lioni.qa-exceptions/v2",
-          "exceptions:",
+          "format: lioni.qa-suppressions/v1",
+          "suppressions:",
           "  - id: save-copy-meaning-fr",
           "    reason: 译文保留了预期动作。",
           "    checkId: copy/meaning",
@@ -83,30 +83,28 @@ void describe("Node.js QA 例外存储", () => {
         ].join("\n"),
         "utf8",
       );
-      const store = createFileQualityExceptionStore(filePath);
+      const store = createFileQaSuppressionStore(filePath);
 
-      assert.deepEqual(await store.load(), [exception]);
+      assert.deepEqual(await store.load(), [suppression]);
     });
   });
 
-  void it("拒绝旧例外并保留原文件供用户重建", async () => {
+  void it("拒绝旧豁免并保留原文件供用户重建", async () => {
     await withDirectory(async (directory) => {
-      const filePath = path.join(directory, "lioni.exceptions.yaml");
-      const oldContents = [
-        "format: lioni.qa-exceptions/v1",
-        "exceptions: []",
-        "",
-      ].join("\n");
+      const filePath = path.join(directory, "lioni.suppressions.yaml");
+      const oldContents = ["format: unsupported", "suppressions: []", ""].join(
+        "\n",
+      );
       await writeFile(filePath, oldContents, "utf8");
-      const store = createFileQualityExceptionStore(filePath);
+      const store = createFileQaSuppressionStore(filePath);
 
       await assert.rejects(store.load(), {
-        name: "QualityExceptionFormatError",
+        name: "QaSuppressionFormatError",
         reason: "unsupported",
-        message: /先保留并移开.*运行 QA.*重新建立/u,
+        message: /依据当前 QA 报告重新建立/u,
       });
-      await assert.rejects(store.upsert(exception), {
-        name: "QualityExceptionFormatError",
+      await assert.rejects(store.upsert(suppression), {
+        name: "QaSuppressionFormatError",
       });
       assert.equal(await readFile(filePath, "utf8"), oldContents);
     });
@@ -114,32 +112,32 @@ void describe("Node.js QA 例外存储", () => {
 
   void it("无效 YAML、错误格式或冲突身份会明确失败", async () => {
     await withDirectory(async (directory) => {
-      const filePath = path.join(directory, "lioni.exceptions.yaml");
-      const store = createFileQualityExceptionStore(filePath);
-      await writeFile(filePath, "exceptions: [\n", "utf8");
+      const filePath = path.join(directory, "lioni.suppressions.yaml");
+      const store = createFileQaSuppressionStore(filePath);
+      await writeFile(filePath, "suppressions: [\n", "utf8");
       await assert.rejects(store.load(), {
-        name: "QualityExceptionFormatError",
+        name: "QaSuppressionFormatError",
       });
 
       await writeFile(
         filePath,
-        "format: lioni.qa-exceptions/v1\nexceptions: []\n",
+        "format: unsupported\nsuppressions: []\n",
         "utf8",
       );
       await assert.rejects(store.load(), {
-        name: "QualityExceptionFormatError",
+        name: "QaSuppressionFormatError",
       });
 
       await writeFile(filePath, "", "utf8");
       await assert.rejects(store.load(), {
-        name: "QualityExceptionFormatError",
+        name: "QaSuppressionFormatError",
       });
 
       await writeFile(
         filePath,
         [
-          "format: lioni.qa-exceptions/v2",
-          "exceptions:",
+          "format: lioni.qa-suppressions/v1",
+          "suppressions:",
           "  - id: first",
           "    reason: 第一个理由",
           "    checkId: copy/meaning",
@@ -159,26 +157,24 @@ void describe("Node.js QA 例外存储", () => {
         "utf8",
       );
       await assert.rejects(store.load(), {
-        name: "QualityExceptionFormatError",
+        name: "QaSuppressionFormatError",
       });
 
       const unreadablePath = path.join(directory, "directory-not-a-file");
       await mkdir(unreadablePath);
-      await assert.rejects(
-        createFileQualityExceptionStore(unreadablePath).load(),
-      );
+      await assert.rejects(createFileQaSuppressionStore(unreadablePath).load());
     });
   });
 
   void it("更新单条记录时保留注释和其他记录顺序", async () => {
     await withDirectory(async (directory) => {
-      const filePath = path.join(directory, "lioni.exceptions.yaml");
+      const filePath = path.join(directory, "lioni.suppressions.yaml");
       await writeFile(
         filePath,
         [
           "# 文件说明保留",
-          "format: lioni.qa-exceptions/v2",
-          "exceptions:",
+          "format: lioni.qa-suppressions/v1",
+          "suppressions:",
           "  # 第一条说明保留",
           "  - id: save-copy-meaning-fr",
           "    reason: 旧理由",
@@ -190,7 +186,7 @@ void describe("Node.js QA 例外存储", () => {
           '      version: "2"',
           "      inputFingerprint: sha256:business-input",
           "  # 第二条说明保留",
-          "  - id: another-exception",
+          "  - id: another-suppression",
           "    reason: 另一项人工批准",
           "    checkId: copy/meaning",
           "    sourceKey: submit",
@@ -203,9 +199,9 @@ void describe("Node.js QA 例外存储", () => {
         ].join("\n"),
         "utf8",
       );
-      const store = createFileQualityExceptionStore(filePath);
+      const store = createFileQaSuppressionStore(filePath);
 
-      await store.upsert(exception);
+      await store.upsert(suppression);
 
       const contents = await readFile(filePath, "utf8");
       assert.match(contents, /# 文件说明保留/u);
@@ -213,12 +209,12 @@ void describe("Node.js QA 例外存储", () => {
       assert.match(contents, /# 第二条说明保留/u);
       assert.ok(
         contents.indexOf("save-copy-meaning-fr") <
-          contents.indexOf("another-exception"),
+          contents.indexOf("another-suppression"),
       );
       assert.deepEqual(await store.load(), [
-        exception,
+        suppression,
         {
-          id: "another-exception",
+          id: "another-suppression",
           reason: "另一项人工批准",
           checkId: "copy/meaning",
           sourceKey: "submit",
@@ -233,10 +229,10 @@ void describe("Node.js QA 例外存储", () => {
     });
   });
 
-  void it("从配置文件路径定位同目录下的默认例外文件", () => {
+  void it("从配置文件路径定位同目录下的默认豁免文件", () => {
     assert.equal(
-      resolveDefaultQualityExceptionFilePath("configs/lioni.config.ts"),
-      path.resolve("configs/lioni.exceptions.yaml"),
+      resolveDefaultQaSuppressionFilePath("configs/lioni.config.ts"),
+      path.resolve("configs/lioni.suppressions.yaml"),
     );
   });
 });

@@ -3,17 +3,17 @@ import { createHash, type Hash } from "node:crypto";
 import { createMemoScope, type MemoScope } from "@lioni/memo";
 
 import type {
-  ActualTranslationFact,
+  Translation,
   Awaitable,
-  FrameworkFacts,
-  SourceReadFact,
-  SourceUnitFact,
-  TranslationAssociationFact,
-  TranslationReadFact,
+  ProjectSnapshot,
+  SourceReadCoverage,
+  SourceUnit,
+  TranslationAssociation,
+  TranslationReadCoverage,
   TranslationUnitInput,
 } from "../index.ts";
 import { isRecord } from "../object-guards.ts";
-import type { JsonValue, SemanticEditCandidate } from "../semantic-edits.ts";
+import type { JsonValue, TranslationCandidate } from "../semantic-edits.ts";
 import { stableStringifyJson } from "../stable-json.ts";
 import {
   freezeJsonValue,
@@ -27,35 +27,26 @@ import type {
   PreservingStandardSchema,
   StandardSchemaV1,
 } from "../standard-schema.ts";
-import { validateQualityCandidateScope } from "./candidate-contract.ts";
+import {
+  savedTranslationCandidates,
+  validateQualityCandidateScope,
+} from "./candidate-contract.ts";
 import type {
   QualityProfileSession,
   QualityProfileCandidateSession,
 } from "./profiler.ts";
 import {
-  isCacheableQualityCheckOutcome,
-  isQualityCheckOutcome,
-  isQualityIssue,
-  isReusableQualityCheckOutcome,
-  type CacheableQualityCheckOutcome,
+  qaSuppressionMatchesExecution,
+  validateQaSuppressions,
+  type QaSuppression,
+} from "./qa-suppressions.ts";
+import {
+  isCachedQualityFindings,
+  type CachedQualityFindings,
   type QualityCheckResultCache,
 } from "./quality-cache.ts";
-import {
-  evaluateQualityExceptionApplicability,
-  qualityExceptionMatchesExecution,
-  validateQualityExceptions,
-} from "./quality-exceptions.ts";
-import type {
-  QualityException,
-  QualityExceptionApplicability,
-} from "./quality-exceptions.ts";
 
-export type QualityCheckStatus =
-  | "not-run"
-  | "not-applicable"
-  | "incomplete"
-  | "failed"
-  | "complete";
+export type QualityCheckStatus = "not-run" | "failed" | "complete";
 
 export type QualityObject = {
   readonly kind: string;
@@ -88,8 +79,8 @@ export type QualityRelationship = {
 export type QualityDiagnosticHandling =
   | { readonly status: "active" }
   | {
-      readonly status: "excepted";
-      readonly exceptionId: string;
+      readonly status: "suppressed";
+      readonly suppressionId: string;
       readonly reason: string;
     };
 
@@ -115,20 +106,9 @@ export type QualityDiagnostic<TObject extends QualityObject = QualityObject> =
 export type QualityFinding<TObject extends QualityObject = QualityObject> =
   Omit<QualityDiagnostic<TObject>, "checkId" | "executionId" | "handling">;
 
-export type QualityIssue<TObject extends QualityObject = QualityObject> =
-  ReadonlyQualityValue<{
-    readonly code: string;
-    readonly message: string;
-    readonly object?: TObject;
-    readonly location?: QualityLocation;
-    readonly evidence?: readonly QualityEvidence<TObject>[];
-  }>;
-
 export type QualityCoverage = {
   readonly selected: number;
   readonly evaluated: number;
-  readonly notApplicable: number;
-  readonly incomplete: number;
   readonly failed: number;
 };
 
@@ -140,39 +120,10 @@ type ReadonlyQualityValue<TValue> =
       ? { readonly [TKey in keyof TValue]: ReadonlyQualityValue<TValue[TKey]> }
       : TValue;
 
-type MutableQualityCoverage = {
-  -readonly [TKey in keyof QualityCoverage]: QualityCoverage[TKey];
-};
-
-type AcceptedQualityCheckOutcome = {
-  readonly outcome: QualityCheckOutcome;
-  readonly cacheableOutcome?: CacheableQualityCheckOutcome;
-};
-
-type QualityCheckOutcomeResolution =
-  | { readonly outcome: QualityCheckOutcome }
-  | {
-      readonly execute: () => Awaitable<QualityCheckOutcome>;
-      readonly cache?: QualityCheckResultCache;
-      readonly cacheKey?: string;
-    };
-
-/**
- * 检查器返回的原始结果。QA 在接入时隔离一次，之后缓存与报告共享只读数据；
- * 检查器完成返回后不得继续修改原对象。
- */
-export type QualityCheckOutcome<TObject extends QualityObject = QualityObject> =
-  {
-    readonly status: Exclude<QualityCheckStatus, "not-run">;
-    readonly diagnostics: readonly QualityFinding<TObject>[];
-    readonly issues: readonly QualityIssue<TObject>[];
-    readonly coverage: QualityCoverage;
-  };
-
 export type QualityCheckRequest<TBody = JsonValue> = {
-  readonly candidates: readonly SemanticEditCandidate<TBody>[];
+  readonly candidates?: readonly TranslationCandidate<TBody>[];
   readonly relationships?: readonly QualityRelationship[];
-  readonly exceptions?: readonly QualityException[];
+  readonly suppressions?: readonly QaSuppression[];
 };
 
 /** 同一次 QA 的明确共享读取器；同一函数对象与同一参数共享结果及失败。 */
@@ -197,7 +148,7 @@ export class QualityDataReaderContractError extends TypeError {
 }
 
 /** 创建仅覆盖当前 QA 运行的检查资料读取范围。 */
-export function createQualityDataReader(): QualityDataReaderScope {
+function createQualityDataReader(): QualityDataReaderScope {
   const memo = createMemoScope();
   const operations = new WeakMap<
     object,
@@ -235,24 +186,24 @@ export type QualityDataLoadInput<
   TBody,
   TUnavailable,
 > = {
-  readonly facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>;
+  readonly snapshot: ProjectSnapshot<TUnit, TTranslation, TBody, TUnavailable>;
   /** 纯计算可跨本次检查运行复用；不用于缓存动态检查资料。 */
   readonly memo: MemoScope;
   readonly qualityData: QualityDataReader;
 };
 
-/** 一次加载所需的上下文。事实、候选和关系由本次运行共享，按只读约定使用。 */
+/** 一次加载所需的上下文。项目快照、候选和关系由本次运行共享，按只读约定使用。 */
 export type CheckerLoadInput<
   TUnit extends TranslationUnitInput = TranslationUnitInput,
   TTranslation = unknown,
   TBody = unknown,
   TUnavailable = unknown,
 > = QualityDataLoadInput<TUnit, TTranslation, TBody, TUnavailable> & {
-  readonly candidates: readonly SemanticEditCandidate<TBody>[];
+  readonly candidates: readonly TranslationCandidate<TBody>[];
   readonly relationships: readonly QualityRelationship[];
 };
 
-/** 为当前候选准备规则消费的完整业务输入。 */
+/** 为当前检查对象准备规则消费的完整业务输入。 */
 export type CheckerPrepareInput<
   TUnit extends TranslationUnitInput = TranslationUnitInput,
   TTranslation = unknown,
@@ -263,26 +214,14 @@ export type CheckerPrepareInput<
   CheckerLoadInput<TUnit, TTranslation, TBody, TUnavailable>,
   "qualityData"
 > & {
-  readonly candidate: SemanticEditCandidate<TBody>;
-  readonly sourceUnit: SourceUnitFact<TUnit>;
+  readonly candidate: TranslationCandidate<TBody> | null;
+  readonly sourceUnit: SourceUnit<TUnit>;
   /** 同键同语言的现存记录。空值的读取依据见 association。 */
-  readonly translation: ActualTranslationFact<
-    TTranslation,
-    TBody,
-    TUnavailable
-  > | null;
-  readonly association: TranslationAssociationFact;
+  readonly translation: Translation<TTranslation, TBody, TUnavailable> | null;
+  readonly association: TranslationAssociation;
   /** 只读使用。其生命周期为当前运行，未声明 load 时为 undefined。 */
   readonly loaded: TLoaded;
 };
-
-export type CheckerPreparation<
-  TInput,
-  TObject extends QualityObject = QualityObject,
-> =
-  | { readonly status: "ready"; readonly input: TInput }
-  | { readonly status: "not-applicable" }
-  | { readonly status: "incomplete"; readonly issue: QualityIssue<TObject> };
 
 export type CheckerDefinition<
   TSchema extends StandardSchemaV1<unknown, unknown>,
@@ -298,7 +237,7 @@ export type CheckerDefinition<
   readonly version: string;
   readonly inputSchema: TSchema &
     PreservingStandardSchema<StandardSchemaOutput<TSchema>, NoInfer<TSchema>>;
-  /** 已选中且有候选时调用一次。动态资料可通过 qualityData.read 显式共享。 */
+  /** 已选中且有检查对象时调用一次。动态资料可通过 qualityData.read 显式共享。 */
   readonly load?: (
     input: CheckerLoadInput<TUnit, TTranslation, TBody, TUnavailable>,
   ) => Awaitable<TLoaded>;
@@ -310,13 +249,11 @@ export type CheckerDefinition<
       TUnavailable,
       NoInfer<TLoaded>
     >,
-  ) => Awaitable<
-    CheckerPreparation<NoInfer<StandardSchemaInput<TSchema>>, TObject>
-  >;
+  ) => Awaitable<NoInfer<StandardSchemaInput<TSchema>>>;
   /** 只消费已校验并固定的输入。缓存命中时不调用。 */
   readonly check: (
     input: ReadonlyQualityValue<NoInfer<StandardSchemaOutput<TSchema>>>,
-  ) => Awaitable<QualityCheckOutcome<TObject>>;
+  ) => Awaitable<readonly QualityFinding<TObject>[]>;
 } & (undefined extends NoInfer<TLoaded> ? unknown : { readonly load: unknown });
 
 /** 检查器声明或阶段返回结构不符合正式检查契约。 */
@@ -344,11 +281,12 @@ export type QualityInputFingerprintSummary = {
 
 export type QualityCheckExecution = {
   readonly executionId: number;
-  readonly candidateIndex: number;
+  readonly candidateIndex?: number;
   readonly checkId: string;
   readonly sourceKey: string;
   readonly language: string;
-  readonly status: QualityCheckStatus;
+  readonly status: "complete" | "failed";
+  readonly error?: string;
   readonly inputFingerprint?: string;
   readonly fingerprintSummary?: QualityInputFingerprintSummary;
 };
@@ -396,19 +334,11 @@ type QualityInputPreparationContext = {
   readonly endFingerprint: () => void;
 };
 
-type QualityCheckPreparer = () => Promise<unknown>;
-
-type QualityCheckExecutionPreparation<TObject extends QualityObject> =
-  | {
-      readonly status: "not-applicable" | "incomplete";
-      readonly outcome: QualityCheckOutcome<TObject>;
-    }
-  | {
-      readonly status: "ready";
-      readonly fingerprint: Required<QualityInputFingerprint>;
-      readonly cacheKey: string;
-      readonly execute: () => Awaitable<QualityCheckOutcome<TObject>>;
-    };
+type QualityCheckExecutionPreparation<TObject extends QualityObject> = {
+  readonly fingerprint: Required<QualityInputFingerprint>;
+  readonly cacheKey: string;
+  readonly execute: () => Awaitable<readonly QualityFinding<TObject>[]>;
+};
 
 const qualityCheckDefinitionBrand: unique symbol = Symbol(
   "qualityCheckDefinition",
@@ -431,13 +361,13 @@ export type QualityCheckDefinition<
       TUnavailable,
       unknown
     >,
-  ) => QualityCheckOutcome<TObject>;
+  ) => readonly QualityFinding<TObject>[];
   readonly id: TId;
   readonly version: string;
 };
 
-/** 将执行状态与公开检查器对象分离，避免暴露内部准备和执行协议。 */
-const qualityCheckPreparers = new WeakMap<object, QualityCheckPreparer>();
+/** 宿主类型由公开定义约束，运行时按同一对象取回对应实现。 */
+const qualityCheckImplementations = new WeakMap<object, unknown>();
 
 function defineCheckerFor<
   TUnit extends TranslationUnitInput = TranslationUnitInput,
@@ -514,26 +444,9 @@ function defineCheckerFor<
             TLoaded
           >,
         );
-        if (!isCheckerPreparation(preparation))
-          throw new QualityCheckerContractError(
-            id,
-            "prepare",
-            "的 prepare 返回了无效结果。",
-          );
-        if (preparation.status === "not-applicable")
-          return {
-            status: "not-applicable",
-            outcome: checkerOutcome<TObject>("not-applicable"),
-          };
-        if (preparation.status === "incomplete")
-          return {
-            status: "incomplete",
-            outcome: checkerOutcome<TObject>("incomplete", preparation.issue),
-          };
-
         const finalInput = await validateWithStandardSchema(
           inputSchema,
-          preparation.input,
+          preparation,
           `QA 检查器 ${id} 的输入`,
           { snapshotInput: true },
         );
@@ -541,7 +454,6 @@ function defineCheckerFor<
         context.startFingerprint();
         try {
           return {
-            status: "ready",
             ...prepareFingerprint(
               id,
               version,
@@ -560,7 +472,7 @@ function defineCheckerFor<
         }
       },
     };
-    qualityCheckPreparers.set(qualityCheck, async () => prepared);
+    qualityCheckImplementations.set(qualityCheck, prepared);
     return qualityCheck as unknown as QualityCheckDefinition<
       TUnit,
       TTranslation,
@@ -574,7 +486,7 @@ function defineCheckerFor<
 }
 
 /**
- * 声明一次共享加载、逐候选准备及规则计算。规则所需的全部业务依据
+ * 声明一次共享加载、逐对象准备及规则计算。规则所需的全部业务依据
  * 必须进入准备结果，框架用同一份固定输入计算指纹并执行规则。
  * 相同输入下规则语义变化时应更新 version。
  * 需要明确宿主类型时，可先调用 withTypes，schema、加载结果和 ID 仍由声明推导。
@@ -582,31 +494,6 @@ function defineCheckerFor<
 export const defineChecker = Object.assign(defineCheckerFor(), {
   withTypes: defineCheckerFor,
 });
-
-function isCheckerPreparation(value: unknown): boolean {
-  if (!isRecord(value)) return false;
-  if (value.status === "ready") return Object.hasOwn(value, "input");
-  if (value.status === "not-applicable") return true;
-  return value.status === "incomplete" && isQualityIssue(value.issue);
-}
-
-function checkerOutcome<TObject extends QualityObject>(
-  status: "not-applicable" | "incomplete",
-  issue?: QualityIssue<TObject>,
-): QualityCheckOutcome<TObject> {
-  return {
-    status,
-    diagnostics: [],
-    issues: issue === undefined ? [] : [issue],
-    coverage: {
-      selected: 1,
-      evaluated: 0,
-      notApplicable: status === "not-applicable" ? 1 : 0,
-      incomplete: status === "incomplete" ? 1 : 0,
-      failed: 0,
-    },
-  };
-}
 
 function assertQualityCheckIdentity(id: string, version: string): void {
   if (typeof id !== "string" || id.trim() === "")
@@ -646,7 +533,6 @@ export type QualityCheckResult<TObject extends QualityObject = QualityObject> =
     readonly version: string;
     readonly status: QualityCheckStatus;
     readonly diagnostics: readonly QualityDiagnostic<TObject>[];
-    readonly issues: readonly QualityIssue<TObject>[];
     readonly coverage: QualityCoverage;
     readonly executions: readonly QualityCheckExecution[];
   };
@@ -656,12 +542,19 @@ export type QualityCheckScope = {
   readonly selectedIds: readonly string[];
 };
 
-export type QualityFactCoverage = {
-  readonly source: SourceReadFact;
-  readonly translations: readonly TranslationReadFact[];
-  readonly associations: readonly (TranslationAssociationFact & {
-    readonly candidateSelected: boolean;
+export type QualityReadCoverage = {
+  readonly source: SourceReadCoverage;
+  readonly translations: readonly TranslationReadCoverage[];
+  readonly associations: readonly (TranslationAssociation & {
+    readonly subjectSelected: boolean;
   })[];
+};
+
+export type TranslationProgress = {
+  readonly language: string;
+  readonly completed: number;
+  readonly total: number;
+  readonly percentage?: number;
 };
 
 export type QualityRunResult<
@@ -669,12 +562,12 @@ export type QualityRunResult<
   TBody = JsonValue,
 > = {
   readonly version: string;
-  readonly candidates: readonly SemanticEditCandidate<TBody>[];
-  readonly factCoverage: QualityFactCoverage;
+  readonly candidates: readonly TranslationCandidate<TBody>[];
+  readonly readCoverage: QualityReadCoverage;
   readonly checkScope: QualityCheckScope;
   readonly relationships: readonly QualityRelationship[];
-  readonly exceptions: readonly QualityException[];
-  readonly exceptionApplicability: readonly QualityExceptionApplicability[];
+  readonly suppressions: readonly QaSuppression[];
+  readonly progress?: readonly TranslationProgress[];
   readonly status: QualityCheckStatus;
   readonly diagnostics: readonly QualityDiagnostic<TObject>[];
   readonly checks: readonly QualityCheckResult<TObject>[];
@@ -685,7 +578,7 @@ export type QualityExecutionOptions = {
   readonly profile?: QualityProfileSession;
   /** 传入的范围由调用方管理；省略时由本次 QA 创建并关闭。 */
   readonly memo?: MemoScope;
-  /** 只复用已完成检查的原始结果；例外仍按本次运行重新处理。 */
+  /** 只复用已完成检查的原始结果；豁免仍按本次运行重新处理。 */
   readonly qualityCheckResultCache?: QualityCheckResultCache;
 };
 
@@ -695,7 +588,7 @@ export async function runQualityChecks<
   TBody,
   TUnavailable,
 >(
-  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
+  snapshot: ProjectSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
   request: QualityCheckRequest<TBody>,
   checks: readonly QualityCheckDefinition<
     TUnit,
@@ -706,49 +599,62 @@ export async function runQualityChecks<
   >[],
   options: QualityExecutionOptions = {},
 ): Promise<QualityRunResult<QualityObject, TBody>> {
-  validateQualityCandidateScope(facts, request.candidates);
   const qualityData = createQualityDataReader();
-  try {
-    return await runQualityChecksWithQualityData(
-      facts,
-      request,
-      checks,
-      options,
-      qualityData,
-    );
-  } finally {
-    qualityData.dispose();
-  }
-}
-
-/** 正式 QA 入口共用其运行级资料 reader；不通过产品索引公开。 */
-export async function runQualityChecksWithQualityData<
-  TUnit extends TranslationUnitInput,
-  TTranslation,
-  TBody,
-  TUnavailable,
->(
-  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
-  request: QualityCheckRequest<TBody>,
-  checks: readonly QualityCheckDefinition<
-    TUnit,
-    TTranslation,
-    QualityObject,
-    TBody,
-    TUnavailable
-  >[],
-  options: QualityExecutionOptions = {},
-  qualityData: QualityDataReaderScope,
-): Promise<QualityRunResult<QualityObject, TBody>> {
   const memo = options.memo ?? createMemoScope();
   try {
-    const boundRequest = snapshotQualityData({
-      candidates: request.candidates,
-      relationships: request.relationships ?? [],
+    if (request.candidates !== undefined)
+      validateQualityCandidateScope(snapshot, request.candidates);
+    const identityKey = (key: {
+      readonly sourceKey: string;
+      readonly language: string;
+    }) => JSON.stringify([key.sourceKey, key.language]);
+    const byIdentity = new Map(
+      snapshot.associations.map((association) => [
+        identityKey(association),
+        association,
+      ]),
+    );
+    const sourceUnits = new Map(
+      snapshot.source.units.map((unit) => [unit.key, unit]),
+    );
+    const selectedAssociations =
+      request.candidates === undefined
+        ? snapshot.associations
+        : request.candidates.map((candidate) => {
+            const association = byIdentity.get(identityKey(candidate));
+            if (!association)
+              throw new TypeError("送检候选缺少对应的源译关联。");
+            return association;
+          });
+    const candidates = snapshotQualityData(
+      request.candidates ?? savedTranslationCandidates(snapshot),
+    );
+    const candidateByIdentity = new Map(
+      candidates.map((candidate, index) => [
+        identityKey(candidate),
+        { candidate, index },
+      ]),
+    );
+    const subjects = selectedAssociations.map((association) => {
+      const sourceUnit = sourceUnits.get(association.sourceKey);
+      if (!sourceUnit) throw new TypeError("送检对象缺少对应的原文单元。");
+      const [translationIndex] = association.translationIndexes;
+      const entry = candidateByIdentity.get(identityKey(association));
+      return {
+        sourceUnit,
+        association,
+        candidateIndex: entry?.index,
+        translation:
+          translationIndex === undefined
+            ? null
+            : (snapshot.translations.records[translationIndex] ?? null),
+        candidate: entry?.candidate ?? null,
+      };
     });
-    const exceptionInput = request.exceptions ?? [];
-    validateQualityExceptions(exceptionInput);
-    const exceptions = snapshotQualityData(exceptionInput);
+    const selected = new Set(selectedAssociations.map(identityKey));
+    const relationships = snapshotQualityData(request.relationships ?? []);
+    const suppressions = snapshotQualityData(request.suppressions ?? []);
+    validateQaSuppressions(suppressions);
     const preparedChecks: {
       readonly id: string;
       readonly prepared: PreparedQualityCheck<
@@ -770,27 +676,29 @@ export async function runQualityChecksWithQualityData<
       if (checkIds.has(definition.id))
         throw new TypeError(`QA 检查项 id ${definition.id} 重复。`);
       checkIds.add(definition.id);
-      const prepare = qualityCheckPreparers.get(definition);
-      if (prepare === undefined)
+      const prepared = qualityCheckImplementations.get(definition) as
+        | PreparedQualityCheck<
+            TUnit,
+            TTranslation,
+            QualityObject,
+            TBody,
+            TUnavailable
+          >
+        | undefined;
+      if (prepared === undefined)
         throw new TypeError(
           `QA 检查项 ${definition.id} 必须由 defineChecker 创建。`,
         );
-      const prepared = (await prepare()) as PreparedQualityCheck<
-        TUnit,
-        TTranslation,
-        QualityObject,
-        TBody,
-        TUnavailable
-      >;
 
       let loaded: unknown;
       let loadFailure: { readonly error: unknown } | undefined;
-      if (boundRequest.candidates.length > 0 && prepared.load !== undefined) {
+      if (subjects.length > 0 && prepared.load !== undefined) {
         const endLoad = options.profile?.checkStage(definition.id, "load");
         try {
           loaded = await prepared.load({
-            facts,
-            ...boundRequest,
+            snapshot,
+            candidates,
+            relationships,
             memo,
             qualityData: qualityData.reader,
           });
@@ -810,80 +718,36 @@ export async function runQualityChecksWithQualityData<
     }
 
     const results: QualityCheckResult[] = [];
-    const sourceUnits = new Map(
-      facts.source.units.map((unit) => [unit.key, unit]),
-    );
-    const associations = new Map<
-      string,
-      Map<string, TranslationAssociationFact>
-    >();
-    for (const association of facts.associations) {
-      let languageAssociations = associations.get(association.language);
-      if (languageAssociations === undefined) {
-        languageAssociations = new Map();
-        associations.set(association.language, languageAssociations);
-      }
-      languageAssociations.set(association.sourceKey, association);
-    }
-    const selectedLanguages = new Map<string, Set<string>>();
-    for (const { sourceKey, language } of boundRequest.candidates) {
-      const languages = selectedLanguages.get(sourceKey) ?? new Set<string>();
-      languages.add(language);
-      selectedLanguages.set(sourceKey, languages);
-    }
     let nextExecutionId = 0;
     for (const { id, prepared, loaded, loadFailure } of preparedChecks) {
       const diagnostics: QualityDiagnostic[] = [];
-      const issues: QualityIssue[] = [];
       const executions: QualityCheckExecution[] = [];
-      const coverage: MutableQualityCoverage = {
-        selected: 0,
-        evaluated: 0,
-        notApplicable: 0,
-        incomplete: 0,
-        failed: 0,
-      };
-      const statuses: QualityCheckStatus[] = [];
-
       for (const [
-        candidateIndex,
-        candidate,
-      ] of boundRequest.candidates.entries()) {
+        subjectIndex,
+        { candidateIndex, ...subject },
+      ] of subjects.entries()) {
+        const { sourceKey, language } = subject.association;
         const candidateProfile = options.profile?.candidate(
           id,
           {
-            candidateIndex,
-            sourceKey: candidate.sourceKey,
-            language: candidate.language,
+            subjectIndex,
+            sourceKey,
+            language,
           },
           options.qualityCheckResultCache !== undefined,
         );
         const executionId = nextExecutionId;
         nextExecutionId += 1;
         let fingerprint: QualityInputFingerprint | undefined;
-        let outcomeResolution: QualityCheckOutcomeResolution;
+        let errorMessage: string | undefined;
+        let findings: readonly QualityFinding[] = [];
         try {
           if (loadFailure !== undefined) throw loadFailure.error;
-          const sourceUnit = sourceUnits.get(candidate.sourceKey) ?? null;
-          const association = associations
-            .get(candidate.language)
-            ?.get(candidate.sourceKey);
-          if (sourceUnit === null || association === undefined)
-            throw new QualityCheckerContractError(
-              id,
-              "prepare",
-              "无法解析候选的源译关联。",
-            );
-          const translationIndex = association.translationIndexes[0];
-          const translation =
-            translationIndex === undefined
-              ? null
-              : (facts.translations.records[translationIndex] ?? null);
           const endPreparation = candidateProfile?.stage("prepareInput");
           let endFingerprintStage: (() => void) | undefined;
           const preparationContext: QualityInputPreparationContext = {
-            sourceKey: candidate.sourceKey,
-            language: candidate.language,
+            sourceKey,
+            language,
             startFingerprint() {
               endPreparation?.();
               endFingerprintStage = candidateProfile?.stage("fingerprint");
@@ -897,13 +761,10 @@ export async function runQualityChecksWithQualityData<
           try {
             preparation = await prepared.prepareInput(
               {
-                candidate,
-                sourceUnit,
-                translation,
-                association,
-                facts,
-                candidates: boundRequest.candidates,
-                relationships: boundRequest.relationships,
+                ...subject,
+                snapshot,
+                candidates,
+                relationships,
                 loaded,
                 memo,
               },
@@ -913,104 +774,74 @@ export async function runQualityChecksWithQualityData<
             endPreparation?.();
             preparationContext.endFingerprint();
           }
-          if (preparation.status === "ready") {
-            fingerprint = preparation.fingerprint;
-            const key = preparation.cacheKey;
-            const execute = preparation.execute.bind(preparation);
-            outcomeResolution = {
-              execute: async () => {
-                try {
-                  return await execute();
-                } catch (error) {
-                  if (isQualityContractError(error)) throw error;
-                  return failedQualityCheckOutcome(candidate, error);
-                }
-              },
-              ...(options.qualityCheckResultCache === undefined
-                ? {}
-                : {
-                    cache: options.qualityCheckResultCache,
-                    cacheKey: key,
-                  }),
-            };
-          } else {
-            outcomeResolution = { outcome: preparation.outcome };
-          }
+          fingerprint = preparation.fingerprint;
+          findings = await resolveQualityFindings(
+            id,
+            preparation,
+            options.qualityCheckResultCache,
+            candidateProfile,
+          );
         } catch (error) {
           if (isQualityContractError(error)) throw error;
-          outcomeResolution = {
-            outcome: failedQualityCheckOutcome(candidate, error),
-          };
+          errorMessage = error instanceof Error ? error.message : String(error);
         }
-
-        const accepted = await resolveQualityCheckOutcome(
-          id,
-          outcomeResolution,
-          candidateProfile,
-        );
-        const stableOutcome = accepted.outcome;
         const endResults = candidateProfile?.stage("results");
-        const findings = stableOutcome.diagnostics;
-        issues.push(...stableOutcome.issues);
-        statuses.push(stableOutcome.status);
-        addCoverage(coverage, stableOutcome.coverage);
-        const executionWithoutFingerprint: QualityCheckExecution = {
+        const status = errorMessage === undefined ? "complete" : "failed";
+        const execution: QualityCheckExecution = {
           executionId,
-          candidateIndex,
+          ...(candidateIndex === undefined ? {} : { candidateIndex }),
           checkId: id,
-          sourceKey: candidate.sourceKey,
-          language: candidate.language,
-          status: stableOutcome.status,
+          sourceKey,
+          language,
+          status,
+          ...(errorMessage === undefined ? {} : { error: errorMessage }),
+          ...fingerprint,
         };
-        const execution: QualityCheckExecution =
-          fingerprint === undefined
-            ? executionWithoutFingerprint
-            : { ...executionWithoutFingerprint, ...fingerprint };
         executions.push(execution);
         diagnostics.push(
           ...findings.map((diagnostic) => ({
             ...diagnostic,
             checkId: id,
             executionId,
-            handling: handlingFor(execution, exceptions),
+            handling: handlingFor(execution, suppressions),
           })),
         );
         endResults?.();
-        candidateProfile?.finish(stableOutcome.status);
+        candidateProfile?.finish(status);
       }
 
+      const failed = executions.filter(
+        (execution) => execution.status === "failed",
+      ).length;
       results.push({
         checkId: id,
         version: prepared.version,
-        status: aggregateStatus(statuses),
+        status: aggregateStatus(executions.map(({ status }) => status)),
         diagnostics,
-        issues,
-        coverage,
+        coverage: {
+          selected: executions.length,
+          evaluated: executions.length - failed,
+          failed,
+        },
         executions,
       });
     }
 
     return {
-      version: facts.version,
-      ...boundRequest,
+      version: snapshot.version,
+      candidates,
+      relationships,
       checkScope: {
         configuredCount: checks.length,
         selectedIds: checks.map(({ id }) => id),
       },
-      exceptions,
-      exceptionApplicability: evaluateQualityExceptionApplicability(
-        exceptions,
-        results.flatMap(({ executions }) => executions),
-      ),
-      factCoverage: snapshotQualityData({
-        source: facts.source.read,
-        translations: facts.translations.reads,
-        associations: facts.associations.map((association) => ({
+      suppressions,
+      readCoverage: snapshotQualityData({
+        source: snapshot.source.read,
+        translations: snapshot.translations.reads,
+        associations: snapshot.associations.map((association) => ({
           ...association,
-          candidateSelected:
-            selectedLanguages
-              .get(association.sourceKey)
-              ?.has(association.language) ?? false,
+          subjectSelected: selected.has(identityKey(association)),
         })),
       }),
       status: aggregateStatus(results.map(({ status }) => status)),
@@ -1019,7 +850,13 @@ export async function runQualityChecksWithQualityData<
     };
   } finally {
     options.profile?.endChecks();
-    if (options.memo === undefined) memo.dispose();
+    const endCleanup = options.profile?.stage("cleanup");
+    try {
+      qualityData.dispose();
+      if (options.memo === undefined) memo.dispose();
+    } finally {
+      endCleanup?.();
+    }
   }
 }
 
@@ -1031,46 +868,11 @@ function isQualityContractError(error: unknown): boolean {
   );
 }
 
-function addCoverage(
-  target: MutableQualityCoverage,
-  addition: QualityCoverage,
-): void {
-  target.selected += addition.selected;
-  target.evaluated += addition.evaluated;
-  target.notApplicable += addition.notApplicable;
-  target.incomplete += addition.incomplete;
-  target.failed += addition.failed;
-}
-
 function snapshotQualityData<TValue>(
   value: TValue,
   valueDescription = "QA 输入与结果",
 ): TValue {
   return snapshotJsonValue(value, valueDescription) as TValue;
-}
-
-function failedQualityCheckOutcome<TBody>(
-  candidate: SemanticEditCandidate<TBody>,
-  error: unknown,
-): QualityCheckOutcome {
-  return {
-    status: "failed",
-    diagnostics: [],
-    issues: [
-      {
-        code: "checkFailed",
-        message: error instanceof Error ? error.message : String(error),
-        object: candidateObject(candidate),
-      },
-    ],
-    coverage: {
-      selected: 1,
-      evaluated: 0,
-      notApplicable: 0,
-      incomplete: 0,
-      failed: 1,
-    },
-  };
 }
 
 function qualityInputFingerprint(
@@ -1109,126 +911,65 @@ function qualityCheckCacheKey(
   });
 }
 
-async function readCachedQualityOutcome(
-  cache: QualityCheckResultCache,
-  key: string,
-  profile?: QualityProfileCandidateSession,
-): Promise<AcceptedQualityCheckOutcome | undefined> {
-  const end = profile?.stage("cacheRead");
-  try {
-    const outcome = await cache.get(key);
-    if (outcome === undefined) {
-      profile?.read("miss");
-      return undefined;
-    }
-    const accepted = acceptQualityCheckOutcome(outcome, "cache", profile);
-    if (accepted === undefined) {
-      profile?.read("invalid");
-      return undefined;
-    }
-    profile?.read("hit");
-    return accepted;
-  } catch {
-    profile?.read("error");
-    return undefined;
-  } finally {
-    end?.();
-  }
-}
-
-/** 缓存读取、规则执行和结果交接共用同一入口。 */
-async function resolveQualityCheckOutcome(
+async function resolveQualityFindings(
   checkId: string,
-  resolution: QualityCheckOutcomeResolution,
+  preparation: QualityCheckExecutionPreparation<QualityObject>,
+  cache?: QualityCheckResultCache,
   profile?: QualityProfileCandidateSession,
-): Promise<AcceptedQualityCheckOutcome> {
-  if ("outcome" in resolution)
-    return acceptQualityCheckOutcome(resolution.outcome, { checkId }, profile);
-
-  const { cache, cacheKey, execute } = resolution;
-  if (cache !== undefined && cacheKey !== undefined) {
-    const cached = await readCachedQualityOutcome(cache, cacheKey, profile);
-    if (cached !== undefined) return cached;
+): Promise<CachedQualityFindings> {
+  if (cache) {
+    const end = profile?.stage("cacheRead");
+    try {
+      const cached = await cache.get(preparation.cacheKey);
+      if (isCachedQualityFindings(cached)) {
+        profile?.read("hit");
+        const endSnapshot = profile?.stage("snapshot");
+        try {
+          return snapshotQualityData(cached);
+        } finally {
+          endSnapshot?.();
+        }
+      }
+      profile?.read(cached === undefined ? "miss" : "invalid");
+    } catch {
+      profile?.read("error");
+    } finally {
+      end?.();
+    }
   }
-
   profile?.executed();
   const endExecute = profile?.stage("execute");
-  let outcome: QualityCheckOutcome;
+  let findings;
   try {
-    outcome = await execute();
+    findings = await preparation.execute();
   } finally {
     endExecute?.();
   }
-
-  const accepted = acceptQualityCheckOutcome(outcome, { checkId }, profile);
-  if (
-    cache !== undefined &&
-    cacheKey !== undefined &&
-    accepted.cacheableOutcome !== undefined
-  )
-    await writeCachedQualityOutcome(
-      cache,
-      cacheKey,
-      accepted.cacheableOutcome,
-      profile,
-    );
-  return accepted;
-}
-
-function acceptQualityCheckOutcome(
-  outcome: QualityCheckOutcome,
-  source: { readonly checkId: string },
-  profile?: QualityProfileCandidateSession,
-): AcceptedQualityCheckOutcome;
-function acceptQualityCheckOutcome(
-  outcome: unknown,
-  source: "cache",
-  profile?: QualityProfileCandidateSession,
-): AcceptedQualityCheckOutcome | undefined;
-function acceptQualityCheckOutcome(
-  outcome: unknown,
-  source: { readonly checkId: string } | "cache",
-  profile?: QualityProfileCandidateSession,
-): AcceptedQualityCheckOutcome | undefined {
-  if (source === "cache" && !isCacheableQualityCheckOutcome(outcome))
-    return undefined;
-
   const endSnapshot = profile?.stage("snapshot");
   try {
-    const stableOutcome = snapshotQualityData(outcome) as QualityCheckOutcome;
-    if (source !== "cache" && !isQualityCheckOutcome(stableOutcome))
+    if (!isCachedQualityFindings(findings))
       throw new QualityCheckerContractError(
-        source.checkId,
+        checkId,
         "check",
-        "的 check 返回了无效结果。",
+        "的 check 必须返回有效的诊断数组。",
       );
-    return {
-      outcome: stableOutcome,
-      ...(isReusableQualityCheckOutcome(stableOutcome)
-        ? { cacheableOutcome: stableOutcome }
-        : {}),
-    };
+    findings = snapshotQualityData(findings);
+    freezeJsonValue(findings);
   } finally {
     endSnapshot?.();
   }
-}
-
-async function writeCachedQualityOutcome(
-  cache: QualityCheckResultCache,
-  key: string,
-  outcome: CacheableQualityCheckOutcome,
-  profile?: QualityProfileCandidateSession,
-): Promise<void> {
-  const end = profile?.stage("cacheWrite");
-  try {
-    await cache.set(key, outcome);
-    profile?.write("completed");
-  } catch {
-    profile?.write("error");
-    // 缓存写入失败只会增加后续检查成本。
-  } finally {
-    end?.();
+  if (cache) {
+    const end = profile?.stage("cacheWrite");
+    try {
+      await cache.set(preparation.cacheKey, findings);
+      profile?.write("completed");
+    } catch {
+      profile?.write("error");
+    } finally {
+      end?.();
+    }
   }
+  return findings;
 }
 
 function fingerprintQualityInputBasis(value: JsonValue): string {
@@ -1293,17 +1034,17 @@ function updateFingerprintHash(hash: Hash, value: string): void {
 
 function handlingFor(
   execution: QualityCheckExecution,
-  exceptions: readonly QualityException[],
+  suppressions: readonly QaSuppression[],
 ): QualityDiagnosticHandling {
-  const exception = exceptions.find((candidate) =>
-    qualityExceptionMatchesExecution(candidate, execution),
+  const suppression = suppressions.find((candidate) =>
+    qaSuppressionMatchesExecution(candidate, execution),
   );
-  return exception === undefined
+  return suppression === undefined
     ? { status: "active" }
     : {
-        status: "excepted",
-        exceptionId: exception.id,
-        reason: exception.reason,
+        status: "suppressed",
+        suppressionId: suppression.id,
+        reason: suppression.reason,
       };
 }
 
@@ -1315,19 +1056,6 @@ function aggregateStatus(
     statuses.every((status) => status === "not-run")
   )
     return "not-run";
-  if (statuses.every((status) => status === "not-applicable"))
-    return "not-applicable";
-  if (statuses.some((status) => status === "failed")) return "failed";
-  if (statuses.some((status) => status === "incomplete")) return "incomplete";
+  if (statuses.includes("failed")) return "failed";
   return "complete";
-}
-
-function candidateObject<TBody>(
-  candidate: SemanticEditCandidate<TBody>,
-): QualityObject {
-  return {
-    kind: "translation-unit",
-    key: candidate.sourceKey,
-    language: candidate.language,
-  };
 }

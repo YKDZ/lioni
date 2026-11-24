@@ -2,14 +2,14 @@ import type { QualityCheckStatus } from "./qa.ts";
 
 /**
  * 框架阶段、检查项准备及候选处理子阶段；同名阶段按所在层级解释。
- * facts 包含资源读取与关联；checks 包含公共准备、检查计算和例外汇总。
+ * 运行级 snapshot 记录资源读取和关联耗时，checks 包含公共准备、检查计算和豁免汇总。
  * prepareInput 包含逐候选输入准备与验证；fingerprint 仅为摘要与缓存键计算。
- * snapshot 为检查结果快照，results 为候选诊断及执行记录整理。
+ * 检查对象的 snapshot 记录复制结果的耗时，results 记录归集诊断和执行记录的耗时。
  */
 export type QualityProfileStage =
   | "configuration"
-  | "exceptions"
-  | "facts"
+  | "suppressions"
+  | "snapshot"
   | "load"
   | "candidates"
   | "checks"
@@ -18,7 +18,6 @@ export type QualityProfileStage =
   | "fingerprint"
   | "cacheRead"
   | "execute"
-  | "snapshot"
   | "cacheWrite"
   | "results";
 /** 候选中断独立于规则返回状态；not-run 只沿用质量检查状态词汇。 */
@@ -41,7 +40,7 @@ export type QualityProfileTiming = {
   readonly calls: number;
 };
 export type QualityProfileCandidate = {
-  readonly candidateIndex: number;
+  readonly subjectIndex: number;
   readonly sourceKey: string;
   readonly language: string;
   readonly status: QualityProfileCandidateStatus;
@@ -196,7 +195,7 @@ export function beginQualityProfile(profiler: QualityProfiler) {
     },
     candidate(
       id: string,
-      identity: { candidateIndex: number; sourceKey: string; language: string },
+      identity: { subjectIndex: number; sourceKey: string; language: string },
       enabled: boolean,
     ) {
       const entry = check(id);
@@ -225,7 +224,7 @@ export function beginQualityProfile(profiler: QualityProfiler) {
         entry.slowestCandidates.push(record);
         entry.slowestCandidates.sort(
           (a, b) =>
-            b.durationMs - a.durationMs || a.candidateIndex - b.candidateIndex,
+            b.durationMs - a.durationMs || a.subjectIndex - b.subjectIndex,
         );
         if (entry.slowestCandidates.length > state.limit)
           entry.slowestCandidates.pop();

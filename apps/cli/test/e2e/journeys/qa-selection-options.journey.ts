@@ -24,14 +24,9 @@ function checker(id) {
     id,
     version: "qa-selection-options-v1",
     inputSchema: z.object({ mode: z.literal("strict") }),
-    prepare: () => ({ status: "ready", input: { mode: "strict" } }),
+    prepare: () => ({ mode: "strict" }),
     check() {
-      return {
-        status: "complete",
-        diagnostics: [],
-        issues: [],
-        coverage: { selected: 1, evaluated: 1, notApplicable: 0, incomplete: 0, failed: 0 },
-      };
+      return [];
     },
   });
 }
@@ -158,6 +153,9 @@ export default defineConfig({
       selectedIds: ["second"],
     });
 
+    for (const partial of [selected, repeatedChecks, selectedGroup])
+      assert.equal(Object.hasOwn(partial, "progress"), false);
+
     const conflictingSelection = results[4];
     assert.equal(conflictingSelection?.exitCode, 2);
     const usageFailure = JSON.parse(
@@ -178,7 +176,10 @@ export default defineConfig({
       readable?.stdout ?? "",
       /检查项范围：配置 2 项，本次子集 1 项（second）/u,
     );
-    assert.match(readable?.stdout ?? "", /候选范围：已选候选 1 条/u);
+    assert.match(
+      readable?.stdout ?? "",
+      /送检范围：1 项，其中 1 项提供了译文/u,
+    );
   },
 };
 

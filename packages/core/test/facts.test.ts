@@ -4,9 +4,9 @@ import { describe, it } from "node:test";
 import {
   defineConfig,
   DuplicateTranslationUnitKeyError,
-  readFacts,
+  readProjectSnapshot,
   readComparisonSnapshot,
-  readSourceFacts,
+  readSourceSnapshot,
   StandardSchemaContractError,
   TranslationIdentityContractError,
 } from "../src/index.ts";
@@ -88,7 +88,7 @@ function completeSource<T>(...values: readonly T[]) {
   };
 }
 
-void describe("framework facts", () => {
+void describe("framework snapshot", () => {
   void it("validates synchronous and asynchronous source schemas without changing structure", async () => {
     const units: ManualUnit[] = [
       {
@@ -112,7 +112,7 @@ void describe("framework facts", () => {
         context: { file: "messages.ts", line: 5 },
       },
     ];
-    const facts = await readSourceFacts(
+    const snapshot = await readSourceSnapshot(
       defineConfig({
         source: {
           schema: manualSourceSchema,
@@ -121,7 +121,7 @@ void describe("framework facts", () => {
         keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
       }),
     );
-    const asyncFacts = await readSourceFacts(
+    const asyncFacts = await readSourceSnapshot(
       defineConfig({
         source: {
           schema: asyncManualSourceSchema,
@@ -132,7 +132,7 @@ void describe("framework facts", () => {
     );
 
     assert.deepStrictEqual(
-      facts.units.map(({ unit }) => unit),
+      snapshot.units.map(({ unit }) => unit),
       units,
     );
     assert.deepStrictEqual(
@@ -184,7 +184,7 @@ void describe("framework facts", () => {
         keyOf: (value) => `${value.context.file}:${value.context.line}`,
       });
 
-      await assert.rejects(readSourceFacts(config), (error: unknown) => {
+      await assert.rejects(readSourceSnapshot(config), (error: unknown) => {
         assert.ok(error instanceof StandardSchemaContractError, description);
         assert.equal(error.kind, "invalid-json", description);
         return true;
@@ -208,7 +208,7 @@ void describe("framework facts", () => {
       keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
     });
     await assert.rejects(
-      readSourceFacts(invalidJsonConfig),
+      readSourceSnapshot(invalidJsonConfig),
       (error: unknown) =>
         error instanceof StandardSchemaContractError &&
         error.kind === "invalid-json" &&
@@ -227,7 +227,7 @@ void describe("framework facts", () => {
       keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
     });
     await assert.rejects(
-      readSourceFacts(schemaMismatchConfig),
+      readSourceSnapshot(schemaMismatchConfig),
       (error: unknown) =>
         error instanceof StandardSchemaContractError &&
         error.kind === "schema-mismatch" &&
@@ -266,7 +266,7 @@ void describe("framework facts", () => {
       },
       keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
     });
-    await assert.rejects(readSourceFacts(changedConfig), {
+    await assert.rejects(readSourceSnapshot(changedConfig), {
       name: "StandardSchemaContractError",
       kind: "output-changed",
     });
@@ -294,7 +294,7 @@ void describe("framework facts", () => {
       },
       keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
     });
-    await assert.rejects(readSourceFacts(deletedFieldConfig), {
+    await assert.rejects(readSourceSnapshot(deletedFieldConfig), {
       name: "StandardSchemaContractError",
       kind: "output-changed",
     });
@@ -319,7 +319,7 @@ void describe("framework facts", () => {
       },
       keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
     });
-    await assert.rejects(readSourceFacts(inPlaceConfig), {
+    await assert.rejects(readSourceSnapshot(inPlaceConfig), {
       name: "StandardSchemaContractError",
       kind: "input-mutated",
     });
@@ -351,11 +351,11 @@ void describe("framework facts", () => {
     });
 
     assert.equal(reads, 0);
-    const facts = await readSourceFacts(config);
+    const snapshot = await readSourceSnapshot(config);
 
     assert.equal(reads, 1);
     assert.strictEqual(identityInput, rawUnit);
-    assert.deepStrictEqual(facts.units, [
+    assert.deepStrictEqual(snapshot.units, [
       {
         key: "src/messages.ts:18",
         unit: rawUnit,
@@ -379,7 +379,7 @@ void describe("framework facts", () => {
     });
 
     await assert.rejects(
-      readSourceFacts(config),
+      readSourceSnapshot(config),
       (error: unknown) =>
         error instanceof DuplicateTranslationUnitKeyError &&
         error.key === "src/messages.ts:18" &&
@@ -399,7 +399,7 @@ void describe("framework facts", () => {
         keyOf: () => key as never,
       });
       await assert.rejects(
-        readSourceFacts(config),
+        readSourceSnapshot(config),
         StandardSchemaContractError,
       );
     }
@@ -430,8 +430,8 @@ void describe("framework facts", () => {
         keyOf: (unit) => `${unit.context.file}:${unit.context.line}`,
       });
 
-    const before = await readSourceFacts(makeConfig("shots/before.png"));
-    const after = await readSourceFacts(makeConfig("shots/after.png"));
+    const before = await readSourceSnapshot(makeConfig("shots/before.png"));
+    const after = await readSourceSnapshot(makeConfig("shots/after.png"));
 
     assert.equal(before.units[0]?.key, after.units[0]?.key);
     assert.notEqual(before.version, after.version);
@@ -451,8 +451,8 @@ void describe("framework facts", () => {
           `${unit.context.file}:${unit.context.line}:${unit.source}`,
       });
 
-    const before = await readSourceFacts(makeConfig("Save", "src/a.ts"));
-    const after = await readSourceFacts(makeConfig("Submit", "src/b.ts"));
+    const before = await readSourceSnapshot(makeConfig("Save", "src/a.ts"));
+    const after = await readSourceSnapshot(makeConfig("Submit", "src/b.ts"));
 
     assert.notEqual(before.units[0]?.key, after.units[0]?.key);
   });
@@ -462,7 +462,7 @@ void describe("framework facts", () => {
       source: "Save",
       context: { file: "src/messages.ts", line: 18 },
     };
-    const facts = await readSourceFacts(
+    const snapshot = await readSourceSnapshot(
       defineConfig({
         source: {
           schema: sourceSchemaFromExamples(knownUnit),
@@ -480,7 +480,7 @@ void describe("framework facts", () => {
       }),
     );
 
-    assert.deepStrictEqual(facts.units, [
+    assert.deepStrictEqual(snapshot.units, [
       {
         key: "src/messages.ts:18",
         unit: knownUnit,
@@ -488,8 +488,8 @@ void describe("framework facts", () => {
         scopeIndex: 0,
       },
     ]);
-    assert.equal(facts.totalUnitCount, null);
-    assert.deepStrictEqual(facts.read.scopes, [
+    assert.equal(snapshot.totalUnitCount, null);
+    assert.deepStrictEqual(snapshot.read.scopes, [
       {
         range: "src/messages.ts",
         enumeration: "partial",
@@ -504,7 +504,7 @@ void describe("framework facts", () => {
       { source: "Submit", context: { file: "src/messages.ts", line: 19 } },
     ];
     let reads = 0;
-    const facts = await readFacts(
+    const snapshot = await readProjectSnapshot(
       defineConfig({
         source: {
           schema: sourceSchemaFromExamples(...units),
@@ -560,7 +560,7 @@ void describe("framework facts", () => {
 
     assert.equal(reads, 1);
     assert.deepStrictEqual(
-      facts.associations.map(
+      snapshot.associations.map(
         ({
           sourceKey,
           language,
@@ -592,8 +592,8 @@ void describe("framework facts", () => {
         },
       ],
     );
-    assert.equal(facts.translations.records.length, 2);
-    assert.deepStrictEqual(facts.translations.records[0], {
+    assert.equal(snapshot.translations.records.length, 2);
+    assert.deepStrictEqual(snapshot.translations.records[0], {
       index: 0,
       language: "fr",
       scopeIndex: 0,
@@ -602,7 +602,7 @@ void describe("framework facts", () => {
         language: "fr",
         key: "src/messages.ts:18",
       },
-      translation: {
+      record: {
         id: "save-fr",
         text: "Enregistrer",
         context: { sourceLine: 18 },
@@ -610,13 +610,13 @@ void describe("framework facts", () => {
       content: null,
       bodyAvailability: "available",
     });
-    assert.match(facts.version, /^sha256:[a-f0-9]{64}$/u);
+    assert.match(snapshot.version, /^sha256:[a-f0-9]{64}$/u);
   });
 
   void it("同键译文的关联不受读取范围归属影响", async () => {
     const unit = { source: "Save" };
     const translation = { id: "a", text: "Enregistrer" };
-    const facts = await readFacts(
+    const snapshot = await readProjectSnapshot(
       defineConfig({
         source: {
           schema: sourceSchemaFromExamples(unit),
@@ -651,7 +651,7 @@ void describe("framework facts", () => {
       }),
     );
 
-    assert.deepEqual(facts.associations, [
+    assert.deepEqual(snapshot.associations, [
       {
         sourceKey: "a",
         language: "fr",
@@ -661,7 +661,7 @@ void describe("framework facts", () => {
         translationIndexes: [0],
       },
     ]);
-    assert.equal(facts.translations.records[0]?.scopeIndex, 1);
+    assert.equal(snapshot.translations.records[0]?.scopeIndex, 1);
   });
 
   void it("读取顺序和正文变化不改变译文身份与范围依据", async () => {
@@ -881,7 +881,7 @@ void describe("framework facts", () => {
       language: "zh",
       scopeIndex: 0,
       range: "locales/zh.json",
-      translation: { id: "old" },
+      record: { id: "old" },
       identity: { language: "zh", key: "old" },
       bodyAvailability: "unavailable",
     });
@@ -893,7 +893,7 @@ void describe("framework facts", () => {
       { source: "Submit", context: { line: 19 } },
       { source: "Cancel", context: { line: 20 } },
     ];
-    const facts = await readFacts(
+    const snapshot = await readProjectSnapshot(
       defineConfig({
         source: {
           schema: sourceSchemaFromExamples(...units),
@@ -959,7 +959,7 @@ void describe("framework facts", () => {
     );
 
     assert.deepStrictEqual(
-      facts.associations.map(
+      snapshot.associations.map(
         ({ status, coverageStatus, scopeIndexes, translationIndexes }) => ({
           status,
           coverageStatus,
@@ -1002,7 +1002,7 @@ void describe("framework facts", () => {
       readonly context: { readonly sourceLine: number };
     };
     let contentCalls = 0;
-    const facts = await readFacts(
+    const snapshot = await readProjectSnapshot(
       defineConfig({
         source: {
           schema: sourceSchemaFromExamples(...units),
@@ -1068,7 +1068,7 @@ void describe("framework facts", () => {
       }),
     );
 
-    assert.deepStrictEqual(facts.translations.reads, [
+    assert.deepStrictEqual(snapshot.translations.reads, [
       {
         language: "fr",
         status: "complete",
@@ -1089,7 +1089,7 @@ void describe("framework facts", () => {
       },
     ]);
     assert.deepStrictEqual(
-      facts.associations.map(
+      snapshot.associations.map(
         ({ language, status, coverageStatus, translationIndexes }) => ({
           language,
           status,
@@ -1136,21 +1136,21 @@ void describe("framework facts", () => {
         },
       ],
     );
-    assert.equal(facts.translations.records.length, 3);
+    assert.equal(snapshot.translations.records.length, 3);
     assert.equal(contentCalls, 2);
     assert.equal(
-      Object.hasOwn(facts.translations.records[1]!, "content"),
+      Object.hasOwn(snapshot.translations.records[1]!, "content"),
       false,
     );
     assert.equal(
-      facts.translations.records[1]?.bodyAvailability,
+      snapshot.translations.records[1]?.bodyAvailability,
       "unavailable",
     );
-    assert.deepStrictEqual(facts.translations.records[1]?.translation, {
+    assert.deepStrictEqual(snapshot.translations.records[1]?.record, {
       id: "unavailable-fr",
       context: { sourceLine: 20 },
     });
-    assert.deepStrictEqual(facts.translations.records[2]?.translation, {
+    assert.deepStrictEqual(snapshot.translations.records[2]?.record, {
       id: "orphan-fr",
       text: "Orphan",
       context: { sourceLine: 999 },
@@ -1158,7 +1158,7 @@ void describe("framework facts", () => {
   });
 
   void it("records a source read failure without publishing a precise total", async () => {
-    const facts = await readSourceFacts(
+    const snapshot = await readSourceSnapshot(
       defineConfig({
         source: {
           schema: emptySourceSchema,
@@ -1170,10 +1170,10 @@ void describe("framework facts", () => {
       }),
     );
 
-    assert.equal(facts.read.status, "failed");
-    assert.equal(facts.read.error, "source catalogue is unavailable");
-    assert.equal(facts.totalUnitCount, null);
-    assert.deepStrictEqual(facts.units, []);
+    assert.equal(snapshot.read.status, "failed");
+    assert.equal(snapshot.read.error, "source catalogue is unavailable");
+    assert.equal(snapshot.totalUnitCount, null);
+    assert.deepStrictEqual(snapshot.units, []);
   });
 
   void it("propagates schema contract errors through a nested source reader", async () => {
@@ -1190,14 +1190,14 @@ void describe("framework facts", () => {
       source: {
         schema,
         async read() {
-          await readSourceFacts(nested);
+          await readSourceSnapshot(nested);
           return { scopes: [] };
         },
       },
       keyOf: () => "outer",
     });
 
-    await assert.rejects(readFacts(outer), StandardSchemaContractError);
+    await assert.rejects(readProjectSnapshot(outer), StandardSchemaContractError);
   });
 
   void it("propagates schema contract errors through a nested translation reader", async () => {
@@ -1253,7 +1253,7 @@ void describe("framework facts", () => {
         schema: translationSchema,
         contentSchema: jsonValueSchema,
         async read() {
-          await readFacts(nested);
+          await readProjectSnapshot(nested);
           return { scopes: [] };
         },
 
@@ -1261,13 +1261,13 @@ void describe("framework facts", () => {
       },
     });
 
-    await assert.rejects(readFacts(outer), StandardSchemaContractError);
+    await assert.rejects(readProjectSnapshot(outer), StandardSchemaContractError);
   });
 
   void it("keeps ordinary adapter TypeErrors as failed reads", async () => {
     const unit = { source: "Save" };
     const schema = sourceSchemaFromExamples(unit);
-    const sourceFacts = await readSourceFacts(
+    const sourceSnapshot = await readSourceSnapshot(
       defineConfig({
         source: {
           schema,
@@ -1278,11 +1278,11 @@ void describe("framework facts", () => {
         keyOf: () => "save",
       }),
     );
-    assert.equal(sourceFacts.read.status, "failed");
-    assert.equal(sourceFacts.read.error, "source adapter type error");
+    assert.equal(sourceSnapshot.read.status, "failed");
+    assert.equal(sourceSnapshot.read.error, "source adapter type error");
 
     const translation: { readonly text: string } = { text: "Enregistrer" };
-    const facts = await readFacts(
+    const snapshot = await readProjectSnapshot(
       defineConfig({
         source: { schema, read: () => completeSource(unit) },
         keyOf: () => "save",
@@ -1299,15 +1299,15 @@ void describe("framework facts", () => {
         },
       }),
     );
-    assert.equal(facts.translations.reads[0]?.status, "failed");
+    assert.equal(snapshot.translations.reads[0]?.status, "failed");
     assert.equal(
-      facts.translations.reads[0]?.error,
+      snapshot.translations.reads[0]?.error,
       "translation adapter type error",
     );
   });
 
   void it("keeps a target language unknown when its resources were not read", async () => {
-    const facts = await readFacts(
+    const snapshot = await readProjectSnapshot(
       defineConfig({
         source: {
           schema: sourceSchemaFromExamples({
@@ -1329,10 +1329,10 @@ void describe("framework facts", () => {
       }),
     );
 
-    assert.deepStrictEqual(facts.translations.reads, [
+    assert.deepStrictEqual(snapshot.translations.reads, [
       { language: "fr", status: "notRead", scopes: [] },
     ]);
-    assert.deepStrictEqual(facts.associations, [
+    assert.deepStrictEqual(snapshot.associations, [
       {
         sourceKey: "message:18",
         language: "fr",
@@ -1374,7 +1374,7 @@ void describe("framework facts", () => {
       sourceLine: 19,
     };
     let contentReads = 0;
-    const facts = await readFacts(
+    const snapshot = await readProjectSnapshot(
       defineConfig({
         source: {
           schema: sourceSchemaFromExamples(...units),
@@ -1411,16 +1411,16 @@ void describe("framework facts", () => {
 
     assert.equal(contentReads, 1);
     assert.deepStrictEqual(
-      facts.translations.records.map((record) =>
+      snapshot.translations.records.map((record) =>
         record.bodyAvailability === "available"
           ? {
               bodyAvailability: record.bodyAvailability,
-              translation: record.translation,
+              translation: record.record,
               content: record.content,
             }
           : {
               bodyAvailability: record.bodyAvailability,
-              translation: record.translation,
+              translation: record.record,
               hasContent: Object.hasOwn(record, "content"),
             },
       ),
@@ -1438,7 +1438,7 @@ void describe("framework facts", () => {
       ],
     );
     assert.deepStrictEqual(
-      facts.associations.map(({ status }) => status),
+      snapshot.associations.map(({ status }) => status),
       ["matched", "unavailable"],
     );
   });
@@ -1480,14 +1480,14 @@ void describe("framework facts", () => {
     });
 
     await assert.rejects(
-      readFacts(config),
+      readProjectSnapshot(config),
       (error: unknown) =>
         error instanceof StandardSchemaContractError &&
         error.kind === "schema-mismatch",
     );
   });
 
-  void it("rejects non-JSON translation content before recording facts", async () => {
+  void it("rejects non-JSON translation content before recording snapshot", async () => {
     type Translation = { readonly id: string; readonly text: string };
     const unit = { source: "Save", context: { line: 18 } };
     const translation: Translation = { id: "save", text: "Save" };
@@ -1518,7 +1518,7 @@ void describe("framework facts", () => {
     });
 
     await assert.rejects(
-      readFacts(config),
+      readProjectSnapshot(config),
       (error: unknown) =>
         error instanceof StandardSchemaContractError &&
         error.kind === "invalid-json",
@@ -1565,7 +1565,7 @@ void describe("framework facts", () => {
         contentOf: (value) => value.text,
       },
     });
-    await assert.rejects(readFacts(changedConfig), {
+    await assert.rejects(readProjectSnapshot(changedConfig), {
       name: "StandardSchemaContractError",
       kind: "output-changed",
     });
@@ -1600,7 +1600,7 @@ void describe("framework facts", () => {
         contentOf: (value: Translation) => value.text,
       },
     } as unknown as FrameworkConfig<typeof unit, Translation>;
-    await assert.rejects(readFacts(undeclaredUnavailableConfig), {
+    await assert.rejects(readProjectSnapshot(undeclaredUnavailableConfig), {
       name: "StandardSchemaContractError",
       kind: "schema-mismatch",
     });

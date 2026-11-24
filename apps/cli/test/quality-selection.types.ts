@@ -1,7 +1,7 @@
 import * as z from "zod";
 
 import {
-  analyzeQuality,
+  runQa,
   defineChecker,
   defineConfig,
   type JsonValue,
@@ -18,27 +18,13 @@ const checker = defineChecker.withTypes<Unit, unknown, JsonValue>()({
   id: "sdk/custom-check",
   version: "1",
   inputSchema,
-  prepare: () => ({
-    status: "ready",
-    input: { mode: "strict" as const },
-  }),
+  prepare: () => ({ mode: "strict" as const }),
   check(input) {
     const mode: "strict" = input.mode;
     void mode;
     // @ts-expect-error 检查器不会接收未经准备的框架上下文。
-    void input.facts;
-    return {
-      status: "complete",
-      diagnostics: [],
-      issues: [],
-      coverage: {
-        selected: 1,
-        evaluated: 1,
-        notApplicable: 0,
-        incomplete: 0,
-        failed: 0,
-      },
-    };
+    void input.snapshot;
+    return [];
   },
 });
 const checkerId: "sdk/custom-check" = checker.id;
@@ -54,12 +40,12 @@ const config = defineConfig.withTypes<Unit, typeof sourceSchema>()({
 });
 
 function verifySelectionTypes() {
-  void analyzeQuality(config, { groups: ["daily"] });
-  void analyzeQuality(config, { checkIds: ["sdk/custom-check"] });
+  void runQa(config, { groups: ["daily"] });
+  void runQa(config, { checkIds: ["sdk/custom-check"] });
 
   // @ts-expect-error SDK 消费者获得相同的精确检查项 ID 联合类型。
-  void analyzeQuality(config, { checkIds: ["sdk/custom-chek"] });
-  // @ts-expect-error SDK consumers receive the configured group-name union.
-  void analyzeQuality(config, { groups: ["nightly"] });
+  void runQa(config, { checkIds: ["sdk/custom-chek"] });
+  // @ts-expect-error SDK 消费者获得已配置的检查组名称联合类型。
+  void runQa(config, { groups: ["nightly"] });
 }
 void verifySelectionTypes;

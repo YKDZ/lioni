@@ -123,6 +123,6 @@ void test("变量比较忽略重排但保留身份、重复数和分支形状", 
     malformed.checks.find(
       (item) => item.checkId === checkIds.variableCorrespondence,
     )?.status,
-    "incomplete",
+    "failed",
   );
 });

@@ -10,41 +10,19 @@ import {
   createDirectoryQualityCheckResultCache,
   resolveDefaultQualityCheckResultCacheDirectory,
 } from "../src/node/quality-cache.ts";
-import type { CacheableQualityCheckOutcome } from "../src/quality/quality-cache.ts";
+import type { CachedQualityFindings } from "../src/quality/quality-cache.ts";
 
-const completeOutcome: CacheableQualityCheckOutcome = {
-  status: "complete",
-  diagnostics: [
-    {
-      severity: "error",
-      object: { kind: "translation", key: "save", language: "fr" },
-      location: { language: "fr", range: [4, 8] },
-      message: "变量数量不匹配。",
-      evidence: [],
-    },
-  ],
-  issues: [],
-  coverage: {
-    selected: 1,
-    evaluated: 1,
-    notApplicable: 0,
-    incomplete: 0,
-    failed: 0,
+const completeOutcome: CachedQualityFindings = [
+  {
+    severity: "error",
+    object: { kind: "translation", key: "save", language: "fr" },
+    location: { language: "fr", range: [4, 8] },
+    message: "变量数量不匹配。",
+    evidence: [],
   },
-};
+];
 
-const notApplicable: CacheableQualityCheckOutcome = {
-  status: "not-applicable",
-  diagnostics: [],
-  issues: [],
-  coverage: {
-    selected: 1,
-    evaluated: 0,
-    notApplicable: 1,
-    incomplete: 0,
-    failed: 0,
-  },
-};
+const emptyFindings: CachedQualityFindings = [];
 
 async function withDirectory(
   run: (directory: string) => Promise<void>,
@@ -98,7 +76,7 @@ void describe("QA 结果缓存", () => {
 
       await second.set(
         "check:save:fr:candidate:1:fingerprint:a",
-        notApplicable,
+        emptyFindings,
       );
       assert.equal((await readdir(cacheDirectory)).length, 2);
     });
@@ -107,22 +85,21 @@ void describe("QA 结果缓存", () => {
   void it("只替换同键条目，保留其他键的记录", async () => {
     await withDirectory(async (directory) => {
       const cache = createDirectoryQualityCheckResultCache(directory);
-      const replacement: CacheableQualityCheckOutcome = {
-        ...completeOutcome,
-        diagnostics: completeOutcome.diagnostics.map((diagnostic) => ({
+      const replacement: CachedQualityFindings = completeOutcome.map(
+        (diagnostic) => ({
           ...diagnostic,
           message: "已替换的诊断。",
-        })),
-      };
+        }),
+      );
       await cache.set("first", completeOutcome);
-      await cache.set("second", notApplicable);
+      await cache.set("second", emptyFindings);
       const unrelatedEntryPath = await entryPathForKey(directory, "second");
       const unrelatedEntry = await readFile(unrelatedEntryPath);
 
       await cache.set("first", replacement);
 
       assert.deepEqual(await cache.get("first"), replacement);
-      assert.deepEqual(await cache.get("second"), notApplicable);
+      assert.deepEqual(await cache.get("second"), emptyFindings);
       assert.deepEqual(await readFile(unrelatedEntryPath), unrelatedEntry);
       assert.equal((await readdir(directory)).length, 2);
     });
@@ -135,23 +112,23 @@ void describe("QA 结果缓存", () => {
       const replacementCharacterKey = "\ufffd";
 
       await cache.set(loneSurrogateKey, completeOutcome);
-      await cache.set(replacementCharacterKey, notApplicable);
+      await cache.set(replacementCharacterKey, emptyFindings);
 
       assert.deepEqual(await cache.get(loneSurrogateKey), completeOutcome);
-      assert.deepEqual(await cache.get(replacementCharacterKey), notApplicable);
+      assert.deepEqual(await cache.get(replacementCharacterKey), emptyFindings);
       assert.equal((await readdir(directory)).length, 2);
     });
   });
 
-  void it("允许缓存可复用的完整结果及 not-applicable 结果", async () => {
+  void it("缓存已完成规则返回的诊断与空数组", async () => {
     await withDirectory(async (directory) => {
       const cache = createDirectoryQualityCheckResultCache(directory);
 
       await cache.set("complete-with-error", completeOutcome);
-      await cache.set("not-applicable", notApplicable);
+      await cache.set("empty", emptyFindings);
 
       assert.deepEqual(await cache.get("complete-with-error"), completeOutcome);
-      assert.deepEqual(await cache.get("not-applicable"), notApplicable);
+      assert.deepEqual(await cache.get("empty"), emptyFindings);
     });
   });
 
@@ -159,13 +136,13 @@ void describe("QA 结果缓存", () => {
     await withDirectory(async (directory) => {
       const cache = createDirectoryQualityCheckResultCache(directory);
       const incomplete = {
-        ...completeOutcome,
+        diagnostics: completeOutcome,
         status: "incomplete",
-      } as unknown as CacheableQualityCheckOutcome;
+      } as unknown as CachedQualityFindings;
       const failed = {
-        ...completeOutcome,
+        diagnostics: completeOutcome,
         status: "failed",
-      } as unknown as CacheableQualityCheckOutcome;
+      } as unknown as CachedQualityFindings;
 
       await cache.set("incomplete", incomplete);
       await cache.set("failed", failed);
@@ -180,7 +157,7 @@ void describe("QA 结果缓存", () => {
     await withDirectory(async (directory) => {
       const cache = createDirectoryQualityCheckResultCache(directory);
       await cache.set("damaged", completeOutcome);
-      await cache.set("deleted", notApplicable);
+      await cache.set("deleted", emptyFindings);
       await cache.set("healthy", completeOutcome);
 
       const damagedEntryPath = await entryPathForKey(directory, "damaged");
@@ -198,7 +175,7 @@ void describe("QA 结果缓存", () => {
         { ...validEntry, key: "a-different-key" },
         {
           ...validEntry,
-          outcome: { ...validEntry.outcome, diagnostics: [{}] },
+          outcome: [{}],
         },
         { ...validEntry, contentDigest: `sha256:${"0".repeat(64)}` },
       ];
@@ -213,8 +190,8 @@ void describe("QA 结果缓存", () => {
       assert.equal(await cache.get("deleted"), undefined);
       assert.deepEqual(await cache.get("healthy"), completeOutcome);
 
-      await cache.set("damaged", notApplicable);
-      assert.deepEqual(await cache.get("damaged"), notApplicable);
+      await cache.set("damaged", emptyFindings);
+      assert.deepEqual(await cache.get("damaged"), emptyFindings);
     });
   });
 
@@ -239,13 +216,10 @@ void describe("QA 结果缓存", () => {
       const cache = createDirectoryQualityCheckResultCache(directory);
       const alternatives = [
         completeOutcome,
-        {
-          ...completeOutcome,
-          diagnostics: completeOutcome.diagnostics.map((diagnostic) => ({
-            ...diagnostic,
-            message: "并发写入的诊断。",
-          })),
-        },
+        completeOutcome.map((diagnostic) => ({
+          ...diagnostic,
+          message: "并发写入的诊断。",
+        })),
       ] as const;
       const writes = Array.from({ length: 8 }, (_, index) =>
         cache.set("same-key", alternatives[index % alternatives.length]!),

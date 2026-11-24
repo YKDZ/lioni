@@ -1,11 +1,9 @@
 import type {
   CheckerPrepareInput,
   FrameworkConfig,
-  QualityCheckOutcome,
-  QualityObject,
   TranslationUnitInput,
 } from "@lioni/core";
-import { analyzeQuality, defineConfig } from "@lioni/core";
+import { runQa, defineConfig } from "@lioni/core";
 import {
   requireAllowedTranslation,
   type CompiledTerms,
@@ -48,10 +46,10 @@ const checkerOptions = {
     >,
   ) {
     const sourceText: string = input.sourceUnit.unit.source;
+    if (input.candidate === null) return null;
     const candidate: Body = input.candidate.content;
     void candidate;
     return {
-      status: "ready" as const,
       subject: { sourceText: sourceText ?? "Save" },
       comparison: {
         groups: [
@@ -104,23 +102,6 @@ const allTermIds: readonly (
 )[] = [derived.id, overridden.id];
 void allTermIds;
 
-function outcome(): QualityCheckOutcome<QualityObject> {
-  return {
-    status: "complete",
-    diagnostics: [],
-    issues: [],
-    coverage: {
-      selected: 1,
-      evaluated: 1,
-      notApplicable: 0,
-      incomplete: 0,
-      failed: 0,
-    },
-  };
-}
-
-void outcome;
-
 const sourceSchema = z.object({
   source: z.string(),
   context: z.object({ key: z.string() }),
@@ -150,10 +131,11 @@ const vueProjection: VueI18nMessageProjection = {
 const vueOptions: VueI18nChecksOptions<VueUnit, VueTranslation, VueBody> = {
   prepare: ({ candidate, sourceUnit }) => {
     const sourceText: string = sourceUnit.unit.source;
+    if (candidate === null) return null;
     const candidateBody: VueBody = candidate.content;
     void sourceText;
     void candidateBody;
-    return { status: "ready", input: vueProjection };
+    return vueProjection;
   },
   reference: () => vueProjection,
 };
@@ -252,8 +234,8 @@ function configWithMismatchedNumberChecker() {
 void configWithMismatchedNumberChecker;
 
 function verifyVueSelectionTypes() {
-  void analyzeQuality(vueConfig, { groups: ["syntax"] });
-  void analyzeQuality(vueConfig, {
+  void runQa(vueConfig, { groups: ["syntax"] });
+  void runQa(vueConfig, {
     checkIds: [
       "vue-i18n/source-syntax",
       "message-family-consistency",
@@ -262,11 +244,11 @@ function verifyVueSelectionTypes() {
   });
 
   // @ts-expect-error Vue 集合 ID 联合拒绝拼写错误。
-  void analyzeQuality(vueConfig, { checkIds: ["vue-i18n/source-syntaxx"] });
+  void runQa(vueConfig, { checkIds: ["vue-i18n/source-syntaxx"] });
   // @ts-expect-error 内置数字检查 ID 保留精确字面量。
-  void analyzeQuality(vueConfig, { checkIds: ["number-correspondance"] });
+  void runQa(vueConfig, { checkIds: ["number-correspondance"] });
   // @ts-expect-error Vue 分组名称必须来自宿主配置。
-  void analyzeQuality(vueConfig, { groups: ["unconfigured"] });
+  void runQa(vueConfig, { groups: ["unconfigured"] });
 }
 void verifyVueSelectionTypes;
 

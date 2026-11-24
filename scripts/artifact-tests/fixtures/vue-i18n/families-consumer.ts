@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 
 import {
-  analyzeQuality,
-  createQualityException,
+  runQa,
+  createQaSuppression,
   createVueI18nChecks,
   defineConfig,
   type QualityCheckResultCache,
-  type QualityException,
+  type QaSuppression,
   type VueI18nMessageProjection,
   type VueI18nPolicy,
 } from "@lioni/lioni";
@@ -16,13 +16,13 @@ const unitSchema = z.object({ key: z.string(), source: z.string() });
 const translationSchema = z.object({ key: z.string(), text: z.string() });
 type Unit = z.infer<typeof unitSchema>;
 type Translation = z.infer<typeof translationSchema>;
-type CacheableQualityCheckOutcome = Exclude<
+type CachedFindings = Exclude<
   Awaited<ReturnType<QualityCheckResultCache["get"]>>,
   undefined
 >;
-const cache = new Map<string, CacheableQualityCheckOutcome>();
+const cache = new Map<string, CachedFindings>();
 let hits = 0;
-const exceptions: QualityException[] = [];
+const suppressions: QaSuppression[] = [];
 const candidate = { sourceKey: "first", language: "zh-CN", content: "激活" };
 
 function projection(
@@ -109,21 +109,19 @@ async function run(
     quality: {
       checks: createVueI18nChecks<Unit, Translation, string>({
         prepare: ({ sourceUnit, candidate }) => {
+          if (candidate === null) return null;
           const prepared = projection(
             candidate.sourceKey,
             sourceUnit.unit.source,
             candidate.content,
           );
           return {
-            status: "ready",
-            input: {
-              ...prepared,
-              locations: {
-                ...prepared.locations,
-                target: {
-                  ...prepared.locations.target,
-                  range: "prepared-by-adapter.json",
-                },
+            ...prepared,
+            locations: {
+              ...prepared.locations,
+              target: {
+                ...prepared.locations.target,
+                range: "prepared-by-adapter.json",
               },
             },
           };
@@ -144,21 +142,21 @@ async function run(
           if (value !== undefined) hits += 1;
           return value;
         },
-        async set(key: string, value: CacheableQualityCheckOutcome) {
+        async set(key: string, value: CachedFindings) {
           cache.set(key, value);
         },
       },
-      exceptionStore: {
+      suppressionStore: {
         async load() {
-          return exceptions;
+          return suppressions;
         },
         async upsert() {
-          throw new Error("消费验收只读取例外。");
+          throw new Error("消费验收只读取豁免。");
         },
       },
     },
   });
-  return await analyzeQuality(config, { candidates: [candidate] });
+  return await runQa(config, { candidates: [candidate] });
 }
 
 const first = { key: "first", source: "Active", text: "旧译文" };
@@ -174,8 +172,8 @@ assert.equal(
 );
 const execution = before.checks[0]?.executions[0];
 assert.ok(execution);
-exceptions.push(
-  createQualityException({
+suppressions.push(
+  createQaSuppression({
     id: "family-approval",
     reason: "批准当前同族译法差异",
     execution,
@@ -185,8 +183,7 @@ exceptions.push(
 // 重排和编辑不同族的已保存消息，不改变当前参照身份、位置及缓存依据。
 const after = await run([{ ...other, text: "移除" }, second, first]);
 assert.equal(hits, 1);
-assert.equal(after.exceptionApplicability[0]?.status, "applicable");
-assert.equal(after.diagnostics[0]?.handling.status, "excepted");
+assert.equal(after.diagnostics[0]?.handling.status, "suppressed");
 assert.deepEqual(
   after.diagnostics[0]?.evidence,
   before.diagnostics[0]?.evidence,
@@ -195,7 +192,7 @@ assert.deepEqual(
 // 同族参照改变但仍产生同一类别诊断，必须重新计算并撤销本次豁免。
 const changed = await run([first, { ...second, text: "启用" }, other]);
 assert.equal(hits, 1);
-assert.equal(changed.exceptionApplicability[0]?.status, "basis-changed");
+assert.equal(changed.diagnostics[0]?.handling.status, "active");
 assert.equal(changed.diagnostics.length, 1);
 assert.notDeepEqual(
   changed.diagnostics[0]?.evidence,
@@ -203,4 +200,4 @@ assert.notDeepEqual(
 );
 const restored = await run([first, second, other]);
 assert.equal(hits, 2);
-assert.equal(restored.exceptionApplicability[0]?.status, "applicable");
+assert.equal(restored.diagnostics[0]?.handling.status, "suppressed");

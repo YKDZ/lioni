@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { Hash, type BinaryLike, type Encoding } from "node:crypto";
 
 import {
-  analyzeQuality,
+  runQa,
   createMessageFamilyChecker,
   createQualityProfiler,
   defineConfig,
@@ -61,15 +61,15 @@ async function measure(size: number, shape: "small" | "large") {
     string
   >()({
     id: "artifact-message-families",
-    prepare: ({ candidate, sourceUnit }) => ({
-      status: "ready",
-      input: projection(
-        candidate.sourceKey,
-        sourceUnit.unit.source,
-        candidate.content,
-        false,
-      ),
-    }),
+    prepare: ({ candidate, sourceUnit }) =>
+      candidate === null
+        ? null
+        : projection(
+            candidate.sourceKey,
+            sourceUnit.unit.source,
+            candidate.content,
+            false,
+          ),
     reference: (reference, context) => {
       assert.equal("candidate" in context, false);
       assert.equal("sourceUnit" in context, false);
@@ -156,11 +156,8 @@ async function measure(size: number, shape: "small" | "large") {
     };
     const profiler = createQualityProfiler({ slowestCandidates: 0 });
     try {
-      const result = await analyzeQuality(config, { profiler });
-      assert.equal(
-        result.status,
-        shape === "large" ? "complete" : "not-applicable",
-      );
+      const result = await runQa(config, { profiler });
+      assert.equal(result.status, "complete");
       assert.deepEqual(result.diagnostics, []);
     } finally {
       Hash.prototype.update = update;

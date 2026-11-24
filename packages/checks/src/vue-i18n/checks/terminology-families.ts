@@ -89,20 +89,20 @@ export function createVueI18nTerminologyChecks<
   const compile = (data: TermbaseData) =>
     compileTerms(createTermbase(data), { analysis: options.analysis });
   const loadLanguages = async ({
-    facts,
+    snapshot,
     memo,
     qualityData,
   }: QualityDataLoadInput<TUnit, TTranslation, TBody, TUnavailable>) => {
     return readVueI18nLanguagePolicies(
-      await qualityData.read(options.loadLanguages, facts, memo),
+      await qualityData.read(options.loadLanguages, snapshot, memo),
     );
   };
   const loadTerms = async ({
-    facts,
+    snapshot,
     memo,
     qualityData,
   }: QualityDataLoadInput<TUnit, TTranslation, TBody, TUnavailable>) => {
-    const data = await qualityData.read(options.loadTerms, facts, memo);
+    const data = await qualityData.read(options.loadTerms, snapshot, memo);
     return memo.memo(compile)(data);
   };
 
@@ -119,35 +119,25 @@ export function createVueI18nTerminologyChecks<
       load: loadLanguages,
       rule,
       prepare: async (input) => {
-        const policy = input.loaded.context.get(input.candidate.language);
-        if (policy === undefined) return { status: "not-applicable" };
+        const policy = input.loaded.context.get(input.association.language);
+        if (policy === undefined) return null;
         const { loaded: _loaded, ...messageInput } = input;
-        const prepared = await prepareVueI18nMessage(
+        const projection = await prepareVueI18nMessage(
           messageInput,
           options.prepare,
         );
-        if (prepared.status !== "ready") return prepared;
-        const projection = prepared.input;
-        if (projection.target.status === "missing")
-          return { status: "not-applicable" };
+        if (projection === null) return null;
+        if (projection.target.status === "missing") return null;
         if (projection.target.status === "unavailable")
-          return incompleteSelection(
-            "targetUnavailable",
-            "目标消息正文不可用，术语检查未执行。",
-          );
-        if (projection.source.status === "absent")
-          return { status: "not-applicable" };
+          throw new Error("目标消息正文不可用，术语检查未执行。");
+        if (projection.source.status === "absent") return null;
         if (
           projection.source.status === "unavailable" ||
           input.sourceUnit.bodyAvailability !== "available"
         )
-          return incompleteSelection(
-            "sourceUnavailable",
-            "原文正文不可用，术语检查未执行。",
-          );
-        if (!projection.target.text.trim()) return { status: "not-applicable" };
+          throw new Error("原文正文不可用，术语检查未执行。");
+        if (!projection.target.text.trim()) return null;
         return {
-          status: "ready",
           subject: projection,
           comparison: {
             groups: [
@@ -209,11 +199,11 @@ export function createVueI18nMessageFamilyCheck<
   const resolvePolicies = (dependencies: unknown) =>
     readVueI18nFamilyPolicies(dependencies);
   const loadDependencies = ({
-    facts,
+    snapshot,
     memo,
     qualityData,
   }: QualityDataLoadInput<TUnit, TTranslation, TBody, TUnavailable>) =>
-    qualityData.read(options.loadPolicies, facts, memo);
+    qualityData.read(options.loadPolicies, snapshot, memo);
 
   return createMessageFamilyChecker<
     TUnit,
@@ -236,41 +226,39 @@ export function createVueI18nMessageFamilyCheck<
     prepare: async (input) => {
       const policy = input.memo
         .memo(resolvePolicies)(input.loaded)
-        .policies.get(input.candidate.language);
-      if (policy === undefined || input.sourceUnit === null)
-        return { status: "not-applicable" };
-      const prepared = await prepareVueI18nMessage(input, options.prepare);
-      if (prepared.status !== "ready") return prepared;
-      const projection = prepared.input;
-      const unavailable = sourceAvailability(projection);
-      if (unavailable !== undefined) return unavailable;
-      const targetUnavailable = targetAvailability(projection);
-      if (targetUnavailable !== undefined) return targetUnavailable;
+        .policies.get(input.association.language);
+      if (policy === undefined || input.sourceUnit === null) return null;
+      const projection = await prepareVueI18nMessage(input, options.prepare);
+      if (projection === null) return null;
+      if (
+        projection.source.status === "absent" ||
+        projection.target.status === "missing"
+      )
+        return null;
+      if (
+        projection.target.status === "unavailable" ||
+        projection.source.status === "unavailable"
+      )
+        throw new Error("原文或目标消息正文不可用，无法比较消息族。");
       if (input.sourceUnit.bodyAvailability !== "available")
-        return incompleteSelection(
-          "sourceUnavailable",
-          "原文正文不可用，消息族检查未执行。",
-        );
+        throw new Error("原文正文不可用，消息族检查未执行。");
       if (
         projection.source.status !== "available" ||
         projection.target.status !== "available" ||
         !projection.target.text.trim()
       )
-        return { status: "not-applicable" };
+        return null;
       if (
         memoizedVueI18nMessage(projection.source.text, input.memo).errors
           .length > 0 ||
         memoizedVueI18nMessage(projection.target.text, input.memo).errors
           .length > 0
       )
-        return { status: "not-applicable" };
-      return {
-        status: "ready",
-        input: familyInput(
-          projection,
-          input.memo.memo(resolvePolicies)(input.loaded).policies,
-        ),
-      };
+        throw new Error("原文或译文语法无效，无法确定消息族。");
+      return familyInput(
+        projection,
+        input.memo.memo(resolvePolicies)(input.loaded).policies,
+      );
     },
     reference: (reference, context) =>
       familyInput(
@@ -374,33 +362,4 @@ function familyInput(
       },
     ],
   };
-}
-
-function incompleteSelection(code: string, message: string) {
-  return {
-    status: "incomplete" as const,
-    issue: { code, message },
-  };
-}
-
-function sourceAvailability(projection: VueI18nMessageProjection) {
-  if (projection.source.status === "absent")
-    return { status: "not-applicable" as const };
-  if (projection.source.status === "unavailable")
-    return incompleteSelection(
-      "sourceUnavailable",
-      "原文正文不可用，消息族检查未执行。",
-    );
-  return undefined;
-}
-
-function targetAvailability(projection: VueI18nMessageProjection) {
-  if (projection.target.status === "missing")
-    return { status: "not-applicable" as const };
-  if (projection.target.status === "unavailable")
-    return incompleteSelection(
-      "targetUnavailable",
-      "目标消息正文不可用，消息族检查未执行。",
-    );
-  return undefined;
 }

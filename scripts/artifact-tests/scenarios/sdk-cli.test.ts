@@ -49,7 +49,7 @@ testArtifactConsumer(
       textReport.stdout,
       /检查项范围：配置 1 项，本次全量 1 项（number-correspondence）/u,
     );
-    assert.match(textReport.stdout, /候选范围：已选候选 4 条/u);
+    assert.match(textReport.stdout, /送检范围：4 项，其中 4 项提供了译文/u);
 
     const report = await runProcess(executable, [
       "qa",
@@ -90,7 +90,7 @@ testArtifactConsumer(
     );
     await writeFile(path.join(root, "qa-report.json"), report.stdout);
     await cli(
-      "exceptions",
+      "suppressions",
       "upsert",
       "lioni.config.ts",
       "qa-report.json",
@@ -103,24 +103,24 @@ testArtifactConsumer(
       "--reason",
       "已确认的数字差异。",
     );
-    const excepted = await runProcess(executable, [
+    const suppressed = await runProcess(executable, [
       "qa",
       "lioni.config.ts",
       "--output-format",
       "structured",
     ]);
-    assert.equal(excepted.status, 0);
-    assert.partialDeepStrictEqual(JSON.parse(excepted.stdout), {
+    assert.equal(suppressed.status, 0);
+    assert.partialDeepStrictEqual(JSON.parse(suppressed.stdout), {
       data: {
         diagnostics: [
-          { handling: { status: "excepted", exceptionId: "approved-number" } },
+          { handling: { status: "suppressed", suppressionId: "approved-number" } },
         ],
       },
     });
-    const exceptionPath = path.join(root, "lioni.exceptions.yaml");
-    const exceptionContents = await readFile(exceptionPath, "utf8");
-    assert.match(exceptionContents, /^format: lioni\.qa-exceptions\/v2$/mu);
-    assert.match(exceptionContents, /approved-number/u);
+    const suppressionPath = path.join(root, "lioni.suppressions.yaml");
+    const suppressionContents = await readFile(suppressionPath, "utf8");
+    assert.match(suppressionContents, /^format: lioni\.qa-suppressions\/v1$/mu);
+    assert.match(suppressionContents, /approved-number/u);
     await writeFile(
       path.join(root, "fr.json"),
       JSON.stringify([
@@ -137,17 +137,16 @@ testArtifactConsumer(
     assert.equal(unrelatedEdit.status, 0);
     assert.partialDeepStrictEqual(JSON.parse(unrelatedEdit.stdout), {
       data: {
-        exceptionApplicability: [{ status: "applicable" }],
-        diagnostics: [{ handling: { status: "excepted" } }],
+        diagnostics: [{ handling: { status: "suppressed" } }],
       },
     });
     assert.deepEqual(await readFile(baselinePath), baseline);
 
-    const oldExceptionContents =
-      "format: lioni.qa-exceptions/v1\nexceptions: []\n";
-    await writeFile(exceptionPath, oldExceptionContents, "utf8");
-    const rejectedLegacyException = await runProcess(executable, [
-      "exceptions",
+    const oldSuppressionContents =
+      "format: unsupported\nsuppressions: []\n";
+    await writeFile(suppressionPath, oldSuppressionContents, "utf8");
+    const rejectedLegacySuppression = await runProcess(executable, [
+      "suppressions",
       "upsert",
       "lioni.config.ts",
       "qa-report.json",
@@ -160,11 +159,11 @@ testArtifactConsumer(
       "--reason",
       "旧格式必须重新确认。",
     ]);
-    assert.equal(rejectedLegacyException.status, 1);
+    assert.equal(rejectedLegacySuppression.status, 1);
     assert.match(
-      rejectedLegacyException.stdout + rejectedLegacyException.stderr,
-      /先保留并移开.*运行 QA.*重新建立/u,
+      rejectedLegacySuppression.stdout + rejectedLegacySuppression.stderr,
+      /依据当前 QA 报告重新建立/u,
     );
-    assert.equal(await readFile(exceptionPath, "utf8"), oldExceptionContents);
+    assert.equal(await readFile(suppressionPath, "utf8"), oldSuppressionContents);
   },
 );

@@ -1,10 +1,10 @@
 import type {
-  ActualTranslationFact,
+  Translation,
   Awaitable,
-  FrameworkFacts,
+  ProjectSnapshot,
   JsonValue,
-  SourceUnitFact,
-  TranslationAssociationFact,
+  SourceUnit,
+  TranslationAssociation,
   TranslationUnitInput,
 } from "@lioni/core";
 import type { MemoScope } from "@lioni/memo";
@@ -86,7 +86,7 @@ export type VueI18nPolicyRequirement =
   | "protectedLiterals"
   | "messageFamilies";
 
-/** 宿主按需读取 Vue I18n 检查资料；facts 与 memo 可用于选择读取范围。 */
+/** 宿主按需读取 Vue I18n 检查资料；snapshot 与 memo 可用于选择读取范围。 */
 export type VueI18nDataReader<
   TUnit extends TranslationUnitInput,
   TTranslation,
@@ -94,7 +94,7 @@ export type VueI18nDataReader<
   TUnavailable,
   TValue,
 > = (
-  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
+  snapshot: ProjectSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
   memo: MemoScope,
 ) => Awaitable<TValue>;
 
@@ -113,13 +113,9 @@ export type VueI18nMessageReference<
   TBody,
   TUnavailable
 > & {
-  readonly sourceUnit: SourceUnitFact<TUnit>;
-  readonly association: TranslationAssociationFact;
-  readonly translation: ActualTranslationFact<
-    TTranslation,
-    TBody,
-    TUnavailable
-  >;
+  readonly sourceUnit: SourceUnit<TUnit>;
+  readonly association: TranslationAssociation;
+  readonly translation: Translation<TTranslation, TBody, TUnavailable>;
 };
 
 export type VueI18nReferenceProjector<

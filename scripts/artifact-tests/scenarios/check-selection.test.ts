@@ -81,7 +81,7 @@ testArtifactConsumer(
       sdk.full.report ?? "",
       /检查项范围：配置 3 项，本次全量 3 项（syntax、terms、unlisted）/u,
     );
-    assert.match(sdk.full.report ?? "", /候选范围：已选候选 1 条/u);
+    assert.match(sdk.full.report ?? "", /送检范围：1 项，其中 1 项提供了译文/u);
 
     assert.deepEqual(checkIds(sdk.direct), ["syntax"]);
     assert.ok(!sdk.direct.events.includes("loader:terms"));
@@ -95,13 +95,7 @@ testArtifactConsumer(
     );
     assert.equal(
       sdk.direct.result?.diagnostics[0]?.handling.status,
-      "excepted",
-    );
-    assert.equal(
-      sdk.direct.result?.exceptionApplicability.find(
-        ({ checkId }) => checkId === "syntax",
-      )?.status,
-      "applicable",
+      "suppressed",
     );
     assert.ok(!sdk.direct.events.includes("rule:syntax:normalized-v1"));
     assert.match(
@@ -123,22 +117,10 @@ testArtifactConsumer(
     );
     assert.equal(
       sdk.groupUnion.result?.diagnostics[0]?.handling.status,
-      "excepted",
+      "suppressed",
     );
 
     assert.deepEqual(checkIds(sdk.termsOnly), ["terms"]);
-    assert.equal(
-      sdk.termsOnly.result?.exceptionApplicability.find(
-        ({ checkId }) => checkId === "syntax",
-      )?.status,
-      "not-verified",
-    );
-    assert.equal(
-      sdk.termsOnly.result?.exceptionApplicability.find(
-        ({ checkId }) => checkId === "syntax",
-      )?.reason,
-      "not-run",
-    );
 
     for (const invalid of Object.values(sdk.invalidSelections)) {
       assert.ok(invalid.error);
@@ -171,12 +153,6 @@ testArtifactConsumer(
       sdk.changedDependency.events.includes("rule:syntax:normalized-v2"),
     );
     assert.equal(eventCount(sdk.changedDependency, "compile:shared:v2"), 1);
-    assert.equal(
-      sdk.changedDependency.result.exceptionApplicability.find(
-        ({ checkId }) => checkId === "syntax",
-      )?.status,
-      "basis-changed",
-    );
 
     assert.ok(sdk.isolatedLoaderFailure.result);
     assert.deepEqual(
@@ -209,18 +185,6 @@ testArtifactConsumer(
         { checkId: "terms", status: "failed" },
         { checkId: "unlisted", status: "complete" },
       ],
-    );
-    assert.equal(
-      sdk.sharedLoaderFailure.result.exceptionApplicability.find(
-        ({ checkId }) => checkId === "syntax",
-      )?.status,
-      "not-verified",
-    );
-    assert.equal(
-      sdk.sharedLoaderFailure.result.exceptionApplicability.find(
-        ({ checkId }) => checkId === "syntax",
-      )?.reason,
-      "no-comparable-basis",
     );
     assert.ok(
       sdk.sharedLoaderFailure.events.includes("rule:unlisted:normalized-v4"),
@@ -258,7 +222,7 @@ testArtifactConsumer(
       fullText.stdout,
       /检查项范围：配置 3 项，本次全量 3 项（syntax、terms、unlisted）/u,
     );
-    assert.match(fullText.stdout, /候选范围：已选候选 1 条/u);
+    assert.match(fullText.stdout, /送检范围：1 项，其中 1 项提供了译文/u);
 
     await clearEvents(root);
     const oneCheck = await cli("--check", "terms");
@@ -294,7 +258,7 @@ testArtifactConsumer(
       !groupedResult.checks.some(({ checkId }) => checkId === "unlisted"),
     );
 
-    await rm(path.join(root, "lioni.exceptions.yaml"), { force: true });
+    await rm(path.join(root, "lioni.suppressions.yaml"), { force: true });
     await clearEvents(root);
     const failingSubset = await cli("--check", "syntax");
     assert.equal(failingSubset.status, 1);

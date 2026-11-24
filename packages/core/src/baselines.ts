@@ -1,16 +1,17 @@
+import { readStatus } from "./read-coverage.ts";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import type {
-  ActualTranslationFact,
+  Translation,
   ComparisonSnapshot,
   CoverageStatus,
   EnumerationCompleteness,
   FrameworkConfig,
-  SourceFacts,
-  SourceReadFact,
-  TranslationReadFact,
-  TranslationReadScopeFact,
+  SourceSnapshot,
+  SourceReadCoverage,
+  TranslationReadCoverage,
+  TranslationReadScopeCoverage,
   TranslationUnitInput,
 } from "./index.ts";
 import { readComparisonSnapshot } from "./index.ts";
@@ -167,7 +168,7 @@ export function replaceComparisonBaseline<
       ? current.source.read.error
       : previousSourceRead?.error;
   const sourceRead = createSourceRead(sourceScopes, sourceError);
-  const source = createSourceFacts(sourceRead, sourceUnits);
+  const source = createSourceSnapshot(sourceRead, sourceUnits);
 
   const translationReads = mergeTranslationReads<
     TUnit,
@@ -196,7 +197,7 @@ export function replaceComparisonBaseline<
     translations,
   );
 
-  if (previous !== undefined && sameSnapshotFacts(previous.snapshot, snapshot))
+  if (previous !== undefined && sameSnapshot(previous.snapshot, snapshot))
     return previous;
 
   const result: ComparisonBaseline<TUnit, TTranslation, TBody, TUnavailable> = {
@@ -327,7 +328,7 @@ function selectScopeIndexes<TScope extends { readonly range: unknown }>(
 }
 
 function selectTranslationScopeIndexes(
-  reads: readonly TranslationReadFact[],
+  reads: readonly TranslationReadCoverage[],
   ranges: readonly { readonly language: string; readonly range: unknown }[],
 ): Map<string, number[]> {
   const indexes = new Map<string, number[]>();
@@ -381,7 +382,7 @@ function mergeTranslationReads<
   >;
   readonly selection: ComparisonBaselineSelection | undefined;
   readonly translationRangesByLanguage: ReadonlyMap<string, readonly number[]>;
-}): readonly TranslationReadFact[] {
+}): readonly TranslationReadCoverage[] {
   const previousReads = options.previous?.snapshot.translations.reads ?? [];
   const currentReads = options.current.translations.reads;
   const languages = previousReads.map(({ language }) => language);
@@ -444,7 +445,7 @@ function createTranslations<
     TBody,
     TUnavailable
   >;
-  readonly entries: readonly TranslationReadFact[];
+  readonly entries: readonly TranslationReadCoverage[];
   readonly selection: readonly {
     readonly language: string;
     readonly range: unknown;
@@ -455,8 +456,8 @@ function createTranslations<
   TBody,
   TUnavailable
 >["translations"] {
-  const reads: TranslationReadFact[] = [];
-  const records: ActualTranslationFact<TTranslation, TBody, TUnavailable>[] =
+  const reads: TranslationReadCoverage[] = [];
+  const records: Translation<TTranslation, TBody, TUnavailable>[] =
     [];
   for (const read of options.entries) {
     const previousRead = options.previous?.snapshot.translations.reads.find(
@@ -465,7 +466,7 @@ function createTranslations<
     const currentRead = options.current.translations.reads.find(
       (candidate) => candidate.language === read.language,
     );
-    const scopes: TranslationReadScopeFact[] = [];
+    const scopes: TranslationReadScopeCoverage[] = [];
     for (const [scopeIndex, scope] of read.scopes.entries()) {
       const selected = options.selection.some(
         ({ language, range }) =>
@@ -501,10 +502,10 @@ function createTranslations<
   return { reads, records };
 }
 
-function createSourceFacts<TUnit extends TranslationUnitInput>(
-  read: SourceReadFact,
-  units: readonly SourceFacts<TUnit>["units"][number][],
-): SourceFacts<TUnit> {
+function createSourceSnapshot<TUnit extends TranslationUnitInput>(
+  read: SourceReadCoverage,
+  units: readonly SourceSnapshot<TUnit>["units"][number][],
+): SourceSnapshot<TUnit> {
   const totalUnitCount = read.status === "complete" ? units.length : null;
   const version = hashJson({ read, units });
   return { version, read, totalUnitCount, units };
@@ -516,7 +517,7 @@ function createSnapshot<
   TBody,
   TUnavailable,
 >(
-  source: SourceFacts<TUnit>,
+  source: SourceSnapshot<TUnit>,
   translations: ComparisonSnapshot<
     TUnit,
     TTranslation,
@@ -532,9 +533,9 @@ function createSnapshot<
 }
 
 function createSourceRead(
-  scopes: readonly SourceReadFact["scopes"][number][],
+  scopes: readonly SourceReadCoverage["scopes"][number][],
   error?: string,
-): SourceReadFact {
+): SourceReadCoverage {
   return {
     status: readStatus(scopes, error),
     scopes,
@@ -542,20 +543,6 @@ function createSourceRead(
   };
 }
 
-function readStatus(
-  scopes: readonly { readonly enumeration: EnumerationCompleteness }[],
-  error?: string,
-): CoverageStatus {
-  if (
-    error !== undefined ||
-    scopes.some(({ enumeration }) => enumeration === "failed")
-  )
-    return "failed";
-  if (scopes.length === 0) return "notRead";
-  return scopes.every(({ enumeration }) => enumeration === "complete")
-    ? "complete"
-    : "incomplete";
-}
 
 function assertCompleteSnapshot<
   TUnit extends TranslationUnitInput,
@@ -632,7 +619,7 @@ function assertUniqueTranslationIdentities(
   }
 }
 
-function sameSnapshotFacts<
+function sameSnapshot<
   TUnit extends TranslationUnitInput,
   TTranslation,
   TBody,
@@ -673,16 +660,16 @@ function validateSnapshot(
     invalidBaseline("比较快照缺少版本、原文或译文事实。");
   const source = value.source;
   const translations = value.translations;
-  validateSourceFacts(source);
-  validateTranslationFacts(translations);
+  validateSourceSnapshot(source);
+  validateTranslationSnapshot(translations);
   const expectedStatus = readStatus(source.read.scopes, source.read.error);
   if (source.read.status !== expectedStatus)
     invalidBaseline("比较快照的原文读取状态与范围证据不一致。");
 }
 
-function validateSourceFacts(
+function validateSourceSnapshot(
   value: unknown,
-): asserts value is SourceFacts<TranslationUnitInput> {
+): asserts value is SourceSnapshot<TranslationUnitInput> {
   if (!isRecord(value) || typeof value.version !== "string")
     invalidBaseline("原文事实缺少版本。");
   if (!isRecord(value.read) || !Array.isArray(value.read.scopes))
@@ -738,7 +725,7 @@ function validateSourceFacts(
     invalidBaseline("原文总数与读取状态不一致。");
 }
 
-function validateTranslationFacts(
+function validateTranslationSnapshot(
   value: unknown,
 ): asserts value is ComparisonSnapshot<
   TranslationUnitInput,
@@ -753,7 +740,7 @@ function validateTranslationFacts(
   )
     invalidBaseline("译文事实必须包含读取结果与实际译文数组。");
   const languages = new Set<string>();
-  const readsByLanguage = new Map<string, TranslationReadFact>();
+  const readsByLanguage = new Map<string, TranslationReadCoverage>();
   for (const [readIndex, read] of value.reads.entries()) {
     if (
       !isRecord(read) ||
@@ -765,7 +752,7 @@ function validateTranslationFacts(
     validateStatus(read.status);
     if (languages.has(read.language)) invalidBaseline("目标语言读取重复。");
     languages.add(read.language);
-    readsByLanguage.set(read.language, read as unknown as TranslationReadFact);
+    readsByLanguage.set(read.language, read as unknown as TranslationReadCoverage);
     for (const [scopeIndex, scope] of read.scopes.entries()) {
       if (
         !isRecord(scope) ||
@@ -829,7 +816,7 @@ function validateTranslationFacts(
     } else if (Object.hasOwn(record, "content")) {
       invalidBaseline("正文不可用的实际译文不能包含正文。");
     }
-    assertJsonValue(record.translation, `实际译文 ${index + 1}`);
+    assertJsonValue(record.record, `实际译文 ${index + 1}`);
     const scopeKey = JSON.stringify([
       record.language,
       record.scopeIndex as number,
@@ -838,7 +825,7 @@ function validateTranslationFacts(
     scopeIndexes.push(index);
     translationIndexesByScope.set(scopeKey, scopeIndexes);
   }
-  for (const read of value.reads as readonly TranslationReadFact[]) {
+  for (const read of value.reads as readonly TranslationReadCoverage[]) {
     for (const [scopeIndex, scope] of read.scopes.entries()) {
       const expectedIndexes =
         translationIndexesByScope.get(

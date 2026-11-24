@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
-  analyzeQuality,
+  runQa,
   defineChecker,
   defineConfig,
   StandardSchemaContractError,
-  type CacheableQualityCheckOutcome,
-  type QualityCheckOutcome,
+  type CachedQualityFindings,
+  type QualityFinding,
   type QualityCheckResultCache,
   type QualityCheckDefinition,
   type StandardSchemaV1,
@@ -79,18 +79,7 @@ function config(
   });
 }
 
-const complete = {
-  status: "complete",
-  diagnostics: [],
-  issues: [],
-  coverage: {
-    selected: 1,
-    evaluated: 1,
-    notApplicable: 0,
-    incomplete: 0,
-    failed: 0,
-  },
-} satisfies QualityCheckOutcome;
+const complete = [] satisfies ReadonlyArray<QualityFinding>;
 
 void describe("三阶段自定义检查", () => {
   void it("逐候选交接原始事实、固定关联及完整证据", async () => {
@@ -108,18 +97,18 @@ void describe("三阶段自定义检查", () => {
           ["a", "b", "c"],
         );
         assert.deepEqual(context.relationships, [relationship]);
-        assert.equal(context.facts.source.units.length, 3);
+        assert.equal(context.snapshot.source.units.length, 3);
         visits.push([
-          candidate.content,
+          candidate?.content,
           sourceUnit.unit.source,
-          translation?.translation ?? null,
+          translation?.record ?? null,
           association.status,
         ]);
-        return { status: "ready", input: candidate.sourceKey };
+        return association.sourceKey;
       },
       check: () => complete,
     });
-    const result = await analyzeQuality(config([checker]), {
+    const result = await runQa(config([checker]), {
       candidates: [
         { sourceKey: "a", language: "fr", content: "编辑 A" },
         { sourceKey: "b", language: "fr", content: "新增 B" },
@@ -144,9 +133,9 @@ void describe("三阶段自定义检查", () => {
         id,
         version: "1",
         inputSchema: schemaFromExamples(0),
-        async load({ candidates, facts, relationships, qualityData }) {
+        async load({ candidates, snapshot, relationships, qualityData }) {
           assert.equal(candidates.length, 2);
-          assert.equal(facts.source.units.length, 3);
+          assert.equal(snapshot.source.units.length, 3);
           assert.deepEqual(relationships, [relationship]);
           loads.push(id);
           const { value } = await qualityData.read(readPolicy);
@@ -159,11 +148,8 @@ void describe("三阶段自定义检查", () => {
             lookup: (key: string) => index.get(key) ?? 0,
           };
         },
-        prepare({ candidate, loaded }) {
-          return {
-            status: "ready",
-            input: loaded.lookup(candidate.sourceKey),
-          };
+        prepare({ association, loaded }) {
+          return loaded.lookup(association.sourceKey);
         },
         check(input) {
           evaluated.push(input);
@@ -172,7 +158,7 @@ void describe("三阶段自定义检查", () => {
       }),
     );
     const qa = config(checks);
-    await analyzeQuality(qa, { candidates: [] });
+    await runQa(qa, { candidates: [] });
     assert.equal(reads, 0);
 
     const candidates = [
@@ -180,7 +166,7 @@ void describe("三阶段自定义检查", () => {
       { sourceKey: "b", language: "fr", content: "新增 B" },
     ];
     const options = { candidates, checkIds: ["first", "second"] };
-    const first = await analyzeQuality(qa, options);
+    const first = await runQa(qa, options);
     assert.deepEqual(loads, ["first", "second"]);
     assert.deepEqual(evaluated, [1, 10, 1, 10]);
     assert.equal(reads, 1);
@@ -191,7 +177,7 @@ void describe("三阶段自定义检查", () => {
       false,
     );
 
-    await analyzeQuality(qa, options);
+    await runQa(qa, options);
     assert.deepEqual(loads, ["first", "second", "first", "second"]);
     assert.deepEqual(evaluated, [1, 10, 1, 10, 2, 20, 2, 20]);
     assert.equal(reads, 2);
@@ -217,9 +203,9 @@ void describe("三阶段自定义检查", () => {
       id: "local",
       version: "1",
       inputSchema: schemaFromExamples(""),
-      prepare({ candidate }) {
-        if (candidate.sourceKey === "a") throw new TypeError("准备失败");
-        return { status: "ready", input: candidate.sourceKey };
+      prepare({ association }) {
+        if (association.sourceKey === "a") throw new TypeError("准备失败");
+        return association.sourceKey;
       },
       check(key) {
         if (key === "b") throw new Error("计算失败");
@@ -230,21 +216,16 @@ void describe("三阶段自定义检查", () => {
       id: "coverage",
       version: "1",
       inputSchema: schemaFromExamples(""),
-      prepare({ candidate }) {
-        if (candidate.sourceKey === "a") return { status: "not-applicable" };
-        if (candidate.sourceKey === "b")
-          return {
-            status: "incomplete",
-            issue: { code: "noEvidence", message: "缺少依据" },
-          };
-        return { status: "ready", input: candidate.sourceKey };
+      prepare({ association }) {
+        if (association.sourceKey === "b") throw new Error("缺少依据");
+        return association.sourceKey;
       },
       check(key) {
-        assert.equal(key, "c");
+        assert.notEqual(key, "b");
         return complete;
       },
     });
-    const result = await analyzeQuality(config([...loading, local, coverage]), {
+    const result = await runQa(config([...loading, local, coverage]), {
       candidates: ["a", "b", "c"].map((sourceKey) => ({
         sourceKey,
         language: "fr",
@@ -261,16 +242,16 @@ void describe("三阶段自定义检查", () => {
         ["failed", "failed", "failed"],
         ["failed", "failed", "failed"],
         ["failed", "failed", "complete"],
-        ["not-applicable", "incomplete", "complete"],
+        ["complete", "failed", "complete"],
       ],
     );
     assert.deepEqual(
-      result.checks[2]?.issues.map(({ message }) => message),
+      result.checks[2]?.executions.flatMap((e) =>
+        e.error === undefined ? [] : [e.error],
+      ),
       ["准备失败", "计算失败"],
     );
-    assert.deepEqual(result.checks[3]?.issues, [
-      { code: "noEvidence", message: "缺少依据" },
-    ]);
+    assert.equal(result.checks[3]?.executions[1]?.error, "缺少依据");
   });
 
   void it("准备或规则返回无效结构时中止检查", async () => {
@@ -281,22 +262,18 @@ void describe("三阶段自定义检查", () => {
       prepare: () => ({ status: "ready" }) as never,
       check: () => complete,
     });
-    await assert.rejects(analyzeQuality(config([badPreparation])), {
-      name: "QualityCheckerContractError",
-      stage: "prepare",
+    await assert.rejects(runQa(config([badPreparation])), {
+      name: "StandardSchemaContractError",
     });
 
     const badOutcome = defineChecker({
       id: "invalid-outcome",
       version: "1",
       inputSchema: schemaFromExamples(""),
-      prepare: () => ({ status: "ready", input: "a" }),
-      check: () => ({
-        ...complete,
-        coverage: { ...complete.coverage, evaluated: -1 },
-      }),
+      prepare: () => "a",
+      check: () => ({ diagnostics: [] }) as never,
     });
-    await assert.rejects(analyzeQuality(config([badOutcome])), {
+    await assert.rejects(runQa(config([badOutcome])), {
       name: "QualityCheckerContractError",
       stage: "check",
     });
@@ -305,7 +282,7 @@ void describe("三阶段自定义检查", () => {
   void it("缓存查询与规则使用已固定的同一输入，候选筛选后可复用结果", async () => {
     let original: { payload: { key: string } } | undefined;
     const checked: string[] = [];
-    const entries = new Map<string, CacheableQualityCheckOutcome>();
+    const entries = new Map<string, CachedQualityFindings>();
     const cache: QualityCheckResultCache = {
       async get(key) {
         assert.ok(original);
@@ -320,9 +297,9 @@ void describe("三阶段自定义检查", () => {
       id: "fixed-input",
       version: "1",
       inputSchema: schemaFromExamples({ payload: { key: "" } }),
-      prepare({ candidate }) {
-        original = { payload: { key: candidate.sourceKey } };
-        return { status: "ready", input: original };
+      prepare({ association }) {
+        original = { payload: { key: association.sourceKey } };
+        return original;
       },
       check(input) {
         assert.equal(Reflect.set(input.payload, "key", "规则修改"), false);
@@ -333,8 +310,8 @@ void describe("三阶段自定义检查", () => {
     const qa = config([checker], cache);
     const a = { sourceKey: "a", language: "fr", content: "编辑 A" };
     const b = { sourceKey: "b", language: "fr", content: "新增 B" };
-    const first = await analyzeQuality(qa, { candidates: [a, b] });
-    const filtered = await analyzeQuality(qa, { candidates: [b] });
+    const first = await runQa(qa, { candidates: [a, b] });
+    const filtered = await runQa(qa, { candidates: [b] });
     assert.deepEqual(checked, ["a", "b"]);
     const firstB = first.checks[0]?.executions[1];
     const filteredB = filtered.checks[0]?.executions[0];
@@ -379,13 +356,10 @@ void describe("三阶段自定义检查", () => {
         id: "preserving-schema",
         version: "1",
         inputSchema,
-        prepare: () => ({
-          status: "ready",
-          input: input ?? { text: "正文", detail: "细节" },
-        }),
+        prepare: () => input ?? { text: "正文", detail: "细节" },
         check: () => assert.fail("输入校验失败后不得执行规则"),
       });
-      await assert.rejects(analyzeQuality(config([checker])), (error) => {
+      await assert.rejects(runQa(config([checker])), (error) => {
         assert.ok(error instanceof StandardSchemaContractError);
         assert.equal(error.kind, kind);
         return true;

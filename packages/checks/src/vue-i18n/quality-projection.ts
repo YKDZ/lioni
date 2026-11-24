@@ -68,13 +68,14 @@ export type VueI18nMessageProjection = {
 
 /** Zod 负责结构验证；保留原投影，避免对象复制丢失位置上的特殊扩展键。 */
 export const vueI18nMessageProjectionSchema: StandardSchemaV1<
-  VueI18nMessageProjection,
-  VueI18nMessageProjection
+  VueI18nMessageProjection | null,
+  VueI18nMessageProjection | null
 > = {
   "~standard": {
     version: 1,
     vendor: "lioni-vue-i18n",
     validate(value) {
+      if (value === null) return { value: null };
       const result = projectionShape.safeParse(value);
       return result.success
         ? { value: value as VueI18nMessageProjection }
@@ -100,7 +101,13 @@ const projectionKey = <
   TUnavailable,
 >(
   input: VueI18nPrepareInput<TUnit, TTranslation, TBody, TUnavailable>,
-) => [input.facts, input.candidate, input.sourceUnit, input.relationships];
+) => [
+  input.snapshot,
+  input.association,
+  input.candidate,
+  input.sourceUnit,
+  input.relationships,
+];
 
 /** 准备适配保留原始源译单元，但不暴露检查专属加载资料。 */
 export type VueI18nPrepareInput<
@@ -120,9 +127,7 @@ export type VueI18nPreparer<
   TUnavailable = never,
 > = (
   input: VueI18nPrepareInput<TUnit, TTranslation, TBody, TUnavailable>,
-) => import("@lioni/core").Awaitable<
-  import("@lioni/core").CheckerPreparation<VueI18nMessageProjection>
->;
+) => import("@lioni/core").Awaitable<VueI18nMessageProjection | null>;
 
 /** 默认只提取字符串；各项检查自行判断所需一侧的正文可用性。 */
 export function prepareVueI18nMessage<
@@ -133,9 +138,7 @@ export function prepareVueI18nMessage<
 >(
   input: VueI18nPrepareInput<TUnit, TTranslation, TBody, TUnavailable>,
   adapter?: VueI18nPreparer<TUnit, TTranslation, TBody, TUnavailable>,
-): import("@lioni/core").Awaitable<
-  import("@lioni/core").CheckerPreparation<VueI18nMessageProjection>
-> {
+): import("@lioni/core").Awaitable<VueI18nMessageProjection | null> {
   if (adapter) {
     // Omit 仅影响静态类型；运行时仍需移除通用检查器交接的加载资料。
     const { loaded: _loaded, ...context } = input as typeof input & {
@@ -145,61 +148,45 @@ export function prepareVueI18nMessage<
       const prepared = await input.memo.memo(adapter, { key: projectionKey })(
         context,
       );
+      if (prepared === null) return null;
+      assertVueI18nMessageProjection(prepared);
       if (
-        prepared === null ||
-        typeof prepared !== "object" ||
-        Array.isArray(prepared)
+        prepared.key !== input.association.sourceKey ||
+        prepared.language !== input.association.language
       )
-        throw new StandardSchemaContractError(
-          "Vue I18n 准备结果",
-          "schema-mismatch",
-          "Vue I18n prepare 返回了无效结果。",
-        );
-      if (prepared.status === "ready")
-        assertVueI18nMessageProjection(prepared.input);
-      if (
-        prepared.status === "ready" &&
-        (prepared.input.key !== input.candidate.sourceKey ||
-          prepared.input.language !== input.candidate.language)
-      )
-        return {
-          status: "incomplete" as const,
-          issue: {
-            code: "messageProjectionIdentityMismatch",
-            message: "消息准备结果的键或语言与本次候选不一致。",
-          },
-        };
+        throw new Error("消息准备结果的键或语言与本次检查对象不一致。");
       return prepared;
     })();
   }
   const source = input.sourceUnit.unit.source;
   return {
-    status: "ready",
-    input: {
-      key: input.candidate.sourceKey,
-      language: input.candidate.language,
-      source:
-        input.sourceUnit.bodyAvailability === "available" &&
-        typeof source === "string"
-          ? { status: "available", text: source }
-          : { status: "unavailable" },
-      target:
-        typeof input.candidate.content === "string"
+    key: input.association.sourceKey,
+    language: input.association.language,
+    source:
+      input.sourceUnit.bodyAvailability === "available" &&
+      typeof source === "string"
+        ? { status: "available", text: source }
+        : { status: "unavailable" },
+    target:
+      input.candidate === null
+        ? input.association.status === "missing"
+          ? { status: "missing" }
+          : { status: "unavailable" }
+        : typeof input.candidate.content === "string"
           ? { status: "available", text: input.candidate.content }
           : { status: "unavailable" },
-      locations: {
-        source: {
-          language: null,
-          key: input.candidate.sourceKey,
-          range:
-            input.facts.source.read.scopes[input.sourceUnit.scopeIndex]
-              ?.range ?? null,
-        },
-        target: {
-          language: input.candidate.language,
-          key: input.candidate.sourceKey,
-          range: input.translation?.range ?? null,
-        },
+    locations: {
+      source: {
+        language: null,
+        key: input.association.sourceKey,
+        range:
+          input.snapshot.source.read.scopes[input.sourceUnit.scopeIndex]
+            ?.range ?? null,
+      },
+      target: {
+        language: input.association.language,
+        key: input.association.sourceKey,
+        range: input.translation?.range ?? null,
       },
     },
   };

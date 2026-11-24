@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { analyzeQuality, type TermbaseData } from "@lioni/lioni";
+import { runQa, type TermbaseData } from "@lioni/lioni";
 
 import {
   createConfig,
@@ -30,12 +30,9 @@ const terms: TermbaseData = {
 };
 
 resetDataReadCounts();
-const syntaxOnly = await analyzeQuality(
-  createConfig("你好 {name}", { terms }),
-  {
-    checkIds: ["vue-i18n/target-syntax"],
-  },
-);
+const syntaxOnly = await runQa(createConfig("你好 {name}", { terms }), {
+  checkIds: ["vue-i18n/target-syntax"],
+});
 assert.deepEqual(syntaxOnly.checkScope.selectedIds, ["vue-i18n/target-syntax"]);
 assert.equal(syntaxOnly.checks[0]?.executions.length, 1);
 assert.deepEqual(getDataReadCounts(), {
@@ -45,15 +42,12 @@ assert.deepEqual(getDataReadCounts(), {
 });
 
 resetDataReadCounts();
-const terminology = await analyzeQuality(
-  createConfig("旧称 {name}", { terms }),
-  {
-    checkIds: [
-      "terminology/require-allowed-translation",
-      "terminology/reject-forbidden-translation",
-    ],
-  },
-);
+const terminology = await runQa(createConfig("旧称 {name}", { terms }), {
+  checkIds: [
+    "terminology/require-allowed-translation",
+    "terminology/reject-forbidden-translation",
+  ],
+});
 assert.deepEqual(terminology.checkScope.selectedIds, [
   "terminology/require-allowed-translation",
   "terminology/reject-forbidden-translation",

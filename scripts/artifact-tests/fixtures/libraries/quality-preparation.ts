@@ -8,11 +8,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
-  analyzeQuality,
+  runQa,
   createQualityProfiler,
   defineChecker,
   defineConfig,
-  type QualityCheckOutcome,
+  type QualityFinding,
   type QualityCheckResultCache,
   type QualityObject,
   type QualityProfileReport,
@@ -87,7 +87,7 @@ type QualityResultSummary = {
   readonly diagnosticCount: number;
   readonly diagnosticEvidenceCount: number;
   readonly diagnosticEvidenceJsonBytes: number;
-  readonly factCoverage: {
+  readonly readCoverage: {
     readonly sourceStatus: string;
     readonly translationReadCount: number;
     readonly associationCount: number;
@@ -97,7 +97,6 @@ type QualityResultSummary = {
     readonly status: string;
     readonly coverage: QualityRunResult["checks"][number]["coverage"];
     readonly diagnosticCount: number;
-    readonly issueCount: number;
     readonly executionCount: number;
   }[];
 };
@@ -190,20 +189,6 @@ function ordinaryWorkloads(): Workload[] {
   );
 }
 
-function emptyOutcome(): QualityCheckOutcome {
-  return {
-    status: "complete",
-    diagnostics: [],
-    issues: [],
-    coverage: {
-      selected: 1,
-      evaluated: 1,
-      notApplicable: 0,
-      incomplete: 0,
-      failed: 0,
-    },
-  };
-}
 
 function createConfig(
   workload: Workload,
@@ -214,10 +199,10 @@ function createConfig(
   ruleExecutions: { count: number },
 ) {
   const readDependencyPayload = () => dependencyPayload;
-  const check = (input: CheckerInput): QualityCheckOutcome => {
+  const check = (input: CheckerInput): readonly QualityFinding[] => {
     ruleExecutions.count++;
     assert.ok(input.payload.records.length > 0);
-    if (input.evidencePayload === undefined) return emptyOutcome();
+    if (input.evidencePayload === undefined) return [];
 
     const object = {
       kind: "translation-unit",
@@ -225,9 +210,7 @@ function createConfig(
       language: input.candidate.language,
     };
     const location = { language: input.candidate.language, range: "memory" };
-    return {
-      status: "complete",
-      diagnostics: [
+    return [
         {
           severity: "warning",
           object,
@@ -242,16 +225,7 @@ function createConfig(
             },
           ],
         },
-      ],
-      issues: [],
-      coverage: {
-        selected: 1,
-        evaluated: 1,
-        notApplicable: 0,
-        incomplete: 0,
-        failed: 0,
-      },
-    };
+      ];
   };
   const checks = Array.from({ length: workload.checkCount }, (_, index) => {
     const id = "artifact-cost-check-" + (index + 1);
@@ -270,9 +244,9 @@ function createConfig(
       >({
         ...common,
         load: ({ qualityData }) => qualityData.read(readDependencyPayload),
-        prepare: ({ candidate, loaded }) => ({
-          status: "ready",
-          input: {
+        prepare: ({ candidate, loaded }) => {
+          assert.ok(candidate);
+          return {
             candidate: {
               sourceKey: candidate.sourceKey,
               language: candidate.language,
@@ -280,8 +254,8 @@ function createConfig(
             },
             payload: loaded,
             ...(evidencePayload === undefined ? {} : { evidencePayload }),
-          },
-        }),
+          };
+        },
       });
     return defineChecker.withTypes<Unit, unknown, string, never>()<
       typeof checkerInputSchema,
@@ -290,9 +264,9 @@ function createConfig(
       undefined
     >({
       ...common,
-      prepare: ({ candidate }) => ({
-        status: "ready",
-        input: {
+      prepare: ({ candidate }) => {
+          assert.ok(candidate);
+          return {
           candidate: {
             sourceKey: candidate.sourceKey,
             language: candidate.language,
@@ -300,8 +274,8 @@ function createConfig(
           },
           payload: basisPayload,
           ...(evidencePayload === undefined ? {} : { evidencePayload }),
+        };
         },
-      }),
     });
   });
 
@@ -468,17 +442,16 @@ function summarizeQualityResult<TBody>(
     diagnosticCount: result.diagnostics.length,
     diagnosticEvidenceCount: evidence.length,
     diagnosticEvidenceJsonBytes: Buffer.byteLength(JSON.stringify(evidence)),
-    factCoverage: {
-      sourceStatus: result.factCoverage.source.status,
-      translationReadCount: result.factCoverage.translations.length,
-      associationCount: result.factCoverage.associations.length,
+    readCoverage: {
+      sourceStatus: result.readCoverage.source.status,
+      translationReadCount: result.readCoverage.translations.length,
+      associationCount: result.readCoverage.associations.length,
     },
     checks: result.checks.map((check) => ({
       checkId: check.checkId,
       status: check.status,
       coverage: check.coverage,
       diagnosticCount: check.diagnostics.length,
-      issueCount: check.issues.length,
       executionCount: check.executions.length,
     })),
   };
@@ -523,7 +496,7 @@ async function runWorker(): Promise<void> {
 
   const expectedExecutions = workload.candidateCount * workload.checkCount;
   if (workload.cacheMode === "warm") {
-    const warmed = await analyzeQuality(config, { candidates });
+    const warmed = await runQa(config, { candidates });
     assert.equal(
       warmed.checks.reduce(
         (total, check) => total + check.executions.length,
@@ -556,7 +529,7 @@ async function runWorker(): Promise<void> {
     const heapUsedBefore = process.memoryUsage().heapUsed;
     const cpuBefore = process.resourceUsage();
     const started = performance.now();
-    const result = await analyzeQuality(config, {
+    const result = await runQa(config, {
       candidates,
       ...(profiler === undefined ? {} : { profiler }),
     });
@@ -578,7 +551,7 @@ async function runWorker(): Promise<void> {
     assert.equal(
       result.status,
       "complete",
-      JSON.stringify(result.checks.map(({ issues }) => issues)),
+      JSON.stringify(executions.filter(({ status }) => status === "failed")),
     );
     assert.equal(result.checks.length, workload.checkCount);
     assert.equal(executions.length, expectedExecutions);
@@ -907,7 +880,7 @@ async function runBenchmark(): Promise<void> {
       worker: "independent Node process per sample",
       allocationSampler: "V8 Inspector HeapProfiler sampling",
       allocationSamplingIntervalBytes,
-      facts: "one in-memory source fact; no translation reads",
+      snapshot: "one in-memory source fact; no translation reads",
       resultCache: "in-memory Map using public QA cache contract",
       allocationGates:
         "按工作单位归一化的产品栈采样分配不得超过小规模的4倍；最终输入固定阶段须被分配采样覆盖",

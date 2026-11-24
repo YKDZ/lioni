@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  createQualityException,
+  createQaSuppression,
   StandardSchemaContractError,
-  type QualityException,
+  type QaSuppression,
   type QualityCheckResultCache,
 } from "@lioni/core";
 import { TermContractError } from "@lioni/terminology";
@@ -71,7 +71,7 @@ void test("检查组保留独立身份，并从投影位置报告原文和候选
   assert.ok(target?.location.span);
   assert.equal(
     check(result, checkIds.variableCorrespondence)?.status,
-    "incomplete",
+    "failed",
   );
 });
 
@@ -382,28 +382,22 @@ void test("非法语法使变量比较未完成，缺译、不可用和真实空
 
   assert.equal(
     check(invalid, checkIds.variableCorrespondence)?.status,
-    "incomplete",
+    "failed",
   );
-  assert.equal(check(invalid, checkIds.quantities)?.status, "incomplete");
+  assert.equal(check(invalid, checkIds.quantities)?.status, "failed");
   assert.equal(
     check(targetUnavailable, checkIds.targetSyntax)?.status,
-    "incomplete",
+    "failed",
   );
   assert.equal(
     check(targetUnavailable, checkIds.sourceSyntax)?.status,
-    "incomplete",
+    "complete",
   );
-  assert.equal(
-    check(targetMissing, checkIds.targetSyntax)?.status,
-    "not-applicable",
-  );
-  assert.equal(
-    check(targetMissing, checkIds.sourceSyntax)?.status,
-    "not-applicable",
-  );
+  assert.equal(check(targetMissing, checkIds.targetSyntax)?.status, "complete");
+  assert.equal(check(targetMissing, checkIds.sourceSyntax)?.status, "complete");
   assert.equal(
     check(targetMissing, checkIds.variableCorrespondence)?.status,
-    "not-applicable",
+    "complete",
   );
   assert.deepEqual(findings(targetMissing, checkIds.targetSyntax), []);
   assert.equal(check(empty, checkIds.targetSyntax)?.status, "complete");
@@ -412,24 +406,24 @@ void test("非法语法使变量比较未完成，缺译、不可用和真实空
   assert.equal(check(emptySource, checkIds.sourceSyntax)?.status, "complete");
   assert.equal(
     check(unavailableSource, checkIds.sourceSyntax)?.status,
-    "incomplete",
+    "failed",
   );
   assert.equal(
     check(unavailableSource, checkIds.variableCorrespondence)?.status,
-    "incomplete",
+    "failed",
   );
   assert.equal(
     check(unavailableSource, checkIds.allowedTerminology)?.status,
-    "incomplete",
+    "failed",
   );
   assert.equal(
     check(unavailableSource, checkIds.messageFamilyConsistency)?.status,
-    "incomplete",
+    "failed",
   );
   assert.deepEqual(findings(unavailableSource, checkIds.targetSyntax), []);
   assert.equal(
     check(unavailableSourceWithMissingTarget, checkIds.sourceSyntax)?.status,
-    "not-applicable",
+    "failed",
   );
 });
 
@@ -575,7 +569,7 @@ void test("数量比较保留单位语义，显式策略支持换算和能力不
       }),
     ],
   }).run([candidate("label", "Warten {other}", "de-DE")]);
-  assert.equal(check(unsupported, checkIds.quantities)?.status, "incomplete");
+  assert.equal(check(unsupported, checkIds.quantities)?.status, "failed");
   assert.equal(
     findings(unsupported, checkIds.variableCorrespondence).length,
     1,
@@ -677,8 +671,11 @@ void test("无效的已保存译文不使其他消息族变为未完成", async 
   ]);
 
   const familyCheck = check(result, checkIds.messageFamilyConsistency);
-  assert.equal(familyCheck?.status, "complete");
-  assert.equal(familyCheck?.coverage.incomplete, 0);
+  assert.equal(familyCheck?.status, "failed");
+  assert.deepEqual(
+    familyCheck?.executions.map(({ status }) => status),
+    ["complete", "failed"],
+  );
   assert.equal(findings(result, checkIds.messageFamilyConsistency).length, 1);
   assert.equal(findings(result, checkIds.targetSyntax).length, 1);
 });
@@ -779,7 +776,7 @@ void test("组合基础、术语与消息族共用准备适配并保留候选位
   let preparations = 0;
   let candidateRange = { file: "prepared-target.json", revision: 4 };
   let savedRange = { file: "saved-target.json", revision: 2 };
-  let exceptions: QualityException[] = [];
+  let suppressions: QaSuppression[] = [];
   const policy = policyFor({
     sourceMessages: { current: "Open", peer: "Open" },
     targetMessages: { current: "旧译", peer: "启用" },
@@ -820,36 +817,34 @@ void test("组合基础、术语与消息族共用准备适配并保留候选位
       assert.equal(Object.hasOwn(input, "loaded"), false);
       const { candidate, sourceUnit } = input;
       assert.ok(sourceUnit);
+      if (candidate === null) return null;
       return {
-        status: "ready",
-        input: {
-          key: candidate.sourceKey,
-          language: candidate.language,
+        key: candidate.sourceKey,
+        language: candidate.language,
+        source: {
+          status: "available",
+          text: sourceUnit.unit.source.text,
+        },
+        target: { status: "available", text: candidate.content.text },
+        locations: {
           source: {
-            status: "available",
-            text: sourceUnit.unit.source.text,
+            language: null,
+            key: candidate.sourceKey,
+            range: "prepared-source.json",
           },
-          target: { status: "available", text: candidate.content.text },
-          locations: {
-            source: {
-              language: null,
-              key: candidate.sourceKey,
-              range: "prepared-source.json",
-            },
-            target: {
-              language: candidate.language,
-              key: candidate.sourceKey,
-              range: candidateRange,
-              hostMetadata: { adapter: "vue" },
-            },
+          target: {
+            language: candidate.language,
+            key: candidate.sourceKey,
+            range: candidateRange,
+            hostMetadata: { adapter: "vue" },
           },
         },
       };
     },
-    exceptionStore: {
-      load: async () => exceptions,
-      upsert: async (exception) => {
-        exceptions = [...exceptions, exception];
+    suppressionStore: {
+      load: async () => suppressions,
+      upsert: async (suppression) => {
+        suppressions = [...suppressions, suppression];
       },
     },
   });
@@ -887,8 +882,8 @@ void test("组合基础、术语与消息族共用准备适配并保留候选位
   const execution = check(result, checkIds.messageFamilyConsistency)
     ?.executions[0];
   assert.ok(execution);
-  exceptions = [
-    createQualityException({
+  suppressions = [
+    createQaSuppression({
       id: "family-location",
       reason: "接受当前消息族发现",
       execution,
@@ -899,10 +894,7 @@ void test("组合基础、术语与消息族共用准备适配并保留候选位
     [candidate("current", "激活")],
     [checkIds.messageFamilyConsistency],
   );
-  assert.equal(
-    movedCandidate.exceptionApplicability[0]?.status,
-    "basis-changed",
-  );
+  assert.equal(movedCandidate.diagnostics[0]?.handling.status, "active");
   assert.deepEqual(
     findings(movedCandidate, checkIds.messageFamilyConsistency)[0]?.location
       .range,
@@ -915,10 +907,7 @@ void test("组合基础、术语与消息族共用准备适配并保留候选位
     [candidate("current", "激活")],
     [checkIds.messageFamilyConsistency],
   );
-  assert.equal(
-    movedReference.exceptionApplicability[0]?.status,
-    "basis-changed",
-  );
+  assert.equal(movedReference.diagnostics[0]?.handling.status, "active");
   assert.deepEqual(
     movedReference.diagnostics[0]?.evidence.find(
       ({ role }) => role === "saved-reference",
@@ -1088,12 +1077,12 @@ void test("缺少目标候选时不把缺译占位转成空消息", async () => 
   assert.deepEqual(findings(result, checkIds.variableCorrespondence), []);
 });
 
-void test("Vue 术语例外与缓存仅随当前消息、术语资料和诊断位置变化", async () => {
+void test("Vue 术语豁免与缓存仅随当前消息、术语资料和诊断位置变化", async () => {
   const sourceMessages = { a: "monitor", b: "Hello" };
   const targetMessages = { a: "显示器", b: "你好" };
   const policy = policyFor({ sourceMessages, targetMessages });
   let targetRange = "zh-CN.json";
-  let exceptions: readonly QualityException[] = [];
+  let suppressions: readonly QaSuppression[] = [];
   let terms: TermbaseData = {
     concepts: [
       {
@@ -1130,19 +1119,19 @@ void test("Vue 术语例外与缓存仅随当前消息、术语资料和诊断�
         target: { ...value.locations.target, range: targetRange },
       },
     }),
-    exceptionStore: {
+    suppressionStore: {
       async load() {
-        return exceptions;
+        return suppressions;
       },
       async upsert(value) {
-        exceptions = [...exceptions, value];
+        suppressions = [...suppressions, value];
       },
     },
     resultCache: {
       async get(key) {
         const value = cache.get(key);
         if (
-          value?.diagnostics.some(
+          value?.some(
             (item) =>
               item.object.code === "forbidden-translation" ||
               item.object.code === "missing-allowed-translation",
@@ -1159,69 +1148,57 @@ void test("Vue 术语例外与缓存仅随当前消息、术语资料和诊断�
   const run = (text = "显示器") => fixture.run([candidate("a", text)]);
   const first = await run();
   const ids = [checkIds.allowedTerminology, checkIds.forbiddenTerminology];
-  exceptions = first.checks
+  const sameTermInputs = (report: typeof first) =>
+    ids.map(
+      (id) =>
+        check(report, id)?.executions[0]?.inputFingerprint ===
+        check(first, id)?.executions[0]?.inputFingerprint,
+    );
+  suppressions = first.checks
     .filter((item) => ids.includes(item.checkId as (typeof ids)[number]))
     .flatMap((item) =>
       item.executions.map((execution) =>
-        createQualityException({
+        createQaSuppression({
           id: execution.checkId,
           reason: "接受消息 A",
           execution,
         }),
       ),
     );
-  assert.equal(exceptions.length, 2);
+  assert.equal(suppressions.length, 2);
   sourceMessages.b = "Goodbye";
   targetMessages.b = "再见";
   const unrelated = await run();
-  assert.deepEqual(
-    unrelated.exceptionApplicability.map((item) => item.status),
-    ["applicable", "applicable"],
-  );
+  assert.deepEqual(sameTermInputs(unrelated), [true, true]);
   assert.equal(termCacheHits, 2);
   assert.deepEqual(
     unrelated.diagnostics
       .filter((item) => ids.includes(item.checkId as (typeof ids)[number]))
       .map((item) => item.handling.status),
-    ["excepted", "excepted"],
+    ["suppressed", "suppressed"],
   );
   const changedCandidate = await run("另一个译法");
-  assert.deepEqual(
-    changedCandidate.exceptionApplicability.map((item) => item.status),
-    ["basis-changed", "basis-changed"],
-  );
+  assert.deepEqual(sameTermInputs(changedCandidate), [false, false]);
   sourceMessages.a = "monitor changed";
-  assert.deepEqual(
-    (await run()).exceptionApplicability.map((item) => item.status),
-    ["basis-changed", "basis-changed"],
-  );
+  assert.deepEqual(sameTermInputs(await run()), [false, false]);
   sourceMessages.a = "monitor";
   terms = { concepts: [] };
   const changedTerms = await run();
-  assert.deepEqual(
-    changedTerms.exceptionApplicability.map((item) => item.status),
-    ["basis-changed", "basis-changed"],
-  );
+  assert.deepEqual(sameTermInputs(changedTerms), [false, false]);
   assert.deepEqual(findings(changedTerms, checkIds.forbiddenTerminology), []);
   terms = originalTerms;
   targetRange = "moved/zh-CN.json";
   const moved = await run();
-  assert.deepEqual(
-    moved.exceptionApplicability.map((item) => item.status),
-    ["basis-changed", "basis-changed"],
-  );
+  assert.deepEqual(sameTermInputs(moved), [false, false]);
   assert.equal(
     findings(moved, checkIds.forbiddenTerminology)[0]?.location.range,
     targetRange,
   );
   targetRange = "zh-CN.json";
-  assert.deepEqual(
-    (await run()).exceptionApplicability.map((item) => item.status),
-    ["applicable", "applicable"],
-  );
+  assert.deepEqual(sameTermInputs(await run()), [true, true]);
 });
 
-void test("局部规则复用无关消息和策略变更前的例外，相关输入和位置变化重新判断", async () => {
+void test("局部规则复用无关消息和策略变更前的豁免，相关输入和位置变化重新判断", async () => {
   const cases = [
     { id: checkIds.sourceSyntax, source: "bad } source", target: "正常" },
     { id: checkIds.targetSyntax, source: "正常", target: "bad } target" },
@@ -1254,7 +1231,7 @@ void test("局部规则复用无关消息和策略变更前的例外，相关输
       protectedLiterals: literals,
       targetQuantities: { profile: "zh-CN", byKey },
     });
-    let exceptions: readonly QualityException[] = [];
+    let suppressions: readonly QaSuppression[] = [];
     const values = new Map<
       string,
       Awaited<ReturnType<QualityCheckResultCache["get"]>>
@@ -1270,10 +1247,10 @@ void test("局部规则复用无关消息和策略变更前的例外，相关输
           target: { ...projection.locations.target, range: targetRange },
         },
       }),
-      exceptionStore: {
-        load: async () => exceptions,
+      suppressionStore: {
+        load: async () => suppressions,
         upsert: async (value) => {
-          exceptions = [...exceptions, value];
+          suppressions = [...suppressions, value];
         },
       },
       resultCache: {
@@ -1290,8 +1267,8 @@ void test("局部规则复用无关消息和策略变更前的例外，相关输
     const run = (text = scenario.target) => fixture.run([candidate("a", text)]);
     const first = await run();
     assert.equal(findings(first, scenario.id).length, 1, scenario.id);
-    exceptions = [
-      createQualityException({
+    suppressions = [
+      createQaSuppression({
         id: scenario.id,
         reason: "接受当前消息",
         execution: check(first, scenario.id)!.executions[0]!,
@@ -1303,43 +1280,46 @@ void test("局部规则复用无关消息和策略变更前的例外，相关输
     byKey.b = { defaultUnit: "hour" };
     const stable = await run();
     assert.equal(
-      stable.exceptionApplicability[0]?.status,
-      "applicable",
+      check(stable, scenario.id)?.executions[0]?.inputFingerprint,
+      suppressions[0]?.inputFingerprint,
       scenario.id,
     );
-    assert.equal(findings(stable, scenario.id)[0]?.handling.status, "excepted");
-    assert.ok(hits > 0, scenario.id);
     assert.equal(
-      (await run(`${scenario.target} changed`)).exceptionApplicability[0]
-        ?.status,
-      "basis-changed",
+      findings(stable, scenario.id)[0]?.handling.status,
+      "suppressed",
+    );
+    assert.ok(hits > 0, scenario.id);
+    assert.notEqual(
+      check(await run(`${scenario.target} changed`), scenario.id)?.executions[0]
+        ?.inputFingerprint,
+      suppressions[0]?.inputFingerprint,
       scenario.id,
     );
     targetRange = "moved.json";
-    assert.equal(
-      (await run()).exceptionApplicability[0]?.status,
-      "basis-changed",
+    assert.notEqual(
+      check(await run(), scenario.id)?.executions[0]?.inputFingerprint,
+      suppressions[0]?.inputFingerprint,
       scenario.id,
     );
     targetRange = "target.json";
     assert.equal(
-      (await run()).exceptionApplicability[0]?.status,
-      "applicable",
+      check(await run(), scenario.id)?.executions[0]?.inputFingerprint,
+      suppressions[0]?.inputFingerprint,
       scenario.id,
     );
     if (scenario.id === checkIds.protectedLiterals) literals.a = ["API", "SDK"];
     else if (scenario.id === checkIds.quantities)
       byKey.a = { defaultUnit: "hour" };
     else sourceMessages.a = `${scenario.source} changed`;
-    assert.equal(
-      (await run()).exceptionApplicability[0]?.status,
-      "basis-changed",
+    assert.notEqual(
+      check(await run(), scenario.id)?.executions[0]?.inputFingerprint,
+      suppressions[0]?.inputFingerprint,
       scenario.id,
     );
   }
 });
 
-void test("链接例外按直接键存在性和完整可达闭包复用缓存", async () => {
+void test("链接豁免按直接键存在性和完整可达闭包复用缓存", async () => {
   const sourceMessages: Record<string, string> = {
     a: "Root",
     b: "@:a",
@@ -1350,7 +1330,7 @@ void test("链接例外按直接键存在性和完整可达闭包复用缓存", 
     b: "@:a",
     unrelated: "其他",
   };
-  let exceptions: readonly QualityException[] = [];
+  let suppressions: readonly QaSuppression[] = [];
   const cache = new Map<
     string,
     Awaited<ReturnType<QualityCheckResultCache["get"]>>
@@ -1358,10 +1338,10 @@ void test("链接例外按直接键存在性和完整可达闭包复用缓存", 
   let hits = 0;
   const fixture = createQualityFixture({
     policies: [policyFor({ sourceMessages, targetMessages })],
-    exceptionStore: {
-      load: async () => exceptions,
+    suppressionStore: {
+      load: async () => suppressions,
       upsert: async (value) => {
-        exceptions = [...exceptions, value];
+        suppressions = [...suppressions, value];
       },
     },
     resultCache: {
@@ -1379,59 +1359,68 @@ void test("链接例外按直接键存在性和完整可达闭包复用缓存", 
   const run = () => fixture.run([candidate("a", text)]);
   const first = await run();
   const ids = [checkIds.linkTargetExists, checkIds.linkCycle];
-  exceptions = ids.map((id) =>
-    createQualityException({
+  suppressions = ids.map((id) =>
+    createQaSuppression({
       id,
       reason: "接受当前关联",
       execution: check(first, id)!.executions[0]!,
     }),
   );
-  const applicability = (result: Awaited<ReturnType<typeof run>>) =>
-    result.exceptionApplicability.map((value) => value.status);
+  const sameInputs = (result: typeof first) =>
+    ids.map(
+      (id) =>
+        check(result, id)?.executions[0]?.inputFingerprint ===
+        check(first, id)?.executions[0]?.inputFingerprint,
+    );
   targetMessages.unrelated = "@:unrelated";
   targetMessages.a = "保存正文不覆盖候选";
-  assert.deepEqual(applicability(await run()), ["applicable", "applicable"]);
+  assert.deepEqual(sameInputs(await run()), [true, true]);
   assert.ok(hits >= 2);
   targetMessages.b = "No link";
   const changedBody = await run();
-  assert.deepEqual(applicability(changedBody), ["applicable", "basis-changed"]);
+  assert.deepEqual(sameInputs(changedBody), [true, false]);
   assert.deepEqual(findings(changedBody, checkIds.linkCycle), []);
   delete targetMessages.b;
   const fallback = await run();
-  assert.deepEqual(applicability(fallback), ["applicable", "basis-changed"]);
+  assert.deepEqual(sameInputs(fallback), [true, false]);
   assert.equal(findings(fallback, checkIds.linkCycle).length, 1);
   targetMessages.b = "@:a";
-  assert.deepEqual(applicability(await run()), ["applicable", "applicable"]);
+  assert.deepEqual(sameInputs(await run()), [true, true]);
   // 首个循环后的引用也属于完整闭包；新键即使不改变首个循环仍改变依据。
   targetMessages.missing = "@:a";
   const added = await run();
-  assert.deepEqual(applicability(added), ["basis-changed", "basis-changed"]);
+  assert.deepEqual(sameInputs(added), [false, false]);
   assert.deepEqual(findings(added, checkIds.linkTargetExists), []);
+  // 即使先遇到有效循环，另一条可达分支解析失败仍会使整次检查失败。
+  targetMessages.missing = "bad }";
+  const partial = await run();
+  assert.equal(check(partial, checkIds.linkCycle)?.status, "failed");
+  assert.deepEqual(findings(partial, checkIds.linkCycle), []);
   delete targetMessages.missing;
   targetMessages.b = "bad }";
   const invalid = await run();
-  assert.equal(check(invalid, checkIds.linkCycle)?.status, "incomplete");
-  assert.deepEqual(applicability(invalid), ["applicable", "basis-changed"]);
+  assert.equal(check(invalid, checkIds.linkCycle)?.status, "failed");
+  assert.deepEqual(sameInputs(invalid), [true, false]);
 });
 
 void test("缺失关联键后来补全成循环会重新检查", async () => {
   const sourceMessages = { a: "Root" };
   const targetMessages: Record<string, string> = { a: "@:missing" };
-  let exceptions: readonly QualityException[] = [];
+  let suppressions: readonly QaSuppression[] = [];
   const fixture = createQualityFixture({
     policies: [policyFor({ sourceMessages, targetMessages })],
-    exceptionStore: {
-      load: async () => exceptions,
+    suppressionStore: {
+      load: async () => suppressions,
       upsert: async (value) => {
-        exceptions = [...exceptions, value];
+        suppressions = [...suppressions, value];
       },
     },
   });
   const run = () => fixture.run([candidate("a", "@:missing")]);
   const first = await run();
   assert.deepEqual(findings(first, checkIds.linkCycle), []);
-  exceptions = [
-    createQualityException({
+  suppressions = [
+    createQaSuppression({
       id: "cycle",
       reason: "当前没有循环",
       execution: check(first, checkIds.linkCycle)!.executions[0]!,
@@ -1439,15 +1428,18 @@ void test("缺失关联键后来补全成循环会重新检查", async () => {
   ];
   targetMessages.missing = "@:a";
   const added = await run();
-  assert.equal(added.exceptionApplicability[0]?.status, "basis-changed");
+  assert.equal(
+    findings(added, checkIds.linkCycle)[0]?.handling.status,
+    "active",
+  );
   assert.equal(findings(added, checkIds.linkCycle).length, 1);
 });
 
 void test("消息族按已知源族局部化目标语法缺口，未知源族仍保守未完成", async () => {
   for (const [source, expected] of [
-    ["Enabled", "incomplete"],
+    ["Enabled", "failed"],
     ["Other", "complete"],
-    ["bad } source", "incomplete"],
+    ["bad } source", "failed"],
   ] as const) {
     const fixture = createQualityFixture({
       policies: [
@@ -1464,13 +1456,16 @@ void test("消息族按已知源族局部化目标语法缺口，未知源族仍
       expected,
       source,
     );
-    assert.equal(findings(result, checkIds.messageFamilyConsistency).length, 1);
+    assert.equal(
+      findings(result, checkIds.messageFamilyConsistency).length,
+      expected === "failed" ? 0 : 1,
+    );
   }
 });
 
 void test("消息族只随实际采用的目标等价变化重新判断", async () => {
   const targetEquivalences: string[][] = [];
-  let exceptions: readonly QualityException[] = [];
+  let suppressions: readonly QaSuppression[] = [];
   const fixture = createQualityFixture({
     policies: [
       policyFor({
@@ -1480,17 +1475,17 @@ void test("消息族只随实际采用的目标等价变化重新判断", async 
         targetEquivalences,
       }),
     ],
-    exceptionStore: {
-      load: async () => exceptions,
+    suppressionStore: {
+      load: async () => suppressions,
       upsert: async (value) => {
-        exceptions = [...exceptions, value];
+        suppressions = [...suppressions, value];
       },
     },
   });
   const run = () => fixture.run([candidate("a", "A")]);
   const first = await run();
-  exceptions = [
-    createQualityException({
+  suppressions = [
+    createQaSuppression({
       id: "family",
       reason: "接受同族差异",
       execution: check(first, checkIds.messageFamilyConsistency)!
@@ -1498,10 +1493,13 @@ void test("消息族只随实际采用的目标等价变化重新判断", async 
     }),
   ];
   targetEquivalences.push(["Other", "Unrelated"]);
-  assert.equal((await run()).exceptionApplicability[0]?.status, "applicable");
+  assert.equal(
+    findings(await run(), checkIds.messageFamilyConsistency)[0]?.handling
+      .status,
+    "suppressed",
+  );
   targetEquivalences.push(["A", "B"]);
   const related = await run();
-  assert.equal(related.exceptionApplicability[0]?.status, "basis-changed");
   assert.deepEqual(findings(related, checkIds.messageFamilyConsistency), []);
 });
 
@@ -1520,10 +1518,7 @@ void test("Vue 准备适配先验证返回结构与投影，普通 TypeError 保
     checkIds.messageFamilyConsistency,
   ];
   for (const checkId of selectedIds) {
-    for (const invalid of [
-      null,
-      { status: "ready", input: { key: "label", language: "zh-CN" } },
-    ]) {
+    for (const invalid of [undefined, { key: "label", language: "zh-CN" }]) {
       const fixture = createQualityFixture({
         policies,
         prepare: () => invalid as never,
@@ -1541,7 +1536,7 @@ void test("Vue 准备适配先验证返回结构与投影，普通 TypeError 保
     });
     const failed = await fixture.run([candidate("label", "你好")], [checkId]);
     assert.equal(failed.status, "failed");
-    assert.equal(failed.checks[0]?.issues[0]?.message, "宿主消息提取失败");
+    assert.equal(failed.checks[0]?.executions[0]?.error, "宿主消息提取失败");
   }
 });
 
@@ -1576,5 +1571,5 @@ void test("Vue 消息族参照投影的非法返回中止运行，宿主普通 T
     [checkIds.messageFamilyConsistency],
   );
   assert.equal(failed.status, "failed");
-  assert.equal(failed.checks[0]?.issues[0]?.message, "宿主参照提取失败");
+  assert.equal(failed.checks[0]?.executions[0]?.error, "宿主参照提取失败");
 });

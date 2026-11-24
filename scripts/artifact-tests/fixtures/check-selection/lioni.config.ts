@@ -3,13 +3,13 @@ import path from "node:path";
 import {
   defineConfig,
   defineChecker,
-  type QualityCheckOutcome,
+  type QualityFinding,
   type QualityObject,
   type StandardSchemaV1,
 } from "@lioni/lioni";
 import {
   createDirectoryQualityCheckResultCache,
-  createFileQualityExceptionStore,
+  createFileQaSuppressionStore,
 } from "@lioni/lioni/node";
 import * as z from "zod";
 
@@ -77,17 +77,17 @@ function assertQualityData(value: unknown): asserts value is QualityData {
   dependencySchema.parse(value);
 }
 
-const exceptionFileStore = createFileQualityExceptionStore(
-  path.join(process.cwd(), "lioni.exceptions.yaml"),
+const suppressionFileStore = createFileQaSuppressionStore(
+  path.join(process.cwd(), "lioni.suppressions.yaml"),
 );
-const exceptionStore = {
+const suppressionStore = {
   async load() {
-    recordEvent("exception:load");
-    return await exceptionFileStore.load();
+    recordEvent("suppression:load");
+    return await suppressionFileStore.load();
   },
-  async upsert(exception: Parameters<typeof exceptionFileStore.upsert>[0]) {
-    recordEvent("exception:upsert");
-    await exceptionFileStore.upsert(exception);
+  async upsert(suppression: Parameters<typeof suppressionFileStore.upsert>[0]) {
+    recordEvent("suppression:upsert");
+    await suppressionFileStore.upsert(suppression);
   },
 };
 
@@ -127,19 +127,16 @@ function createChecker<const TId extends "syntax" | "terms" | "unlisted">(
       assertQualityData(value);
       return value;
     },
-    prepare({ candidate, loaded, memo }) {
+    prepare({ association, loaded, memo }) {
       assertQualityData(loaded);
       const dependency = memo.memo(compileQualityData)(loaded);
       return {
-        status: "ready",
-        input: {
-          candidateSourceKey: candidate.sourceKey,
-          candidateLanguage: candidate.language,
+          candidateSourceKey: association.sourceKey,
+          candidateLanguage: association.language,
           dependency,
-        },
-      };
+        };
     },
-    check(input): QualityCheckOutcome {
+    check(input): readonly QualityFinding[] {
       const dependency = input.dependency;
       recordEvent(`rule:${id}:${dependency.revision}`);
       const diagnostics =
@@ -162,18 +159,7 @@ function createChecker<const TId extends "syntax" | "terms" | "unlisted">(
               },
             ]
           : [];
-      return {
-        status: "complete",
-        diagnostics,
-        issues: [],
-        coverage: {
-          selected: 1,
-          evaluated: 1,
-          notApplicable: 0,
-          incomplete: 0,
-          failed: 0,
-        },
-      };
+      return diagnostics;
     },
   });
 }
@@ -240,7 +226,7 @@ export default defineConfig.withTypes<
       syntaxOnly: ["syntax"],
       empty: [],
     },
-    exceptionStore,
+    suppressionStore,
     resultCache: createDirectoryQualityCheckResultCache(
       path.join(process.cwd(), ".lioni", "cache", "quality-results"),
     ),

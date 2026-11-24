@@ -1,17 +1,15 @@
 import type {
-  ActualTranslationFact,
+  Translation,
   Awaitable,
   CheckerLoadInput,
   CheckerPrepareInput,
-  CheckerPreparation,
-  FrameworkFacts,
+  ProjectSnapshot,
   QualityCheckDefinition,
   QualityEvidence,
-  QualityIssue,
   QualityLocation,
   QualityObject,
-  SourceUnitFact,
-  TranslationAssociationFact,
+  SourceUnit,
+  TranslationAssociation,
   TranslationUnitInput,
 } from "@lioni/core";
 import {
@@ -54,15 +52,11 @@ export type MessageFamilyReferenceProjection<
   TUnavailable = never,
 > = {
   readonly kind: "reference";
-  readonly sourceUnit: SourceUnitFact<TUnit>;
+  readonly sourceUnit: SourceUnit<TUnit>;
   readonly sourceKey: string;
   readonly language: string;
-  readonly association: TranslationAssociationFact;
-  readonly translation: ActualTranslationFact<
-    TTranslation,
-    TBody,
-    TUnavailable
-  >;
+  readonly association: TranslationAssociation;
+  readonly translation: Translation<TTranslation, TBody, TUnavailable>;
 };
 
 /** 固定参照解释只读取事实与本次加载的资料，不接收当前候选。 */
@@ -74,7 +68,7 @@ export type MessageFamilyContext<
   TLoaded = unknown,
 > = Pick<
   CheckerPrepareInput<TUnit, TTranslation, TBody, TUnavailable, TLoaded>,
-  "facts" | "relationships" | "loaded" | "memo"
+  "snapshot" | "relationships" | "loaded" | "memo"
 >;
 
 export type MessageFamilyCheckerOptions<
@@ -98,7 +92,7 @@ export type MessageFamilyCheckerOptions<
       TUnavailable,
       TLoaded
     >,
-  ) => Awaitable<CheckerPreparation<MessageFamilyInput>>;
+  ) => Awaitable<MessageFamilyInput | null>;
   readonly reference: (
     reference: MessageFamilyReferenceProjection<
       TUnit,
@@ -155,16 +149,14 @@ type ReferenceEvidence = Pick<ProjectedReferences, "incomplete" | "issues">;
 type CheckInput = {
   readonly sourceKey: string;
   readonly language: string;
-  readonly projected: MessageFamilyInput;
-  readonly groups: readonly SignedMessageGroup[];
+  readonly groups: readonly (SignedMessageGroup & {
+    readonly targetKey: string;
+  })[];
   readonly savedReferences: readonly Omit<
     MessageFamilyReference,
     "translationIndex"
   >[];
   readonly location: QualityLocation;
-  readonly sourceAvailability: string;
-  readonly associationIncomplete: boolean;
-  readonly references: ReferenceEvidence;
   readonly limits: MessageFamilyLimits;
 };
 const checkInputSchema = z.custom<CheckInput>((value) => {
@@ -448,9 +440,9 @@ function messageFamilyChecker<
   }
 
   type PreparedRecords = WeakMap<
-    TranslationAssociationFact,
+    TranslationAssociation,
     Map<
-      ActualTranslationFact<TTranslation, TBody, TUnavailable>,
+      Translation<TTranslation, TBody, TUnavailable>,
       | Awaited<ReturnType<typeof projectSavedReference>>
       | { readonly error: unknown }
     >
@@ -484,18 +476,18 @@ function messageFamilyChecker<
     language: string,
     replacedIndex: number | undefined,
     familyKeys: ReadonlySet<string>,
-    associations: readonly TranslationAssociationFact[],
-    sourceByKey: ReadonlyMap<string, SourceUnitFact<TUnit>>,
+    associations: readonly TranslationAssociation[],
+    sourceByKey: ReadonlyMap<string, SourceUnit<TUnit>>,
     readEvidence: boolean,
     records: PreparedRecords,
   ): Promise<ReferenceEvidence> {
-    const facts = input.facts;
+    const snapshot = input.snapshot;
     const issues: MessageFamilyIssue[] = [];
     let incomplete = false;
     if (readEvidence) {
       if (
-        facts.source.read.status !== "complete" ||
-        facts.source.read.scopes.some(
+        snapshot.source.read.status !== "complete" ||
+        snapshot.source.read.scopes.some(
           ({ enumeration }) => enumeration !== "complete",
         )
       ) {
@@ -507,7 +499,7 @@ function messageFamilyChecker<
           ),
         );
       }
-      const translationRead = facts.translations.reads.find(
+      const translationRead = snapshot.translations.reads.find(
         (read) => read.language === language,
       );
       // 有明确 covers 的缺口由对应关联处理；没有范围归属的读取失败可能隐藏任意同族参照。
@@ -580,7 +572,7 @@ function messageFamilyChecker<
       // 先判定整个关联的归属完整性，再统一选取依据，避免记录顺序改变成员集合。
       for (const translationIndex of association.translationIndexes) {
         if (translationIndex === replacedIndex) continue;
-        const translation = facts.translations.records[translationIndex];
+        const translation = snapshot.translations.records[translationIndex];
         if (translation === undefined || translation.language !== language) {
           knownFamilies = false;
           continue;
@@ -603,7 +595,7 @@ function messageFamilyChecker<
       let relevant = false;
       for (const translationIndex of association.translationIndexes) {
         if (translationIndex === replacedIndex) continue;
-        const translation = facts.translations.records[translationIndex];
+        const translation = snapshot.translations.records[translationIndex];
         if (translation === undefined || translation.language !== language) {
           associationIncomplete = true;
           associationIssues.push(
@@ -668,11 +660,11 @@ function messageFamilyChecker<
   ) {
     // 目录与准备结果属于本次 load，重叠运行不能按同一事实对象互相覆盖。
     const preparedRecords: PreparedRecords = new WeakMap();
-    const facts = input.facts;
+    const snapshot = input.snapshot;
     const sourceByKey = new Map(
-      facts.source.units.map((unit) => [unit.key, unit]),
+      snapshot.source.units.map((unit) => [unit.key, unit]),
     );
-    const associations = facts.associations.filter(
+    const associations = snapshot.associations.filter(
       (item) => item.language === language,
     );
     const reads = await evaluateReferences(
@@ -685,8 +677,8 @@ function messageFamilyChecker<
       true,
       preparedRecords,
     );
-    const byFamily = new Map<string, Set<TranslationAssociationFact>>();
-    const unknown = new Set<TranslationAssociationFact>();
+    const byFamily = new Map<string, Set<TranslationAssociation>>();
+    const unknown = new Set<TranslationAssociation>();
     // 同次运行按候选涉及的语言建立一次固定目录。
     const references: MessageFamilyReference[] = [];
     for (const association of associations) {
@@ -704,7 +696,7 @@ function messageFamilyChecker<
       )
         unknown.add(association);
       for (const translationIndex of association.translationIndexes) {
-        const translation = facts.translations.records[translationIndex];
+        const translation = snapshot.translations.records[translationIndex];
         if (translation === undefined || translation.language !== language) {
           unknown.add(association);
           continue;
@@ -829,8 +821,8 @@ function messageFamilyChecker<
 
   return defineChecker.withTypes<TUnit, TTranslation, TBody, TUnavailable>()({
     id: checkId,
-    version: "checks.message-family-consistency/v5",
-    inputSchema: checkInputSchema,
+    version: "checks.message-family-consistency/v6",
+    inputSchema: checkInputSchema.nullable(),
     load: async (input) => {
       const loaded = (await options.load?.(input)) as TLoaded;
       const context = fixedContext({ ...input, loaded });
@@ -845,33 +837,41 @@ function messageFamilyChecker<
       return { loaded, directories };
     },
     prepare: async (input) => {
+      if (input.candidate === null) {
+        if (input.association.status !== "missing")
+          throw new Error("候选正文不可用。");
+        return null;
+      }
       const context = fixedContext({ ...input, loaded: input.loaded.loaded });
       const preparation = await options.prepare({
         ...input,
         loaded: input.loaded.loaded,
       });
-      if (
-        preparation === null ||
-        typeof preparation !== "object" ||
-        Array.isArray(preparation)
-      )
+      if (preparation === null) return null;
+      if (typeof preparation !== "object" || Array.isArray(preparation))
         throw new QualityCheckerContractError(
           checkId,
           "prepare",
           "的 prepare 返回了无效结果。",
         );
-      if (preparation.status !== "ready") return preparation;
       const { sourceKey, language } = input.candidate;
       const projected = validateProjection(
-        preparation.input,
+        preparation,
         sourceKey,
         language,
         checkId,
       );
+      if (input.sourceUnit.bodyAvailability !== "available")
+        throw new Error("候选对应的原文正文不可用。");
+      if (projected.complete === false)
+        throw new Error(
+          projected.issues?.map(({ message }) => message).join(" ") ||
+            "候选投影仍有未提供的消息组。",
+        );
       const groups = await Promise.all(
         projected.groups.map(async (group) => {
           assertProjectedLanguage(group, language, checkId);
-          return signGroup(
+          const signed = await signGroup(
             group,
             analysis,
             sourceTemplate,
@@ -882,26 +882,14 @@ function messageFamilyChecker<
             input.memo,
             context,
           );
-        }),
-      );
-      const excluded = candidateRecordIndex(
-        input.facts,
-        sourceKey,
-        language,
-        input.memo,
-      );
-      const references = await input.loaded.directories.get(language)!(
-        excluded,
-        new Set(groups.map(({ familyKey }) => familyKey)),
-      );
-      return {
-        status: "ready",
-        input: {
-          sourceKey,
-          language,
-          projected,
-          groups: groups.map((signed) => ({
+          if (signed.familyKey === "" || signed.targetKey === undefined)
+            throw new Error(
+              signed.issues.map(({ message }) => message).join(" ") ||
+                "无法确定候选签名。",
+            );
+          return {
             ...signed,
+            targetKey: signed.targetKey,
             sourceSignatures: signed.sourceSignatures.map(
               messageFamilySignatureEvidence,
             ),
@@ -912,25 +900,44 @@ function messageFamilyChecker<
                     messageFamilySignatureEvidence,
                   ),
                 }),
-          })),
-          savedReferences: references.references,
-          location:
-            projected.location ??
-            translationLocation(input.facts, sourceKey, language, excluded),
-          sourceAvailability: input.sourceUnit.bodyAvailability,
-          associationIncomplete:
-            excluded === undefined &&
-            (input.association.coverageStatus !== "complete" ||
-              ["unknown", "unavailable"].includes(input.association.status)),
-          references: {
-            incomplete: references.incomplete,
-            issues: references.issues,
-          },
-          limits,
-        },
+          };
+        }),
+      );
+      const excluded = candidateRecordIndex(
+        input.snapshot,
+        sourceKey,
+        language,
+        input.memo,
+      );
+      if (
+        excluded === undefined &&
+        (input.association.coverageStatus !== "complete" ||
+          input.association.status === "unknown" ||
+          input.association.status === "unavailable")
+      )
+        throw new Error("无法唯一确认候选替代的已保存译文。");
+      const references = await input.loaded.directories.get(language)!(
+        excluded,
+        new Set(groups.map(({ familyKey }) => familyKey)),
+      );
+      if (references.incomplete)
+        throw new Error(
+          references.issues.map(({ message }) => message).join(" ") ||
+            "缺少完整的同族参照。",
+        );
+      return {
+        sourceKey,
+        language,
+        groups,
+        savedReferences: references.references,
+        location:
+          projected.location ??
+          translationLocation(input.snapshot, sourceKey, language, excluded),
+        limits,
       };
     },
     check: (preparedInput) => {
+      if (preparedInput === null) return [];
       // 运行时已按完整输入 schema 校验并固定；避免递归 JSON 引用重复展开只读映射。
       const input = preparedInput as unknown as CheckInput;
       const object: QualityObject = {
@@ -939,50 +946,6 @@ function messageFamilyChecker<
         language: input.language,
       };
       const candidateLocation = input.location;
-      const candidateIssues: MessageFamilyIssue[] = withSource(
-        input.projected.issues ?? [],
-        input.sourceKey,
-        input.language,
-      );
-      let incomplete = input.projected.complete === false;
-      if (input.sourceAvailability !== "available") {
-        incomplete = true;
-        candidateIssues.push(
-          issue("candidateSourceUnavailable", "候选对应的原文正文不可用。", {
-            sourceKey: input.sourceKey,
-            language: input.language,
-          }),
-        );
-      }
-      if (input.projected.complete === false && candidateIssues.length === 0)
-        candidateIssues.push(
-          issue(
-            "candidateProjectionIncomplete",
-            "候选投影仍有未提供的消息组。",
-            {
-              language: input.language,
-              sourceKey: input.sourceKey,
-            },
-          ),
-        );
-
-      if (input.associationIncomplete) {
-        incomplete = true;
-        candidateIssues.push(
-          issue(
-            "candidateAssociationUnknown",
-            "无法唯一确认候选替代的已保存译文，保留关联限制。",
-            { language: input.language, sourceKey: input.sourceKey },
-          ),
-        );
-      }
-      const references = input.references;
-      const initialCandidateIssueCount = candidateIssues.length;
-      incomplete = incomplete || references.incomplete;
-      const allIssues = [
-        ...candidateIssues,
-        ...withSource(references.issues, undefined, input.language),
-      ];
       const diagnostics: {
         readonly severity: "warning";
         readonly object: QualityObject;
@@ -990,7 +953,6 @@ function messageFamilyChecker<
         readonly message: string;
         readonly evidence: readonly QualityEvidence[];
       }[] = [];
-      let comparable = false;
       // 既有比较算法按物理记录去重；这里从稳定身份恢复当前输入内的局部索引。
       const recordIndexes = new Map<string, number>();
       const referenceIndex = indexMessageFamilies(
@@ -1008,61 +970,16 @@ function messageFamilyChecker<
       );
 
       for (const signed of input.groups) {
-        const group = signed.group;
-        candidateIssues.push(...signed.issues);
-        if (signed.familyKey === "") {
-          incomplete = true;
-          continue;
-        }
-        const candidateTargetKey = signed.targetKey;
         const comparison = compareMessageFamily(
           referenceIndex,
           {
             familyKey: signed.familyKey,
-            targetKey:
-              candidateTargetKey ?? "\u0000unknown-candidate-target-signature",
+            targetKey: signed.targetKey,
           },
           new Set(),
           input.limits,
         );
 
-        if (candidateTargetKey === undefined) {
-          incomplete = true;
-          if (comparison.categoryCount > 1) {
-            comparable = true;
-            diagnostics.push(
-              createDiagnostic(
-                object,
-                candidateLocation,
-                "保存参照中已知存在多种消息表达；候选结构不完整，尚不能确定其目标类别。",
-                comparison,
-                signed,
-                input,
-              ),
-            );
-          }
-          continue;
-        }
-
-        if (comparison.status === "no-comparison") {
-          if (!references.incomplete) {
-            allIssues.push(
-              issue(
-                "noComparableReference",
-                "完整保存证据中没有与该消息族相同的参照。",
-                {
-                  language: input.language,
-                  sourceKey: input.sourceKey,
-                  ref: group.ref,
-                },
-              ),
-            );
-          } else {
-            incomplete = true;
-          }
-          continue;
-        }
-        comparable = true;
         if (comparison.status === "different")
           diagnostics.push(
             createDiagnostic(
@@ -1076,34 +993,7 @@ function messageFamilyChecker<
           );
       }
 
-      allIssues.push(...candidateIssues.slice(initialCandidateIssueCount));
-      if (input.projected.groups.length === 0 && !comparable) {
-        allIssues.push(
-          issue("noComparableReference", "候选投影没有提供可比较的消息组。", {
-            language: input.language,
-            sourceKey: input.sourceKey,
-          }),
-        );
-      }
-
-      const notApplicable = !incomplete && !comparable;
-
-      return {
-        status: incomplete
-          ? "incomplete"
-          : notApplicable
-            ? "not-applicable"
-            : "complete",
-        diagnostics,
-        issues: allIssues.map((item) => toQualityIssue(item, object)),
-        coverage: {
-          selected: 1,
-          evaluated: notApplicable ? 0 : 1,
-          notApplicable: notApplicable ? 1 : 0,
-          incomplete: incomplete ? 1 : 0,
-          failed: 0,
-        },
-      };
+      return diagnostics;
     },
   });
 }
@@ -1375,12 +1265,12 @@ function candidateRecordIndex<
   TBody,
   TUnavailable,
 >(
-  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
+  snapshot: ProjectSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
   sourceKey: string,
   language: string,
   memo: MemoScope,
 ): number | undefined {
-  const association = findAssociation(facts, sourceKey, language, memo);
+  const association = findAssociation(snapshot, sourceKey, language, memo);
   if (
     association?.coverageStatus === "complete" &&
     (association.status === "matched" ||
@@ -1397,20 +1287,20 @@ function findAssociation<
   TBody,
   TUnavailable,
 >(
-  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
+  snapshot: ProjectSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
   sourceKey: string,
   language: string,
   memo: MemoScope,
-): TranslationAssociationFact | undefined {
-  return memo.memo(indexAssociations)(facts).get(language)?.get(sourceKey);
+): TranslationAssociation | undefined {
+  return memo.memo(indexAssociations)(snapshot).get(language)?.get(sourceKey);
 }
 
 /** 同次事实的关联定位只建一次，避免候选替换和指纹阶段反复线性查找。 */
-function indexAssociations(facts: {
-  readonly associations: readonly TranslationAssociationFact[];
+function indexAssociations(snapshot: {
+  readonly associations: readonly TranslationAssociation[];
 }) {
-  const languages = new Map<string, Map<string, TranslationAssociationFact>>();
-  for (const association of facts.associations) {
+  const languages = new Map<string, Map<string, TranslationAssociation>>();
+  for (const association of snapshot.associations) {
     let sources = languages.get(association.language);
     if (sources === undefined) {
       sources = new Map();
@@ -1428,7 +1318,7 @@ function translationLocation<
   TBody,
   TUnavailable,
 >(
-  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
+  snapshot: ProjectSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
   sourceKey: string,
   language: string,
   translationIndex: number | undefined,
@@ -1436,7 +1326,7 @@ function translationLocation<
   const record =
     translationIndex === undefined
       ? undefined
-      : facts.translations.records[translationIndex];
+      : snapshot.translations.records[translationIndex];
   return {
     language,
     range: record?.range ?? null,
@@ -1456,43 +1346,6 @@ function withSource(
       : {}),
     language: item.language ?? language,
   }));
-}
-
-function toQualityIssue(
-  item: MessageFamilyIssue,
-  object: QualityObject,
-): QualityIssue<QualityObject> {
-  return {
-    code: item.code,
-    message: item.message,
-    object,
-    ...(item.language === undefined
-      ? {}
-      : {
-          location: {
-            language: item.language,
-            range: item.range ?? null,
-            ...(item.sourceKey === undefined ? {} : { key: item.sourceKey }),
-          },
-        }),
-    evidence:
-      item.ref === undefined
-        ? []
-        : [
-            {
-              role: "limited-input",
-              object,
-              location: {
-                language: item.language ?? null,
-                range: item.range ?? null,
-                ...(item.sourceKey === undefined
-                  ? {}
-                  : { key: item.sourceKey }),
-              },
-              value: { ref: item.ref },
-            },
-          ],
-  };
 }
 
 function issue(
@@ -1556,9 +1409,9 @@ function fixedContext<
     TLoaded
   >,
 ): MessageFamilyContext<TUnit, TTranslation, TBody, TUnavailable, TLoaded> {
-  const { facts, loaded, relationships, memo } = input;
+  const { snapshot, loaded, relationships, memo } = input;
   return {
-    facts,
+    snapshot,
     loaded,
     relationships,
     memo,

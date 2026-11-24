@@ -1,10 +1,6 @@
 import assert from "node:assert/strict";
 
-import {
-  analyzeQuality,
-  createQualityException,
-  type TermbaseData,
-} from "@lioni/lioni";
+import { runQa, createQaSuppression, type TermbaseData } from "@lioni/lioni";
 
 import { createConfig } from "./lioni.config.ts";
 
@@ -15,7 +11,7 @@ const cases = [
 ];
 const summaries = [];
 for (const { target, expected } of cases) {
-  const result = await analyzeQuality(createConfig(target));
+  const result = await runQa(createConfig(target));
   const diagnostics = result.diagnostics.map(({ checkId }) => checkId).sort();
   if (expected === undefined) {
     assert.equal(result.status, "complete");
@@ -25,7 +21,7 @@ for (const { target, expected } of cases) {
   }
   summaries.push({ target, status: result.status, diagnostics });
 }
-// 使用安装后的正式 SDK 验证无关消息编辑不会撤销术语例外。
+// 使用安装后的正式 SDK 验证无关消息编辑不会撤销术语豁免。
 const terms: TermbaseData = {
   concepts: [
     {
@@ -50,46 +46,42 @@ const target = "旧称 {name}";
 const candidates = [
   { sourceKey: "message", language: "zh-CN", content: target },
 ];
-const before = await analyzeQuality(
+const before = await runQa(
   createConfig(target, { terms, otherText: "消息 B" }),
   { candidates },
 );
-const exceptions = before.checks
+const suppressions = before.checks
   .filter((check) => check.checkId.startsWith("terminology/"))
   .flatMap((check) =>
     check.executions.map((execution) =>
-      createQualityException({
+      createQaSuppression({
         id: execution.checkId,
         reason: "接受消息 A",
         execution,
       }),
     ),
   );
-assert.equal(exceptions.length, 2);
-const after = await analyzeQuality(
-  createConfig(target, { terms, otherText: "修改消息 B", exceptions }),
+assert.equal(suppressions.length, 2);
+const after = await runQa(
+  createConfig(target, { terms, otherText: "修改消息 B", suppressions }),
   { candidates },
-);
-assert.deepEqual(
-  after.exceptionApplicability.map((item) => item.status),
-  ["applicable", "applicable"],
 );
 assert.deepEqual(
   after.diagnostics
     .filter((item) => item.checkId.startsWith("terminology/"))
     .map((item) => item.handling.status),
-  ["excepted", "excepted"],
+  ["suppressed", "suppressed"],
 );
-const changed = await analyzeQuality(
+const changed = await runQa(
   createConfig(target, {
     terms: { concepts: [] },
     otherText: "修改消息 B",
-    exceptions,
+    suppressions,
   }),
   { candidates },
 );
 assert.deepEqual(
-  changed.exceptionApplicability.map((item) => item.status),
-  ["basis-changed", "basis-changed"],
+  changed.diagnostics.filter((item) => item.checkId.startsWith("terminology/")),
+  [],
 );
 process.stdout.write(JSON.stringify(summaries));

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { analyzeQuality, defineConfig } from "@lioni/lioni";
+import { runQa, defineConfig } from "@lioni/lioni";
 import { createVueI18nTargetSyntaxChecker } from "@lioni/lioni";
 import { z } from "zod";
 
@@ -48,7 +48,7 @@ import { z } from "zod";
     },
     quality: { checks: [createVueI18nTargetSyntaxChecker()] },
   });
-  const report = await analyzeQuality(config, {
+  const report = await runQa(config, {
     candidates: [{ sourceKey: "greeting", language: "fr", content: "bad }" }],
   });
   assert.equal(report.diagnostics.length, 1);
@@ -108,32 +108,33 @@ import { z } from "zod";
     language: "fr",
     content: { text: "bad }" },
   };
-  const missing = await analyzeQuality(create(), { candidates: [candidate] });
-  assert.equal(missing.checks[0]?.status, "incomplete");
-  const ready = await analyzeQuality(
-    create(({ candidate, sourceUnit, translation }) => ({
-      status: "ready",
-      input: {
-        key: sourceUnit.key,
-        language: candidate.language,
-        source: { status: "available", text: sourceUnit.unit.source.text },
-        target: { status: "available", text: candidate.content.text },
-        locations: {
-          source: { language: null, range: null },
-          target: {
+  const missing = await runQa(create(), { candidates: [candidate] });
+  assert.equal(missing.checks[0]?.status, "failed");
+  const ready = await runQa(
+    create(({ candidate, sourceUnit, translation }) =>
+      candidate === null
+        ? null
+        : {
+            key: sourceUnit.key,
             language: candidate.language,
-            range: translation?.range ?? "new-message",
+            source: { status: "available", text: sourceUnit.unit.source.text },
+            target: { status: "available", text: candidate.content.text },
+            locations: {
+              source: { language: null, range: null },
+              target: {
+                language: candidate.language,
+                range: translation?.range ?? "new-message",
+              },
+            },
           },
-        },
-      },
-    })),
+    ),
     { candidates: [candidate] },
   );
   assert.equal(ready.diagnostics[0]?.location.range, "new-message");
   assert.deepEqual(ready.diagnostics[0]?.location.span, { start: 4, end: 4 });
-  const skipped = await analyzeQuality(
-    create(() => ({ status: "not-applicable" })),
+  const skipped = await runQa(
+    create(() => null),
     { candidates: [candidate] },
   );
-  assert.equal(skipped.checks[0]?.status, "not-applicable");
+  assert.equal(skipped.checks[0]?.status, "complete");
 }

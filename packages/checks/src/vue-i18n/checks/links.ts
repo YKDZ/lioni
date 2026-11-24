@@ -1,4 +1,4 @@
-import type { QualityIssue, TranslationUnitInput } from "@lioni/core";
+import type { TranslationUnitInput } from "@lioni/core";
 import type { MemoScope } from "@lioni/memo";
 
 import { memoizedVueI18nMessage } from "../message-memo.ts";
@@ -11,15 +11,13 @@ import type {
   VueI18nPolicyData,
 } from "../quality-types.ts";
 import {
+  type VueI18nLink,
   parseVueI18nMessage,
   VUE_I18N_MESSAGE_COMPILER_VERSION,
 } from "../vue-i18n-messages.ts";
 import {
-  completeOutcome,
   createVueI18nMessageCheck,
   finding,
-  incompleteOutcome,
-  issue,
   messageLocation,
   translationObject,
 } from "./common.ts";
@@ -52,7 +50,7 @@ export function createLinkTargetExistsCheck<
     prepare: (projection, policy, memo) => {
       if (projection.target.status !== "available") return [];
       const message = memoizedVueI18nMessage(projection.target.text, memo);
-      return message.linkFacts.flatMap((link) =>
+      return message.links.flatMap((link) =>
         link.kind === "static"
           ? [
               {
@@ -68,20 +66,12 @@ export function createLinkTargetExistsCheck<
     check: (input, targets) => {
       const projection = input;
       if (projection.target.status !== "available")
-        return incompleteOutcome([
-          issue("targetUnavailable", "目标消息正文不可用。", projection),
-        ]);
+        throw new Error("目标消息正文不可用。");
       const targetText = projection.target.text;
       const message = parseVueI18nMessage(targetText);
       if (message.errors.length > 0)
-        return incompleteOutcome([
-          issue(
-            "targetMessageSyntaxInvalid",
-            "译文语法无效，关联目标检查未执行。",
-            projection,
-          ),
-        ]);
-      const diagnostics = message.linkFacts.flatMap((link) =>
+        throw new Error("译文语法无效，关联目标检查未执行。");
+      const diagnostics = message.links.flatMap((link) =>
         link.kind === "static" &&
         !targets.some((target) => target.key === link.key && target.exists)
           ? [
@@ -108,7 +98,7 @@ export function createLinkTargetExistsCheck<
             ]
           : [],
       );
-      return completeOutcome(diagnostics);
+      return diagnostics;
     },
   });
 }
@@ -141,9 +131,7 @@ export function createLinkCycleCheck<
     prepare: reachableMessages,
     check: (input, messages) => {
       if (input.target.status !== "available")
-        return incompleteOutcome([
-          issue("targetUnavailable", "目标消息正文不可用。", input),
-        ]);
+        throw new Error("目标消息正文不可用。");
       const search = findCycle(input, messages);
       const targetText = input.target.text;
       const fallbackRange = fullRange(input.target.text);
@@ -178,9 +166,7 @@ export function createLinkCycleCheck<
                 ],
               ),
             ];
-      return search.issues.length === 0
-        ? completeOutcome(diagnostics)
-        : incompleteOutcome(search.issues, diagnostics);
+      return diagnostics;
     },
   });
 }
@@ -189,6 +175,7 @@ type ReachableMessage = {
   readonly key: string;
   readonly origin: "candidate" | "target" | "source" | "missing";
   readonly text: string | null;
+  readonly links: readonly Extract<VueI18nLink, { kind: "static" }>[];
 };
 
 /** 先准备完整可达闭包，包括缺失键，避免首次发现循环后漏掉后续依赖。 */
@@ -216,12 +203,13 @@ function reachableMessages(
         : origin === "missing"
           ? null
           : policy.resources[origin].messages[key]!;
-    messages.set(key, { key, origin, text });
-    if (text === null) return;
-    const message = memoizedVueI18nMessage(text, memo);
-    if (message.errors.length > 0) return;
-    for (const link of message.linkFacts)
-      if (link.kind === "static") visit(link.key);
+    const message =
+      text === null ? undefined : memoizedVueI18nMessage(text, memo);
+    if (message && message.errors.length > 0)
+      throw new Error(`关联消息 ${key} 语法无效，无法完整判断循环。`);
+    const links = message?.links.filter((link) => link.kind === "static") ?? [];
+    messages.set(key, { key, origin, text, links });
+    for (const link of links) visit(link.key);
   }
   visit(projection.key);
   return [...messages.values()];
@@ -230,18 +218,18 @@ function reachableMessages(
 type CycleSearch = {
   readonly path?: readonly string[];
   readonly range?: { readonly start: number; readonly end: number };
-  readonly issues: readonly QualityIssue[];
 };
 
 function findCycle(
   projection: VueI18nMessageProjection,
   messages: readonly ReachableMessage[],
 ): CycleSearch {
-  const byKey = new Map(messages.map((message) => [message.key, message.text]));
+  const byKey = new Map(
+    messages.map((message) => [message.key, message.links]),
+  );
   const active = new Map<string, number>();
   const done = new Set<string>();
   const stack: string[] = [];
-  const issues: QualityIssue[] = [];
   let path: readonly string[] | undefined;
   let range: { readonly start: number; readonly end: number } | undefined;
 
@@ -255,25 +243,10 @@ function findCycle(
 
     active.set(key, stack.length);
     stack.push(key);
-    const text = byKey.get(key) ?? undefined;
-    if (text !== undefined) {
-      const message = parseVueI18nMessage(text);
-      if (message.errors.length > 0) {
-        issues.push(
-          issue(
-            "linkedMessageSyntaxInvalid",
-            `关联消息 ${key} 语法无效，无法完整判断循环。`,
-            projection,
-          ),
-        );
-      } else {
-        for (const link of message.linkFacts) {
-          if (link.kind !== "static") continue;
-          if (visit(link.key)) {
-            if (key === projection.key) range = link.range;
-            return true;
-          }
-        }
+    for (const link of byKey.get(key) ?? []) {
+      if (visit(link.key)) {
+        if (key === projection.key) range = link.range;
+        return true;
       }
     }
     stack.pop();
@@ -286,12 +259,11 @@ function findCycle(
   return {
     ...(path === undefined ? {} : { path }),
     ...(range === undefined ? {} : { range }),
-    issues,
   };
 }
 
 function version(kind: string): string {
-  const base = `vue-i18n-suite/${kind}/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`;
+  const base = `vue-i18n-suite/${kind}/v3+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`;
   return base;
 }
 

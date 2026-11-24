@@ -6,7 +6,7 @@ import path from "node:path";
 import type { CliJourney } from "../journey.ts";
 
 const journey: CliJourney = {
-  name: "qa-exceptions",
+  name: "qa-suppressions",
   modes: ["source", "distribution"],
   async setup({ workDir, packageRoot, mode }) {
     const sdkImport = mode === "source" ? "@lioni/core" : "@lioni/lioni";
@@ -56,7 +56,7 @@ const inputSchema = z.strictObject({
 
 const checker = defineChecker({
   id: "review-required",
-  version: "qa-exceptions-journey-v1",
+  version: "qa-suppressions-journey-v1",
   inputSchema,
   load() {
     const enabledBySource = new Map([["save", true]]);
@@ -66,14 +66,12 @@ const checker = defineChecker({
     };
   },
   prepare({ candidate, loaded }) {
+    if (!candidate) throw new Error("检查需要候选正文。");
     return {
-      status: "ready",
-      input: {
-        enabled: loaded.isEnabled(candidate.sourceKey),
-        sourceKey: candidate.sourceKey,
-        language: candidate.language,
-        content: candidate.content,
-      },
+      enabled: loaded.isEnabled(candidate.sourceKey),
+      sourceKey: candidate.sourceKey,
+      language: candidate.language,
+      content: candidate.content,
     };
   },
   check(input) {
@@ -83,24 +81,13 @@ const checker = defineChecker({
       language: input.language,
     };
     const location = { language: input.language, range: "fr.json" };
-    return {
-      status: input.enabled ? "complete" : "not-applicable",
-      diagnostics: input.enabled ? [{
+    return input.enabled ? [{
         severity: "error",
         object,
         location,
         message: "候选需要人工确认。",
         evidence: [{ role: "candidate", object, location, value: input.content }],
-      }] : [],
-      issues: [],
-      coverage: {
-        selected: 1,
-        evaluated: input.enabled ? 1 : 0,
-        notApplicable: input.enabled ? 0 : 1,
-        incomplete: 0,
-        failed: 0,
-      },
-    };
+      }] : [];
   },
 });
 
@@ -142,13 +129,13 @@ export default defineConfig({
   commands() {
     return [
       {
-        name: "CLI 输出可用于创建例外的结构化 QA 报告",
+        name: "CLI 输出可用于创建豁免的结构化 QA 报告",
         args: ["qa", "qa.config.ts", "--output-format", "structured"],
       },
       {
-        name: "CLI 根据报告创建例外",
+        name: "CLI 根据报告创建豁免",
         args: [
-          "exceptions",
+          "suppressions",
           "upsert",
           "qa.config.ts",
           "qa-report.json",
@@ -163,7 +150,7 @@ export default defineConfig({
         ],
       },
       {
-        name: "CLI 在后续检查中应用报告例外",
+        name: "CLI 在后续检查中应用报告豁免",
         args: ["qa", "qa.config.ts", "--output-format", "structured"],
       },
     ];
@@ -216,29 +203,22 @@ export default defineConfig({
         readonly diagnostics: readonly {
           readonly handling: {
             readonly status: string;
-            readonly exceptionId?: string;
+            readonly suppressionId?: string;
           };
-        }[];
-        readonly exceptionApplicability: readonly {
-          readonly status: string;
         }[];
       };
     };
     assert.deepEqual(updatedReport.data.diagnostics[0]?.handling, {
-      status: "excepted",
-      exceptionId: "approved-review",
+      status: "suppressed",
+      suppressionId: "approved-review",
       reason: "已由维护者确认。",
     });
-    assert.equal(
-      updatedReport.data.exceptionApplicability[0]?.status,
-      "applicable",
-    );
 
-    const exceptionFile = await readFile(
-      path.join(context.workDir, "lioni.exceptions.yaml"),
+    const suppressionFile = await readFile(
+      path.join(context.workDir, "lioni.suppressions.yaml"),
       "utf8",
     );
-    assert.match(exceptionFile, /^format: lioni\.qa-exceptions\/v2$/mu);
+    assert.match(suppressionFile, /^format: lioni\.qa-suppressions\/v1$/mu);
   },
 };
 

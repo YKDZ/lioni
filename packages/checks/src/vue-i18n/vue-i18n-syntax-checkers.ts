@@ -1,5 +1,5 @@
 import type {
-  QualityCheckOutcome,
+  QualityFinding,
   QualityCheckDefinition,
   QualityEvidence,
   QualityObject,
@@ -112,43 +112,34 @@ export function createVueI18nSourceSyntaxChecker<
   assertVueI18nCallback(options?.loadLanguages, "loadLanguages");
   return defineChecker.withTypes<TUnit, TTranslation, TBody, TUnavailable>()({
     id: options?.id ?? "vue-i18n/source-syntax",
-    version: `checks.vue-i18n/source-syntax/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
+    version: `checks.vue-i18n/source-syntax/v3+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
     inputSchema: vueI18nMessageProjectionSchema,
-    load: async ({ facts, memo, qualityData }) =>
+    load: async ({ snapshot, memo, qualityData }) =>
       options?.loadLanguages
         ? readVueI18nLanguagePolicies(
-            await qualityData.read(options?.loadLanguages, facts, memo),
+            await qualityData.read(options?.loadLanguages, snapshot, memo),
           )
         : null,
     prepare: async (input) => {
-      if (input.loaded !== null && !input.loaded.has(input.candidate.language))
-        return { status: "not-applicable" };
-      const prepared = await prepareVueI18nMessage(input, options?.prepare);
-      if (prepared.status !== "ready") return prepared;
-      const projection = prepared.input;
-      if (projection.target.status === "missing")
-        return { status: "not-applicable" };
-      if (projection.target.status === "unavailable")
-        return incompleteSelection(
-          "candidateBodyUnavailable",
-          "目标消息正文不可用，Vue I18n 检查未执行。",
-        );
-      if (projection.source.status === "absent")
-        return { status: "not-applicable" };
+      if (
+        input.loaded !== null &&
+        !input.loaded.has(input.association.language)
+      )
+        return null;
+      const projection = await prepareVueI18nMessage(input, options?.prepare);
+      if (projection === null) return null;
+      if (projection.source.status === "absent") return null;
       if (
         projection.source.status === "unavailable" ||
         input.sourceUnit.bodyAvailability !== "available"
       )
-        return incompleteSelection(
-          "sourceUnavailable",
-          "原文正文不可用，无法检查 Vue I18n 语法。",
-        );
-      return { status: "ready", input: projection };
+        throw new Error("原文正文不可用，无法检查 Vue I18n 语法。");
+      return projection;
     },
     check: (input) => {
+      if (input === null) return [];
       const text = input.source;
-      if (text.status !== "available")
-        return incompleteOutcome("sourceUnavailable", "原文正文不可用。");
+      if (text.status !== "available") throw new Error("原文正文不可用。");
       return syntaxOutcome("source", input, text.text);
     },
   });
@@ -209,33 +200,31 @@ export function createVueI18nTargetSyntaxChecker<
   assertVueI18nCallback(options?.loadLanguages, "loadLanguages");
   return defineChecker.withTypes<TUnit, TTranslation, TBody, TUnavailable>()({
     id: options?.id ?? "vue-i18n/target-syntax",
-    version: `checks.vue-i18n/target-syntax/v2+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
+    version: `checks.vue-i18n/target-syntax/v3+@intlify/message-compiler@${VUE_I18N_MESSAGE_COMPILER_VERSION}`,
     inputSchema: vueI18nMessageProjectionSchema,
-    load: async ({ facts, memo, qualityData }) =>
+    load: async ({ snapshot, memo, qualityData }) =>
       options?.loadLanguages
         ? readVueI18nLanguagePolicies(
-            await qualityData.read(options?.loadLanguages, facts, memo),
+            await qualityData.read(options?.loadLanguages, snapshot, memo),
           )
         : null,
     prepare: async (input) => {
-      if (input.loaded !== null && !input.loaded.has(input.candidate.language))
-        return { status: "not-applicable" };
-      const prepared = await prepareVueI18nMessage(input, options?.prepare);
-      if (prepared.status !== "ready") return prepared;
-      const projection = prepared.input;
-      if (projection.target.status === "missing")
-        return { status: "not-applicable" };
+      if (
+        input.loaded !== null &&
+        !input.loaded.has(input.association.language)
+      )
+        return null;
+      const projection = await prepareVueI18nMessage(input, options?.prepare);
+      if (projection === null) return null;
+      if (projection.target.status === "missing") return null;
       if (projection.target.status === "unavailable")
-        return incompleteSelection(
-          "candidateBodyUnavailable",
-          "目标消息正文不可用，Vue I18n 检查未执行。",
-        );
-      return { status: "ready", input: projection };
+        throw new Error("目标消息正文不可用，Vue I18n 检查未执行。");
+      return projection;
     },
     check: (input) => {
+      if (input === null) return [];
       const text = input.target;
-      if (text.status !== "available")
-        return incompleteOutcome("targetUnavailable", "目标消息正文不可用。");
+      if (text.status !== "available") throw new Error("目标消息正文不可用。");
       return syntaxOutcome("target", input, text.text);
     },
   });
@@ -245,7 +234,7 @@ function syntaxOutcome(
   side: "source" | "target",
   projection: VueI18nMessageProjection,
   text: string,
-): QualityCheckOutcome {
+): readonly QualityFinding[] {
   const parsed = parseVueI18nMessage(text);
   const location = projection.locations[side];
   const object: QualityObject = {
@@ -253,67 +242,29 @@ function syntaxOutcome(
     key: projection.key,
     ...(side === "target" ? { language: projection.language } : {}),
   };
-  return completeOutcome(
-    parsed.errors.map((error) => {
-      const range = error.range ?? { start: 0, end: 0 };
-      const findingLocation = { ...location, span: range };
-      const evidence: readonly QualityEvidence[] = [
-        {
-          role: `${side}-message`,
-          object,
-          location: findingLocation,
-          value: text,
-        },
-        {
-          role: "syntax-error",
-          object,
-          location: findingLocation,
-          value: error,
-        },
-      ];
-      return {
-        severity: "error" as const,
+  return parsed.errors.map((error) => {
+    const range = error.range ?? { start: 0, end: 0 };
+    const findingLocation = { ...location, span: range };
+    const evidence: readonly QualityEvidence[] = [
+      {
+        role: `${side}-message`,
         object,
         location: findingLocation,
-        message: `${side === "source" ? "原文" : "译文"}不符合 Vue I18n 消息语法：${error.message}。`,
-        evidence,
-      };
-    }),
-  );
-}
-
-function completeOutcome(
-  diagnostics: QualityCheckOutcome["diagnostics"],
-): QualityCheckOutcome {
-  return {
-    status: "complete",
-    diagnostics,
-    issues: [],
-    coverage: {
-      selected: 1,
-      evaluated: 1,
-      notApplicable: 0,
-      incomplete: 0,
-      failed: 0,
-    },
-  };
-}
-
-function incompleteOutcome(code: string, message: string): QualityCheckOutcome {
-  return {
-    status: "incomplete",
-    diagnostics: [],
-    issues: [{ code, message }],
-    coverage: {
-      selected: 1,
-      evaluated: 0,
-      notApplicable: 0,
-      incomplete: 1,
-      failed: 0,
-    },
-  };
-}
-
-function incompleteSelection(code: string, message: string) {
-  return { status: "incomplete" as const, issue: { code, message } };
+        value: text,
+      },
+      {
+        role: "syntax-error",
+        object,
+        location: findingLocation,
+        value: error,
+      },
+    ];
+    return {
+      severity: "error" as const,
+      object,
+      location: findingLocation,
+      message: `${side === "source" ? "原文" : "译文"}不符合 Vue I18n 消息语法：${error.message}。`,
+      evidence,
+    };
+  });
 }

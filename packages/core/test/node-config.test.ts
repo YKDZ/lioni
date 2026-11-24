@@ -5,7 +5,7 @@ import path from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { readComparisonSnapshot, readSourceFacts } from "../src/index.ts";
+import { readComparisonSnapshot, readSourceSnapshot } from "../src/index.ts";
 import { StandardSchemaContractError } from "../src/index.ts";
 import { loadConfig } from "../src/node/index.ts";
 
@@ -38,7 +38,7 @@ void describe("动态 Node 配置契约", () => {
         deferredPath,
         `export default { source: { schema: { "~standard": { version: 1, vendor: "deferred", validate: (value) => ({ value }) } }, read: () => ({ scopes: [] }) }, keyOf: () => "unused", translations: {} };\n`,
       );
-      const defaultException = {
+      const defaultSuppression = {
         id: "from-default-file",
         reason: "来自默认 YAML 文件。",
         checkId: "example/check",
@@ -51,10 +51,10 @@ void describe("动态 Node 配置契约", () => {
         },
       };
       await writeFile(
-        path.join(directory, "lioni.exceptions.yaml"),
+        path.join(directory, "lioni.suppressions.yaml"),
         [
-          "format: lioni.qa-exceptions/v2",
-          "exceptions:",
+          "format: lioni.qa-suppressions/v1",
+          "suppressions:",
           "  - id: from-default-file",
           "    reason: 来自默认 YAML 文件。",
           "    checkId: example/check",
@@ -66,37 +66,38 @@ void describe("动态 Node 配置契约", () => {
         ].join("\n"),
         "utf8",
       );
-      const customException = {
-        ...defaultException,
+      const customSuppression = {
+        ...defaultSuppression,
         id: "from-custom-store",
         reason: "来自显式自定义存储。",
       };
       await writeFile(
         customPath,
-        `import { defineConfig } from ${JSON.stringify(hostCoreUrl)};\nexport default defineConfig({\n  source: { schema: { "~standard": { version: 1, vendor: "custom-store", validate: (value) => ({ value }) } }, read: () => ({ scopes: [] }) },\n  keyOf: () => "unused",\n  quality: { exceptionStore: { load: async () => [${JSON.stringify(customException)}], upsert: async () => {} } }\n});\n`,
+        `import { defineConfig } from ${JSON.stringify(hostCoreUrl)};\nexport default defineConfig({\n  source: { schema: { "~standard": { version: 1, vendor: "custom-store", validate: (value) => ({ value }) } }, read: () => ({ scopes: [] }) },\n  keyOf: () => "unused",\n  quality: { suppressionStore: { load: async () => [${JSON.stringify(customSuppression)}], upsert: async () => {} } }\n});\n`,
         "utf8",
       );
 
       const loaded = await loadConfig(configPath);
-      const directFacts = await readSourceFacts(loaded);
+      const directFacts = await readSourceSnapshot(loaded);
       assert.equal(directFacts.units[0]?.unit.source, "Save");
-      const facts = await readSourceFacts(loaded);
+      const snapshot = await readSourceSnapshot(loaded);
       const observed = {
-        key: facts.units[0]?.key,
-        source: facts.units[0]?.unit.source,
+        key: snapshot.units[0]?.key,
+        source: snapshot.units[0]?.unit.source,
       };
 
       assert.deepStrictEqual(observed, { key: "18", source: "Save" });
-      const defaultExceptions = await loaded.quality?.exceptionStore?.load();
-      assert.deepEqual(defaultExceptions, [defaultException]);
+      const defaultSuppressions =
+        await loaded.quality?.suppressionStore?.load();
+      assert.deepEqual(defaultSuppressions, [defaultSuppression]);
       const custom = await loadConfig(customPath);
-      const customExceptions = await custom.quality?.exceptionStore?.load();
-      assert.deepEqual(customExceptions, [customException]);
+      const customSuppressions = await custom.quality?.suppressionStore?.load();
+      assert.deepEqual(customSuppressions, [customSuppression]);
       const plain = await loadConfig(unboundPath);
-      const plainFacts = await readSourceFacts(plain);
+      const plainFacts = await readSourceSnapshot(plain);
       assert.equal(plainFacts.units.length, 0);
       const deferred = await loadConfig(deferredPath);
-      const deferredFacts = await readSourceFacts(deferred);
+      const deferredFacts = await readSourceSnapshot(deferred);
       assert.equal(deferredFacts.units.length, 0);
       await assert.rejects(
         readComparisonSnapshot(deferred),

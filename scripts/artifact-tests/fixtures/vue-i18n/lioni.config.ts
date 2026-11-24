@@ -6,7 +6,7 @@ import {
   type VueI18nMessageProjection,
   type VueI18nPolicy,
   type TermbaseData,
-  type QualityException,
+  type QaSuppression,
 } from "@lioni/lioni";
 import * as z from "zod";
 
@@ -34,7 +34,7 @@ export function createConfig(
   options: {
     readonly otherText?: string;
     readonly terms?: TermbaseData;
-    readonly exceptions?: readonly QualityException[];
+    readonly suppressions?: readonly QaSuppression[];
   } = {},
 ) {
   const policies: readonly VueI18nPolicy[] = [
@@ -140,12 +140,12 @@ export function createConfig(
       }),
     },
     quality: {
-      exceptionStore: {
+      suppressionStore: {
         async load() {
-          return options.exceptions ?? [];
+          return options.suppressions ?? [];
         },
         async upsert() {
-          throw new Error("制品验收只读取例外。");
+          throw new Error("制品验收只读取豁免。");
         },
       },
       checks: createVueI18nChecks<Unit, Translation, string>({

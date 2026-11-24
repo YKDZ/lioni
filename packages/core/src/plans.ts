@@ -10,21 +10,21 @@ import {
   type TranslationChange,
 } from "./comparison.ts";
 import type {
-  ActualTranslationFact,
+  Translation,
   Awaitable,
   ComparisonSnapshot,
   ComparisonStatus,
   ComparisonResult,
   ComparisonBaselineStore,
   FrameworkConfig,
-  FrameworkFacts,
-  SourceUnitFact,
-  TranslationAssociationFact,
+  ProjectSnapshot,
+  SourceUnit,
+  TranslationAssociation,
   TranslationIdentity,
   TranslationUnitInput,
   StandardSchemaV1,
 } from "./index.ts";
-import { readFacts, validateFrameworkConfig } from "./index.ts";
+import { readProjectSnapshot, validateFrameworkConfig } from "./index.ts";
 import {
   resolveLanguageSelection,
   type LanguageSelectionOptions,
@@ -67,15 +67,15 @@ export type UpdatePlanWriteRequest<
 export type UpdatePlanSourceChange<TUnit extends TranslationUnitInput> = {
   readonly key: string;
   readonly status: ComparisonStatus;
-  readonly previous?: SourceUnitFact<TUnit>;
-  readonly current?: SourceUnitFact<TUnit>;
+  readonly previous?: SourceUnit<TUnit>;
+  readonly current?: SourceUnit<TUnit>;
 };
 
 export type UpdatePlanTranslationChange<TTranslation, TBody, TUnavailable> = {
   readonly identity: TranslationIdentity;
   readonly status: ComparisonStatus;
-  readonly previous?: ActualTranslationFact<TTranslation, TBody, TUnavailable>;
-  readonly current?: ActualTranslationFact<TTranslation, TBody, TUnavailable>;
+  readonly previous?: Translation<TTranslation, TBody, TUnavailable>;
+  readonly current?: Translation<TTranslation, TBody, TUnavailable>;
 };
 
 type UpdatePlanItemBase<
@@ -196,8 +196,8 @@ export type UpdatePlan<
 export type UpdatePlanData = UpdatePlan;
 
 export type UpdatePlanAssociations = {
-  readonly previous: readonly TranslationAssociationFact[];
-  readonly current: readonly TranslationAssociationFact[];
+  readonly previous: readonly TranslationAssociation[];
+  readonly current: readonly TranslationAssociation[];
 };
 
 export type UpdatePlanInput<
@@ -212,7 +212,7 @@ export type UpdatePlanInput<
     TBody,
     TUnavailable
   >;
-  readonly current: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>;
+  readonly current: ProjectSnapshot<TUnit, TTranslation, TBody, TUnavailable>;
   readonly comparisons: ComparisonResult<
     TUnit,
     TTranslation,
@@ -435,7 +435,7 @@ export async function defaultUpdatePolicy<
               identity: target.identity,
               content: target.content,
               range: target.range as JsonValue,
-              record: target.translation as JsonValue,
+              record: target.record as JsonValue,
             },
           };
           items.push({
@@ -616,7 +616,7 @@ export async function defaultUpdatePolicy<
               identity: translation.identity,
               content: translation.content,
               range: translation.range as JsonValue,
-              record: translation.translation as JsonValue,
+              record: translation.record as JsonValue,
             },
           },
           reason:
@@ -718,7 +718,7 @@ export async function previewUpdate<
 
   const baseline = await store?.load();
   if (baseline !== undefined) validateComparisonBaseline(baseline);
-  const current = await readFacts(config, options);
+  const current = await readProjectSnapshot(config, options);
   // 比较器和策略也只接收本次范围；未选语言的历史不能成为本次决定依据。
   const previous =
     baseline === undefined
@@ -886,7 +886,7 @@ export function validateUpdatePlan(
 
 /** 保存计划中的关联必须仍指向同一消息键，不接受自定义交叉配对。 */
 function assertAssociationKeys(
-  associations: readonly TranslationAssociationFact[],
+  associations: readonly TranslationAssociation[],
   snapshot:
     | ComparisonSnapshot<TranslationUnitInput, unknown, JsonValue, unknown>
     | undefined,
@@ -912,12 +912,12 @@ function snapshotOf<
   TBody,
   TUnavailable,
 >(
-  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
+  snapshot: ProjectSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
 ): ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable> {
   return {
-    version: facts.version,
-    source: facts.source,
-    translations: facts.translations,
+    version: snapshot.version,
+    source: snapshot.source,
+    translations: snapshot.translations,
   };
 }
 
@@ -981,7 +981,7 @@ function sourceRangeForRemoved<
   TUnavailable,
 >(
   previousRange: unknown,
-  current: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
+  current: ProjectSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
 ): unknown {
   const range = current.source.read.scopes.find(
     ({ range: currentRange, enumeration }) =>
@@ -1015,7 +1015,7 @@ function isPlanAssociations(value: unknown): boolean {
 }
 
 function hasUniqueAssociations(
-  associations: readonly TranslationAssociationFact[],
+  associations: readonly TranslationAssociation[],
 ): boolean {
   const subjects = new Set<string>();
   const targets = new Set<number>();

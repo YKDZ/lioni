@@ -178,7 +178,7 @@ function translationChange(
 }
 
 void describe("snapshot comparison", () => {
-  void it("compares stable source and full target identities while retaining before and after facts", async () => {
+  void it("compares stable source and full target identities while retaining before and after snapshot", async () => {
     const previous = await readSnapshot(
       [
         {

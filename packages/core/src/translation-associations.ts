@@ -1,6 +1,7 @@
+import { readStatus } from "./read-coverage.ts";
 import type {
   ComparisonSnapshot,
-  TranslationAssociationFact,
+  TranslationAssociation,
   TranslationUnitInput,
 } from "./index.ts";
 
@@ -12,8 +13,8 @@ export function associateSnapshot<
   TUnavailable,
 >(
   snapshot: ComparisonSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
-): TranslationAssociationFact[] {
-  const associations: TranslationAssociationFact[] = [];
+): TranslationAssociation[] {
+  const associations: TranslationAssociation[] = [];
   for (const languageRead of snapshot.translations.reads) {
     for (const sourceUnit of snapshot.source.units) {
       const scopeIndexes = languageRead.scopes.flatMap((scope, index) =>
@@ -54,19 +55,3 @@ export function associateSnapshot<
   return associations;
 }
 
-function readStatus(
-  scopes: readonly {
-    readonly enumeration: "complete" | "partial" | "failed";
-  }[],
-  error?: string,
-): "complete" | "incomplete" | "failed" | "notRead" {
-  if (
-    error !== undefined ||
-    scopes.some(({ enumeration }) => enumeration === "failed")
-  )
-    return "failed";
-  if (scopes.length === 0) return "notRead";
-  return scopes.every(({ enumeration }) => enumeration === "complete")
-    ? "complete"
-    : "incomplete";
-}

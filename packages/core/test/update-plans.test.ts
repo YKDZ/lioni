@@ -8,7 +8,7 @@ import {
   defaultCompare,
   defaultUpdatePolicy,
   previewUpdate,
-  readFacts,
+  readProjectSnapshot,
   readComparisonSnapshot,
   replaceComparisonBaseline,
   validateUpdatePlan,
@@ -117,19 +117,8 @@ function makeConfig(
                   options.onQualityData?.();
                   return {};
                 },
-                prepare: () => ({ status: "ready", input: null }),
-                check: () => ({
-                  status: "complete",
-                  diagnostics: [],
-                  issues: [],
-                  coverage: {
-                    selected: 1,
-                    evaluated: 1,
-                    notApplicable: 0,
-                    incomplete: 0,
-                    failed: 0,
-                  },
-                }),
+                prepare: () => (null),
+                check: () => ([]),
               }),
             ],
           },
@@ -690,7 +679,7 @@ void describe("业务更新计划与预览", () => {
     const config = makeConfig([{ id: "welcome", source: "Welcome" }], [], {
       createPlaceholderContent,
     });
-    const current = await readFacts(config);
+    const current = await readProjectSnapshot(config);
     const comparisons = defaultCompare({
       previous: undefined,
       current: {

@@ -1,5 +1,5 @@
-import type { FrameworkFacts, TranslationUnitInput } from "../index.ts";
-import type { SemanticEditCandidate } from "../semantic-edits.ts";
+import type { ProjectSnapshot, TranslationUnitInput } from "../index.ts";
+import type { TranslationCandidate } from "../semantic-edits.ts";
 
 /** 验证单次 QA 候选都对应本次固定事实中的原文、语言与唯一身份。 */
 export function validateQualityCandidateScope<
@@ -8,12 +8,12 @@ export function validateQualityCandidateScope<
   TBody,
   TUnavailable,
 >(
-  facts: FrameworkFacts<TUnit, TTranslation, TBody, TUnavailable>,
-  candidates: readonly SemanticEditCandidate<TBody>[],
+  snapshot: ProjectSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
+  candidates: readonly TranslationCandidate<TBody>[],
 ): void {
-  const sourceKeys = new Set(facts.source.units.map(({ key }) => key));
+  const sourceKeys = new Set(snapshot.source.units.map(({ key }) => key));
   const languages = new Set(
-    facts.translations.reads.map(({ language }) => language),
+    snapshot.translations.reads.map(({ language }) => language),
   );
   const candidatesBySource = new Map<string, Set<string>>();
 
@@ -43,4 +43,29 @@ export function validateQualityCandidateScope<
       );
     candidateLanguages.add(candidate.language);
   }
+}
+
+export function savedTranslationCandidates<
+  TUnit extends TranslationUnitInput,
+  TTranslation,
+  TBody,
+  TUnavailable,
+>(
+  snapshot: ProjectSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
+): TranslationCandidate<TBody>[] {
+  return snapshot.associations.flatMap((association) => {
+    const record =
+      snapshot.translations.records[
+        association.translationIndexes[0] as number
+      ];
+    return record === undefined || record.bodyAvailability !== "available"
+      ? []
+      : [
+          {
+            sourceKey: association.sourceKey,
+            language: association.language,
+            content: record.content,
+          },
+        ];
+  });
 }

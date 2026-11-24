@@ -2,18 +2,18 @@ import { isDeepStrictEqual } from "node:util";
 
 import {
   readComparisonSnapshot,
-  readSourceFacts,
+  readSourceSnapshot,
   TranslationIdentityContractError,
 } from "./index.ts";
 import type {
-  ActualTranslationFact,
+  Translation,
   Awaitable,
   ComparisonSnapshot,
   FrameworkConfig,
-  SourceFacts,
-  SourceUnitFact,
+  SourceSnapshot,
+  SourceUnit,
   TranslationIdentity,
-  TranslationReadFact,
+  TranslationReadCoverage,
   TranslationUnitInput,
 } from "./index.ts";
 import {
@@ -29,7 +29,7 @@ import {
 } from "./standard-schema.ts";
 import type { JsonValue } from "./standard-schema.ts";
 import type { StandardSchemaV1 } from "./standard-schema.ts";
-import { readTranslationFacts } from "./translation-snapshot.ts";
+import { readTranslationSnapshot } from "./translation-snapshot.ts";
 
 export type { JsonValue } from "./standard-schema.ts";
 
@@ -37,7 +37,7 @@ export type TranslationWriteTarget =
   | { readonly sourceKey: string; readonly language: string }
   | { readonly identity: TranslationIdentity };
 
-export type SemanticEditCandidate<TBody = JsonValue> = {
+export type TranslationCandidate<TBody = JsonValue> = {
   readonly sourceKey: string;
   readonly language: string;
   readonly content: TBody;
@@ -98,8 +98,8 @@ export type TranslationWritebackResolution =
   | { readonly status: "located"; readonly locator: JsonValue }
   | { readonly status: "notWritable"; readonly reason: string };
 
-type AvailableTranslationFact<TTranslation, TBody, TUnavailable> = Extract<
-  ActualTranslationFact<TTranslation, TBody, TUnavailable>,
+type AvailableTranslation<TTranslation, TBody, TUnavailable> = Extract<
+  Translation<TTranslation, TBody, TUnavailable>,
   { readonly bodyAvailability: "available" }
 >;
 
@@ -111,8 +111,8 @@ export type TranslationWritebackInput<
 > = {
   readonly request: TranslationWriteRequest<TBody, TUnit>;
   readonly target: TranslationWritebackTarget;
-  readonly sourceUnit?: SourceUnitFact<TUnit>;
-  readonly currentTranslation?: AvailableTranslationFact<
+  readonly sourceUnit?: SourceUnit<TUnit>;
+  readonly currentTranslation?: AvailableTranslation<
     TTranslation,
     TBody,
     TUnavailable
@@ -127,7 +127,7 @@ export type TranslationWritebackAdapter<
 > = {
   readonly locateExistingTarget?: (input: {
     readonly identity: TranslationIdentity;
-    readonly translation: AvailableTranslationFact<
+    readonly translation: AvailableTranslation<
       TTranslation,
       TBody,
       TUnavailable
@@ -135,7 +135,7 @@ export type TranslationWritebackAdapter<
   }) => Awaitable<TranslationWritebackResolution>;
   readonly locateNewTarget?: (input: {
     readonly sourceKey: string;
-    readonly sourceUnit: SourceUnitFact<TUnit>;
+    readonly sourceUnit: SourceUnit<TUnit>;
     readonly language: string;
   }) => Awaitable<TranslationWritebackResolution>;
   /** 单目标写回；未配置 writeBatch 时按物理目标组调用。 */
@@ -171,8 +171,8 @@ export type TranslationWriteConditionInput<
     TUnavailable
   >;
   readonly target: TranslationWritebackTarget;
-  readonly sourceUnit?: SourceUnitFact<TUnit>;
-  readonly currentTranslation?: AvailableTranslationFact<
+  readonly sourceUnit?: SourceUnit<TUnit>;
+  readonly currentTranslation?: AvailableTranslation<
     TTranslation,
     TBody,
     TUnavailable
@@ -233,8 +233,8 @@ type PreparedWrite<
   readonly index: number;
   readonly request: TranslationWriteRequest<TBody, TUnit>;
   readonly target: TranslationWritebackTarget;
-  readonly sourceUnit?: SourceUnitFact<TUnit>;
-  readonly currentTranslation?: AvailableTranslationFact<
+  readonly sourceUnit?: SourceUnit<TUnit>;
+  readonly currentTranslation?: AvailableTranslation<
     TTranslation,
     TBody,
     TUnavailable
@@ -247,10 +247,10 @@ type WriteSnapshot<
   TBody,
   TUnavailable,
 > = {
-  readonly source?: SourceFacts<TUnit>;
+  readonly source?: SourceSnapshot<TUnit>;
   readonly translations: {
-    readonly reads: readonly TranslationReadFact[];
-    readonly records: readonly ActualTranslationFact<
+    readonly reads: readonly TranslationReadCoverage[];
+    readonly records: readonly Translation<
       TTranslation,
       TBody,
       TUnavailable
@@ -259,7 +259,7 @@ type WriteSnapshot<
 };
 
 /** 校验候选正文数据；是否检查或写入由调用者另外组合。 */
-export async function validateSemanticEditCandidate<
+export async function validateTranslationCandidate<
   TUnit extends TranslationUnitInput,
   TTranslation,
   TBody,
@@ -267,7 +267,7 @@ export async function validateSemanticEditCandidate<
 >(
   value: unknown,
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
-): Promise<SemanticEditCandidate<TBody>> {
+): Promise<TranslationCandidate<TBody>> {
   if (
     !isRecord(value) ||
     typeof value.sourceKey !== "string" ||
@@ -722,8 +722,8 @@ async function readWriteSnapshot<
   includeSource: boolean,
   languages: readonly string[],
 ): Promise<WriteSnapshot<TUnit, TTranslation, TBody, TUnavailable>> {
-  const source = includeSource ? await readSourceFacts(config) : undefined;
-  const translations = await readTranslationFacts(
+  const source = includeSource ? await readSourceSnapshot(config) : undefined;
+  const translations = await readTranslationSnapshot(
     config.translations,
     source?.units ?? [],
     languages,
@@ -767,7 +767,7 @@ async function prepareWrite<
 
   let sourceUnit = sourceCheck.sourceUnit;
   let currentTranslation:
-    | AvailableTranslationFact<TTranslation, TBody, TUnavailable>
+    | AvailableTranslation<TTranslation, TBody, TUnavailable>
     | undefined;
   let target: TranslationWritebackTarget;
   let resolved: TranslationWritebackResolution;
@@ -812,7 +812,7 @@ async function prepareWrite<
         current,
         request.target.identity,
       ) as
-        | AvailableTranslationFact<TTranslation, TBody, TUnavailable>
+        | AvailableTranslation<TTranslation, TBody, TUnavailable>
         | undefined;
       if (currentTranslation === undefined) {
         if (
@@ -855,7 +855,7 @@ async function prepareWrite<
       if (
         request.expectedTarget.record !== undefined &&
         !isDeepStrictEqual(
-          currentTranslation.translation,
+          currentTranslation.record,
           request.expectedTarget.record,
         )
       )
@@ -937,7 +937,7 @@ function checkExpectedSource<
   request: TranslationWriteRequest<TBody, TUnit>,
   current: WriteSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
 ):
-  | { readonly status: "ready"; readonly sourceUnit?: SourceUnitFact<TUnit> }
+  | { readonly status: "ready"; readonly sourceUnit?: SourceUnit<TUnit> }
   | { readonly status: "conflict" | "notWritable"; readonly reason: string } {
   const expectation = request.expectedSource;
   if (expectation === undefined) return { status: "ready" };
@@ -985,7 +985,7 @@ function checkSourceTargetMissing<
   TUnavailable,
 >(
   current: WriteSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
-  sourceUnit: SourceUnitFact<TUnit>,
+  sourceUnit: SourceUnit<TUnit>,
   language: string,
   config: FrameworkConfig<TUnit, TTranslation, TBody, TUnavailable>,
 ):
@@ -1310,7 +1310,7 @@ function findSourceUnit<
 >(
   current: WriteSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
   key: string,
-): SourceUnitFact<TUnit> | undefined {
+): SourceUnit<TUnit> | undefined {
   return current.source?.units.find((unit) => unit.key === key);
 }
 
@@ -1322,7 +1322,7 @@ function findTranslationByIdentity<
 >(
   current: WriteSnapshot<TUnit, TTranslation, TBody, TUnavailable>,
   identity: TranslationIdentity,
-): ActualTranslationFact<TTranslation, TBody, TUnavailable> | undefined {
+): Translation<TTranslation, TBody, TUnavailable> | undefined {
   return current.translations.records.find((translation) =>
     isDeepStrictEqual(translation.identity, identity),
   );

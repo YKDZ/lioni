@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
-  analyzeQuality,
+  runQa,
   defineChecker,
   defineConfig,
   StandardSchemaContractError,
@@ -38,11 +38,11 @@ function fixture(
       }[];
     }[];
     readonly observe?: (input: {
-      readonly candidate: {
+      readonly association: {
         readonly sourceKey: string;
         readonly language: string;
       };
-      readonly facts: {
+      readonly snapshot: {
         readonly source: {
           readonly units: readonly { readonly key: string }[];
         };
@@ -67,21 +67,10 @@ function fixture(
     inputSchema: schemaFromExamples(null),
     prepare(checkInput) {
       input.observe?.(checkInput);
-      return { status: "ready", input: null };
+      return null;
     },
     check() {
-      return {
-        status: "complete",
-        diagnostics: [],
-        issues: [],
-        coverage: {
-          selected: 1,
-          evaluated: 1,
-          notApplicable: 0,
-          incomplete: 0,
-          failed: 0,
-        },
-      };
+      return [];
     },
   });
 
@@ -139,12 +128,12 @@ function fixture(
 
 void describe("QA 候选入口与身份", () => {
   void it("默认纳入已读取且正文可用的同键译文，即使覆盖范围不完整", async () => {
-    const result = await analyzeQuality(fixture({ enumeration: "partial" }));
+    const result = await runQa(fixture({ enumeration: "partial" }));
 
     assert.deepEqual(result.candidates, [
       { sourceKey: "save", language: "zh-CN", content: "保存" },
     ]);
-    assert.equal(result.factCoverage.associations[0]?.status, "unknown");
+    assert.equal(result.readCoverage.associations[0]?.status, "unknown");
   });
 
   void it("显式候选子集只限制检查对象，完整事实与关系仍可见", async () => {
@@ -168,11 +157,11 @@ void describe("QA 候选入口与身份", () => {
           ],
         },
       ],
-      observe: ({ candidate, facts, relationships }) => {
+      observe: ({ association, snapshot, relationships }) => {
         observed.push({
-          key: candidate.sourceKey,
-          sourceKeys: facts.source.units.map(({ key }) => key),
-          translationKeys: facts.translations.records.map(
+          key: association.sourceKey,
+          sourceKeys: snapshot.source.units.map(({ key }) => key),
+          translationKeys: snapshot.translations.records.map(
             ({ identity }) => identity.key,
           ),
           relationships: relationships ?? [],
@@ -180,7 +169,7 @@ void describe("QA 候选入口与身份", () => {
       },
     });
 
-    const result = await analyzeQuality(config, {
+    const result = await runQa(config, {
       candidates: [{ sourceKey: "save", language: "zh-CN", content: "已保存" }],
     });
 
@@ -209,7 +198,7 @@ void describe("QA 候选入口与身份", () => {
 
   void it("接受原文已读取但尚无现存译文的候选，并拒绝未知原文", async () => {
     const config = fixture();
-    const added = await analyzeQuality(config, {
+    const added = await runQa(config, {
       candidates: [
         { sourceKey: "save", language: "fr", content: "Enregistrer" },
       ],
@@ -219,7 +208,7 @@ void describe("QA 候选入口与身份", () => {
     ]);
 
     await assert.rejects(
-      analyzeQuality(config, {
+      runQa(config, {
         candidates: [
           { sourceKey: "missing", language: "fr", content: "Absent" },
         ],
@@ -229,7 +218,7 @@ void describe("QA 候选入口与身份", () => {
   });
 
   void it("原文正文不可用不改变已知消息键的候选身份", async () => {
-    const result = await analyzeQuality(
+    const result = await runQa(
       fixture({
         translations: [],
         sourceBodyAvailability: "unavailable",
@@ -255,17 +244,17 @@ void describe("QA 候选入口与身份", () => {
     };
 
     await assert.rejects(
-      analyzeQuality(config, { candidates: [candidate, { ...candidate }] }),
+      runQa(config, { candidates: [candidate, { ...candidate }] }),
       /候选身份.*重复/,
     );
     await assert.rejects(
-      analyzeQuality(config, {
+      runQa(config, {
         candidates: [{ ...candidate, language: "es" }],
       }),
       /译文候选语言 "es" 不在本次执行范围内/,
     );
     await assert.rejects(
-      analyzeQuality(config, {
+      runQa(config, {
         languages: ["zh-CN"],
         candidates: [candidate],
       }),
@@ -277,7 +266,7 @@ void describe("QA 候选入口与身份", () => {
     const config = fixture();
 
     await assert.rejects(
-      analyzeQuality(config, {
+      runQa(config, {
         candidates: [
           { sourceKey: "missing", language: "fr", content: "Absent" },
         ],
@@ -286,7 +275,7 @@ void describe("QA 候选入口与身份", () => {
       /原文键.*不存在.*本次已读取/,
     );
     await assert.rejects(
-      analyzeQuality(config, {
+      runQa(config, {
         candidates: [
           { sourceKey: "save", language: "fr", content: "Enregistrer" },
         ],
@@ -302,7 +291,7 @@ void describe("QA 候选入口与身份", () => {
       language: "fr",
       content: { nested: { value: "stable" } },
     };
-    const result = await analyzeQuality(fixture(), {
+    const result = await runQa(fixture(), {
       candidates: [candidate],
       selectCandidates(candidates) {
         assert.equal(
@@ -324,7 +313,7 @@ void describe("QA 候选入口与身份", () => {
     let calls = 0;
     const config = fixture({ observe: () => calls++ });
 
-    const result = await analyzeQuality(config, { candidates: [] });
+    const result = await runQa(config, { candidates: [] });
 
     assert.deepEqual(result.candidates, []);
     assert.equal(calls, 0);
@@ -333,7 +322,7 @@ void describe("QA 候选入口与身份", () => {
 
   void it("显式 null 不会被当成省略候选而触发默认候选", async () => {
     await assert.rejects(
-      analyzeQuality(fixture(), { candidates: null as never }),
+      runQa(fixture(), { candidates: null as never }),
       /candidates 必须是译文候选数组/,
     );
   });
@@ -380,27 +369,16 @@ void describe("QA 候选入口与身份", () => {
             inputSchema: schemaFromExamples(null),
             prepare: () => {
               prepared = true;
-              return { status: "ready", input: null };
+              return null;
             },
-            check: () => ({
-              status: "complete",
-              diagnostics: [],
-              issues: [],
-              coverage: {
-                selected: 1,
-                evaluated: 1,
-                notApplicable: 0,
-                incomplete: 0,
-                failed: 0,
-              },
-            }),
+            check: () => [],
           }),
         ],
       },
     });
 
     await assert.rejects(
-      analyzeQuality(config, {
+      runQa(config, {
         candidates: [
           {
             sourceKey: "save",

@@ -7,13 +7,13 @@ import {
   type VueI18nChecksOptions,
 } from "@lioni/checks";
 import {
-  analyzeQuality,
+  runQa,
   defineConfig,
   type JsonValue,
   type QualityCheckResultCache,
-  type QualityExceptionStore,
-  type SemanticEditCandidate,
-  type SourceUnitFact,
+  type QaSuppressionStore,
+  type TranslationCandidate,
+  type SourceUnit,
 } from "@lioni/core";
 import type { TermbaseData } from "@lioni/terminology";
 import { z } from "zod";
@@ -111,7 +111,7 @@ export function createQualityFixture(input: {
     readonly loadTerms?: () => TermbaseData;
   };
   readonly resultCache?: QualityCheckResultCache;
-  readonly exceptionStore?: QualityExceptionStore;
+  readonly suppressionStore?: QaSuppressionStore;
   readonly unavailableSourceKeys?: readonly string[];
   readonly onPrepare?: () => void;
   readonly prepare?: VueI18nPreparer<Unit, Translation, Body>;
@@ -147,19 +147,20 @@ export function createQualityFixture(input: {
     qualityInput: VueI18nPrepareInput<Unit, Translation, Body>,
   ): VueI18nMessageProjection => {
     const candidate = qualityInput.candidate;
-    const policy = byLanguage.get(candidate.language);
-    if (!policy) throw new Error(`缺少目标语言策略：${candidate.language}。`);
+    const { sourceKey, language } = qualityInput.association;
+    const policy = byLanguage.get(language);
+    if (!policy) throw new Error(`缺少目标语言策略：${language}。`);
     const projected = projection({
-      key: candidate.sourceKey,
-      language: candidate.language,
+      key: sourceKey,
+      language,
       sourceUnit: qualityInput.sourceUnit,
       sourceRange:
-        qualityInput.facts.source.read.scopes[
+        qualityInput.snapshot.source.read.scopes[
           qualityInput.sourceUnit.scopeIndex
         ]?.range ?? policy.resources.source.range,
       targetRange: policy.resources.target.range,
       target:
-        candidate.content.resourceStatus === "missing"
+        candidate === null || candidate.content.resourceStatus === "missing"
           ? { status: "missing" }
           : candidate.content.resourceStatus === "unavailable"
             ? { status: "unavailable" }
@@ -171,10 +172,7 @@ export function createQualityFixture(input: {
     input.prepare ??
     ((qualityInput: Parameters<typeof buildMessageProjection>[0]) => {
       input.onPrepare?.();
-      return {
-        status: "ready" as const,
-        input: buildMessageProjection(qualityInput),
-      };
+      return buildMessageProjection(qualityInput);
     });
 
   const defaultReference = (
@@ -187,7 +185,7 @@ export function createQualityFixture(input: {
     return projection({
       key: value.sourceKey,
       language: value.language,
-      sourceUnit: value.sourceUnit as SourceUnitFact<Unit>,
+      sourceUnit: value.sourceUnit as SourceUnit<Unit>,
       sourceRange:
         value.sourceUnit.scopeIndex >= 0
           ? sourcePolicy.resources.source.range
@@ -266,9 +264,9 @@ export function createQualityFixture(input: {
       ...(input.resultCache === undefined
         ? {}
         : { resultCache: input.resultCache }),
-      ...(input.exceptionStore === undefined
+      ...(input.suppressionStore === undefined
         ? {}
-        : { exceptionStore: input.exceptionStore }),
+        : { suppressionStore: input.suppressionStore }),
       checks: createVueI18nChecks<Unit, Translation, Body>({
         prepare,
         reference,
@@ -279,10 +277,10 @@ export function createQualityFixture(input: {
 
   return {
     run(
-      candidates: readonly SemanticEditCandidate<Body>[],
+      candidates: readonly TranslationCandidate<Body>[],
       selectedIds?: readonly (typeof checkIds)[keyof typeof checkIds][],
     ) {
-      return analyzeQuality(config, {
+      return runQa(config, {
         candidates,
         ...(selectedIds === undefined ? {} : { checkIds: selectedIds }),
       });
@@ -293,7 +291,7 @@ export function createQualityFixture(input: {
 function projection(input: {
   readonly key: string;
   readonly language: string;
-  readonly sourceUnit: SourceUnitFact<Unit> | null;
+  readonly sourceUnit: SourceUnit<Unit> | null;
   readonly sourceRange: unknown;
   readonly targetRange: unknown;
   readonly target:

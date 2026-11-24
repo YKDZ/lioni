@@ -103,43 +103,30 @@ export default defineConfig({
           isEnabled: (sourceKey) => enabledBySource.get(sourceKey) ?? false,
         };
       },
-      prepare({ candidate, loaded }) {
+      prepare({ candidate, association, loaded }) {
         return {
-          status: "ready",
-          input: {
-            enabled: loaded.isEnabled(candidate.sourceKey),
-            sourceKey: candidate.sourceKey,
-            language: candidate.language,
-            content: candidate.content,
-          },
+          enabled: loaded.isEnabled(association.sourceKey),
+          sourceKey: association.sourceKey,
+          language: association.language,
+          content: candidate?.content ?? "",
         };
       },
       check(input) {
-        return {
-          status: input.enabled ? "complete" : "not-applicable",
-          diagnostics: input.enabled ? [{
-            severity: "warning",
-            object: {
-              kind: "translation-unit",
-              key: input.sourceKey,
-              language: input.language
-            },
-            location: {
-              language: input.language,
-              range: "src/messages.ts:18"
-            },
-            message: "候选需要人工复核。",
-            evidence: []
-          }] : [],
-          issues: [],
-          coverage: {
-            selected: 1,
-            evaluated: 1,
-            notApplicable: 0,
-            incomplete: 0,
-            failed: 0
-          }
-        };
+        if (!input.enabled) return [];
+        return [{
+          severity: "warning",
+          object: {
+            kind: "translation-unit",
+            key: input.sourceKey,
+            language: input.language
+          },
+          location: {
+            language: input.language,
+            range: "src/messages.ts:18"
+          },
+          message: "候选需要人工复核。",
+          evidence: []
+        }];
       }
     })],
   },
@@ -147,8 +134,16 @@ export default defineConfig({
 `,
     );
     await writeFile(
-      path.join(workDir, "no-checks.config.ts"),
-      `export { default } from "./lioni.config.ts";\n`,
+      path.join(workDir, "empty.config.ts"),
+      `import config from "./qa.config.ts";
+export default {
+  ...config,
+  source: {
+    ...config.source,
+    read: () => ({ scopes: [{ range: "source", enumeration: "complete", records: [] }] }),
+  },
+};
+`,
     );
   },
   commands() {
@@ -166,20 +161,21 @@ export default defineConfig({
         args: ["inspect", "duplicate.config.ts"],
       },
       {
-        name: "explicit host QA checker",
+        name: "执行宿主配置的检查器",
         args: ["qa", "qa.config.ts", "--output-format", "structured"],
       },
       {
-        name: "default readable QA candidate summary",
+        name: "显示送检范围和默认文本报告",
         args: ["qa", "qa.config.ts"],
       },
       {
-        name: "QA without a configured checker",
-        args: ["qa", "no-checks.config.ts"],
+        name: "没有配置检查器时仍显示进度",
+        args: ["qa", "lioni.config.ts"],
       },
       { name: "help", args: ["--help"] },
       { name: "version", args: ["--version"] },
       { name: "查看资源时缺少配置参数", args: ["inspect"] },
+      { name: "完整读取空项目", args: ["qa", "empty.config.ts"] },
     ];
   },
   async assertions({ results }) {
@@ -229,7 +225,7 @@ export default defineConfig({
             scopeIndex: number;
             range: string;
             identity: { language: string; key: string };
-            translation: {
+            record: {
               id: string;
               text: string;
               context: { file: string; line: number };
@@ -291,7 +287,7 @@ export default defineConfig({
           language: "fr",
           key: "src/messages.ts:18",
         },
-        translation: {
+        record: {
           id: "save-button",
           text: "Enregistrer",
           context: { file: "src/messages.ts", line: 18 },
@@ -308,7 +304,7 @@ export default defineConfig({
           language: "fr",
           key: "legacy/messages.ts:999",
         },
-        translation: {
+        record: {
           id: "legacy-notice",
           text: "Avis",
           context: { file: "legacy/messages.ts", line: 999 },
@@ -358,12 +354,12 @@ export default defineConfig({
           language: string;
           content: string;
         }[];
-        factCoverage: {
+        readCoverage: {
           associations: readonly {
             sourceKey: string;
             language: string;
             status: string;
-            candidateSelected: boolean;
+            subjectSelected: boolean;
           }[];
         };
         checks: readonly {
@@ -399,7 +395,7 @@ export default defineConfig({
         content: "Enregistrer",
       },
     ]);
-    assert.deepEqual(qaResult.data.factCoverage.associations, [
+    assert.deepEqual(qaResult.data.readCoverage.associations, [
       {
         sourceKey: "src/messages.ts:18",
         language: "fr",
@@ -407,7 +403,7 @@ export default defineConfig({
         coverageStatus: "complete",
         scopeIndexes: [0],
         translationIndexes: [0],
-        candidateSelected: true,
+        subjectSelected: true,
       },
     ]);
     assert.equal(qaResult.data.checks.length, 1);
@@ -474,7 +470,7 @@ export default defineConfig({
       qaText?.stdout ?? "",
       /检查项范围：配置 1 项，本次全量 1 项（host-rule）/u,
     );
-    assert.match(qaText?.stdout ?? "", /候选范围：已选候选 1 条/u);
+    assert.match(qaText?.stdout ?? "", /送检范围：1 项，其中 1 项提供了译文/u);
     assert.match(
       qaText?.stdout ?? "",
       /有效问题：错误 0，警告 1，提示 0；已豁免 0/u,
@@ -483,14 +479,19 @@ export default defineConfig({
       qaText?.stdout ?? "",
       /- \[警告\] host-rule src\/messages\.ts:18（fr，src\/messages\.ts:18）：候选需要人工复核/u,
     );
+    assert.ok(qaText?.stdout.includes("翻译进度 fr：0/1（0%）"));
     assert.equal(noChecks?.exitCode, 1);
+    assert.match(noChecks?.stdout ?? "", /没有配置检查项/u);
     assert.match(noChecks?.stdout ?? "", /语言范围：读取 fr；所选候选语言 fr/u);
     assert.match(
       noChecks?.stdout ?? "",
       /检查项范围：配置 0 项，本次无检查项/u,
     );
-    assert.match(noChecks?.stdout ?? "", /候选范围：已选候选 1 条/u);
-    assert.match(noChecks?.stdout ?? "", /没有配置检查项/u);
+    assert.match(
+      noChecks?.stdout ?? "",
+      /送检范围：1 项，其中 1 项提供了译文/u,
+    );
+    assert.ok(noChecks?.stdout.includes("翻译进度 fr：1/1（100%）"));
     assert.equal(results[6]?.exitCode, 0);
     assert.match(results[6]?.stdout ?? "", /inspect/u);
     assert.equal(results[7]?.exitCode, 0);
@@ -505,6 +506,9 @@ export default defineConfig({
       kind: "usageFailure",
       issues: [{ code: "missingRequiredField", field: "config" }],
     });
+    const empty = results[9];
+    assert.equal(empty?.exitCode, 0, empty?.stderr);
+    assert.match(empty?.stdout ?? "", /^翻译进度 fr：0\/0$/mu);
   },
 };
 
