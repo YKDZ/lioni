@@ -1,6 +1,6 @@
 {
   "name": "@boringparts/lioni",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "private": false,
   "description": "多语言项目资源检查与维护工具，提供命令行与 TypeScript SDK。",
   "homepage": "https://github.com/boringparts/lioni",

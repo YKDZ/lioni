@@ -1,5 +1,9 @@
 # 更新日志
 
+## 0.4.2
+
+- 维护发布：验证 `@boringparts/lioni` 在 `boringparts/lioni` 仓库下的 GitHub Actions OIDC 可信发布配置。
+
 ## 0.4.1
 
 - 公开 npm 产品包名迁移至 `@boringparts/lioni`（Node 子路径为 `@boringparts/lioni/node`），CLI 命令名仍为 `lioni`。
