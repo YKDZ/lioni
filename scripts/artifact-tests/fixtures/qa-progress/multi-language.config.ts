@@ -2,7 +2,7 @@ import {
   createMissingTranslationChecker,
   createSameTextChecker,
   defineConfig,
-} from "@lioni/lioni";
+} from "@boringparts/lioni";
 
 import { baseConfig, type LocaleRecord, type Unit } from "./lioni.config.ts";
 

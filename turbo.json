@@ -72,7 +72,7 @@
     },
     "//#verify:artifacts": {
       "cache": false,
-      "dependsOn": ["@lioni/lioni#test:e2e", "@lioni/lioni#build"],
+      "dependsOn": ["@boringparts/lioni#test:e2e", "@boringparts/lioni#build"],
       "outputs": [],
       "tags": ["quality:heavy"],
       "passThroughEnv": ["LIONI_KEEP_ARTIFACT_TESTS"]

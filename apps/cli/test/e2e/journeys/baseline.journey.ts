@@ -7,11 +7,11 @@ import type { CliJourney } from "../journey.ts";
 const journey: CliJourney = {
   name: "baseline",
   modes: ["source", "distribution"],
-  async setup({ workDir }) {
+  async setup({ workDir, sdkImport }) {
     await mkdir(path.join(workDir, "project"));
     await writeFile(
       path.join(workDir, "project", "lioni.config.ts"),
-      `import { defineConfig } from "@lioni/core";
+      `import { defineConfig } from "${sdkImport}";
 import * as z from "zod";
 
 export default defineConfig({
@@ -33,7 +33,7 @@ export default defineConfig({
     );
     await writeFile(
       path.join(workDir, "project", "incomplete.config.ts"),
-      `import { defineConfig } from "@lioni/core";
+      `import { defineConfig } from "${sdkImport}";
 import * as z from "zod";
 
 export default defineConfig({

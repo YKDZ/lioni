@@ -8,7 +8,7 @@ import {
   defineConfig,
   type MessageFamilyInput,
   type QualityCheckResultCache,
-} from "@lioni/lioni";
+} from "@boringparts/lioni";
 import { z } from "zod";
 
 const unitSchema = z.object({ id: z.string(), source: z.string() });

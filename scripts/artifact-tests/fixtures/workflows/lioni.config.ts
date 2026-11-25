@@ -6,7 +6,7 @@ import {
   defineConfig,
   type UpdatePolicy,
   type UpdatePlanItem,
-} from "@lioni/lioni";
+} from "@boringparts/lioni";
 import * as z from "zod";
 
 const unitSchema = z

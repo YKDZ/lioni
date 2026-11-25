@@ -6,7 +6,7 @@ import {
   defineChecker,
   defineConfig,
   type QualityFinding,
-} from "@lioni/lioni";
+} from "@boringparts/lioni";
 import * as z from "zod";
 
 import { baseConfig, type LocaleRecord, type Unit } from "./lioni.config.ts";

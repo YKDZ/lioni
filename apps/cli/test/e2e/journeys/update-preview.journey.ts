@@ -10,6 +10,7 @@ import type { CliJourney } from "../journey.ts";
 const expectedModifiedBaselineByWorkDir = new Map<string, string>();
 
 function configSource(
+  sdkImport: string,
   sources: readonly { readonly id: string; readonly source: string }[],
   _translations: readonly {
     readonly targetId: string;
@@ -24,7 +25,7 @@ function configSource(
 ): string {
   return `import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "@lioni/core";
+import { defineConfig } from "${sdkImport}";
 import * as z from "zod";
 
 const translationsPath = fileURLToPath(new URL("./lioni.translations.json", import.meta.url));
@@ -95,10 +96,10 @@ export default defineConfig({
 const journey: CliJourney = {
   name: "update-preview",
   modes: ["source", "distribution"],
-  async setup({ workDir }) {
+  async setup({ workDir, sdkImport }) {
     await writeFile(
       path.join(workDir, "lioni.config.ts"),
-      configSource([{ id: "welcome", source: "Welcome" }], []),
+      configSource(sdkImport, [{ id: "welcome", source: "Welcome" }], []),
     );
     await writeFile(path.join(workDir, "lioni.translations.json"), "[]\n");
 
@@ -108,6 +109,7 @@ const journey: CliJourney = {
     await writeFile(
       previousConfigPath,
       configSource(
+        sdkImport,
         [{ id: "welcome", source: "Welcome" }],
         [
           {
@@ -120,7 +122,7 @@ const journey: CliJourney = {
     );
     await writeFile(
       path.join(removedDir, "lioni.config.ts"),
-      configSource([], []),
+      configSource(sdkImport, [], []),
     );
     await writeFile(
       path.join(removedDir, "lioni.translations.json"),
@@ -154,11 +156,11 @@ const journey: CliJourney = {
     ];
     await writeFile(
       unchangedConfigPath,
-      configSource(unchangedSources, unchangedTranslations),
+      configSource(sdkImport, unchangedSources, unchangedTranslations),
     );
     await writeFile(
       path.join(emptyDir, "lioni.config.ts"),
-      configSource(unchangedSources, unchangedTranslations, {
+      configSource(sdkImport, unchangedSources, unchangedTranslations, {
         noDecisions: true,
       }),
     );
@@ -189,11 +191,16 @@ const journey: CliJourney = {
     const oldConfigPath = path.join(modifiedDir, "previous.config.ts");
     await writeFile(
       oldConfigPath,
-      configSource([{ id: "welcome", source: "Welcome" }], oldTranslations),
+      configSource(
+        sdkImport,
+        [{ id: "welcome", source: "Welcome" }],
+        oldTranslations,
+      ),
     );
     await writeFile(
       path.join(modifiedDir, "lioni.config.ts"),
       configSource(
+        sdkImport,
         [{ id: "welcome", source: "Welcome back" }],
         oldTranslations,
       ),
@@ -214,7 +221,7 @@ const journey: CliJourney = {
     await mkdir(unconfirmedDir);
     await writeFile(
       path.join(unconfirmedDir, "lioni.config.ts"),
-      configSource([{ id: "welcome", source: "Welcome" }], [], {
+      configSource(sdkImport, [{ id: "welcome", source: "Welcome" }], [], {
         writeUnconfirmed: true,
       }),
     );
@@ -229,6 +236,7 @@ const journey: CliJourney = {
       await writeFile(
         path.join(batchDir, "lioni.config.ts"),
         configSource(
+          sdkImport,
           [
             { id: "welcome", source: "Welcome" },
             { id: "save", source: "Save" },

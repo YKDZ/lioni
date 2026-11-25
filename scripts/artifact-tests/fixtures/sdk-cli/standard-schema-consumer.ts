@@ -12,7 +12,7 @@ import {
   type StandardSchemaV1,
   type Translation,
   type TranslationCandidate,
-} from "@lioni/lioni";
+} from "@boringparts/lioni";
 import { z } from "zod";
 
 type Unit = { source: string; context: { file: string } };

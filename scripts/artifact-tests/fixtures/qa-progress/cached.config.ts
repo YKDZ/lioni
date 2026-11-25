@@ -1,8 +1,8 @@
 import { appendFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { defineChecker, defineConfig } from "@lioni/lioni";
-import { createDirectoryQualityCheckResultCache } from "@lioni/lioni/node";
+import { defineChecker, defineConfig } from "@boringparts/lioni";
+import { createDirectoryQualityCheckResultCache } from "@boringparts/lioni/node";
 import * as z from "zod";
 
 import { baseConfig, type LocaleRecord, type Unit } from "./lioni.config.ts";

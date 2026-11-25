@@ -7,7 +7,7 @@ import {
   type VueI18nPolicy,
   type TermbaseData,
   type QaSuppression,
-} from "@lioni/lioni";
+} from "@boringparts/lioni";
 import * as z from "zod";
 
 const source = "Hello {name}";

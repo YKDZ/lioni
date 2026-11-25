@@ -4,7 +4,7 @@ import {
   createMissingTranslationChecker,
   createSameTextChecker,
   defineConfig,
-} from "@lioni/lioni";
+} from "@boringparts/lioni";
 import * as z from "zod";
 
 const dictionary = z.record(z.string(), z.string());

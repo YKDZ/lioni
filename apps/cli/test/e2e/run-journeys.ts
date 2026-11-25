@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type {
   CliJourney,
   CliJourneyCommand,
+  CliJourneyContext,
   CliJourneyMode,
   CliJourneyResult,
 } from "./journey.ts";
@@ -152,22 +153,42 @@ export async function runJourneys(options: {
     const workDir = await mkdtemp(
       path.join(tmpdir(), `cli-${journey.name}-${options.mode}-`),
     );
-    const context = { mode: options.mode, packageRoot, workDir };
+    const sdkImport =
+      options.mode === "source" ? "@lioni/core" : "@boringparts/lioni";
+    const context: CliJourneyContext = {
+      mode: options.mode,
+      packageRoot,
+      sdkImport,
+      workDir,
+    };
     try {
-      const packageLink = path.join(workDir, "node_modules", "@lioni", "core");
-      await mkdir(path.dirname(packageLink), { recursive: true });
-      await symlink(
-        coreDependency,
-        packageLink,
-        process.platform === "win32" ? "junction" : "dir",
-      );
-      const productLink = path.join(workDir, "node_modules", "@lioni", "lioni");
-      await mkdir(path.dirname(productLink), { recursive: true });
-      await symlink(
-        productDependency,
-        productLink,
-        process.platform === "win32" ? "junction" : "dir",
-      );
+      if (options.mode === "source") {
+        const packageLink = path.join(
+          workDir,
+          "node_modules",
+          "@lioni",
+          "core",
+        );
+        await mkdir(path.dirname(packageLink), { recursive: true });
+        await symlink(
+          coreDependency,
+          packageLink,
+          process.platform === "win32" ? "junction" : "dir",
+        );
+      } else {
+        const productLink = path.join(
+          workDir,
+          "node_modules",
+          "@boringparts",
+          "lioni",
+        );
+        await mkdir(path.dirname(productLink), { recursive: true });
+        await symlink(
+          productDependency,
+          productLink,
+          process.platform === "win32" ? "junction" : "dir",
+        );
+      }
       await symlink(
         path.join(packageRoot, "node_modules", "zod"),
         path.join(workDir, "node_modules", "zod"),

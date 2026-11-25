@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { runQa, type TermbaseData } from "@lioni/lioni";
+import { runQa, type TermbaseData } from "@boringparts/lioni";
 
 import {
   createConfig,

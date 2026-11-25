@@ -10,8 +10,8 @@ import {
   defineChecker,
   readProjectSnapshot,
   StandardSchemaContractError,
-} from "@lioni/lioni";
-import { createDirectoryQualityCheckResultCache } from "@lioni/lioni/node";
+} from "@boringparts/lioni";
+import { createDirectoryQualityCheckResultCache } from "@boringparts/lioni/node";
 import * as z from "zod";
 
 import config, { createConfig } from "./lioni.config.ts";

@@ -2,7 +2,7 @@ import {
   createMissingTranslationChecker,
   createSameTextChecker,
   defineConfig,
-} from "@lioni/lioni";
+} from "@boringparts/lioni";
 import * as z from "zod";
 
 import {

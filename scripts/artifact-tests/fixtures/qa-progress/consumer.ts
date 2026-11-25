@@ -13,8 +13,8 @@ import {
   type JsonValue,
   type QualityFinding,
   type QualityReportFormatOptions,
-} from "@lioni/lioni";
-import { loadConfig } from "@lioni/lioni/node";
+} from "@boringparts/lioni";
+import { loadConfig } from "@boringparts/lioni/node";
 import * as z from "zod";
 
 const mode = process.argv[2];

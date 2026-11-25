@@ -17,8 +17,10 @@ import {
   type QualityObject,
   type QualityProfileReport,
   type QualityRunResult,
-} from "@lioni/lioni";
+} from "@boringparts/lioni";
 import { z } from "zod";
+
+const productPackageName = "@boringparts/lioni";
 
 type CacheMode = "cold" | "warm";
 type MeasurementMode = "timing" | "allocation";
@@ -346,7 +348,7 @@ function summarizeAllocation(profile: { readonly head: HeapProfileNode }): {
     const name = callFrame.functionName || "<anonymous>";
     const frame = `${name} (${callFrame.url}:${callFrame.lineNumber + 1})`;
     const stack = [...ancestors, frame].slice(-6).reverse().join(" <- ");
-    if (stack.includes("/node_modules/@lioni/lioni/"))
+    if (stack.includes(`/node_modules/${productPackageName}/`))
       productStackSampledBytes += node.selfSize;
     if (stack.includes("snapshotJsonValue"))
       snapshotJsonValueStackSampledBytes += node.selfSize;
@@ -799,7 +801,7 @@ async function runBenchmark(): Promise<void> {
   const artifacts = JSON.parse(
     await readFile(path.join(runRoot, "artifacts.json"), "utf8"),
   ) as readonly { readonly name: string; readonly filename: string }[];
-  const artifact = artifacts.find(({ name }) => name === "@lioni/lioni");
+  const artifact = artifacts.find(({ name }) => name === productPackageName);
   assert.ok(artifact, "缺少本次正式产品 tarball。");
   const packageRoot = path.join(process.cwd(), "node_modules");
   const artifactDigest = createHash("sha256")
@@ -807,8 +809,7 @@ async function runBenchmark(): Promise<void> {
     .digest("hex");
   const packageMetadataPath = path.join(
     packageRoot,
-    "@lioni",
-    "lioni",
+    productPackageName,
     "package.json",
   );
   const packageMetadata = JSON.parse(
@@ -857,7 +858,7 @@ async function runBenchmark(): Promise<void> {
   const report = {
     schemaVersion: 1,
     artifact: {
-      package: "@lioni/lioni",
+      package: productPackageName,
       version: packageMetadata.version,
       sourceRevision: process.env.LIONI_ARTIFACT_SOURCE_REVISION ?? "unknown",
       sha256: artifactDigest,

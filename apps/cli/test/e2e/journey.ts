@@ -16,6 +16,7 @@ export type CliJourneyResult = {
 export type CliJourneyContext = {
   readonly mode: CliJourneyMode;
   readonly packageRoot: string;
+  readonly sdkImport: "@lioni/core" | "@boringparts/lioni";
   readonly workDir: string;
 };
 

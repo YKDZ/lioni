@@ -1,4 +1,4 @@
-import { defineChecker } from "@lioni/lioni";
+import { defineChecker } from "@boringparts/lioni";
 import * as z from "zod";
 
 import baseConfig from "./lioni.config.ts";

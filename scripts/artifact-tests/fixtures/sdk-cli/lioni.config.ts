@@ -9,7 +9,7 @@ import {
   type NumberCheckerOptions,
   type NumberCheckerPreparation,
   type NumberTextInput,
-} from "@lioni/lioni";
+} from "@boringparts/lioni";
 import * as z from "zod";
 
 const bodySchema = z.union([z.string(), z.looseObject({ text: z.string() })]);

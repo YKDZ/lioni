@@ -8,8 +8,7 @@ import type { CliJourney } from "../journey.ts";
 const journey: CliJourney = {
   name: "qa-suppressions",
   modes: ["source", "distribution"],
-  async setup({ workDir, packageRoot, mode }) {
-    const sdkImport = mode === "source" ? "@lioni/core" : "@lioni/lioni";
+  async setup({ workDir, packageRoot, mode, sdkImport }) {
     await writeFile(
       path.join(workDir, "lioni.config.ts"),
       `import { defineConfig } from "${sdkImport}";

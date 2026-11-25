@@ -1,4 +1,4 @@
-import { createSameTextChecker, defineConfig } from "@lioni/lioni";
+import { createSameTextChecker, defineConfig } from "@boringparts/lioni";
 
 import { baseConfig, type LocaleRecord, type Unit } from "./lioni.config.ts";
 

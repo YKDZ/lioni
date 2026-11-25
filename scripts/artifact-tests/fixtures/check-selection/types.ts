@@ -12,7 +12,7 @@ import {
   type TermCheckerLocationInput,
   type TermCheckerOptions,
   type TermCheckerPreparation,
-} from "@lioni/lioni";
+} from "@boringparts/lioni";
 
 import config from "./lioni.config.ts";
 

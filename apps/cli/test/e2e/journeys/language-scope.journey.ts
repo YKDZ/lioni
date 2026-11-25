@@ -13,8 +13,7 @@ function dataOf(result: CliJourneyResult | undefined) {
 const journey: CliJourney = {
   name: "language-scope",
   modes: ["source", "distribution"],
-  async setup({ workDir, mode }) {
-    const sdkImport = mode === "source" ? "@lioni/core" : "@lioni/lioni";
+  async setup({ workDir, sdkImport }) {
     await writeFile(
       path.join(workDir, "lioni.config.ts"),
       `import { appendFileSync, readFileSync, writeFileSync } from "node:fs";

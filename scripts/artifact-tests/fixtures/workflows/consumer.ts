@@ -12,11 +12,11 @@ import {
   type TranslationWriteRequest,
   type TranslationWritebackAdapter,
   type UpdatePlan,
-} from "@lioni/lioni";
+} from "@boringparts/lioni";
 import {
   createFileComparisonBaselineStore,
   createFileUpdatePlanStore,
-} from "@lioni/lioni/node";
+} from "@boringparts/lioni/node";
 import * as z from "zod";
 
 import config, { type Translation, type Unit } from "./lioni.config.ts";

@@ -13,8 +13,10 @@ import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 
-import type { QualityCheckResultCache } from "@lioni/lioni";
-import { createDirectoryQualityCheckResultCache } from "@lioni/lioni/node";
+import type { QualityCheckResultCache } from "@boringparts/lioni";
+import { createDirectoryQualityCheckResultCache } from "@boringparts/lioni/node";
+
+const productPackageName = "@boringparts/lioni";
 
 type CacheValue = NonNullable<
   Awaited<ReturnType<QualityCheckResultCache["get"]>>
@@ -252,21 +254,26 @@ assert.ok(runRoot, "请通过正式制品验收运行目录缓存负载。");
 const artifacts = JSON.parse(
   await readFile(path.join(runRoot, "artifacts.json"), "utf8"),
 ) as readonly { readonly name: string; readonly filename: string }[];
-const artifact = artifacts.find(({ name }) => name === "@lioni/lioni");
+const artifact = artifacts.find(({ name }) => name === productPackageName);
 assert.ok(artifact, "缺少本次正式产品 tarball。");
 const sha256 = createHash("sha256")
   .update(await readFile(artifact.filename))
   .digest("hex");
 const metadata = JSON.parse(
   await readFile(
-    path.join(process.cwd(), "node_modules/@lioni/lioni/package.json"),
+    path.join(
+      process.cwd(),
+      "node_modules",
+      productPackageName,
+      "package.json",
+    ),
     "utf8",
   ),
 ) as { readonly version: string };
 const report = {
   schemaVersion: 1,
   artifact: {
-    package: "@lioni/lioni",
+    package: productPackageName,
     version: metadata.version,
     sourceRevision: process.env.LIONI_ARTIFACT_SOURCE_REVISION ?? "unknown",
     sha256,

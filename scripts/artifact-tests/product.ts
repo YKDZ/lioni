@@ -1,1 +1,1 @@
-export const productPackageName = "@lioni/lioni";
+export const productPackageName = "@boringparts/lioni";

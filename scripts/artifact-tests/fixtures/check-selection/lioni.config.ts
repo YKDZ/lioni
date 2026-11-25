@@ -6,11 +6,11 @@ import {
   type QualityFinding,
   type QualityObject,
   type StandardSchemaV1,
-} from "@lioni/lioni";
+} from "@boringparts/lioni";
 import {
   createDirectoryQualityCheckResultCache,
   createFileQaSuppressionStore,
-} from "@lioni/lioni/node";
+} from "@boringparts/lioni/node";
 import * as z from "zod";
 
 import {

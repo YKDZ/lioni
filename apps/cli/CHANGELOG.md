@@ -1,5 +1,10 @@
 # 更新日志
 
+## 0.4.1
+
+- 公开 npm 产品包名迁移至 `@boringparts/lioni`（Node 子路径为 `@boringparts/lioni/node`），CLI 命令名仍为 `lioni`。
+- 代码仓库、主页与问题反馈地址更新至 `https://github.com/boringparts/lioni`，许可证版权署名更新为 `boringparts`。
+
 ## 0.4.0
 
 ### 翻译进度与检查豁免

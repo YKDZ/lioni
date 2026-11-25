@@ -9,7 +9,7 @@ import {
   type QaSuppression,
   type VueI18nMessageProjection,
   type VueI18nPolicy,
-} from "@lioni/lioni";
+} from "@boringparts/lioni";
 import * as z from "zod";
 
 const unitSchema = z.object({ key: z.string(), source: z.string() });

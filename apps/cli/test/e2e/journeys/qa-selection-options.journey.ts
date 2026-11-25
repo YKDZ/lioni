@@ -12,8 +12,7 @@ function qualityData(result: CliJourneyResult | undefined) {
 const journey: CliJourney = {
   name: "qa-selection-options",
   modes: ["source", "distribution"],
-  async setup({ workDir, mode }) {
-    const sdkImport = mode === "source" ? "@lioni/core" : "@lioni/lioni";
+  async setup({ workDir, sdkImport }) {
     await writeFile(
       path.join(workDir, "lioni.config.ts"),
       `import { defineConfig, defineChecker } from "${sdkImport}";

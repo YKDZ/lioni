@@ -7,7 +7,7 @@ import {
   formatQualityReport,
   upsertQaSuppressionFromReport,
   type QualityRunResult,
-} from "@lioni/lioni";
+} from "@boringparts/lioni";
 import * as z from "zod";
 
 import config from "./lioni.config.ts";

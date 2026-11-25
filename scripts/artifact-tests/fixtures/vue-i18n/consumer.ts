@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 
-import { runQa, createQaSuppression, type TermbaseData } from "@lioni/lioni";
+import {
+  runQa,
+  createQaSuppression,
+  type TermbaseData,
+} from "@boringparts/lioni";
 
 import { createConfig } from "./lioni.config.ts";
 

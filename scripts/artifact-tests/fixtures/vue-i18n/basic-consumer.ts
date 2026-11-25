@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 
-import { runQa, defineConfig } from "@lioni/lioni";
-import { createVueI18nTargetSyntaxChecker } from "@lioni/lioni";
+import { runQa, defineConfig } from "@boringparts/lioni";
+import { createVueI18nTargetSyntaxChecker } from "@boringparts/lioni";
 import { z } from "zod";
 
 {
@@ -58,7 +58,7 @@ import { z } from "zod";
 
 {
   const create = (
-    prepare?: import("@lioni/lioni").VueI18nPreparer<
+    prepare?: import("@boringparts/lioni").VueI18nPreparer<
       { key: string; source: { text: string } },
       { key: string; text: string },
       { text: string }

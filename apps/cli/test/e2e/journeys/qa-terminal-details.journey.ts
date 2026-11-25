@@ -7,8 +7,7 @@ import type { CliJourney } from "../journey.ts";
 const journey: CliJourney = {
   name: "qa-terminal-details",
   modes: ["source", "distribution"],
-  async setup({ workDir, mode }) {
-    const sdkImport = mode === "source" ? "@lioni/core" : "@lioni/lioni";
+  async setup({ workDir, sdkImport }) {
     const keys = ["k1", "k2", "k3", "k4", "k5"];
     await writeFile(
       path.join(workDir, "lioni.config.ts"),
